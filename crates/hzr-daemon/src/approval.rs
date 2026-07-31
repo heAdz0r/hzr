@@ -32,12 +32,15 @@ impl ApprovalStore {
     pub async fn insert(&self, pending: PendingApproval) -> String {
         let mut approvals = self.pending.lock().await;
         prune_expired(&mut approvals);
-        if approvals.len() >= MAX_PENDING_APPROVALS
-            && let Some(oldest) = approvals
-                .iter()
-                .min_by_key(|(_, approval)| approval.created_at)
-                .map(|(id, _)| id.clone())
-        {
+        let oldest = (approvals.len() >= MAX_PENDING_APPROVALS)
+            .then(|| {
+                approvals
+                    .iter()
+                    .min_by_key(|(_, approval)| approval.created_at)
+                    .map(|(id, _)| id.clone())
+            })
+            .flatten();
+        if let Some(oldest) = oldest {
             approvals.remove(&oldest);
         }
         let decision_id = Uuid::now_v7().to_string();
