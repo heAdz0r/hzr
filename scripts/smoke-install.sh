@@ -24,6 +24,13 @@ cleanup_hzr_install_smoke() {
 trap cleanup_hzr_install_smoke EXIT
 
 mkdir -p "${HZR_SMOKE_TEMP}/home" "${HZR_SMOKE_TEMP}/workspace" "${HZR_SMOKE_TEMP}/tools"
+export HOME="${HZR_SMOKE_TEMP}/home"
+# ProjectDirs follows XDG overrides on Linux. Pin every user directory to the fixture so
+# a hosted runner cannot redirect config or data back into its real HOME.
+export XDG_CONFIG_HOME="${HOME}/.config"
+export XDG_DATA_HOME="${HOME}/.local/share"
+export XDG_CACHE_HOME="${HOME}/.cache"
+export XDG_STATE_HOME="${HOME}/.local/state"
 HZR_SERVICE_LOG="${HZR_SMOKE_TEMP}/service-manager.log"
 HZR_SERVICE_STUB="${HZR_SMOKE_TEMP}/tools/service-manager"
 printf '%s\n' '#!/bin/sh' 'printf '\''%s\n'\'' "$*" >> "${HZR_SERVICE_LOG}"' 'exit 0' \
@@ -49,8 +56,6 @@ printf 'pub const SMOKE_MARKER: &str = "smoke_marker";\n' \
   PATH="/usr/bin:/bin" \
     /bin/sh "${HZR_REPOSITORY_ROOT}/install.sh"
 )
-
-export HOME="${HZR_SMOKE_TEMP}/home"
 
 HZR_INSTALLED_ROOT="${HZR_SMOKE_TEMP}/home/.local/share/hzr/current"
 HZR_INSTALLED_BIN="${HZR_SMOKE_TEMP}/home/.local/bin"
