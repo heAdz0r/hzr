@@ -780,7 +780,14 @@ fn search_file_list(
     }
     let pattern = build_rg_pattern(query_model);
     let mut cmd = Command::new("rg");
-    cmd.args(["-n", "--no-heading", "-i", "--max-count", "50"]);
+    cmd.args([
+        "-n",
+        "--no-heading",
+        "--with-filename",
+        "-i",
+        "--max-count",
+        "50",
+    ]);
     cmd.arg(&pattern);
     // Resolve each path relative to root (or use as-is if absolute)
     let mut any_added = false;
@@ -809,14 +816,32 @@ fn search_file_list(
         Ok(o) => o,
         Err(e) => {
             if verbose > 0 {
-                eprintln!("rgai[rg-files]: rg failed: {}", e);
+                eprintln!("rgai[rg-files]: rg unavailable ({e}); using builtin search");
             }
-            return Ok(SearchOutcome::default());
+            return Ok(search_file_list_builtin(
+                query_model,
+                root,
+                file_paths,
+                snippets_per_file,
+            ));
         }
     };
     match output.status.code() {
         Some(0) | Some(1) => {}
-        _ => return Ok(SearchOutcome::default()),
+        _ => {
+            if verbose > 0 {
+                eprintln!(
+                    "rgai[rg-files]: rg exited with {}; using builtin search",
+                    output.status
+                );
+            }
+            return Ok(search_file_list_builtin(
+                query_model,
+                root,
+                file_paths,
+                snippets_per_file,
+            ));
+        }
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let hits = parse_rg_output(&stdout, query_model, root, snippets_per_file);
@@ -828,6 +853,58 @@ fn search_file_list(
         hits,
         raw_output,
     })
+}
+
+/// Search an explicit file list without relying on ripgrep.
+///
+/// This is both the portability fallback for minimal bundles and the privacy boundary for
+/// `--files`: only the caller-provided paths are opened, so an unavailable `rg` can never
+/// broaden the search to the surrounding workspace.
+fn search_file_list_builtin(
+    query_model: &QueryModel,
+    root: &Path,
+    file_paths: &[String],
+    snippets_per_file: usize,
+) -> SearchOutcome {
+    let mut outcome = SearchOutcome::default();
+
+    for file_path in file_paths {
+        let path = Path::new(file_path);
+        let full_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        if !full_path.is_file() {
+            continue;
+        }
+
+        outcome.scanned_files += 1;
+        let bytes = match fs::read(&full_path) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        if looks_binary(&bytes) {
+            outcome.skipped_binary += 1;
+            continue;
+        }
+
+        let content = String::from_utf8_lossy(&bytes);
+        let display_path = compact_display_path(&full_path, root);
+        if let Some(hit) = analyze_file(&display_path, &content, query_model, 0, snippets_per_file)
+        {
+            outcome.hits.push(hit);
+        }
+    }
+
+    outcome.hits.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| a.path.to_lowercase().cmp(&b.path.to_lowercase()))
+    });
+    prune_by_relevance(&mut outcome.hits);
+    outcome.raw_output = build_raw_output(&outcome.hits);
+    outcome
 }
 
 /// Ripgrep-accelerated search: fast file discovery via rg + built-in scoring.
@@ -2229,6 +2306,13 @@ src/ok.rs:20:another token match";
         let file_list = vec!["allowed.rs".to_string()];
         let outcome = search_file_list(&qm, root, &file_list, 2, 0).unwrap();
 
+        assert!(
+            outcome
+                .hits
+                .iter()
+                .any(|hit| hit.path.contains("allowed.rs")),
+            "allowed.rs must be returned whether rg or the builtin fallback is used"
+        );
         // Key invariant: excluded.rs must never appear in any hit
         for hit in &outcome.hits {
             assert!(
@@ -2240,6 +2324,23 @@ src/ok.rs:20:another token match";
         assert_eq!(
             outcome.scanned_files, 1,
             "scanned_files must equal the file list length"
+        );
+
+        let fallback = search_file_list_builtin(&qm, root, &file_list, 2);
+        assert_eq!(fallback.scanned_files, 1);
+        assert!(
+            fallback
+                .hits
+                .iter()
+                .any(|hit| hit.path.contains("allowed.rs")),
+            "the builtin fallback must search the explicitly allowed file"
+        );
+        assert!(
+            fallback
+                .hits
+                .iter()
+                .all(|hit| !hit.path.contains("excluded.rs")),
+            "the builtin fallback must preserve the explicit file boundary"
         );
     }
 }
