@@ -1,4 +1,8 @@
-# HZR
+# HZR — heAdz0r's Zero-Redundancy engine
+
+**HZR** = **h**eAdz0r + **Z**ero **R**edundancy. Буква `Z` работает дважды: это и ник автора, и главный технический принцип продукта. Если `RTK` = Rust Token Killer, то `HZR` — его преемник по смыслу: **RTK убивал токены, HZR убивает избыточность.**
+
+Избыточность и есть потраченные деньги: второй semantic index, второй memory store, второй pre-read pack, повторно попавший в контекст один и тот же файл, дублирующий compression layer агента. Поэтому «zero redundancy» — не слоган, а буквальное содержание [PRD](PRD.md): один index, один ICM process, один владелец на каждый concern (§5.1), дедупликация по content hash (§5.2), запрет дублей в data layout (§7) и ноль упрощённых reimplementations в runtime-пути (§4.1).
 
 HZR 0.1.0 — самостоятельная local-first платформа для экономии токенов coding-агентов. Она построена **вокруг полного текущего `heAdz0r/rtk` fork**, а не вместо него: 516 файлов фактического worktree перенесены byte-for-byte как закрытое от изменений ядро, а HZR добавляет снаружи единый control plane, централизованные ICM и grepai, Caveman-derived response contract и managed caveman-code agent.
 

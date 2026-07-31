@@ -1,6 +1,6 @@
 # PRD: HZR 0.1.0 — единая платформа эффективности LLM-агентов
 
-**Продукт:** HZR, от ника heAdz0r
+**Продукт:** HZR — **h**eAdz0r's **Z**ero-**R**edundancy engine (`Z` = и ник автора, и принцип). Преемник RTK по смыслу: RTK убивал токены, HZR убивает избыточность — второй index, второй memory store, второй pre-read pack, повторно поданный в контекст файл, дублирующий compression layer агента
 **Релиз:** 0.1.0
 **Дата решения:** 2026-07-31
 **Статус:** HZR 0.1.0; functional release gates green, economic KPI awaits paired provider benchmark
