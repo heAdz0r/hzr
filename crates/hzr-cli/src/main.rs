@@ -520,6 +520,25 @@ fn run_install(options: InstallOptions, json: bool) -> Result<ExitCode> {
 /// tree has it at the repository root. Both are resolved relative to the binary so
 /// the reference written into `CLAUDE.md` stays valid after relocation.
 fn contract_asset_path(source_dir: &Path) -> PathBuf {
+    // Installed releases live at <root>/versions/<release>/bin while <root>/current
+    // is the upgradeable public pointer. Keep instructions on that pointer instead
+    // of canonicalizing them onto the release that ran `hzr install`.
+    if let Some(release_root) = source_dir.parent()
+        && release_root
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "versions")
+        && let Some(install_root) = release_root.parent().and_then(Path::parent)
+    {
+        let current = install_root.join("current");
+        let stable_contract = current.join("share/hzr/HZR.md");
+        if stable_contract.is_file()
+            && current.canonicalize().ok().as_deref() == release_root.canonicalize().ok().as_deref()
+        {
+            return stable_contract;
+        }
+    }
+
     let candidates = [
         source_dir.join("../share/hzr/HZR.md"),
         source_dir.join("../../HZR.md"),
@@ -1083,9 +1102,11 @@ fn payload_limit(request_limit: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use tempfile::tempdir;
 
-    use super::{canonical_directory, payload_limit};
+    use super::{canonical_directory, contract_asset_path, payload_limit};
 
     #[test]
     fn test_payload_limit_reserves_json_envelope_space() {
@@ -1100,5 +1121,25 @@ mod tests {
         std::fs::write(&file, []).expect("write fixture");
 
         assert!(canonical_directory(Some(&file)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn contract_uses_current_pointer_for_an_installed_release() {
+        let directory = tempdir().expect("temporary directory");
+        let release = directory.path().join("versions/v0.2.0-test");
+        let source = release.join("bin");
+        let contract = release.join("share/hzr/HZR.md");
+        std::fs::create_dir_all(&source).expect("release bin");
+        std::fs::create_dir_all(contract.parent().expect("contract parent"))
+            .expect("release share");
+        std::fs::write(&contract, "contract").expect("contract fixture");
+        std::os::unix::fs::symlink(&release, directory.path().join("current"))
+            .expect("current symlink");
+
+        let stable = contract_asset_path(&source);
+        assert_eq!(stable, directory.path().join("current/share/hzr/HZR.md"));
+        assert!(!stable.to_string_lossy().contains("/versions/"));
+        assert!(Path::new(&stable).is_file());
     }
 }

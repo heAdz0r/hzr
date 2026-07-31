@@ -115,6 +115,34 @@ if [[ ! -f "${HZR_SMOKE_TEMP}/home/.claude/settings.json" ]] || \
   exit 1
 fi
 
+HZR_CLAUDE_SETTINGS="${HZR_SMOKE_TEMP}/home/.claude/settings.json"
+HZR_CLAUDE_INSTRUCTIONS="${HZR_SMOKE_TEMP}/home/.claude/CLAUDE.md"
+HZR_CODEX_INSTRUCTIONS="${HZR_SMOKE_TEMP}/home/.codex/AGENTS.md"
+HZR_CODEX_CONFIG="${HZR_SMOKE_TEMP}/home/.codex/config.toml"
+for HZR_INTEGRATION_FILE in \
+  "${HZR_CLAUDE_SETTINGS}" \
+  "${HZR_CLAUDE_INSTRUCTIONS}" \
+  "${HZR_CODEX_INSTRUCTIONS}" \
+  "${HZR_CODEX_CONFIG}"; do
+  if grep -F "/versions/" "${HZR_INTEGRATION_FILE}" >/dev/null; then
+    echo "integration is pinned to an immutable release: ${HZR_INTEGRATION_FILE}" >&2
+    exit 1
+  fi
+done
+if ! grep -F "${HZR_INSTALLED_BIN}/hzr" "${HZR_CLAUDE_SETTINGS}" >/dev/null || \
+  ! grep -F "${HZR_INSTALLED_BIN}/hzr" "${HZR_CODEX_CONFIG}" >/dev/null || \
+  ! grep -F "${HZR_INSTALLED_ROOT}/share/hzr/HZR.md" "${HZR_CLAUDE_INSTRUCTIONS}" >/dev/null || \
+  ! grep -F "${HZR_INSTALLED_ROOT}/share/hzr/HZR.md" "${HZR_CODEX_INSTRUCTIONS}" >/dev/null; then
+  echo "integrations do not use HZR's stable binary and contract paths" >&2
+  exit 1
+fi
+HZR_CLAUDE_DESKTOP_CONFIG="${HZR_SMOKE_TEMP}/home/Library/Application Support/Claude/claude_desktop_config.json"
+if [[ -f "${HZR_CLAUDE_DESKTOP_CONFIG}" ]] && \
+  grep -F "/versions/" "${HZR_CLAUDE_DESKTOP_CONFIG}" >/dev/null; then
+  echo "Claude Desktop MCP is pinned to an immutable release" >&2
+  exit 1
+fi
+
 case "$(uname -s)" in
   Darwin) HZR_SERVICE_DEFINITION="${HZR_SMOKE_TEMP}/home/Library/LaunchAgents/dev.headz0r.hzr.hzrd.plist" ;;
   Linux) HZR_SERVICE_DEFINITION="${HZR_SMOKE_TEMP}/home/.config/systemd/user/dev.headz0r.hzr.hzrd.service" ;;

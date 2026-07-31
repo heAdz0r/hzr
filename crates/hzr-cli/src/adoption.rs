@@ -318,22 +318,27 @@ pub fn resolve_hook_binary(
         Some(path) => path.to_path_buf(),
         None => std::env::current_exe().context("cannot resolve the HZR executable")?,
     };
-    // Canonicalize so symlinked prefixes and `..` segments cannot hide a build path.
-    // During `--dry-run` the durable copy does not exist yet, so the preview is allowed
-    // to describe the path the confirmed run will create — the dev-path guard below
-    // still applies, it just runs against the uncanonicalized form.
-    let resolved = match candidate.canonicalize() {
+    let durable = if candidate.is_absolute() {
+        candidate.clone()
+    } else {
+        std::env::current_dir()
+            .context("cannot resolve the current directory")?
+            .join(&candidate)
+    };
+    // Resolve the physical target only for validation. Persisting this canonical path
+    // would turn ~/.local/bin/hzr into versions/<release>/bin/hzr and freeze every hook
+    // and MCP client on the release that happened to run the installer.
+    let physical = match durable.canonicalize() {
         Ok(resolved) => resolved,
         Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
-            candidate.clone()
+            durable.clone()
         }
         Err(error) => {
-            return Err(error).with_context(|| {
-                format!("HZR executable does not exist: {}", candidate.display())
-            });
+            return Err(error)
+                .with_context(|| format!("HZR executable does not exist: {}", durable.display()));
         }
     };
-    let display = resolved.to_string_lossy().replace('\\', "/");
+    let display = physical.to_string_lossy().replace('\\', "/");
     if !allow_dev_path
         && DEV_PATH_MARKERS
             .iter()
@@ -343,10 +348,10 @@ pub fn resolve_hook_binary(
             "refusing to bind hooks to the build directory {}: install a durable binary \
              (`hzr install --prefix ~/.local/bin`) or pass `--binary <path>`; \
              `--allow-dev-path` overrides this for development only",
-            resolved.display()
+            physical.display()
         );
     }
-    Ok(resolved)
+    Ok(durable)
 }
 
 fn managed_commands(binary: &Path) -> Result<ManagedCommands> {
@@ -670,6 +675,25 @@ mod tests {
             resolve_hook_binary(Some(Path::new("/nonexistent/hzr")), true, false).is_err(),
             "a hook must never be bound to a missing executable"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hook_binary_validates_but_preserves_a_durable_symlink() {
+        let directory = tempdir().expect("temporary directory");
+        let release = directory.path().join("versions/v0.2.0/bin");
+        let prefix = directory.path().join("bin");
+        fs::create_dir_all(&release).expect("release directory");
+        fs::create_dir_all(&prefix).expect("prefix directory");
+        let physical = release.join("hzr");
+        fs::write(&physical, b"#!/bin/sh\n").expect("fake binary");
+        let durable = prefix.join("hzr");
+        std::os::unix::fs::symlink(&physical, &durable).expect("durable symlink");
+
+        let resolved = resolve_hook_binary(Some(&durable), false, false)
+            .expect("durable symlink must be accepted");
+        assert_eq!(resolved, durable);
+        assert!(!resolved.to_string_lossy().contains("/versions/"));
     }
 
     #[test]
