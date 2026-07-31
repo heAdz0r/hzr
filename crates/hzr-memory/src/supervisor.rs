@@ -123,10 +123,13 @@ impl IcmSupervisor {
                 return Ok(StartOutcome::Attached { health });
             }
         };
-        if self.config.transport == IcmTransport::Http
-            && self.layout.pid_file.exists()
-            && let Ok(health) = self.client.readiness().await
-        {
+        let orphan_health =
+            if self.config.transport == IcmTransport::Http && self.layout.pid_file.exists() {
+                self.client.readiness().await.ok()
+            } else {
+                None
+            };
+        if let Some(health) = orphan_health {
             *process = ManagedProcess::Attached { lock: Some(lock) };
             return Ok(StartOutcome::Attached { health });
         }

@@ -73,10 +73,10 @@ impl ExecutionPipeline {
 
         let (child, executed, raw_fallback) = match spawn_command(&preferred, &envelope) {
             Ok(child) => (child, preferred, false),
-            Err(_) if raw_fallback_allowed => match spawn_command(&requested, &envelope) {
-                Ok(child) => (child, requested.clone(), true),
-                Err(raw_error) => return Err(raw_error),
-            },
+            Err(_) if raw_fallback_allowed => {
+                let child = spawn_command(&requested, &envelope)?;
+                (child, requested.clone(), true)
+            }
             Err(error) => return Err(error),
         };
 
