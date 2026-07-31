@@ -53,6 +53,12 @@ impl Config {
     /// applies when `current/engines` resolves to the very same directory, so a dangling
     /// or foreign `current` can never hijack engine execution.
     fn migrate_pinned_engine_directory(&mut self) {
+        if self.engines.directory.is_none() {
+            // A config first written by a source/debug binary predates the release bundle
+            // and legitimately contains `directory = None`. Once the same config is loaded
+            // by an installed bundle, adopt only a complete sibling engine directory.
+            self.engines.directory = discover_bundle_engine_directory();
+        }
         if let Some(directory) = self.engines.directory.clone() {
             let stable = stable_engine_directory(&directory);
             if stable != directory {
@@ -247,6 +253,12 @@ fn has_all_engines(directory: &Path) -> bool {
 }
 
 fn sibling_engine_directory(executable: &Path) -> Option<PathBuf> {
+    // `current_exe()` may preserve the public `~/.local/bin/hzr` symlink on macOS.
+    // Resolve it before deriving the bundle root or an installed binary will fall back
+    // to PATH even though its complete private engine directory is present.
+    let executable = executable
+        .canonicalize()
+        .unwrap_or_else(|_| executable.to_path_buf());
     let directory = executable.parent()?.parent()?.join("engines");
     if !has_all_engines(&directory) {
         return None;
@@ -413,7 +425,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        Config, ConfigError, EngineConfig, sibling_engine_directory, stable_engine_directory,
+        Config, ConfigError, EngineConfig, discover_bundle_engine_directory,
+        sibling_engine_directory, stable_engine_directory,
     };
 
     /// Build `<root>/versions/<release>/{bin,engines}` plus a `current` symlink, i.e. the
@@ -535,6 +548,17 @@ mod tests {
     }
 
     #[test]
+    fn test_absent_engine_directory_adopts_only_discovered_bundle() {
+        let discovered = discover_bundle_engine_directory();
+        let mut config = Config::default();
+        config.engines.directory = None;
+
+        config.migrate_pinned_engine_directory();
+
+        assert_eq!(config.engines.directory, discovered);
+    }
+
+    #[test]
     fn test_bundle_engine_directory_requires_all_managed_engines() {
         let directory = tempdir().expect("temporary directory");
         let bin = directory.path().join("bin");
@@ -552,6 +576,28 @@ mod tests {
         assert_eq!(
             sibling_engine_directory(&executable),
             Some(fs::canonicalize(engines).expect("canonical engine directory"))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_public_binary_symlink_discovers_private_bundle_engines() {
+        let directory = tempdir().expect("temporary directory");
+        let root = directory.path().join("install");
+        let release = versioned_bundle(&root, "v0.2.0-darwin-arm64");
+        point_current_at(&root, &release);
+        let public = directory.path().join("bin/hzr");
+        fs::create_dir_all(public.parent().expect("public parent")).expect("public directory");
+        std::os::unix::fs::symlink(root.join("current/bin/hzr"), &public)
+            .expect("public binary symlink");
+
+        assert_eq!(
+            sibling_engine_directory(&public),
+            Some(
+                fs::canonicalize(&root)
+                    .expect("canonical install root")
+                    .join("current/engines")
+            )
         );
     }
 
