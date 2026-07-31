@@ -523,27 +523,30 @@ fn contract_asset_path(source_dir: &Path) -> PathBuf {
     // Installed releases live at <root>/versions/<release>/bin while <root>/current
     // is the upgradeable public pointer. Keep instructions on that pointer instead
     // of canonicalizing them onto the release that ran `hzr install`.
-    if let Some(current) = source_dir.parent()
-        && current.file_name().is_some_and(|name| name == "current")
-    {
-        let stable_contract = current.join("share/hzr/HZR.md");
-        if stable_contract.is_file() {
-            return stable_contract;
+    if let Some(current) = source_dir.parent() {
+        if current.file_name().is_some_and(|name| name == "current") {
+            let stable_contract = current.join("share/hzr/HZR.md");
+            if stable_contract.is_file() {
+                return stable_contract;
+            }
         }
     }
-    if let Some(release_root) = source_dir.parent()
-        && release_root
+    if let Some(release_root) = source_dir.parent() {
+        let is_versioned_release = release_root
             .parent()
             .and_then(Path::file_name)
-            .is_some_and(|name| name == "versions")
-        && let Some(install_root) = release_root.parent().and_then(Path::parent)
-    {
-        let current = install_root.join("current");
-        let stable_contract = current.join("share/hzr/HZR.md");
-        if stable_contract.is_file()
-            && current.canonicalize().ok().as_deref() == release_root.canonicalize().ok().as_deref()
-        {
-            return stable_contract;
+            .is_some_and(|name| name == "versions");
+        if is_versioned_release {
+            if let Some(install_root) = release_root.parent().and_then(Path::parent) {
+                let current = install_root.join("current");
+                let stable_contract = current.join("share/hzr/HZR.md");
+                if stable_contract.is_file()
+                    && current.canonicalize().ok().as_deref()
+                        == release_root.canonicalize().ok().as_deref()
+                {
+                    return stable_contract;
+                }
+            }
         }
     }
 
