@@ -333,7 +333,7 @@ hzr hooks status
 hzr mcp serve
 hzr mcp config --client codex|claude-desktop
 hzr doctor [--json]
-hzr daemon serve|status|engines
+hzr daemon serve|status|engines|service install|start|stop|restart|status
 hzr engines status
 hzr index status|init
 hzr exec rewrite|run|approve|deny
@@ -344,7 +344,7 @@ hzr context plan <intent>
 hzr codec compile <text>
 hzr agent run [--json] <prompt>
 hzr savings
-hzr migrate scan|apply
+hzr migrate scan|apply|history|memory
 hzr rtk -- <fork arguments>
 ```
 
@@ -437,7 +437,10 @@ grepai собирается только из pinned commit после прим�
 
 `scripts/package-release.sh` добавляет internal `BUNDLE_MANIFEST.sha256` и создаёт `hzr-v0.2.0-<platform>.tar.gz`; `install.sh` отдельно проверяет release `SHA256SUMS`, внутренний manifest и обязательный bundle layout до атомарного переключения active version. Clean-install smoke запускает HZR с `PATH`, в котором отсутствуют внешние Node/RTK/grepai/ICM, и оставляет только системный Git. Release build проверяет checksum/integrity, license, executable version и protocol smoke test. Engine auto-update/sync отсутствует; будущая реализация не должна обновлять pins без явного подтверждения.
 
-До переключения `current` installer обязан либо re-attest-ить уже существующий same-version root по его manifest, либо fail closed. Текущий release candidate полностью проверяет fresh extracted candidate, но при существующем `versions/v0.2.0-<platform>` повторно его не проверяет; это release gap R2, а не заявленная гарантия immutability.
+До переключения `current` installer re-attest-ит уже существующий same-version root по
+byte-identical internal manifest, mandatory layout, modes, digests и разрешённым symlinks.
+Любое расхождение fail-closed до переключения; smoke fixtures подтверждают rejection для
+tampered, missing и symlink-injected roots, а чистый повторный install остаётся no-op.
 
 Artifact tooling поддерживает `darwin-arm64`, `darwin-x64`, `linux-arm64` и `linux-x64`; каждый artifact должен собираться и smoke-test запускаться нативно. Текущий public CI assembled-bundle gate выполняется на Linux x86_64. Windows artifact не входит в 0.2.0, а остальные заявленные platform artifacts не считаются release-verified до native job/smoke.
 
@@ -592,19 +595,19 @@ cargo test --workspace --all-targets --all-features
 | Blocker | Состояние | Closure evidence |
 |---|---|---|
 | RB-01 | source closed | fixture-тесты legacy instruction migration и transactional Codex/Claude Desktop MCP migration; повторный install — no-op |
-| RB-02 | deployment pending | direct client ownership снимается installer-ом; существующие foreign процессы намеренно не завершаются автоматически и должны исчезнуть после restart/explicit operator action |
+| RB-02 | live closed | direct client ownership снят installer-ом; два точно идентифицированных legacy `icm serve` завершены `SIGTERM`, повторный doctor не находит foreign owners |
 | RB-03 | closed | свежий native archive проходит clean-HOME CLI, hook, daemon, search, memory, MCP и stats без внешних engines/runtime |
-| RB-04 | deployment pending | verified artifact содержит актуальные `stats`/`mcp`; equality глобального binary проверяется после public install |
+| RB-04 | live closed | verified artifact установлен; global public binaries и bundled engines повторно сверены с release root |
 | RB-05 | closed | empty-ledger `COALESCE` regression test и clean-install `hzr stats --json` |
 | RB-06 | source closed | platform legacy discovery, SQLite Online Backup snapshot, content-addressed manifest и double-import idempotence test |
-| RB-07 | source closed / deployment pending | `launchd`/`systemd --user` lifecycle, stable `current/bin/hzrd`, canonicalized symlink tests и service smoke; live debug daemon заменяется только при deployment |
+| RB-07 | live closed on Darwin | `launchd` service активен через stable `current/bin/hzrd`; source также содержит и тестирует `systemd --user` lifecycle |
 | RB-08 | accepted boundary | codec гарантирован для managed `hzr agent run`; hooks не объявляются provider request/response interception и не начисляют несуществующую экономию |
 | RB-09 | closed | README, PRD, adoption/status и release notes синхронизированы с доказанными gates и честными KPI |
 | RB-10 | source closed | doctor проверяет contract asset, legacy directives, direct client ICM, bundle provenance и service ownership |
-| RB-11 | source closed / deployment pending | private pinned paths/versions, PATH-poisoning clean smoke, Caveman private Node; live equality проверяется после public install |
+| RB-11 | live closed on Darwin | private pinned paths/versions, PATH-poisoning clean smoke, Caveman private Node и live equality после public install подтверждены |
 | RB-12 | closed | same-version clean root re-attested; tampered, missing и symlink-injected roots fail closed |
 
-Source tree не имеет незакрытого P0, мешающего первичному push. Tag/release разрешены только после зелёного public CI/native matrix. Статус **globally adopted** разрешён только после public install и повторного live-аудита RB-02/RB-04/RB-07/RB-11.
+Source tree не имеет незакрытого P0, мешающего первичному push. Live adoption на Darwin закрывает RB-02/RB-04/RB-07/RB-11; tag/release для всей заявленной platform matrix разрешены только после зелёного public CI/native matrix.
 
 ## 14. Delivery status и следующий этап
 

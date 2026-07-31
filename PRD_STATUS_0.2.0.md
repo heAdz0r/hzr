@@ -5,10 +5,9 @@
 **Предыдущий аудит:** [PRD_STATUS.md](PRD_STATUS.md) и [REVIEW.md](REVIEW.md) — исторический `v0.1.0` audit trail
 **Метод:** повторный прогон **тех же самых repro-кейсов**, что дали G1–G7, end-to-end проверка adoption-поверхности в изолированном `HOME` и аудит self-contained release pipeline
 
-> Source/release gates выполнялись в throwaway `HOME`. Глобальный PATH-бинарник на момент
-> этого snapshot ещё отличается от verified artifact, а уже открытые клиенты удерживают
-> legacy процессы. Финальный adoption выполняется только из опубликованного SHA и завершается
-> отдельным live audit record.
+> Source/release gates выполнялись в throwaway `HOME`, затем тот же verified Darwin ARM64
+> artifact установлен глобально. Повторный live audit подтвердил bundle equality, active
+> launchd service, отсутствие foreign engine owners и `hzr doctor --json` без errors.
 
 ---
 
@@ -124,22 +123,22 @@ hzr: failed to read daemon token <path>; run `hzr daemon serve`: No such file or
 |---|---|
 | `cargo fmt --all --check` | ✅ exit 0 |
 | `cargo clippy --workspace --all-targets --all-features -D warnings` | ✅ exit 0 |
-| `cargo test --workspace --all-targets --all-features` | ✅ **222 passed, 0 failed** (свежий прогон) |
+| `cargo test --workspace --all-targets --all-features` | ✅ **224 passed, 0 failed** (свежий прогон) |
 | `rustup run 1.85.0 cargo check` (MSRV) | ✅ green |
 | `node --test bridge.test.mjs` | ✅ 2/2 |
-| `scripts/verify-fork-core.sh` | ✅ baseline `f4296ec4…` + current engine `d3be33ab…` verified |
-| `scripts/verify-fork-core.sh --test` | ✅ exit 0 детерминированно ×4 |
+| `scripts/verify-fork-core.sh --test` | ✅ baseline `f4296ec4…` + current engine `a8512845…`; 1699 passed, 1 documented ignored, остальные suites green |
 | `FORK_PARITY.md` без `missing`/`reimplemented` | ✅ (единственное вхождение — легенда) |
 | assembled bundle smoke | ✅ versions, ownership, provenance, daemon и bundled Node 22.17.1 покрыты |
 | outer `package-release.sh` + `smoke-install.sh` | ✅ Darwin ARM64 candidate: clean runtime, reinstall, tamper/missing/symlink rejection и upgrade green; public workflow запускает тот же gate на 4 native runners |
 
-**Отмечу архитектурное решение 0.2.0:** verifier теперь ведёт **двойную identity** — неизменяемый baseline `v0.1.0` (`f4296ec4…`) и evolvable current engine (`d3be33ab…`). Это корректный способ разрешить развитие fork-core, не потеряв provenance: §1.1 больше не читается как «snapshot заморожен навсегда», но исходный импорт остаётся доказуемым.
+**Отмечу архитектурное решение 0.2.0:** verifier теперь ведёт **двойную identity** — неизменяемый baseline `v0.1.0` (`f4296ec4…`) и evolvable current engine (`a8512845…`). Это корректный способ разрешить развитие fork-core, не потеряв provenance: §1.1 больше не читается как «snapshot заморожен навсегда», но исходный импорт остаётся доказуемым.
 
 ---
 
 ## 4. Новая adoption-поверхность (§16) — проверено end-to-end
 
-CLI: **18/18** групп команд из PRD §6.8, точное совпадение. Добавлены `install`, `uninstall`, `hooks status` и скрытый `hooks dispatch`.
+CLI surface из PRD §6.8 реализован; дополнительно доступны production service lifecycle и
+явные `migrate history|memory` с preview/confirmation contract.
 
 | Требование §16 / §13 | Проверка | Статус |
 |---|---|---|
@@ -186,7 +185,23 @@ Release pipeline теперь включает четыре отдельных �
 3. `package-release.sh` создаёт platform archive и внутренний `BUNDLE_MANIFEST.sha256`;
 4. `install.sh` проверяет release `SHA256SUMS` и manifest, ставит отдельный `versions/v0.2.0-<platform>` root и атомарно переключает `current`; `smoke-install.sh` доказывает clean install с урезанным `PATH` без внешних Node/RTK/grepai/ICM.
 
-Artifact mappings реализованы для macOS/Linux arm64/x64. Release workflow собирает каждый artifact на native runner и выполняет тот же outer package/install smoke до публикации. Локально этот полный gate подтверждён на Darwin ARM64; остальные три платформы подтверждает public matrix. Windows artifact в 0.2.0 отсутствует.
+Artifact mappings реализованы для macOS/Linux arm64/x64. Release workflow настроен собирать каждый artifact на native runner и выполнять тот же outer package/install smoke до публикации. Локально этот полный gate подтверждён на Darwin ARM64; остальные три платформы не считаются подтверждёнными до green public matrix. Windows artifact в 0.2.0 отсутствует.
+
+### 4.3 Финальный live audit 2026-08-01
+
+- verified `darwin-arm64` artifact установлен в `~/.local/share/hzr/current`; повторный
+  installer: `changed=false` для hooks, instructions, client MCP и service;
+- launchd service активен и использует только stable `current/bin/hzrd`;
+- bundle attestation: `hzr`, `hzrd`, RTK, grepai, ICM, Node, Caveman bridge и `HZR.md`
+  — все `pass`; installed RTK SHA совпадает с current-engine release binary;
+- `hzr doctor --json`: `healthy=true`, `errors=[]`; остаются только явные warnings для
+  FTS-only memory, 59 исторических daemon-free rewrites и двух host-global codec paths,
+  помеченных `unintercepted` без начисления savings;
+- legacy ICM: 141 memories / 148 durable rows импортированы в repository namespace;
+  legacy RTK: 22 982 commands + 725 parse failures импортированы с signed totals;
+  оба повторных migration run вернули нулевой импорт и `changed=false`;
+- два legacy `icm serve`, запущенные Claude до миграции config, завершены `SIGTERM` после
+  проверки точных PID/command; повторный doctor не находит foreign owners или wrappers.
 
 ---
 
@@ -195,14 +210,12 @@ Artifact mappings реализованы для macOS/Linux arm64/x64. Release w
 | ID | Раздел | Severity | Суть |
 |---|---|---|---|
 | **R1** | §8 / §13 | RELEASE | Full archive/install/re-attestation smoke подтверждён на `darwin-arm64`; `darwin-x64`, `linux-x64` и `linux-arm64` требуют native CI jobs перед публикацией соответствующих artifacts |
-| **L1** | §13.1 | LIVE | Уже открытые до migration Claude/Codex процессы могут удерживать старые direct-ICM children до перезапуска самих клиентов; installer намеренно не убивает чужие процессы |
 | **A3** | §6.6 / RB-08 | ПРИНЯТАЯ ГРАНИЦА | Claude/Codex не дают безопасный global response hook. Doctor маркирует путь `unintercepted`, managed codec остаётся в `hzr agent`, а savings для host-global ответов не начисляются |
 | **A4** | §11 / §16.5 | НИЗКИЙ | Content-addressed backups изменяемых `settings.json`, `CLAUDE.md` и `AGENTS.md` сохраняются; автоудаление запрещено верно, но долгосрочная политика ротации не определена |
 | **A5** | §6.6 | НИЗКИЙ | Идентификаторы защищены только при наличии `_`; CamelCase и однословные — нет. Латентно безопасно при paragraph-level трансформе |
 | **KPI** | §4.2 | **ОТКРЫТО** | **0 из 9 product metrics измерено — без изменений с 0.1.0** |
 
-R1 блокирует только честное заявление «вся platform matrix verified». L1 снимается
-перезапуском уже открытых клиентов после live migration. A3/A4/A5 — документированные
+R1 блокирует только честное заявление «вся platform matrix verified». A3/A4/A5 — документированные
 ограничения, KPI — незавершённое измерение; ни один из них не разрешает публиковать
 прогноз экономии как результат.
 
