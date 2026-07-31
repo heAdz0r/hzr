@@ -1,0 +1,239 @@
+🔍 178 in 40F:
+
+📄 /Users/andrew/Programming/rtk/src/cargo_cmd.rs (12):
+   419: /// Merge another test result into this one
+   420: fn merge(&mut self, other: &Self) {
+   421: self.passed += other.passed;
+   422: self.failed += other.failed;
+   423: self.ignored += other.ignored;
+   424: self.measured += other.measured;
+   425: self.filtered_out += other.filtered_out;
+   426: self.suites += other.suites;
+   427: self.duration_secs += other.duration_secs;
+   428: self.has_duration = self.has_duration && other.has_duration;
+  +2
+
+📄 /Users/andrew/Programming/rtk/src/cc_economics.rs (1):
+   506: println!("  RTK compresses CLI outputs before they enter Claude's context.");
+
+📄 /Users/andrew/Programming/rtk/src/ccusage.rs (2):
+    94: /// Build the ccusage command, falling back to npx if binary not in PATH
+   122: /// Fetch usage data from ccusage for the last 90 days
+
+📄 /Users/andrew/Programming/rtk/src/container.rs (3):
+   331: .or_else(|| p["targetPort"].as_str().and_then(|s| s.parse().ok()))
+   393: // Extract just the port numbers
+   396: .filter_map(|p| p.split("->").next().and_then(|s| s.split(':').last()))
+
+📄 /Users/andrew/Programming/rtk/src/deps.rs (4):
+   132: if let Some(name) = json.get("name").and_then(|v| v.as_str()) {
+   133: let version = json.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+   136: if let Some(deps) = json.get("dependencies").and_then(|v| v.as_object()) {
+   150: ...f let Some(dev_deps) = json.get("devDependencies").and_then(|v| v.as_object()) {
+
+📄 /Users/andrew/Programming/rtk/src/discover/mod.rs (5):
+    19: // For display: the most common raw command
+   118: // Track the display name with status
+   140: // Otherwise just skip
+   151: // Pick the most common command as the display name
+   218: /// Extract the subcommand from a command string (second word).
+
+📄 /.../discover/provider.rs (20):
+    18: /// Whether the tool_result indicated an error
+    20: /// Chronological sequence index within the session
+    37: /// Get the base directory for Claude Code projects.
+    84: let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    90: // Walk the project directory recursively (catches subagents/)
+    97: if file_path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+   126: .and_then(|s| s.to_str())
+   130: // First pass: collect all tool_use Bash commands with their IDs and sequence
+   153: let entry_type = entry.get("type").and_then(|t| t.as_str()).unwrap_or("");
+   159: entry.pointer("/message/content").and_then(|c| c.as_array())
+  +10
+
+📄 /.../discover/registry.rs (11):
+   287: "then\n",
+   288: "then ",
+   339: // Fast check with RegexSet — take the last (most specific) match
+   391: /// Extract the base command (first word, or first two if it looks like a subcom...
+   399: // If the second token looks like a subcommand (no leading -)
+   404: .and_then(|i| {
+   421: /// For pipes `|`, only keep the first command.
+   625: other => panic!("expected Unsupported, got {:?}", other),
+   719: // except Other has a matching pattern in the registry
+   724: other => panic!("cargo {subcmd} should be Supported, got {other:?}"),
+  +1
+
+📄 /.../discover/report.rs (2):
+     8: ...orks via external_subcommand passthrough, no filtering (e.g., cargo fmt → Other)
+   177: // UTF-8 safe truncation: collect chars up to max-2, then add ".."
+
+📄 /Users/andrew/Programming/rtk/src/env_cmd.rs (8):
+    23: let mut other_vars = Vec::new();
+    59: other_vars.push(entry);
+   104: if !other_vars.is_empty() {
+   105: println!("\n📋 Other:");
+   106: for (k, v) in other_vars.iter().take(20) {
+   109: if other_vars.len() > 20 {
+   110: println!("  ... +{} more", other_vars.len() - 20);
+   119: + other_vars.len().min(20);
+
+📄 /Users/andrew/Programming/rtk/src/filter.rs (2):
+   180: // Handle Python docstrings (keep them in minimal mode)
+   273: // Only keep the opening and closing braces
+
+📄 /Users/andrew/Programming/rtk/src/find_cmd.rs (1):
+   249: // run() converts "." to "*" internally, test the logic
+
+📄 /Users/andrew/Programming/rtk/src/gh_cmd.rs (1):
+   863: // gh pr create outputs the URL on success
+
+📄 /Users/andrew/Programming/rtk/src/git.rs (9):
+    79: // Default RTK behavior: stat first, then compacted diff
+   314: // Apply RTK defaults only if user didn't specify them
+   328: .and_then(|arg| arg[1..].parse::<usize>().ok())
+   817: .and_then(|n| n.parse().ok())
+   823: .and_then(|n| n.parse().ok())
+   829: .and_then(|n| n.parse().ok())
+  1422: // Compile-time verification that the function exists with correct signature
+  1427: ...t message (2 days ago) <author>\ndef5678 Another commit (1 week ago) <other>\n";
+  1489: // The line has 30 Thai chars (90 bytes) + other text, so > 80 bytes
+
+📄 /Users/andrew/Programming/rtk/src/go_cmd.rs (1):
+   171: pub fn run_other(args: &[OsString], verbose: u8) -> Result<()> {
+
+📄 /Users/andrew/Programming/rtk/src/grep_cmd.rs (3):
+   207: // Test that the function signature accepts extra_args
+   208: // This is a compile-time test - if it compiles, the signature is correct
+   210: // No need to actually run - we're verifying the parameter exists
+
+📄 /Users/andrew/Programming/rtk/src/init.rs (19):
+   339: let hooks = match root.get_mut("hooks").and_then(|h| h.get_mut("PreToolUse")) {
+   352: if let Some(hooks_array) = entry.get("hooks").and_then(|h| h.as_array()) {
+   354: if let Some(command) = hook.get("command").and_then(|c| c.as_str()) {
+   631: .and_then(|h| h.get("PreToolUse"))
+   632: .and_then(|p| p.as_array())
+   713: /// Hook-only mode: just the hook, no RTK.md
+   808: eprintln!("    Action: Manually remove the incomplete block, then re-run:");
+   960: eprintln!("    Action: Manually remove the incomplete block, then re-run:");
+  1190: // Just verify RTK_INSTRUCTIONS constant has the right content
+  1339: fn test_hook_not_present_other_hooks() {
+  +9
+
+📄 /Users/andrew/Programming/rtk/src/json_cmd.rs (1):
+    51: /// Useful for piping JSON from other commands (e.g., `gh api`, `curl`).
+
+📄 /.../learn/detector.rs (10):
+    12: Other(String),
+    24: ErrorType::Other(s) => s,
+    58: r"(?i)(no such file or directory|cannot find the path|file not found)"
+   109: ErrorType::Other("General Error".to_string())
+   194: matches!(error_type, ErrorType::CommandNotFound | ErrorType::Other(_))
+   282: /// Extract the specific token that changed between wrong and right commands
+   293: // Return the most distinctive change
+   320: // For each group, keep the best confidence example
+   421: ErrorType::Other(_)
+   544: // Let me adjust: they have same base "cat" but different args
+
+📄 /Users/andrew/Programming/rtk/src/learn/mod.rs (1):
+    37: println!("No Claude Code sessions found in the last {} days.", since);
+
+📄 /Users/andrew/Programming/rtk/src/lint_cmd.rs (2):
+    31: // Detect if eslint or other linter (ignore paths containing / or .)
+    46: // Add user arguments (skip first if it was the linter name)
+
+📄 /Users/andrew/Programming/rtk/src/local_llm.rs (4):
+    19: .and_then(|e| e.to_str())
+    62: (!functions.is_empty()).then(|| format!("{} fn", functions.len())),
+    63: (!structs.is_empty()).then(|| format!("{} struct", structs.len())),
+    64: (!traits.is_empty()).then(|| format!("{} trait", traits.len())),
+
+📄 /Users/andrew/Programming/rtk/src/log_cmd.rs (1):
+    48: /// For use by other modules
+
+📄 /Users/andrew/Programming/rtk/src/ls.rs (2):
+    52: // Build ls -la + any extra flags the user passed (e.g. -R)
+    53: // Strip -l, -a, -h (we handle all of these ourselves)
+
+📄 /Users/andrew/Programming/rtk/src/main.rs (15):
+    58: ...gned to filter and summarize system outputs before they reach your LLM context."
+   620: Other(Vec<OsString>),
+   662: Other(Vec<OsString>),
+   675: Other(Vec<OsString>),
+   704: Other(Vec<OsString>),
+   797: Other(Vec<OsString>),
+   822: Other(Vec<OsString>),
+   900: GitCommands::Other(args) => {
+   929: PnpmCommands::Other(args) => {
+   995: DockerCommands::Other(args) => {
+  +5
+
+📄 /Users/andrew/Programming/rtk/src/parser/error.rs (1):
+    35: Other(#[from] anyhow::Error),
+
+📄 /Users/andrew/Programming/rtk/src/parser/mod.rs (4):
+    31: /// Unwrap the parsed data, panicking on Passthrough
+    40: /// Get the tier level (1 = Full, 2 = Degraded, 3 = Passthrough)
+    54: /// Map the parsed data while preserving tier
+   179: let end_pos = start_pos + i + 1; // +1 to include the `}`
+
+📄 /Users/andrew/Programming/rtk/src/pip_cmd.rs (1):
+   163: .and_then(|o| String::from_utf8(o.stdout).ok())
+
+📄 /.../src/playwright_cmd.rs (2):
+   121: .and_then(|r| r.error.as_ref())
+   168: let duration_ms = DURATION_RE.captures(&clean_output).and_then(|caps| {
+
+📄 /Users/andrew/Programming/rtk/src/pnpm_cmd.rs (1):
+   571: // Compile-time verification that the function exists with correct signature
+
+📄 /Users/andrew/Programming/rtk/src/prettier_cmd.rs (1):
+   163: Code style issues found in the above file(s). Forgot to run Prettier?
+
+📄 /Users/andrew/Programming/rtk/src/prisma_cmd.rs (1):
+    27: /// Create a Command that will run prisma (tries global first, then npx)
+
+📄 /Users/andrew/Programming/rtk/src/pytest_cmd.rs (1):
+    85: .and_then(|o| String::from_utf8(o.stdout).ok())
+
+📄 /Users/andrew/Programming/rtk/src/read.rs (2):
+    27: .and_then(|e| e.to_str())
+   171: // Compile-time verification that the function exists with correct signature
+
+📄 /Users/andrew/Programming/rtk/src/ruff_cmd.rs (5):
+    51: // Add user arguments (skip "check" if it was the first arg)
+    70: // Format or other commands - pass through
+    93: // Fallback for other commands (version, etc.)
+   292: result.push_str("\n💡 Run `ruff format` to format these files\n");
+   295: // Write mode or other output - show summary
+
+📄 /Users/andrew/Programming/rtk/src/summary.rs (3):
+   101: .then_some(true)
+   295: .and_then(|c| c.get(1))
+   296: .and_then(|m| m.as_str().parse().ok())
+
+📄 /Users/andrew/Programming/rtk/src/tracking.rs (9):
+   203: /// Opens or creates the SQLite database at the platform-specific location.
+   204: /// Automatically creates the `commands` table if it doesn't exist and runs
+   260: /// Calculates savings metrics and stores the record in the database.
+   726: /// and records token savings. Use instead of the deprecated [`track`] function.
+   748: /// when the command completes.
+   765: /// Track the command with elapsed time and token counts.
+   767: /// Records the command execution with:
+   920: // Use unique test identifier to avoid conflicts with other tests
+   980: // because the savings calculation is correct for both cases
+
+📄 /Users/andrew/Programming/rtk/src/tree.rs (3):
+     3: //! This module proxies to the native `tree` command and filters the output
+   115: // Skip the final summary line (e.g., "5 directories, 23 files")
+   120: // Skip empty lines at the end
+
+📄 /Users/andrew/Programming/rtk/src/utils.rs (3):
+   175: /// Detect the package manager used in the current directory.
+   195: /// Build a Command using the detected package manager's exec mechanism.
+   369: // In the test environment (rtk repo), there's no JS lockfile
+
+📄 /Users/andrew/Programming/rtk/src/vitest_cmd.rs (1):
+   152: let duration_ms = DURATION_RE.captures(&clean_output).and_then(|caps| {
+
+... +27

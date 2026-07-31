@@ -1,0 +1,25 @@
+name: Documentation Validation
+
+on:
+  pull_request:
+    paths:
+      - "src/**/*.rs"
+      - "Cargo.toml"
+      - "**/*.md"
+      - ".claude/hooks/*.sh"
+      - "hooks/*.sh"
+      - "scripts/validate-docs.sh"
+      - "scripts/sync-architecture-modules.sh"
+  push:
+    branches:
+      - master
+      - "feat/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate documentation consistency
+        run: bash scripts/validate-docs.sh

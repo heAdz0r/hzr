@@ -1,0 +1,72 @@
+🧠 9F for 'lazy_static!' (scan 55F)
+
+📄 filter.rs [12.6]
+   149: lazy_static! {
+   150: static ref MULTIPLE_BLANK_LINES: Regex = Regex::new(r"\n{3,}").unwrap();
+       ~ lazy_static
+
+   230: lazy_static! {
+   231: static ref IMPORT_PATTERN: Regex =
+       ~ lazy_static
+
+  +1 more lines
+
+📄 next_cmd.rs [12.3]
+    58: fn filter_next_build(output: &str) -> String {
+    59: lazy_static::lazy_static! {
+    60: // Route line pattern: ○ /dashboard    1.2 kB  132 kB
+       ~ lazy_static
+
+   188: fn extract_time(line: &str) -> Option<String> {
+   189: lazy_static::lazy_static! {
+   190: static ref TIME_RE: Regex = Regex::new(r"(\d+(?:\.\d+)?)\s*(s|ms)").unwrap();
+       ~ lazy_static
+
+📄 playwright_cmd.rs [12.3]
+   140: fn extract_playwright_regex(output: &str) -> Option<TestResult> {
+   141: lazy_static::lazy_static! {
+   142: static ref SUMMARY_RE: Regex = Regex::new(
+       ~ lazy_static
+
+   196: fn extract_failures_regex(output: &str) -> Vec<TestFailure> {
+   197: lazy_static::lazy_static! {
+   198: static ref TEST_PATTERN: Regex = Regex::new(
+       ~ lazy_static
+
+📄 discover/registry.rs [9.6]
+   303: lazy_static! {
+   304: static ref REGEX_SET: RegexSet = RegexSet::new(PATTERNS).expect("invalid regex patterns");
+       ~ lazy_static
+
+     1: use lazy_static::lazy_static;
+     2: use regex::{Regex, RegexSet};
+       ~ lazy_static
+
+📄 learn/detector.rs [9.6]
+    48: lazy_static! {
+    49: static ref UNKNOWN_FLAG_RE: Regex = Regex::new(
+       ~ lazy_static
+
+     1: use lazy_static::lazy_static;
+     2: use regex::Regex;
+       ~ lazy_static
+
+📄 runner.rs [8.4]
+    90: fn filter_errors(output: &str) -> String {
+    91: lazy_static::lazy_static! {
+    92: static ref ERROR_PATTERNS: Vec<Regex> = vec![
+       ~ lazy_static
+
+📄 tsc_cmd.rs [8.4]
+    58: fn filter_tsc_output(output: &str) -> String {
+    59: lazy_static::lazy_static! {
+    60: // Pattern: src/file.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.
+       ~ lazy_static
+
+📄 utils.rs [8.4]
+    47: pub fn strip_ansi(text: &str) -> String {
+    48: lazy_static::lazy_static! {
+    49: static ref ANSI_RE: Regex = Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").unwrap();
+       ~ lazy_static
+
+... +1F

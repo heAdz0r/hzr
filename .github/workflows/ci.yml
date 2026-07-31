@@ -1,0 +1,83 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  assembled-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.18.1
+          cache: npm
+          cache-dependency-path: integrations/caveman-code/package-lock.json
+      - run: scripts/build-bundle.sh "$RUNNER_TEMP/hzr-dist"
+
+  fork-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: bash -n scripts/*.sh
+      - run: ./scripts/verify-fork-core.sh --test
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-targets --all-features
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - run: cargo check --workspace --all-targets --all-features
+
+  caveman-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.18.1
+          cache: npm
+          cache-dependency-path: integrations/caveman-code/package-lock.json
+      - run: npm ci --prefix integrations/caveman-code
+      - run: npm audit --omit=dev --audit-level=high --prefix integrations/caveman-code
+      - run: node --check integrations/caveman-code/bridge.mjs
+
+  grepai-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.2
+      - run: git clone --filter=blob:none https://github.com/yoanbernabeu/grepai /tmp/hzr-grepai
+      - run: git -C /tmp/hzr-grepai checkout --detach 65c345ca32122c17a39a5bbec2780c2eea773a12
+      - run: git -C /tmp/hzr-grepai apply --check "$GITHUB_WORKSPACE/patches/grepai/0.35.0-disable-worktree-discovery.patch"
+      - run: git -C /tmp/hzr-grepai apply "$GITHUB_WORKSPACE/patches/grepai/0.35.0-disable-worktree-discovery.patch"
+      - run: go test ./cli
+        working-directory: /tmp/hzr-grepai

@@ -1,0 +1,35 @@
+🔍 11 in 11F:
+
+📄 /Users/andrew/Programming/rtk/src/config.rs (1):
+     1: use anyhow::Result;
+
+📄 /Users/andrew/Programming/rtk/src/deps.rs (1):
+     2: use anyhow::Result;
+
+📄 /Users/andrew/Programming/rtk/src/diff_cmd.rs (1):
+     3: use anyhow::Result;
+
+📄 /Users/andrew/Programming/rtk/src/discover/mod.rs (1):
+     5: use anyhow::Result;
+
+📄 /Users/andrew/Programming/rtk/src/env_cmd.rs (1):
+     2: use anyhow::Result;
+
+📄 /Users/andrew/Programming/rtk/src/find_cmd.rs (1):
+     2: use anyhow::Result;
+
+📄 /Users/andrew/Programming/rtk/src/learn/mod.rs (1):
+     5: use anyhow::Result;
+
+📄 /Users/andrew/Programming/rtk/src/learn/report.rs (1):
+     2: use anyhow::Result;
+
+📄 /Users/andrew/Programming/rtk/src/local_llm.rs (1):
+   281: use anyhow::Result;
+
+📄 /Users/andrew/Programming/rtk/src/log_cmd.rs (1):
+     2: use anyhow::Result;
+
+📄 /Users/andrew/Programming/rtk/src/tracking.rs (1):
+    32: use anyhow::Result;
+

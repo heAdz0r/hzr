@@ -1,0 +1,41 @@
+name: Git Parity Benchmark Gates
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  git-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run git parity benchmark
+        run: bash benchmarks/parity_git/bench_parity_git.sh
+
+      - name: Analyze git parity benchmark (enforce thresholds)
+        run: python3 benchmarks/parity_git/analyze_parity_git.py --fail-on-thresholds
+
+      - name: Run analyzer tests
+        run: python3 -m unittest discover -s benchmarks/parity_git/tests -p 'test_*.py'
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-parity-benchmark-results
+          path: |
+            benchmarks/parity_git/results_raw.csv
+            benchmarks/parity_git/results_env.txt
+            benchmarks/parity_git/RESULTS.md

@@ -1,0 +1,97 @@
+🧠 40F for 'verbose > 0' (scan 55F)
+
+📄 git.rs [14.9]
+    90: if verbose > 0 {
+    91: eprintln!("Git diff summary:");
+       ~ verbose
+
+   213: if !diff_text.is_empty() {
+   214: if verbose > 0 {
+   215: println!("\n--- Changes ---");
+       ~ verbose
+
+  +37 more lines
+
+📄 init.rs [14.8]
+   208: if existing == REWRITE_HOOK {
+   209: if verbose > 0 {
+   210: eprintln!("Hook already up to date: {}", hook_path.display());
+       ~ verbose
+
+   215: .with_context(|| format!("Failed to write hook to {}", hook_path.display()))?;
+   216: if verbose > 0 {
+   217: eprintln!("Updated hook: {}", hook_path.display());
+       ~ verbose
+
+  +36 more lines
+
+📄 cargo_cmd.rs [14.2]
+    41: if verbose > 0 {
+    42: eprintln!("Running: cargo {} {}", subcommand, args.join(" "));
+       ~ verbose
+
+   679: if verbose > 0 {
+   680: eprintln!("cargo passthrough: {:?}", args);
+       ~ verbose
+
+  +18 more lines
+
+📄 cc_economics.rs [14.1]
+   510: // Verbose mode: legacy metrics
+   511: if verbose > 0 {
+   512: println!("  Legacy metrics (reference only):");
+       ~ verbose
+
+   589: if verbose > 0 {
+   590: // Verbose: include legacy metrics
+       ~ verbose
+
+  +15 more lines
+
+📄 container.rs [14.1]
+   414: if verbose > 0 {
+   415: eprintln!("docker passthrough: {:?}", args);
+       ~ verbose
+
+   438: if verbose > 0 {
+   439: eprintln!("kubectl passthrough: {:?}", args);
+       ~ verbose
+
+  +15 more lines
+
+📄 pnpm_cmd.rs [14.0]
+   320: ParseResult::Full(data) => {
+   321: if verbose > 0 {
+   322: eprintln!("pnpm list (Tier 1: Full JSON parse)");
+       ~ verbose
+
+   326: ParseResult::Degraded(data, warnings) => {
+   327: if verbose > 0 {
+   328: emit_degradation_warning("pnpm list", &warnings.join(", "));
+       ~ verbose
+
+  +14 more lines
+
+📄 pip_cmd.rs [13.6]
+    21: if verbose > 0 && use_uv {
+    22: eprintln!("Using uv (pip-compatible)");
+       ~ verbose
+
+    66: if verbose > 0 {
+    67: eprintln!("Running: {} pip list --format=json", base_cmd);
+       ~ verbose
+
+  +9 more lines
+
+📄 prisma_cmd.rs [13.6]
+    54: if verbose > 0 {
+    55: eprintln!("Running: prisma generate");
+       ~ verbose
+
+   107: if verbose > 0 {
+   108: eprintln!("Running: {}", cmd_name);
+       ~ verbose
+
+  +8 more lines
+
+... +32F

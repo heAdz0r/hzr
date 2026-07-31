@@ -1,0 +1,13 @@
+Date: Sat Feb 14 22:34:25 UTC 2026
+Commit: 4b0a413562c775757d5bc09a6ff966b4e532508c
+rtk_bin: /Users/andrew/Programming/rtk/target/release/rtk
+rtk: rtk 0.15.3
+grep: grep (BSD grep, GNU compatible) 2.6.0-FreeBSD
+tiktoken_encoding: cl100k_base
+rtk_grep_max: 200
+rgai_max: 8
+head_n_lines: 100
+OS: Darwin MacBook-Pro-Andy.local 25.2.0 Darwin Kernel Version 25.2.0: Tue Nov 18 21:09:56 PST 2025; root:xnu-12377.61.12~1/RELEASE_ARM64_T6041 arm64
+CPU: Apple M4 Pro
+Rust files: 54
+Total LOC: 23240

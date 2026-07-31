@@ -1,0 +1,44 @@
+🧠 5F for 'package_manager_exec' (scan 55F)
+
+📄 lint_cmd.rs [12.3]
+     1: use crate::tracking;
+     2: use crate::utils::{package_manager_exec, truncate};
+     3: use anyhow::{Context, Result};
+       ~ package_manager_exec
+
+    39: let mut cmd = package_manager_exec(linter);
+       ~ package_manager_exec
+
+📄 playwright_cmd.rs [12.3]
+     1: use crate::tracking;
+     2: use crate::utils::{package_manager_exec, strip_ansi};
+     3: use anyhow::{Context, Result};
+       ~ package_manager_exec
+
+   222: let mut cmd = package_manager_exec("playwright");
+       ~ package_manager_exec
+
+📄 prettier_cmd.rs [12.3]
+     1: use crate::tracking;
+     2: use crate::utils::package_manager_exec;
+     3: use anyhow::{Context, Result};
+       ~ package_manager_exec
+
+     8: let mut cmd = package_manager_exec("prettier");
+       ~ package_manager_exec
+
+📄 vitest_cmd.rs [12.3]
+     9: use crate::tracking;
+    10: use crate::utils::{package_manager_exec, strip_ansi};
+       ~ package_manager_exec
+
+   225: let mut cmd = package_manager_exec("vitest");
+   226: cmd.arg("run"); // Force non-watch mode
+       ~ package_manager_exec
+
+📄 utils.rs [10.9]
+   196: /// Returns a Command ready to have tool-specific args appended.
+   197: pub fn package_manager_exec(tool: &str) -> Command {
+   198: let tool_exists = Command::new("which")
+       ~ package_manager_exec
+

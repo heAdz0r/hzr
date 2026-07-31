@@ -1,0 +1,9 @@
+/Users/andrew/Programming/rtk/src/lint_cmd.rs:2:use crate::utils::{package_manager_exec, truncate};
+/Users/andrew/Programming/rtk/src/lint_cmd.rs:39:    let mut cmd = package_manager_exec(linter);
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:10:use crate::utils::{package_manager_exec, strip_ansi};
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:225:    let mut cmd = package_manager_exec("vitest");
+/Users/andrew/Programming/rtk/src/prettier_cmd.rs:2:use crate::utils::package_manager_exec;
+/Users/andrew/Programming/rtk/src/prettier_cmd.rs:8:    let mut cmd = package_manager_exec("prettier");
+/Users/andrew/Programming/rtk/src/utils.rs:197:pub fn package_manager_exec(tool: &str) -> Command {
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:2:use crate::utils::{package_manager_exec, strip_ansi};
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:222:    let mut cmd = package_manager_exec("playwright");

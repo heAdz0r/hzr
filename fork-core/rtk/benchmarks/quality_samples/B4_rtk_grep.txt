@@ -1,0 +1,125 @@
+🔍 41 in 41F:
+
+📄 /Users/andrew/Programming/rtk/src/cargo_cmd.rs (1):
+   699: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/cc_economics.rs (1):
+   829: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/ccusage.rs (1):
+   217: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/curl_cmd.rs (1):
+    83: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/diff_cmd.rs (1):
+   214: #[cfg(test)]
+
+📄 /.../discover/provider.rs (1):
+   237: #[cfg(test)]
+
+📄 /.../discover/registry.rs (1):
+   505: #[cfg(test)]
+
+📄 /.../src/display_helpers.rs (1):
+   304: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/filter.rs (1):
+   368: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/find_cmd.rs (1):
+   205: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/gh_cmd.rs (1):
+  1084: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/git.rs (1):
+  1288: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/go_cmd.rs (1):
+   425: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/golangci_cmd.rs (1):
+   195: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/grep_cmd.rs (1):
+   186: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/init.rs (1):
+  1090: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/json_cmd.rs (1):
+   146: #[cfg(test)]
+
+📄 /.../learn/detector.rs (1):
+   352: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/learn/report.rs (1):
+   118: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/lint_cmd.rs (1):
+   244: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/local_llm.rs (1):
+   274: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/log_cmd.rs (1):
+   218: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/ls.rs (1):
+   228: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/main.rs (1):
+  1468: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/next_cmd.rs (1):
+   198: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/npm_cmd.rs (1):
+    80: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/parser/mod.rs (1):
+   190: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/pip_cmd.rs (1):
+   254: #[cfg(test)]
+
+📄 /.../src/playwright_cmd.rs (1):
+   283: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/pnpm_cmd.rs (1):
+   515: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/prettier_cmd.rs (1):
+   141: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/prisma_cmd.rs (1):
+   432: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/pytest_cmd.rs (1):
+   281: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/read.rs (1):
+   145: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/ruff_cmd.rs (1):
+   319: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/runner.rs (1):
+   244: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/tracking.rs (1):
+   890: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/tree.rs (1):
+   136: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/tsc_cmd.rs (1):
+   175: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/utils.rs (1):
+   228: #[cfg(test)]
+
+📄 /Users/andrew/Programming/rtk/src/vitest_cmd.rs (1):
+   271: #[cfg(test)]
+

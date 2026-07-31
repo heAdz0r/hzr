@@ -1,0 +1,106 @@
+🧠 27F for '\.unwrap_or\(1\)' (scan 55F)
+
+📄 gh_cmd.rs [6.4]
+    70: eprintln!("{}", stderr.trim());
+    71: std::process::exit(output.status.code().unwrap_or(1));
+    72: }
+       ~ unwrap_or
+
+    88: for pr in prs.iter().take(20) {
+    89: let number = pr["number"].as_i64().unwrap_or(0);
+    90: let title = pr["title"].as_str().unwrap_or("???");
+       ~ unwrap_or
+
+  +48 more lines
+
+📄 git.rs [5.7]
+    62: eprintln!("{}", stderr);
+    63: std::process::exit(output.status.code().unwrap_or(1));
+    64: }
+       ~ unwrap_or
+
+   109: println!("\n--- Changes ---");
+   110: let compacted = compact_diff(&diff_stdout, max_lines.unwrap_or(100));
+   111: println!("{}", compacted);
+       ~ unwrap_or
+
+  +22 more lines
+
+📄 cc_economics.rs [5.6]
+   600: for p in periods {
+   601: let spent = p.cc_cost.map(format_usd).unwrap_or_else(|| "—".to_string());
+   602: let saved = p
+       ~ unwrap_or
+
+   604: .map(format_tokens)
+   605: .unwrap_or_else(|| "—".to_string());
+   606: let weighted = p
+       ~ unwrap_or
+
+  +20 more lines
+
+📄 container.rs [5.5]
+    33: .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+    34: .unwrap_or_default();
+       ~ unwrap_or
+
+    62: let name = parts[1];
+    63: let short_image = parts.get(3).unwrap_or(&"").split('/').last().unwrap_or("");
+    64: let ports = compact_ports(parts.get(4).unwrap_or(&""));
+       ~ unwrap_or
+
+  +17 more lines
+
+📄 deps.rs [5.1]
+    11: let dir = if path.is_file() {
+    12: path.parent().unwrap_or(Path::new("."))
+    13: } else {
+       ~ unwrap_or
+
+    27: found = true;
+    28: raw.push_str(&fs::read_to_string(&cargo_path).unwrap_or_default());
+    29: rtk.push_str("📦 Rust (Cargo.toml):\n");
+       ~ unwrap_or
+
+  +11 more lines
+
+📄 cargo_cmd.rs [4.5]
+    62: if !output.status.success() {
+    63: std::process::exit(output.status.code().unwrap_or(1));
+    64: }
+       ~ unwrap_or
+
+   133: if trimmed.starts_with("Installing") {
+   134: let rest = trimmed.strip_prefix("Installing").unwrap_or("").trim();
+   135: if !rest.is_empty() && !rest.starts_with('/') {
+       ~ unwrap_or
+
+  +5 more lines
+
+📄 discover/provider.rs [4.5]
+    66: .checked_sub(Duration::from_secs(days * 86400))
+    67: .unwrap_or(SystemTime::UNIX_EPOCH)
+    68: });
+       ~ unwrap_or
+
+    83: if let Some(filter) = project_filter {
+    84: let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    85: if !dir_name.contains(filter) {
+       ~ unwrap_or
+
+  +5 more lines
+
+📄 go_cmd.rs [4.4]
+    78: if !output.status.success() {
+    79: std::process::exit(output.status.code().unwrap_or(1));
+    80: }
+       ~ unwrap_or
+
+   121: if !output.status.success() {
+   122: std::process::exit(output.status.code().unwrap_or(1));
+   123: }
+       ~ unwrap_or
+
+  +4 more lines
+
+... +19F

@@ -1,0 +1,99 @@
+🧠 54F for 'fn run\(.*verbose: u8' (scan 55F)
+
+📄 gh_cmd.rs [18.6]
+    14: /// Run a gh command with token-optimized output
+    15: pub fn run(subcommand: &str, args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+    16: match subcommand {
+       ~ fn, run, verbose, u8
+
+    29: fn run_pr(args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+    30: if args.is_empty() {
+       ~ fn, run, verbose, u8
+
+  +106 more lines
+
+📄 git.rs [18.5]
+    22: pub fn run(cmd: GitCommand, args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()> {
+    23: match cmd {
+       ~ fn, run, verbose, u8
+
+    39: fn run_diff(args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()> {
+    40: let timer = tracking::TimedExecution::start();
+       ~ fn, run, verbose, u8
+
+  +94 more lines
+
+📄 cargo_cmd.rs [18.5]
+    18: pub fn run(cmd: CargoCommand, args: &[String], verbose: u8) -> Result<()> {
+    19: match cmd {
+       ~ fn, run, verbose, u8
+
+    28: /// Generic cargo command runner with filtering
+    29: fn run_cargo_filtered<F>(subcommand: &str, args: &[String], verbose: u8, filter_fn: F) -> Result<()>
+    30: where
+       ~ fn, run, verbose, u8
+
+  +91 more lines
+
+📄 init.rs [18.4]
+   651: #[cfg(not(unix))]
+   652: fn run_default_mode(_global: bool, _patch_mode: PatchMode, _verbose: u8) -> Result<()> {
+   653: eprintln!("⚠️  Hook-based mode requires Unix (macOS/Linux).");
+       ~ fn, run, verbose, u8
+
+   659: #[cfg(unix)]
+   660: fn run_default_mode(global: bool, patch_mode: PatchMode, verbose: u8) -> Result<()> {
+   661: if !global {
+       ~ fn, run, verbose, u8
+
+  +87 more lines
+
+📄 runner.rs [17.6]
+     6: /// Run a command and filter output to show only errors/warnings
+     7: pub fn run_err(command: &str, verbose: u8) -> Result<()> {
+     8: let timer = tracking::TimedExecution::start();
+       ~ fn, run, verbose, u8
+
+    57: /// Run tests and show only failures
+    58: pub fn run_test(command: &str, verbose: u8) -> Result<()> {
+    59: let timer = tracking::TimedExecution::start();
+       ~ fn, run, verbose, u8
+
+  +9 more lines
+
+📄 go_cmd.rs [17.6]
+    34: pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
+    35: let timer = tracking::TimedExecution::start();
+       ~ fn, run, verbose, u8
+
+    85: pub fn run_build(args: &[String], verbose: u8) -> Result<()> {
+    86: let timer = tracking::TimedExecution::start();
+       ~ fn, run, verbose, u8
+
+  +35 more lines
+
+📄 pnpm_cmd.rs [17.5]
+   286: pub fn run(cmd: PnpmCommand, args: &[String], verbose: u8) -> Result<()> {
+   287: match cmd {
+       ~ fn, run, verbose, u8
+
+   294: fn run_list(depth: usize, args: &[String], verbose: u8) -> Result<()> {
+   295: let timer = tracking::TimedExecution::start();
+       ~ fn, run, verbose, u8
+
+  +33 more lines
+
+📄 diff_cmd.rs [17.5]
+     7: /// Ultra-condensed diff - only changed lines, no context
+     8: pub fn run(file1: &Path, file2: &Path, verbose: u8) -> Result<()> {
+     9: let timer = tracking::TimedExecution::start();
+       ~ fn, run, verbose, u8
+
+    68: /// Run diff from stdin (piped command output)
+    69: pub fn run_stdin(_verbose: u8) -> Result<()> {
+    70: use std::io::{self, Read};
+       ~ fn, run, verbose, u8
+
+  +32 more lines
+
+... +46F

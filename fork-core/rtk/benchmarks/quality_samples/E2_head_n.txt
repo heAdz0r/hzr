@@ -1,0 +1,100 @@
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:14:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:53:fn run_list(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, String)> {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:88:fn run_outdated(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, String)> {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:123:fn run_passthrough(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, String)> {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:157:fn which_command(cmd: &str) -> Option<String> {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:169:fn filter_pip_list(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:214:fn filter_pip_outdated(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:259:    fn test_filter_pip_list() {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:274:    fn test_filter_pip_list_empty() {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:281:    fn test_filter_pip_outdated_none() {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:289:    fn test_filter_pip_outdated_some() {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:14:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:79:fn which_command(cmd: &str) -> Option<String> {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:91:fn filter_pytest_output(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:170:fn build_pytest_summary(summary: &str, _test_files: &[String], failures: &[String]) -> String {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:249:fn parse_summary_line(summary: &str) -> (usize, usize, usize) {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:286:    fn test_filter_pytest_all_pass() {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:301:    fn test_filter_pytest_with_failures() {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:327:    fn test_filter_pytest_multiple_failures() {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:354:    fn test_filter_pytest_no_tests() {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:365:    fn test_parse_summary_line() {
+/Users/andrew/Programming/rtk/src/ls.rs:33:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/ls.rs:124:fn human_size(bytes: u64) -> String {
+/Users/andrew/Programming/rtk/src/ls.rs:137:fn compact_ls(raw: &str, show_all: bool) -> String {
+/Users/andrew/Programming/rtk/src/ls.rs:233:    fn test_compact_basic() {
+/Users/andrew/Programming/rtk/src/ls.rs:254:    fn test_compact_filters_noise() {
+/Users/andrew/Programming/rtk/src/ls.rs:270:    fn test_compact_show_all() {
+/Users/andrew/Programming/rtk/src/ls.rs:280:    fn test_compact_empty() {
+/Users/andrew/Programming/rtk/src/ls.rs:287:    fn test_compact_summary() {
+/Users/andrew/Programming/rtk/src/ls.rs:300:    fn test_human_size() {
+/Users/andrew/Programming/rtk/src/ls.rs:310:    fn test_compact_handles_filenames_with_spaces() {
+/Users/andrew/Programming/rtk/src/ls.rs:318:    fn test_compact_symlinks() {
+/Users/andrew/Programming/rtk/src/local_llm.rs:9:pub fn run(file: &Path, _model: &str, _force_download: bool, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:36:fn analyze_code(content: &str, lang: &Language) -> CodeSummary {
+/Users/andrew/Programming/rtk/src/local_llm.rs:62:        (!functions.is_empty()).then(|| format!("{} fn", functions.len())),
+/Users/andrew/Programming/rtk/src/local_llm.rs:97:        let key_fns: Vec<&str> = functions.iter().take(3).map(|s| s.as_str()).collect();
+/Users/andrew/Programming/rtk/src/local_llm.rs:99:            details.push(format!("defines: {}", key_fns.join(", ")));
+/Users/andrew/Programming/rtk/src/local_llm.rs:112:fn lang_display_name(lang: &Language) -> &'static str {
+/Users/andrew/Programming/rtk/src/local_llm.rs:128:fn extract_imports(content: &str, lang: &Language) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:159:fn is_std_import(name: &str, lang: &Language) -> bool {
+/Users/andrew/Programming/rtk/src/local_llm.rs:167:fn extract_functions(content: &str, lang: &Language) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:169:        Language::Rust => r"(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+/Users/andrew/Programming/rtk/src/local_llm.rs:195:fn extract_structs(content: &str, lang: &Language) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:212:fn extract_traits(content: &str, lang: &Language) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:226:fn detect_patterns(content: &str, lang: &Language) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:279:    fn test_rust_analysis() {
+/Users/andrew/Programming/rtk/src/local_llm.rs:288:pub fn load_config() -> Result<Config> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:292:fn helper() {}
+/Users/andrew/Programming/rtk/src/local_llm.rs:296:        assert!(summary.line1.contains("fn"));
+/Users/andrew/Programming/rtk/src/local_llm.rs:300:    fn test_python_analysis() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:16:    pub fn as_str(&self) -> &str {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:76:pub fn is_command_error(is_error: bool, output: &str) -> bool {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:97:pub fn classify_error(output: &str) -> ErrorType {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:124:pub fn extract_base_command(cmd: &str) -> String {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:145:pub fn command_similarity(a: &str, b: &str) -> f64 {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:182:fn is_tdd_cycle_error(error_type: &ErrorType, output: &str) -> bool {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:199:fn differs_only_by_path(a: &str, b: &str) -> bool {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:213:pub fn find_corrections(commands: &[CommandExecution]) -> Vec<CorrectionPair> {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:283:fn extract_diff_token(wrong: &str, right: &str) -> String {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:305:pub fn deduplicate_corrections(pairs: Vec<CorrectionPair>) -> Vec<CorrectionRule> {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:357:    fn test_is_command_error_requires_error_flag() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:363:    fn test_is_command_error_filters_user_rejection() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:370:    fn test_is_command_error_requires_error_content() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:378:    fn test_classify_error_unknown_flag() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:394:    fn test_classify_error_command_not_found() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:406:    fn test_classify_error_all_types() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:426:    fn test_extract_base_command() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:440:    fn test_command_similarity_same_base() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:451:    fn test_find_corrections_basic() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:473:    fn test_find_corrections_window_limit() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:508:    fn test_find_corrections_excludes_tdd_cycle() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:527:    fn test_find_corrections_path_exploration() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:549:    fn test_find_corrections_min_confidence() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:571:    fn test_deduplicate_corrections_merges_same() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:605:    fn test_deduplicate_corrections_keeps_distinct() {
+/Users/andrew/Programming/rtk/src/learn/report.rs:7:pub fn format_console_report(
+/Users/andrew/Programming/rtk/src/learn/report.rs:52:pub fn write_rules_file(rules: &[CorrectionRule], path: &str) -> Result<()> {
+/Users/andrew/Programming/rtk/src/learn/report.rs:110:fn capitalize_first(s: &str) -> String {
+/Users/andrew/Programming/rtk/src/learn/report.rs:124:    fn test_format_console_report_empty() {
+/Users/andrew/Programming/rtk/src/learn/report.rs:132:    fn test_format_console_report_with_rules() {
+/Users/andrew/Programming/rtk/src/learn/report.rs:162:    fn test_write_rules_file_markdown() {
+/Users/andrew/Programming/rtk/src/learn/mod.rs:9:pub fn run(
+/Users/andrew/Programming/rtk/src/discover/registry.rs:29:pub fn category_avg_tokens(category: &str, subcmd: &str) -> usize {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:314:pub fn classify_command(cmd: &str) -> Classification {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:392:fn extract_base_command(cmd: &str) -> &str {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:423:pub fn split_command_chain(cmd: &str) -> Vec<&str> {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:511:    fn test_classify_git_status() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:524:    fn test_classify_git_diff_cached() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:537:    fn test_classify_cargo_test_filter() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:550:    fn test_classify_npx_tsc() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:563:    fn test_classify_cat_file() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:576:    fn test_classify_grepai_search() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:589:    fn test_classify_plain_rgai() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:602:    fn test_classify_cd_ignored() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:607:    fn test_classify_rtk_already() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:612:    fn test_classify_echo_ignored() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:620:    fn test_classify_terraform_unsupported() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:630:    fn test_classify_env_prefix_stripped() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:643:    fn test_classify_sudo_stripped() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:656:    fn test_classify_cargo_check() {

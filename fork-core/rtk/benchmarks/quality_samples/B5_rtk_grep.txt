@@ -1,0 +1,20 @@
+🔍 6 in 6F:
+
+📄 /Users/andrew/Programming/rtk/src/cargo_cmd.rs (1):
+   581: let mut by_rule: HashMap<String, Vec<String>> = HashMap::new();
+
+📄 /Users/andrew/Programming/rtk/src/find_cmd.rs (1):
+   111: let mut by_dir: HashMap<String, Vec<String>> = HashMap::new();
+
+📄 /Users/andrew/Programming/rtk/src/grep_cmd.rs (1):
+    55: let mut by_file: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+
+📄 /Users/andrew/Programming/rtk/src/learn/report.rs (1):
+    71: let mut grouped: HashMap<String, Vec<&CorrectionRule>> = HashMap::new();
+
+📄 /.../parser/formatter.rs (1):
+   126: let mut by_rule: std::collections::HashMap<String, Vec<&LintIssue>> =
+
+📄 /Users/andrew/Programming/rtk/src/tsc_cmd.rs (1):
+   118: let mut by_file: HashMap<String, Vec<&TsError>> = HashMap::new();
+

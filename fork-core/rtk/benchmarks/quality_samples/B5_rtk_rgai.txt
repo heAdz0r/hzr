@@ -1,0 +1,96 @@
+🧠 55F for 'HashMap<String, Vec<' (scan 55F)
+
+📄 cargo_cmd.rs [21.2]
+   580: fn filter_cargo_clippy(output: &str) -> String {
+   581: let mut by_rule: HashMap<String, Vec<String>> = HashMap::new();
+   582: let mut error_count = 0;
+       ~ hashmap, string, str, vec
+
+    18: pub fn run(cmd: CargoCommand, args: &[String], verbose: u8) -> Result<()> {
+    19: match cmd {
+       ~ string, str
+
+  +115 more lines
+
+📄 tsc_cmd.rs [20.2]
+   117: // Group by file
+   118: let mut by_file: HashMap<String, Vec<&TsError>> = HashMap::new();
+   119: for err in &errors {
+       ~ hashmap, string, str, vec
+
+     8: pub fn run(args: &[String], verbose: u8) -> Result<()> {
+     9: let timer = tracking::TimedExecution::start();
+       ~ string, str
+
+  +41 more lines
+
+📄 parser/formatter.rs [20.2]
+   125: // Group by rule_id
+   126: let mut by_rule: std::collections::HashMap<String, Vec<&LintIssue>> =
+   127: std::collections::HashMap::new();
+       ~ hashmap, string, str, vec
+
+    27: /// Format as compact summary (default)
+    28: fn format_compact(&self) -> String;
+       ~ string, str
+
+  +39 more lines
+
+📄 learn/report.rs [20.1]
+    70: // Group by base command
+    71: let mut grouped: HashMap<String, Vec<&CorrectionRule>> = HashMap::new();
+    72: for rule in rules {
+       ~ hashmap, string, str, vec
+
+   110: fn capitalize_first(s: &str) -> String {
+   111: let mut chars = s.chars();
+       ~ string, str
+
+  +36 more lines
+
+📄 grep_cmd.rs [19.9]
+    55: let mut by_file: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+    56: let mut total = 0;
+       ~ hashmap, string, str, vec
+
+   120: fn clean_line(line: &str, max_len: usize, context_only: bool, pattern: &str) -> String {
+   121: let trimmed = line.trim();
+       ~ string, str
+
+  +28 more lines
+
+📄 find_cmd.rs [19.3]
+   110: // Group by directory
+   111: let mut by_dir: HashMap<String, Vec<String>> = HashMap::new();
+       ~ hashmap, string, str, vec
+
+   170: // Extension summary
+   171: let mut by_ext: HashMap<String, usize> = HashMap::new();
+   172: for file in &files {
+       ~ hashmap, string, str
+
+  +22 more lines
+
+📄 local_llm.rs [15.8]
+   128: fn extract_imports(content: &str, lang: &Language) -> Vec<String> {
+   129: let pattern = match lang {
+       ~ string, str, vec
+
+   167: fn extract_functions(content: &str, lang: &Language) -> Vec<String> {
+   168: let pattern = match lang {
+       ~ string, str, vec
+
+  +49 more lines
+
+📄 tracking.rs [15.8]
+   399: fn get_by_command(&self) -> Result<Vec<(String, usize, usize, f64, u64)>> {
+   400: let mut stmt = self.conn.prepare(
+       ~ string, str, vec
+
+   421: fn get_by_day(&self) -> Result<Vec<(String, usize)>> {
+   422: let mut stmt = self.conn.prepare(
+       ~ string, str, vec
+
+  +45 more lines
+
+... +47F

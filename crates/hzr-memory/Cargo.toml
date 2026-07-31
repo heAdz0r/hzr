@@ -1,0 +1,32 @@
+[package]
+name = "hzr-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Centralized ICM process supervision and typed memory client for HZR"
+
+[lints]
+workspace = true
+
+[dependencies]
+directories.workspace = true
+fs2.workspace = true
+hex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.30.1", default-features = false, features = ["process", "signal"] }
+
+[dev-dependencies]
+anyhow.workspace = true
+axum.workspace = true
+tempfile.workspace = true

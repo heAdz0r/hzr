@@ -1,0 +1,28 @@
+[package]
+name = "hzr-context"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Adaptive code and memory context planning for HZR"
+
+[dependencies]
+hex.workspace = true
+hzr-core = { path = "../hzr-core" }
+hzr-exec = { path = "../hzr-exec" }
+hzr-index = { path = "../hzr-index" }
+hzr-memory = { path = "../hzr-memory" }
+hzr-protocol = { path = "../hzr-protocol" }
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

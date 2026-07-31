@@ -1,0 +1,168 @@
+🔍 157 in 29F:
+
+📄 /Users/andrew/Programming/rtk/src/cargo_cmd.rs (2):
+    48: let stdout = String::from_utf8_lossy(&output.stdout);
+    49: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/ccusage.rs (2):
+   158: let stderr = String::from_utf8_lossy(&output.stderr);
+   167: let stdout = String::from_utf8_lossy(&output.stdout);
+
+📄 /Users/andrew/Programming/rtk/src/container.rs (9):
+    33: .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+    45: let stdout = String::from_utf8_lossy(&output.stdout);
+    90: .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+    98: let stdout = String::from_utf8_lossy(&output.stdout);
+   168: let stdout = String::from_utf8_lossy(&output.stdout);
+   169: let stderr = String::from_utf8_lossy(&output.stderr);
+   194: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+   295: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+   375: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+
+📄 /Users/andrew/Programming/rtk/src/curl_cmd.rs (2):
+    21: let stdout = String::from_utf8_lossy(&output.stdout);
+    22: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/gh_cmd.rs (30):
+    65: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+    68: let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+   151: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+   154: let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+   318: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+   321: let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+   332: let stdout = String::from_utf8_lossy(&output.stdout);
+   403: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+   406: let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+   458: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+  +20
+
+📄 /Users/andrew/Programming/rtk/src/git.rs (42):
+    61: let stderr = String::from_utf8_lossy(&output.stderr);
+    66: let stdout = String::from_utf8_lossy(&output.stdout);
+    88: let stat_stdout = String::from_utf8_lossy(&output.stdout);
+   105: let diff_stdout = String::from_utf8_lossy(&diff_output.stdout);
+   146: let stderr = String::from_utf8_lossy(&output.stderr);
+   150: let stdout = String::from_utf8_lossy(&output.stdout);
+   171: .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+   182: let stderr = String::from_utf8_lossy(&summary_output.stderr);
+   186: let summary = String::from_utf8_lossy(&summary_output.stdout);
+   196: let stat_stdout = String::from_utf8_lossy(&stat_output.stdout);
+  +32
+
+📄 /Users/andrew/Programming/rtk/src/go_cmd.rs (8):
+    57: let stdout = String::from_utf8_lossy(&output.stdout);
+    58: let stderr = String::from_utf8_lossy(&output.stderr);
+   103: let stdout = String::from_utf8_lossy(&output.stdout);
+   104: let stderr = String::from_utf8_lossy(&output.stderr);
+   146: let stdout = String::from_utf8_lossy(&output.stdout);
+   147: let stderr = String::from_utf8_lossy(&output.stderr);
+   194: let stdout = String::from_utf8_lossy(&output.stdout);
+   195: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/golangci_cmd.rs (2):
+    62: let stdout = String::from_utf8_lossy(&output.stdout);
+    63: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/grep_cmd.rs (1):
+    39: let stdout = String::from_utf8_lossy(&output.stdout);
+
+📄 /Users/andrew/Programming/rtk/src/lint_cmd.rs (3):
+    65: let stderr = String::from_utf8_lossy(&output.stderr);
+    76: let stdout = String::from_utf8_lossy(&output.stdout);
+    77: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/ls.rs (2):
+    86: let stderr = String::from_utf8_lossy(&output.stderr);
+    91: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+
+📄 /Users/andrew/Programming/rtk/src/main.rs (2):
+  1421: let stdout = String::from_utf8_lossy(&output.stdout);
+  1422: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/next_cmd.rs (2):
+    39: let stdout = String::from_utf8_lossy(&output.stdout);
+    40: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/npm_cmd.rs (2):
+    24: let stdout = String::from_utf8_lossy(&output.stdout);
+    25: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/parser/README.md (1):
+    92: let stdout = String::from_utf8_lossy(&output.stdout);
+
+📄 /Users/andrew/Programming/rtk/src/pip_cmd.rs (6):
+    74: let stdout = String::from_utf8_lossy(&output.stdout);
+    75: let stderr = String::from_utf8_lossy(&output.stderr);
+   109: let stdout = String::from_utf8_lossy(&output.stdout);
+   110: let stderr = String::from_utf8_lossy(&output.stderr);
+   142: let stdout = String::from_utf8_lossy(&output.stdout);
+   143: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /.../src/playwright_cmd.rs (2):
+   239: let stdout = String::from_utf8_lossy(&output.stdout);
+   240: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/pnpm_cmd.rs (6):
+   309: let stderr = String::from_utf8_lossy(&output.stderr);
+   313: let stdout = String::from_utf8_lossy(&output.stdout);
+   363: let stdout = String::from_utf8_lossy(&output.stdout);
+   364: let stderr = String::from_utf8_lossy(&output.stderr);
+   430: let stdout = String::from_utf8_lossy(&output.stdout);
+   431: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/prettier_cmd.rs (2):
+    23: let stdout = String::from_utf8_lossy(&output.stdout);
+    24: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/prisma_cmd.rs (9):
+    63: let stderr = String::from_utf8_lossy(&output.stderr);
+    67: let stdout = String::from_utf8_lossy(&output.stdout);
+    68: let stderr = String::from_utf8_lossy(&output.stderr);
+   114: let stderr = String::from_utf8_lossy(&output.stderr);
+   118: let stdout = String::from_utf8_lossy(&output.stdout);
+   119: let stderr = String::from_utf8_lossy(&output.stderr);
+   152: let stderr = String::from_utf8_lossy(&output.stderr);
+   156: let stdout = String::from_utf8_lossy(&output.stdout);
+   157: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/pytest_cmd.rs (2):
+    50: let stdout = String::from_utf8_lossy(&output.stdout);
+    51: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/ruff_cmd.rs (2):
+    84: let stdout = String::from_utf8_lossy(&output.stdout);
+    85: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/runner.rs (4):
+    29: let stdout = String::from_utf8_lossy(&output.stdout);
+    30: let stderr = String::from_utf8_lossy(&output.stderr);
+    80: let stdout = String::from_utf8_lossy(&output.stdout);
+    81: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/summary.rs (2):
+    30: let stdout = String::from_utf8_lossy(&output.stdout);
+    31: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/tree.rs (2):
+    78: let stderr = String::from_utf8_lossy(&output.stderr);
+    83: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+
+📄 /Users/andrew/Programming/rtk/src/tsc_cmd.rs (2):
+    38: let stdout = String::from_utf8_lossy(&output.stdout);
+    39: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/utils.rs (2):
+    76: let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    77: let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+📄 /Users/andrew/Programming/rtk/src/vitest_cmd.rs (2):
+   236: let stdout = String::from_utf8_lossy(&output.stdout);
+   237: let stderr = String::from_utf8_lossy(&output.stderr);
+
+📄 /Users/andrew/Programming/rtk/src/wget_cmd.rs (4):
+    27: let stderr = String::from_utf8_lossy(&output.stderr);
+    28: let stdout = String::from_utf8_lossy(&output.stdout);
+    73: let content = String::from_utf8_lossy(&output.stdout);
+   105: let stderr = String::from_utf8_lossy(&output.stderr);
+
+... +52

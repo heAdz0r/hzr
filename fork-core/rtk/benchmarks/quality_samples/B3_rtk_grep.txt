@@ -1,0 +1,87 @@
+🔍 48 in 20F:
+
+📄 /Users/andrew/Programming/rtk/src/cargo_cmd.rs (2):
+    63: std::process::exit(output.status.code().unwrap_or(1));
+   694: std::process::exit(status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/container.rs (2):
+   429: std::process::exit(status.code().unwrap_or(1));
+   453: std::process::exit(status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/curl_cmd.rs (1):
+    31: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/gain.rs (1):
+   165: let max_val = data.iter().map(|(_, v)| *v).max().unwrap_or(1);
+
+📄 /Users/andrew/Programming/rtk/src/gh_cmd.rs (15):
+    71: std::process::exit(output.status.code().unwrap_or(1));
+   162: std::process::exit(output.status.code().unwrap_or(1));
+   329: std::process::exit(output.status.code().unwrap_or(1));
+   409: std::process::exit(output.status.code().unwrap_or(1));
+   464: std::process::exit(output.status.code().unwrap_or(1));
+   544: std::process::exit(output.status.code().unwrap_or(1));
+   635: std::process::exit(output.status.code().unwrap_or(1));
+   719: std::process::exit(output.status.code().unwrap_or(1));
+   796: std::process::exit(output.status.code().unwrap_or(1));
+   860: std::process::exit(output.status.code().unwrap_or(1));
+  +5
+
+📄 /Users/andrew/Programming/rtk/src/git.rs (6):
+    63: std::process::exit(output.status.code().unwrap_or(1));
+   148: std::process::exit(output.status.code().unwrap_or(1));
+   184: std::process::exit(summary_output.status.code().unwrap_or(1));
+   351: std::process::exit(output.status.code().unwrap_or(1));
+   648: std::process::exit(output.status.code().unwrap_or(1));
+  1283: std::process::exit(status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/go_cmd.rs (4):
+    79: std::process::exit(output.status.code().unwrap_or(1));
+   122: std::process::exit(output.status.code().unwrap_or(1));
+   165: std::process::exit(output.status.code().unwrap_or(1));
+   210: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/ls.rs (1):
+    88: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/main.rs (3):
+  1332: std::process::exit(status.code().unwrap_or(1));
+  1344: std::process::exit(status.code().unwrap_or(1));
+  1439: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/next_cmd.rs (1):
+    51: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/npm_cmd.rs (1):
+    39: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/pip_cmd.rs (3):
+    82: std::process::exit(output.status.code().unwrap_or(1));
+   117: std::process::exit(output.status.code().unwrap_or(1));
+   150: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /.../src/playwright_cmd.rs (1):
+   277: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/pnpm_cmd.rs (1):
+   510: std::process::exit(status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/prettier_cmd.rs (1):
+    40: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/pytest_cmd.rs (1):
+    72: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/ruff_cmd.rs (1):
+   108: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/tree.rs (1):
+    80: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/tsc_cmd.rs (1):
+    54: std::process::exit(output.status.code().unwrap_or(1));
+
+📄 /Users/andrew/Programming/rtk/src/vitest_cmd.rs (1):
+   268: std::process::exit(output.status.code().unwrap_or(1))
+
+... +5

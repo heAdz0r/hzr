@@ -1,0 +1,54 @@
+name: Benchmark Token Savings
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build rtk
+        run: cargo build --release
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          cache: "pip"
+          cache-dependency-path: ".github/workflows/benchmark.yml"
+
+      - name: Install Python tools
+        run: |
+          pip install ruff pytest
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Cache Go tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-tools-golangci-lint-v1
+          restore-keys: |
+            ${{ runner.os }}-go-tools-
+
+      - name: Install Go tools
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+      - name: Run benchmark
+        run: ./scripts/benchmark.sh

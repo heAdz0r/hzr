@@ -1,0 +1,6 @@
+Date: Tue Feb 17 10:44:35 UTC 2026
+Commit: bd240dc00f4302e2d5e36990b0ada8783359898d
+runs: 5
+write_tool: /Users/andrew/Programming/rtk/target/release/write_bench_tool
+write_tool_version: ok
+OS: Darwin MacBook-Pro-Andy.local 25.2.0 Darwin Kernel Version 25.2.0: Tue Nov 18 21:09:56 PST 2025; root:xnu-12377.61.12~1/RELEASE_ARM64_T6041 arm64

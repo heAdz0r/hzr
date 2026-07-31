@@ -1,0 +1,285 @@
+{
+  "metadata": {
+    "description": "Gold standards for code-search benchmark on rtk codebase",
+    "pinned_commit": "4b0a413562c775757d5bc09a6ff966b4e532508c",
+    "codebase": "rtk-ai/rtk",
+    "generated": "2026-02-15",
+    "notes": "Gold files verified by grep on pinned commit. gold_min_files = minimum unique .rs files expected in output."
+  },
+  "queries": {
+    "A1": {
+      "query": "TimedExecution",
+      "category": "exact_identifier",
+      "grep_flags": "",
+      "gold_files": ["tracking.rs", "main.rs", "cargo_cmd.rs", "git.rs", "container.rs", "grep_cmd.rs", "npm_cmd.rs", "go_cmd.rs", "gh_cmd.rs", "ls.rs"],
+      "gold_min_files": 30,
+      "expect_results": true,
+      "notes": "Struct def + all usages across 34 command modules"
+    },
+    "A2": {
+      "query": "FilterLevel",
+      "category": "exact_identifier",
+      "grep_flags": "",
+      "gold_files": ["filter.rs", "main.rs", "read.rs"],
+      "gold_min_files": 3,
+      "expect_results": true,
+      "notes": "Enum def + variants in 3 files"
+    },
+    "A3": {
+      "query": "classify_command",
+      "category": "exact_identifier",
+      "grep_flags": "",
+      "gold_files": ["discover/registry.rs", "discover/mod.rs"],
+      "gold_min_files": 2,
+      "expect_results": true,
+      "notes": "Function def + caller in discover module"
+    },
+    "A4": {
+      "query": "package_manager_exec",
+      "category": "exact_identifier",
+      "grep_flags": "",
+      "gold_files": ["utils.rs", "vitest_cmd.rs", "playwright_cmd.rs", "prettier_cmd.rs", "lint_cmd.rs"],
+      "gold_min_files": 5,
+      "expect_results": true,
+      "notes": "Function def in utils.rs + callers in JS tooling modules"
+    },
+    "A5": {
+      "query": "strip_ansi",
+      "category": "exact_identifier",
+      "grep_flags": "",
+      "gold_files": ["utils.rs", "vitest_cmd.rs", "playwright_cmd.rs", "next_cmd.rs", "cargo_cmd.rs"],
+      "gold_min_files": 5,
+      "expect_results": true,
+      "notes": "Function def in utils.rs + callers"
+    },
+    "A6": {
+      "query": "HISTORY_DAYS",
+      "category": "exact_identifier",
+      "grep_flags": "",
+      "gold_files": ["tracking.rs"],
+      "gold_min_files": 1,
+      "expect_results": true,
+      "notes": "Const def + usage in cleanup logic, single file"
+    },
+
+    "B1": {
+      "query": "fn run\\(.*verbose: u8",
+      "category": "regex_pattern",
+      "grep_flags": "-E",
+      "gold_files": ["git.rs", "cargo_cmd.rs", "npm_cmd.rs", "container.rs", "ls.rs", "tsc_cmd.rs", "vitest_cmd.rs", "pnpm_cmd.rs"],
+      "gold_min_files": 25,
+      "expect_results": true,
+      "notes": "All run() signatures with verbose param on same line; 27 files match. NB: go_cmd/grep_cmd/runner use run_test()/run_err() so don't match this regex."
+    },
+    "B2": {
+      "query": "timer\\.track\\(",
+      "category": "regex_pattern",
+      "grep_flags": "-E",
+      "gold_files": ["main.rs", "git.rs", "cargo_cmd.rs", "npm_cmd.rs", "go_cmd.rs", "gh_cmd.rs", "container.rs", "curl_cmd.rs"],
+      "gold_min_files": 30,
+      "expect_results": true,
+      "notes": "All tracking calls; 34 files match (same scope as TimedExecution users)"
+    },
+    "B3": {
+      "query": "\\.unwrap_or\\(1\\)",
+      "category": "regex_pattern",
+      "grep_flags": "-E",
+      "gold_files": ["main.rs", "git.rs", "cargo_cmd.rs", "container.rs", "gh_cmd.rs", "tree.rs", "npm_cmd.rs", "gain.rs"],
+      "gold_min_files": 15,
+      "expect_results": true,
+      "notes": "Exit code fallback pattern .code().unwrap_or(1); 20 files match"
+    },
+    "B4": {
+      "query": "#\\[cfg\\(test\\)\\]",
+      "category": "regex_pattern",
+      "grep_flags": "-E",
+      "gold_files": ["filter.rs", "utils.rs", "discover/registry.rs", "vitest_cmd.rs", "next_cmd.rs", "playwright_cmd.rs", "runner.rs", "tsc_cmd.rs", "git.rs", "cargo_cmd.rs"],
+      "gold_min_files": 35,
+      "expect_results": true,
+      "notes": "Test module declarations; 41 files have #[cfg(test)] (nearly all modules)"
+    },
+    "B5": {
+      "query": "HashMap<String, Vec<",
+      "category": "regex_pattern",
+      "grep_flags": "-E",
+      "gold_files": ["tsc_cmd.rs", "grep_cmd.rs", "cargo_cmd.rs", "find_cmd.rs", "parser/formatter.rs", "learn/report.rs"],
+      "gold_min_files": 6,
+      "expect_results": true,
+      "notes": "Grouping data structure pattern; exactly 6 files match this specific generic signature"
+    },
+    "B6": {
+      "query": "lazy_static!",
+      "category": "regex_pattern",
+      "grep_flags": "",
+      "gold_files": ["utils.rs", "next_cmd.rs", "filter.rs", "discover/registry.rs", "playwright_cmd.rs", "tsc_cmd.rs", "runner.rs", "vitest_cmd.rs", "learn/detector.rs"],
+      "gold_min_files": 9,
+      "expect_results": true,
+      "notes": "lazy_static! macro invocations (both bare and lazy_static::lazy_static!); exactly 9 files"
+    },
+
+    "C1": {
+      "query": "token savings tracking database",
+      "category": "semantic_intent",
+      "grep_flags": "",
+      "gold_files": ["tracking.rs", "gain.rs"],
+      "gold_min_files": 1,
+      "expect_results": true,
+      "notes": "SQLite tracking architecture; grep unlikely to find exact phrase"
+    },
+    "C2": {
+      "query": "exit code preservation",
+      "category": "semantic_intent",
+      "grep_flags": "",
+      "gold_files": ["git.rs", "npm_cmd.rs", "cargo_cmd.rs", "go_cmd.rs", "container.rs"],
+      "gold_min_files": 2,
+      "expect_results": true,
+      "notes": "process::exit patterns across command modules"
+    },
+    "C3": {
+      "query": "language aware code filtering",
+      "category": "semantic_intent",
+      "grep_flags": "",
+      "gold_files": ["filter.rs"],
+      "gold_min_files": 1,
+      "expect_results": true,
+      "notes": "Language enum, FilterStrategy in filter.rs"
+    },
+    "C4": {
+      "query": "output grouping by file",
+      "category": "semantic_intent",
+      "grep_flags": "",
+      "gold_files": ["grep_cmd.rs", "lint_cmd.rs", "tsc_cmd.rs", "log_cmd.rs"],
+      "gold_min_files": 2,
+      "expect_results": true,
+      "notes": "HashMap grouping patterns in output formatter modules"
+    },
+    "C5": {
+      "query": "three tier parser degradation",
+      "category": "semantic_intent",
+      "grep_flags": "",
+      "gold_files": ["parser/mod.rs", "parser/types.rs"],
+      "gold_min_files": 1,
+      "expect_results": true,
+      "notes": "ParseResult enum, tier logic in parser module"
+    },
+    "C6": {
+      "query": "ANSI color stripping cleanup",
+      "category": "semantic_intent",
+      "grep_flags": "",
+      "gold_files": ["utils.rs"],
+      "gold_min_files": 1,
+      "expect_results": true,
+      "notes": "strip_ansi function in utils.rs"
+    },
+    "C7": {
+      "query": "hook installation settings json",
+      "category": "semantic_intent",
+      "grep_flags": "",
+      "gold_files": ["init.rs"],
+      "gold_min_files": 1,
+      "expect_results": true,
+      "notes": "patch_settings_json, hook setup in init.rs"
+    },
+    "C8": {
+      "query": "command classification discover",
+      "category": "semantic_intent",
+      "grep_flags": "",
+      "gold_files": ["discover/registry.rs"],
+      "gold_min_files": 1,
+      "expect_results": true,
+      "notes": "RtkRule, RULES, classify_command in registry.rs"
+    },
+    "C9": {
+      "query": "pnpm yarn npm auto detection",
+      "category": "semantic_intent",
+      "grep_flags": "",
+      "gold_files": ["utils.rs", "npm_cmd.rs"],
+      "gold_min_files": 1,
+      "expect_results": true,
+      "notes": "package_manager_exec and related logic"
+    },
+    "C10": {
+      "query": "SQLite retention cleanup policy",
+      "category": "semantic_intent",
+      "grep_flags": "",
+      "gold_files": ["tracking.rs"],
+      "gold_min_files": 1,
+      "expect_results": true,
+      "notes": "HISTORY_DAYS, cleanup logic in tracking.rs"
+    },
+
+    "D1": {
+      "query": "verbose > 0",
+      "category": "cross_file",
+      "grep_flags": "",
+      "gold_files": ["main.rs", "git.rs", "cargo_cmd.rs", "npm_cmd.rs", "go_cmd.rs", "container.rs", "grep_cmd.rs", "pnpm_cmd.rs"],
+      "gold_min_files": 30,
+      "expect_results": true,
+      "notes": "All verbose debug logging points; 90 occurrences across 37 files (includes parser/README.md)"
+    },
+    "D2": {
+      "query": "anyhow::Result",
+      "category": "cross_file",
+      "grep_flags": "",
+      "gold_files": ["tracking.rs", "config.rs", "discover/mod.rs", "log_cmd.rs", "diff_cmd.rs", "deps.rs", "find_cmd.rs", "env_cmd.rs", "local_llm.rs", "learn/mod.rs", "learn/report.rs"],
+      "gold_min_files": 11,
+      "expect_results": true,
+      "notes": "Literal 'anyhow::Result' only in 11 files with standalone import. Most files use 'use anyhow::{Context, Result}' which doesn't contain the literal substring."
+    },
+    "D3": {
+      "query": "process::exit",
+      "category": "cross_file",
+      "grep_flags": "",
+      "gold_files": ["main.rs", "git.rs", "cargo_cmd.rs", "npm_cmd.rs", "container.rs", "gh_cmd.rs"],
+      "gold_min_files": 15,
+      "expect_results": true,
+      "notes": "All exit points across 19 files"
+    },
+    "D4": {
+      "query": "Command::new",
+      "category": "cross_file",
+      "grep_flags": "",
+      "gold_files": ["main.rs", "git.rs", "cargo_cmd.rs", "npm_cmd.rs", "utils.rs", "go_cmd.rs", "grep_cmd.rs"],
+      "gold_min_files": 20,
+      "expect_results": true,
+      "notes": "All subprocess spawns across 25 files"
+    },
+    "D5": {
+      "query": "from_utf8_lossy",
+      "category": "cross_file",
+      "grep_flags": "",
+      "gold_files": ["main.rs", "git.rs", "cargo_cmd.rs", "npm_cmd.rs", "utils.rs", "container.rs", "grep_cmd.rs"],
+      "gold_min_files": 25,
+      "expect_results": true,
+      "notes": "All lossy UTF-8 conversions across 29 files"
+    },
+
+    "E1": {
+      "query": "the",
+      "category": "edge_case",
+      "grep_flags": "",
+      "gold_files": [],
+      "gold_min_files": 0,
+      "expect_results": true,
+      "notes": "Stop word: grep/rtk grep flood output; rgai should filter or return minimal"
+    },
+    "E2": {
+      "query": "fn",
+      "category": "edge_case",
+      "grep_flags": "",
+      "gold_files": [],
+      "gold_min_files": 0,
+      "expect_results": true,
+      "notes": "Ultra-common 2-char token: every .rs file matches; tests truncation limits"
+    },
+    "E3": {
+      "query": "error handling retry backoff",
+      "category": "edge_case",
+      "grep_flags": "",
+      "gold_files": [],
+      "gold_min_files": 0,
+      "expect_results": false,
+      "notes": "Zero results expected from all tools — nothing in codebase matches this phrase"
+    }
+  }
+}

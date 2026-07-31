@@ -1,0 +1,32 @@
+🧠 3F for 'FilterLevel' (scan 55F)
+
+📄 filter.rs [17.7]
+     5: #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+     6: pub enum FilterLevel {
+     7: None,
+       ~ filterlevel
+
+    12: impl FromStr for FilterLevel {
+    13: type Err = String;
+       ~ filterlevel
+
+  +16 more lines
+
+📄 read.rs [12.8]
+     1: use crate::filter::{self, FilterLevel, Language};
+     2: use crate::tracking;
+       ~ filterlevel
+
+     8: file: &Path,
+     9: level: FilterLevel,
+    10: max_lines: Option<usize>,
+       ~ filterlevel
+
+  +2 more lines
+
+📄 main.rs [8.4]
+    98: #[arg(short, long, default_value = "minimal")]
+    99: level: filter::FilterLevel,
+   100: /// Max lines
+       ~ filterlevel
+

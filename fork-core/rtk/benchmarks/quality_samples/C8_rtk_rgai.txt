@@ -1,0 +1,104 @@
+🧠 38F for 'command classification discover' (scan 55F)
+
+📄 discover/registry.rs [14.5]
+   313: /// Classify a single (already-split) command.
+   314: pub fn classify_command(cmd: &str) -> Classification {
+   315: let trimmed = cmd.trim();
+       ~ command, classification
+
+   602: fn test_classify_cd_ignored() {
+   603: assert_eq!(classify_command("cd /tmp"), Classification::Ignored);
+   604: }
+       ~ command, classification
+
+  +58 more lines
+
+📄 main.rs [11.6]
+  1256: Commands::Discover {
+  1257: project,
+       ~ command, discover
+
+    77: #[derive(Subcommand)]
+    78: enum Commands {
+    79: /// List directory contents with token-optimized output (proxy to native ls)
+       ~ command
+
+  +158 more lines
+
+📄 discover/mod.rs [11.0]
+     8: use provider::{ClaudeProvider, SessionProvider};
+     9: use registry::{category_avg_tokens, classify_command, split_command_chain, Classification};
+    10: use report::{DiscoverReport, SupportedEntry, UnsupportedEntry};
+       ~ command, classification
+
+   125: }
+   126: Classification::Unsupported { base_command } => {
+   127: let bucket = unsupported_map.entry(base_command).or_insert_with(|| {
+       ~ command, classification
+
+  +21 more lines
+
+📄 discover/provider.rs [10.9]
+    10: #[derive(Debug)]
+    11: pub struct ExtractedCommand {
+    12: pub command: String,
+       ~ command
+
+    25: pub trait SessionProvider {
+    26: fn discover_sessions(
+    27: &self,
+       ~ discover
+
+  +34 more lines
+
+📄 learn/detector.rs [10.8]
+    75: /// Filters out user rejections - requires actual error-indicating content
+    76: pub fn is_command_error(is_error: bool, output: &str) -> bool {
+    77: if !is_error {
+       ~ command
+
+   113: /// Represents a command with its execution result for correction detection
+   114: pub struct CommandExecution {
+   115: pub command: String,
+       ~ command
+
+  +111 more lines
+
+📄 init.rs [10.7]
+   733: println!(
+   734: "  Note: No RTK.md created. Claude won't know about meta commands (gain, discover, proxy)."
+   735: );
+       ~ command, discover
+
+   591: /// Creates hooks.PreToolUse structure if missing, preserves existing hooks
+   592: fn insert_hook_entry(root: &mut serde_json::Value, hook_command: &str) {
+   593: // Ensure root is an object
+       ~ command
+
+  +65 more lines
+
+📄 discover/report.rs [10.3]
+    45: #[derive(Debug, Serialize)]
+    46: pub struct DiscoverReport {
+    47: pub sessions_scanned: usize,
+       ~ discover
+
+    56: impl DiscoverReport {
+    57: pub fn total_saveable_tokens(&self) -> usize {
+       ~ discover
+
+  +18 more lines
+
+📄 git.rs [9.9]
+     6: #[derive(Debug, Clone)]
+     7: pub enum GitCommand {
+     8: Diff,
+       ~ command
+
+    22: pub fn run(cmd: GitCommand, args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()> {
+    23: match cmd {
+       ~ command
+
+  +44 more lines
+
+... +30F

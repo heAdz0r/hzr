@@ -1,0 +1,601 @@
+test_id,category,query,tool,run,time_us,output_bytes,output_tokens,result_count,exit_code
+A1,exact_identifier,"TimedExecution",grep,1,5000,10338,2927,104,0
+A1,exact_identifier,"TimedExecution",rtk_grep,1,44000,6527,1979,159,0
+A1,exact_identifier,"TimedExecution",rtk_rgai,1,13000,2797,841,94,0
+A1,exact_identifier,"TimedExecution",head_n,1,0,9933,2810,100,0
+A1,exact_identifier,"TimedExecution",grep,2,7000,10338,2927,104,0
+A1,exact_identifier,"TimedExecution",rtk_grep,2,23000,6527,1979,159,0
+A1,exact_identifier,"TimedExecution",rtk_rgai,2,11000,2797,841,94,0
+A1,exact_identifier,"TimedExecution",head_n,2,0,9933,2810,100,0
+A1,exact_identifier,"TimedExecution",grep,3,6000,10338,2927,104,0
+A1,exact_identifier,"TimedExecution",rtk_grep,3,25000,6527,1979,159,0
+A1,exact_identifier,"TimedExecution",rtk_rgai,3,11000,2797,841,94,0
+A1,exact_identifier,"TimedExecution",head_n,3,0,9933,2810,100,0
+A1,exact_identifier,"TimedExecution",grep,4,6000,10338,2927,104,0
+A1,exact_identifier,"TimedExecution",rtk_grep,4,22000,6527,1979,159,0
+A1,exact_identifier,"TimedExecution",rtk_rgai,4,11000,2797,841,94,0
+A1,exact_identifier,"TimedExecution",head_n,4,0,9933,2810,100,0
+A1,exact_identifier,"TimedExecution",grep,5,6000,10338,2927,104,0
+A1,exact_identifier,"TimedExecution",rtk_grep,5,25000,6527,1979,159,0
+A1,exact_identifier,"TimedExecution",rtk_rgai,5,11000,2797,841,94,0
+A1,exact_identifier,"TimedExecution",head_n,5,0,9933,2810,100,0
+A2,exact_identifier,"FilterLevel",grep,1,5000,2196,605,23,0
+A2,exact_identifier,"FilterLevel",rtk_grep,1,25000,902,288,25,0
+A2,exact_identifier,"FilterLevel",rtk_rgai,1,10000,691,223,32,0
+A2,exact_identifier,"FilterLevel",head_n,1,0,2196,605,23,0
+A2,exact_identifier,"FilterLevel",grep,2,5000,2196,605,23,0
+A2,exact_identifier,"FilterLevel",rtk_grep,2,25000,902,288,25,0
+A2,exact_identifier,"FilterLevel",rtk_rgai,2,11000,691,223,32,0
+A2,exact_identifier,"FilterLevel",head_n,2,0,2196,605,23,0
+A2,exact_identifier,"FilterLevel",grep,3,5000,2196,605,23,0
+A2,exact_identifier,"FilterLevel",rtk_grep,3,25000,902,288,25,0
+A2,exact_identifier,"FilterLevel",rtk_rgai,3,10000,691,223,32,0
+A2,exact_identifier,"FilterLevel",head_n,3,0,2196,605,23,0
+A2,exact_identifier,"FilterLevel",grep,4,5000,2196,605,23,0
+A2,exact_identifier,"FilterLevel",rtk_grep,4,22000,902,288,25,0
+A2,exact_identifier,"FilterLevel",rtk_rgai,4,10000,691,223,32,0
+A2,exact_identifier,"FilterLevel",head_n,4,0,2196,605,23,0
+A2,exact_identifier,"FilterLevel",grep,5,5000,2196,605,23,0
+A2,exact_identifier,"FilterLevel",rtk_grep,5,25000,902,288,25,0
+A2,exact_identifier,"FilterLevel",rtk_rgai,5,10000,691,223,32,0
+A2,exact_identifier,"FilterLevel",head_n,5,0,2196,605,23,0
+A3,exact_identifier,"classify_command",grep,1,7000,2524,626,22,0
+A3,exact_identifier,"classify_command",rtk_grep,1,24000,817,225,20,0
+A3,exact_identifier,"classify_command",rtk_rgai,1,10000,782,200,25,0
+A3,exact_identifier,"classify_command",head_n,1,0,2524,626,22,0
+A3,exact_identifier,"classify_command",grep,2,7000,2524,626,22,0
+A3,exact_identifier,"classify_command",rtk_grep,2,24000,817,225,20,0
+A3,exact_identifier,"classify_command",rtk_rgai,2,11000,782,200,25,0
+A3,exact_identifier,"classify_command",head_n,2,0,2524,626,22,0
+A3,exact_identifier,"classify_command",grep,3,7000,2524,626,22,0
+A3,exact_identifier,"classify_command",rtk_grep,3,24000,817,225,20,0
+A3,exact_identifier,"classify_command",rtk_rgai,3,10000,782,200,25,0
+A3,exact_identifier,"classify_command",head_n,3,0,2524,626,22,0
+A3,exact_identifier,"classify_command",grep,4,7000,2524,626,22,0
+A3,exact_identifier,"classify_command",rtk_grep,4,23000,817,225,20,0
+A3,exact_identifier,"classify_command",rtk_rgai,4,11000,782,200,25,0
+A3,exact_identifier,"classify_command",head_n,4,0,2524,626,22,0
+A3,exact_identifier,"classify_command",grep,5,7000,2524,626,22,0
+A3,exact_identifier,"classify_command",rtk_grep,5,23000,817,225,20,0
+A3,exact_identifier,"classify_command",rtk_rgai,5,11000,782,200,25,0
+A3,exact_identifier,"classify_command",head_n,5,0,2524,626,22,0
+A4,exact_identifier,"package_manager_exec",grep,1,7000,918,260,9,0
+A4,exact_identifier,"package_manager_exec",rtk_grep,1,24000,797,246,21,0
+A4,exact_identifier,"package_manager_exec",rtk_rgai,1,11000,1370,381,44,0
+A4,exact_identifier,"package_manager_exec",head_n,1,0,918,260,9,0
+A4,exact_identifier,"package_manager_exec",grep,2,7000,918,260,9,0
+A4,exact_identifier,"package_manager_exec",rtk_grep,2,26000,797,246,21,0
+A4,exact_identifier,"package_manager_exec",rtk_rgai,2,11000,1370,381,44,0
+A4,exact_identifier,"package_manager_exec",head_n,2,0,918,260,9,0
+A4,exact_identifier,"package_manager_exec",grep,3,8000,918,260,9,0
+A4,exact_identifier,"package_manager_exec",rtk_grep,3,24000,797,246,21,0
+A4,exact_identifier,"package_manager_exec",rtk_rgai,3,11000,1370,381,44,0
+A4,exact_identifier,"package_manager_exec",head_n,3,0,918,260,9,0
+A4,exact_identifier,"package_manager_exec",grep,4,7000,918,260,9,0
+A4,exact_identifier,"package_manager_exec",rtk_grep,4,25000,797,246,21,0
+A4,exact_identifier,"package_manager_exec",rtk_rgai,4,10000,1370,381,44,0
+A4,exact_identifier,"package_manager_exec",head_n,4,0,918,260,9,0
+A4,exact_identifier,"package_manager_exec",grep,5,7000,918,260,9,0
+A4,exact_identifier,"package_manager_exec",rtk_grep,5,26000,797,246,21,0
+A4,exact_identifier,"package_manager_exec",rtk_rgai,5,11000,1370,381,44,0
+A4,exact_identifier,"package_manager_exec",head_n,5,0,918,260,9,0
+A5,exact_identifier,"strip_ansi",grep,1,8000,1852,539,20,0
+A5,exact_identifier,"strip_ansi",rtk_grep,1,22000,1197,388,33,0
+A5,exact_identifier,"strip_ansi",rtk_rgai,1,10000,1264,425,51,0
+A5,exact_identifier,"strip_ansi",head_n,1,0,1852,539,20,0
+A5,exact_identifier,"strip_ansi",grep,2,8000,1852,539,20,0
+A5,exact_identifier,"strip_ansi",rtk_grep,2,24000,1197,388,33,0
+A5,exact_identifier,"strip_ansi",rtk_rgai,2,11000,1264,425,51,0
+A5,exact_identifier,"strip_ansi",head_n,2,0,1852,539,20,0
+A5,exact_identifier,"strip_ansi",grep,3,8000,1852,539,20,0
+A5,exact_identifier,"strip_ansi",rtk_grep,3,25000,1197,388,33,0
+A5,exact_identifier,"strip_ansi",rtk_rgai,3,10000,1264,425,51,0
+A5,exact_identifier,"strip_ansi",head_n,3,0,1852,539,20,0
+A5,exact_identifier,"strip_ansi",grep,4,8000,1852,539,20,0
+A5,exact_identifier,"strip_ansi",rtk_grep,4,24000,1197,388,33,0
+A5,exact_identifier,"strip_ansi",rtk_rgai,4,10000,1264,425,51,0
+A5,exact_identifier,"strip_ansi",head_n,4,0,1852,539,20,0
+A5,exact_identifier,"strip_ansi",grep,5,7000,1852,539,20,0
+A5,exact_identifier,"strip_ansi",rtk_grep,5,25000,1197,388,33,0
+A5,exact_identifier,"strip_ansi",rtk_rgai,5,11000,1264,425,51,0
+A5,exact_identifier,"strip_ansi",head_n,5,0,1852,539,20,0
+A6,exact_identifier,"HISTORY_DAYS",grep,1,5000,201,61,2,0
+A6,exact_identifier,"HISTORY_DAYS",rtk_grep,1,23000,182,66,6,0
+A6,exact_identifier,"HISTORY_DAYS",rtk_rgai,1,11000,686,208,23,0
+A6,exact_identifier,"HISTORY_DAYS",head_n,1,0,201,61,2,0
+A6,exact_identifier,"HISTORY_DAYS",grep,2,5000,201,61,2,0
+A6,exact_identifier,"HISTORY_DAYS",rtk_grep,2,23000,182,66,6,0
+A6,exact_identifier,"HISTORY_DAYS",rtk_rgai,2,12000,686,208,23,0
+A6,exact_identifier,"HISTORY_DAYS",head_n,2,0,201,61,2,0
+A6,exact_identifier,"HISTORY_DAYS",grep,3,6000,201,61,2,0
+A6,exact_identifier,"HISTORY_DAYS",rtk_grep,3,25000,182,66,6,0
+A6,exact_identifier,"HISTORY_DAYS",rtk_rgai,3,12000,686,208,23,0
+A6,exact_identifier,"HISTORY_DAYS",head_n,3,0,201,61,2,0
+A6,exact_identifier,"HISTORY_DAYS",grep,4,5000,201,61,2,0
+A6,exact_identifier,"HISTORY_DAYS",rtk_grep,4,28000,182,66,6,0
+A6,exact_identifier,"HISTORY_DAYS",rtk_rgai,4,11000,686,208,23,0
+A6,exact_identifier,"HISTORY_DAYS",head_n,4,0,201,61,2,0
+A6,exact_identifier,"HISTORY_DAYS",grep,5,5000,201,61,2,0
+A6,exact_identifier,"HISTORY_DAYS",rtk_grep,5,24000,182,66,6,0
+A6,exact_identifier,"HISTORY_DAYS",rtk_rgai,5,11000,686,208,23,0
+A6,exact_identifier,"HISTORY_DAYS",head_n,5,0,201,61,2,0
+B1,regex_pattern,"fn run\(.*verbose: u8",grep,1,7000,3128,999,27,0
+B1,regex_pattern,"fn run\(.*verbose: u8",rtk_grep,1,24000,3518,1206,83,0
+B1,regex_pattern,"fn run\(.*verbose: u8",rtk_rgai,1,13000,3264,1065,99,0
+B1,regex_pattern,"fn run\(.*verbose: u8",head_n,1,0,3128,999,27,0
+B1,regex_pattern,"fn run\(.*verbose: u8",grep,2,7000,3128,999,27,0
+B1,regex_pattern,"fn run\(.*verbose: u8",rtk_grep,2,26000,3518,1206,83,0
+B1,regex_pattern,"fn run\(.*verbose: u8",rtk_rgai,2,12000,3264,1065,99,0
+B1,regex_pattern,"fn run\(.*verbose: u8",head_n,2,0,3128,999,27,0
+B1,regex_pattern,"fn run\(.*verbose: u8",grep,3,7000,3128,999,27,0
+B1,regex_pattern,"fn run\(.*verbose: u8",rtk_grep,3,28000,3518,1206,83,0
+B1,regex_pattern,"fn run\(.*verbose: u8",rtk_rgai,3,12000,3264,1065,99,0
+B1,regex_pattern,"fn run\(.*verbose: u8",head_n,3,0,3128,999,27,0
+B1,regex_pattern,"fn run\(.*verbose: u8",grep,4,8000,3128,999,27,0
+B1,regex_pattern,"fn run\(.*verbose: u8",rtk_grep,4,25000,3518,1206,83,0
+B1,regex_pattern,"fn run\(.*verbose: u8",rtk_rgai,4,12000,3264,1065,99,0
+B1,regex_pattern,"fn run\(.*verbose: u8",head_n,4,0,3128,999,27,0
+B1,regex_pattern,"fn run\(.*verbose: u8",grep,5,7000,3128,999,27,0
+B1,regex_pattern,"fn run\(.*verbose: u8",rtk_grep,5,25000,3518,1206,83,0
+B1,regex_pattern,"fn run\(.*verbose: u8",rtk_rgai,5,13000,3264,1065,99,0
+B1,regex_pattern,"fn run\(.*verbose: u8",head_n,5,0,3128,999,27,0
+B2,regex_pattern,"timer\.track\(",grep,1,9000,10764,3338,116,0
+B2,regex_pattern,"timer\.track\(",rtk_grep,1,23000,5723,1979,158,0
+B2,regex_pattern,"timer\.track\(",rtk_rgai,1,12000,2542,803,93,0
+B2,regex_pattern,"timer\.track\(",head_n,1,0,9143,2822,100,0
+B2,regex_pattern,"timer\.track\(",grep,2,8000,10764,3338,116,0
+B2,regex_pattern,"timer\.track\(",rtk_grep,2,25000,5723,1979,158,0
+B2,regex_pattern,"timer\.track\(",rtk_rgai,2,11000,2542,803,93,0
+B2,regex_pattern,"timer\.track\(",head_n,2,0,9143,2822,100,0
+B2,regex_pattern,"timer\.track\(",grep,3,9000,10764,3338,116,0
+B2,regex_pattern,"timer\.track\(",rtk_grep,3,25000,5723,1979,158,0
+B2,regex_pattern,"timer\.track\(",rtk_rgai,3,11000,2542,803,93,0
+B2,regex_pattern,"timer\.track\(",head_n,3,0,9143,2822,100,0
+B2,regex_pattern,"timer\.track\(",grep,4,8000,10764,3338,116,0
+B2,regex_pattern,"timer\.track\(",rtk_grep,4,24000,5723,1979,158,0
+B2,regex_pattern,"timer\.track\(",rtk_rgai,4,12000,2542,803,93,0
+B2,regex_pattern,"timer\.track\(",head_n,4,0,9143,2822,100,0
+B2,regex_pattern,"timer\.track\(",grep,5,8000,10764,3338,116,0
+B2,regex_pattern,"timer\.track\(",rtk_grep,5,23000,5723,1979,158,0
+B2,regex_pattern,"timer\.track\(",rtk_rgai,5,12000,2542,803,93,0
+B2,regex_pattern,"timer\.track\(",head_n,5,0,9143,2822,100,0
+B3,regex_pattern,"\.unwrap_or\(1\)",grep,1,7000,5347,1513,48,0
+B3,regex_pattern,"\.unwrap_or\(1\)",rtk_grep,1,24000,3806,1200,87,0
+B3,regex_pattern,"\.unwrap_or\(1\)",rtk_rgai,1,11000,2777,885,106,0
+B3,regex_pattern,"\.unwrap_or\(1\)",head_n,1,0,5347,1513,48,0
+B3,regex_pattern,"\.unwrap_or\(1\)",grep,2,6000,5347,1513,48,0
+B3,regex_pattern,"\.unwrap_or\(1\)",rtk_grep,2,25000,3806,1200,87,0
+B3,regex_pattern,"\.unwrap_or\(1\)",rtk_rgai,2,11000,2777,885,106,0
+B3,regex_pattern,"\.unwrap_or\(1\)",head_n,2,0,5347,1513,48,0
+B3,regex_pattern,"\.unwrap_or\(1\)",grep,3,7000,5347,1513,48,0
+B3,regex_pattern,"\.unwrap_or\(1\)",rtk_grep,3,24000,3806,1200,87,0
+B3,regex_pattern,"\.unwrap_or\(1\)",rtk_rgai,3,11000,2777,885,106,0
+B3,regex_pattern,"\.unwrap_or\(1\)",head_n,3,0,5347,1513,48,0
+B3,regex_pattern,"\.unwrap_or\(1\)",grep,4,7000,5347,1513,48,0
+B3,regex_pattern,"\.unwrap_or\(1\)",rtk_grep,4,24000,3806,1200,87,0
+B3,regex_pattern,"\.unwrap_or\(1\)",rtk_rgai,4,11000,2777,885,106,0
+B3,regex_pattern,"\.unwrap_or\(1\)",head_n,4,0,5347,1513,48,0
+B3,regex_pattern,"\.unwrap_or\(1\)",grep,5,6000,5347,1513,48,0
+B3,regex_pattern,"\.unwrap_or\(1\)",rtk_grep,5,31000,3806,1200,87,0
+B3,regex_pattern,"\.unwrap_or\(1\)",rtk_rgai,5,15000,2777,885,106,0
+B3,regex_pattern,"\.unwrap_or\(1\)",head_n,5,0,5347,1513,48,0
+B4,regex_pattern,"#\[cfg\(test\)\]",grep,1,6000,2605,845,41,0
+B4,regex_pattern,"#\[cfg\(test\)\]",rtk_grep,1,26000,3098,1142,125,0
+B4,regex_pattern,"#\[cfg\(test\)\]",rtk_rgai,1,11000,2247,716,101,0
+B4,regex_pattern,"#\[cfg\(test\)\]",head_n,1,0,2605,845,41,0
+B4,regex_pattern,"#\[cfg\(test\)\]",grep,2,5000,2605,845,41,0
+B4,regex_pattern,"#\[cfg\(test\)\]",rtk_grep,2,25000,3098,1142,125,0
+B4,regex_pattern,"#\[cfg\(test\)\]",rtk_rgai,2,11000,2247,716,101,0
+B4,regex_pattern,"#\[cfg\(test\)\]",head_n,2,0,2605,845,41,0
+B4,regex_pattern,"#\[cfg\(test\)\]",grep,3,5000,2605,845,41,0
+B4,regex_pattern,"#\[cfg\(test\)\]",rtk_grep,3,25000,3098,1142,125,0
+B4,regex_pattern,"#\[cfg\(test\)\]",rtk_rgai,3,11000,2247,716,101,0
+B4,regex_pattern,"#\[cfg\(test\)\]",head_n,3,0,2605,845,41,0
+B4,regex_pattern,"#\[cfg\(test\)\]",grep,4,5000,2605,845,41,0
+B4,regex_pattern,"#\[cfg\(test\)\]",rtk_grep,4,24000,3098,1142,125,0
+B4,regex_pattern,"#\[cfg\(test\)\]",rtk_rgai,4,11000,2247,716,101,0
+B4,regex_pattern,"#\[cfg\(test\)\]",head_n,4,0,2605,845,41,0
+B4,regex_pattern,"#\[cfg\(test\)\]",grep,5,5000,2605,845,41,0
+B4,regex_pattern,"#\[cfg\(test\)\]",rtk_grep,5,24000,3098,1142,125,0
+B4,regex_pattern,"#\[cfg\(test\)\]",rtk_rgai,5,12000,2247,716,101,0
+B4,regex_pattern,"#\[cfg\(test\)\]",head_n,5,0,2605,845,41,0
+B5,regex_pattern,"HashMap<String, Vec<",grep,1,6000,751,211,6,0
+B5,regex_pattern,"HashMap<String, Vec<",rtk_grep,1,23000,797,255,20,0
+B5,regex_pattern,"HashMap<String, Vec<",rtk_rgai,1,14000,2771,865,96,0
+B5,regex_pattern,"HashMap<String, Vec<",head_n,1,0,751,211,6,0
+B5,regex_pattern,"HashMap<String, Vec<",grep,2,5000,751,211,6,0
+B5,regex_pattern,"HashMap<String, Vec<",rtk_grep,2,24000,797,255,20,0
+B5,regex_pattern,"HashMap<String, Vec<",rtk_rgai,2,14000,2771,865,96,0
+B5,regex_pattern,"HashMap<String, Vec<",head_n,2,0,751,211,6,0
+B5,regex_pattern,"HashMap<String, Vec<",grep,3,6000,751,211,6,0
+B5,regex_pattern,"HashMap<String, Vec<",rtk_grep,3,24000,797,255,20,0
+B5,regex_pattern,"HashMap<String, Vec<",rtk_rgai,3,14000,2771,865,96,0
+B5,regex_pattern,"HashMap<String, Vec<",head_n,3,0,751,211,6,0
+B5,regex_pattern,"HashMap<String, Vec<",grep,4,6000,751,211,6,0
+B5,regex_pattern,"HashMap<String, Vec<",rtk_grep,4,24000,797,255,20,0
+B5,regex_pattern,"HashMap<String, Vec<",rtk_rgai,4,13000,2771,865,96,0
+B5,regex_pattern,"HashMap<String, Vec<",head_n,4,0,751,211,6,0
+B5,regex_pattern,"HashMap<String, Vec<",grep,5,7000,751,211,6,0
+B5,regex_pattern,"HashMap<String, Vec<",rtk_grep,5,24000,797,255,20,0
+B5,regex_pattern,"HashMap<String, Vec<",rtk_rgai,5,14000,2771,865,96,0
+B5,regex_pattern,"HashMap<String, Vec<",head_n,5,0,751,211,6,0
+B6,regex_pattern,"lazy_static!",grep,1,8000,930,280,12,0
+B6,regex_pattern,"lazy_static!",rtk_grep,1,24000,841,292,32,0
+B6,regex_pattern,"lazy_static!",rtk_rgai,1,10000,2218,708,72,0
+B6,regex_pattern,"lazy_static!",head_n,1,0,930,280,12,0
+B6,regex_pattern,"lazy_static!",grep,2,8000,930,280,12,0
+B6,regex_pattern,"lazy_static!",rtk_grep,2,25000,841,292,32,0
+B6,regex_pattern,"lazy_static!",rtk_rgai,2,10000,2218,708,72,0
+B6,regex_pattern,"lazy_static!",head_n,2,0,930,280,12,0
+B6,regex_pattern,"lazy_static!",grep,3,8000,930,280,12,0
+B6,regex_pattern,"lazy_static!",rtk_grep,3,25000,841,292,32,0
+B6,regex_pattern,"lazy_static!",rtk_rgai,3,11000,2218,708,72,0
+B6,regex_pattern,"lazy_static!",head_n,3,0,930,280,12,0
+B6,regex_pattern,"lazy_static!",grep,4,8000,930,280,12,0
+B6,regex_pattern,"lazy_static!",rtk_grep,4,25000,841,292,32,0
+B6,regex_pattern,"lazy_static!",rtk_rgai,4,11000,2218,708,72,0
+B6,regex_pattern,"lazy_static!",head_n,4,0,930,280,12,0
+B6,regex_pattern,"lazy_static!",grep,5,8000,930,280,12,0
+B6,regex_pattern,"lazy_static!",rtk_grep,5,23000,841,292,32,0
+B6,regex_pattern,"lazy_static!",rtk_rgai,5,10000,2218,708,72,0
+B6,regex_pattern,"lazy_static!",head_n,5,0,930,280,12,0
+C1,semantic_intent,"token savings tracking database",grep,1,8000,0,0,0,1
+C1,semantic_intent,"token savings tracking database",rtk_grep,1,24000,45,12,1,0
+C1,semantic_intent,"token savings tracking database",rtk_rgai,1,16000,2801,832,102,0
+C1,semantic_intent,"token savings tracking database",head_n,1,0,0,0,0,0
+C1,semantic_intent,"token savings tracking database",grep,2,9000,0,0,0,1
+C1,semantic_intent,"token savings tracking database",rtk_grep,2,24000,45,12,1,0
+C1,semantic_intent,"token savings tracking database",rtk_rgai,2,15000,2801,832,102,0
+C1,semantic_intent,"token savings tracking database",head_n,2,0,0,0,0,0
+C1,semantic_intent,"token savings tracking database",grep,3,8000,0,0,0,1
+C1,semantic_intent,"token savings tracking database",rtk_grep,3,24000,45,12,1,0
+C1,semantic_intent,"token savings tracking database",rtk_rgai,3,15000,2801,832,102,0
+C1,semantic_intent,"token savings tracking database",head_n,3,0,0,0,0,0
+C1,semantic_intent,"token savings tracking database",grep,4,8000,0,0,0,1
+C1,semantic_intent,"token savings tracking database",rtk_grep,4,26000,45,12,1,0
+C1,semantic_intent,"token savings tracking database",rtk_rgai,4,15000,2801,832,102,0
+C1,semantic_intent,"token savings tracking database",head_n,4,0,0,0,0,0
+C1,semantic_intent,"token savings tracking database",grep,5,8000,0,0,0,1
+C1,semantic_intent,"token savings tracking database",rtk_grep,5,25000,45,12,1,0
+C1,semantic_intent,"token savings tracking database",rtk_rgai,5,16000,2801,832,102,0
+C1,semantic_intent,"token savings tracking database",head_n,5,0,0,0,0,0
+C2,semantic_intent,"exit code preservation",grep,1,9000,0,0,0,1
+C2,semantic_intent,"exit code preservation",rtk_grep,1,25000,36,11,1,0
+C2,semantic_intent,"exit code preservation",rtk_rgai,1,12000,2158,702,96,0
+C2,semantic_intent,"exit code preservation",head_n,1,0,0,0,0,0
+C2,semantic_intent,"exit code preservation",grep,2,9000,0,0,0,1
+C2,semantic_intent,"exit code preservation",rtk_grep,2,26000,36,11,1,0
+C2,semantic_intent,"exit code preservation",rtk_rgai,2,12000,2158,702,96,0
+C2,semantic_intent,"exit code preservation",head_n,2,0,0,0,0,0
+C2,semantic_intent,"exit code preservation",grep,3,9000,0,0,0,1
+C2,semantic_intent,"exit code preservation",rtk_grep,3,27000,36,11,1,0
+C2,semantic_intent,"exit code preservation",rtk_rgai,3,12000,2158,702,96,0
+C2,semantic_intent,"exit code preservation",head_n,3,0,0,0,0,0
+C2,semantic_intent,"exit code preservation",grep,4,10000,0,0,0,1
+C2,semantic_intent,"exit code preservation",rtk_grep,4,24000,36,11,1,0
+C2,semantic_intent,"exit code preservation",rtk_rgai,4,12000,2158,702,96,0
+C2,semantic_intent,"exit code preservation",head_n,4,0,0,0,0,0
+C2,semantic_intent,"exit code preservation",grep,5,9000,0,0,0,1
+C2,semantic_intent,"exit code preservation",rtk_grep,5,24000,36,11,1,0
+C2,semantic_intent,"exit code preservation",rtk_rgai,5,12000,2158,702,96,0
+C2,semantic_intent,"exit code preservation",head_n,5,0,0,0,0,0
+C3,semantic_intent,"language aware code filtering",grep,1,8000,0,0,0,1
+C3,semantic_intent,"language aware code filtering",rtk_grep,1,24000,43,12,1,0
+C3,semantic_intent,"language aware code filtering",rtk_rgai,1,14000,3112,926,103,0
+C3,semantic_intent,"language aware code filtering",head_n,1,0,0,0,0,0
+C3,semantic_intent,"language aware code filtering",grep,2,8000,0,0,0,1
+C3,semantic_intent,"language aware code filtering",rtk_grep,2,25000,43,12,1,0
+C3,semantic_intent,"language aware code filtering",rtk_rgai,2,14000,3112,926,103,0
+C3,semantic_intent,"language aware code filtering",head_n,2,0,0,0,0,0
+C3,semantic_intent,"language aware code filtering",grep,3,8000,0,0,0,1
+C3,semantic_intent,"language aware code filtering",rtk_grep,3,24000,43,12,1,0
+C3,semantic_intent,"language aware code filtering",rtk_rgai,3,13000,3112,926,103,0
+C3,semantic_intent,"language aware code filtering",head_n,3,0,0,0,0,0
+C3,semantic_intent,"language aware code filtering",grep,4,8000,0,0,0,1
+C3,semantic_intent,"language aware code filtering",rtk_grep,4,23000,43,12,1,0
+C3,semantic_intent,"language aware code filtering",rtk_rgai,4,14000,3112,926,103,0
+C3,semantic_intent,"language aware code filtering",head_n,4,0,0,0,0,0
+C3,semantic_intent,"language aware code filtering",grep,5,8000,0,0,0,1
+C3,semantic_intent,"language aware code filtering",rtk_grep,5,24000,43,12,1,0
+C3,semantic_intent,"language aware code filtering",rtk_rgai,5,14000,3112,926,103,0
+C3,semantic_intent,"language aware code filtering",head_n,5,0,0,0,0,0
+C4,semantic_intent,"output grouping by file",grep,1,8000,0,0,0,1
+C4,semantic_intent,"output grouping by file",rtk_grep,1,25000,37,12,1,0
+C4,semantic_intent,"output grouping by file",rtk_rgai,1,12000,3348,989,105,0
+C4,semantic_intent,"output grouping by file",head_n,1,0,0,0,0,0
+C4,semantic_intent,"output grouping by file",grep,2,8000,0,0,0,1
+C4,semantic_intent,"output grouping by file",rtk_grep,2,25000,37,12,1,0
+C4,semantic_intent,"output grouping by file",rtk_rgai,2,13000,3348,989,105,0
+C4,semantic_intent,"output grouping by file",head_n,2,0,0,0,0,0
+C4,semantic_intent,"output grouping by file",grep,3,8000,0,0,0,1
+C4,semantic_intent,"output grouping by file",rtk_grep,3,23000,37,12,1,0
+C4,semantic_intent,"output grouping by file",rtk_rgai,3,12000,3348,989,105,0
+C4,semantic_intent,"output grouping by file",head_n,3,0,0,0,0,0
+C4,semantic_intent,"output grouping by file",grep,4,8000,0,0,0,1
+C4,semantic_intent,"output grouping by file",rtk_grep,4,26000,37,12,1,0
+C4,semantic_intent,"output grouping by file",rtk_rgai,4,13000,3348,989,105,0
+C4,semantic_intent,"output grouping by file",head_n,4,0,0,0,0,0
+C4,semantic_intent,"output grouping by file",grep,5,8000,0,0,0,1
+C4,semantic_intent,"output grouping by file",rtk_grep,5,25000,37,12,1,0
+C4,semantic_intent,"output grouping by file",rtk_rgai,5,13000,3348,989,105,0
+C4,semantic_intent,"output grouping by file",head_n,5,0,0,0,0,0
+C5,semantic_intent,"three tier parser degradation",grep,1,9000,0,0,0,1
+C5,semantic_intent,"three tier parser degradation",rtk_grep,1,28000,43,12,1,0
+C5,semantic_intent,"three tier parser degradation",rtk_rgai,1,13000,2453,741,95,0
+C5,semantic_intent,"three tier parser degradation",head_n,1,0,0,0,0,0
+C5,semantic_intent,"three tier parser degradation",grep,2,8000,0,0,0,1
+C5,semantic_intent,"three tier parser degradation",rtk_grep,2,25000,43,12,1,0
+C5,semantic_intent,"three tier parser degradation",rtk_rgai,2,13000,2453,741,95,0
+C5,semantic_intent,"three tier parser degradation",head_n,2,0,0,0,0,0
+C5,semantic_intent,"three tier parser degradation",grep,3,9000,0,0,0,1
+C5,semantic_intent,"three tier parser degradation",rtk_grep,3,24000,43,12,1,0
+C5,semantic_intent,"three tier parser degradation",rtk_rgai,3,14000,2453,741,95,0
+C5,semantic_intent,"three tier parser degradation",head_n,3,0,0,0,0,0
+C5,semantic_intent,"three tier parser degradation",grep,4,11000,0,0,0,1
+C5,semantic_intent,"three tier parser degradation",rtk_grep,4,25000,43,12,1,0
+C5,semantic_intent,"three tier parser degradation",rtk_rgai,4,13000,2453,741,95,0
+C5,semantic_intent,"three tier parser degradation",head_n,4,0,0,0,0,0
+C5,semantic_intent,"three tier parser degradation",grep,5,9000,0,0,0,1
+C5,semantic_intent,"three tier parser degradation",rtk_grep,5,33000,43,12,1,0
+C5,semantic_intent,"three tier parser degradation",rtk_rgai,5,14000,2453,741,95,0
+C5,semantic_intent,"three tier parser degradation",head_n,5,0,0,0,0,0
+C6,semantic_intent,"ANSI color stripping cleanup",grep,1,6000,0,0,0,1
+C6,semantic_intent,"ANSI color stripping cleanup",rtk_grep,1,27000,42,13,1,0
+C6,semantic_intent,"ANSI color stripping cleanup",rtk_rgai,1,15000,2139,697,92,0
+C6,semantic_intent,"ANSI color stripping cleanup",head_n,1,0,0,0,0,0
+C6,semantic_intent,"ANSI color stripping cleanup",grep,2,7000,0,0,0,1
+C6,semantic_intent,"ANSI color stripping cleanup",rtk_grep,2,27000,42,13,1,0
+C6,semantic_intent,"ANSI color stripping cleanup",rtk_rgai,2,14000,2139,697,92,0
+C6,semantic_intent,"ANSI color stripping cleanup",head_n,2,0,0,0,0,0
+C6,semantic_intent,"ANSI color stripping cleanup",grep,3,6000,0,0,0,1
+C6,semantic_intent,"ANSI color stripping cleanup",rtk_grep,3,24000,42,13,1,0
+C6,semantic_intent,"ANSI color stripping cleanup",rtk_rgai,3,14000,2139,697,92,0
+C6,semantic_intent,"ANSI color stripping cleanup",head_n,3,0,0,0,0,0
+C6,semantic_intent,"ANSI color stripping cleanup",grep,4,6000,0,0,0,1
+C6,semantic_intent,"ANSI color stripping cleanup",rtk_grep,4,25000,42,13,1,0
+C6,semantic_intent,"ANSI color stripping cleanup",rtk_rgai,4,14000,2139,697,92,0
+C6,semantic_intent,"ANSI color stripping cleanup",head_n,4,0,0,0,0,0
+C6,semantic_intent,"ANSI color stripping cleanup",grep,5,7000,0,0,0,1
+C6,semantic_intent,"ANSI color stripping cleanup",rtk_grep,5,31000,42,13,1,0
+C6,semantic_intent,"ANSI color stripping cleanup",rtk_rgai,5,14000,2139,697,92,0
+C6,semantic_intent,"ANSI color stripping cleanup",head_n,5,0,0,0,0,0
+C7,semantic_intent,"hook installation settings json",grep,1,8000,0,0,0,1
+C7,semantic_intent,"hook installation settings json",rtk_grep,1,25000,45,12,1,0
+C7,semantic_intent,"hook installation settings json",rtk_rgai,1,15000,2940,907,104,0
+C7,semantic_intent,"hook installation settings json",head_n,1,0,0,0,0,0
+C7,semantic_intent,"hook installation settings json",grep,2,8000,0,0,0,1
+C7,semantic_intent,"hook installation settings json",rtk_grep,2,29000,45,12,1,0
+C7,semantic_intent,"hook installation settings json",rtk_rgai,2,15000,2940,907,104,0
+C7,semantic_intent,"hook installation settings json",head_n,2,0,0,0,0,0
+C7,semantic_intent,"hook installation settings json",grep,3,7000,0,0,0,1
+C7,semantic_intent,"hook installation settings json",rtk_grep,3,27000,45,12,1,0
+C7,semantic_intent,"hook installation settings json",rtk_rgai,3,15000,2940,907,104,0
+C7,semantic_intent,"hook installation settings json",head_n,3,0,0,0,0,0
+C7,semantic_intent,"hook installation settings json",grep,4,8000,0,0,0,1
+C7,semantic_intent,"hook installation settings json",rtk_grep,4,30000,45,12,1,0
+C7,semantic_intent,"hook installation settings json",rtk_rgai,4,14000,2940,907,104,0
+C7,semantic_intent,"hook installation settings json",head_n,4,0,0,0,0,0
+C7,semantic_intent,"hook installation settings json",grep,5,8000,0,0,0,1
+C7,semantic_intent,"hook installation settings json",rtk_grep,5,27000,45,12,1,0
+C7,semantic_intent,"hook installation settings json",rtk_rgai,5,15000,2940,907,104,0
+C7,semantic_intent,"hook installation settings json",head_n,5,0,0,0,0,0
+C8,semantic_intent,"command classification discover",grep,1,10000,0,0,0,1
+C8,semantic_intent,"command classification discover",rtk_grep,1,26000,45,11,1,0
+C8,semantic_intent,"command classification discover",rtk_rgai,1,13000,2867,796,104,0
+C8,semantic_intent,"command classification discover",head_n,1,0,0,0,0,0
+C8,semantic_intent,"command classification discover",grep,2,8000,0,0,0,1
+C8,semantic_intent,"command classification discover",rtk_grep,2,26000,45,11,1,0
+C8,semantic_intent,"command classification discover",rtk_rgai,2,13000,2867,796,104,0
+C8,semantic_intent,"command classification discover",head_n,2,0,0,0,0,0
+C8,semantic_intent,"command classification discover",grep,3,9000,0,0,0,1
+C8,semantic_intent,"command classification discover",rtk_grep,3,26000,45,11,1,0
+C8,semantic_intent,"command classification discover",rtk_rgai,3,13000,2867,796,104,0
+C8,semantic_intent,"command classification discover",head_n,3,0,0,0,0,0
+C8,semantic_intent,"command classification discover",grep,4,10000,0,0,0,1
+C8,semantic_intent,"command classification discover",rtk_grep,4,26000,45,11,1,0
+C8,semantic_intent,"command classification discover",rtk_rgai,4,13000,2867,796,104,0
+C8,semantic_intent,"command classification discover",head_n,4,0,0,0,0,0
+C8,semantic_intent,"command classification discover",grep,5,9000,0,0,0,1
+C8,semantic_intent,"command classification discover",rtk_grep,5,28000,45,11,1,0
+C8,semantic_intent,"command classification discover",rtk_rgai,5,14000,2867,796,104,0
+C8,semantic_intent,"command classification discover",head_n,5,0,0,0,0,0
+C9,semantic_intent,"pnpm yarn npm auto detection",grep,1,8000,0,0,0,1
+C9,semantic_intent,"pnpm yarn npm auto detection",rtk_grep,1,63000,42,14,1,0
+C9,semantic_intent,"pnpm yarn npm auto detection",rtk_rgai,1,13000,2682,931,104,0
+C9,semantic_intent,"pnpm yarn npm auto detection",head_n,1,0,0,0,0,0
+C9,semantic_intent,"pnpm yarn npm auto detection",grep,2,8000,0,0,0,1
+C9,semantic_intent,"pnpm yarn npm auto detection",rtk_grep,2,26000,42,14,1,0
+C9,semantic_intent,"pnpm yarn npm auto detection",rtk_rgai,2,14000,2682,931,104,0
+C9,semantic_intent,"pnpm yarn npm auto detection",head_n,2,0,0,0,0,0
+C9,semantic_intent,"pnpm yarn npm auto detection",grep,3,9000,0,0,0,1
+C9,semantic_intent,"pnpm yarn npm auto detection",rtk_grep,3,28000,42,14,1,0
+C9,semantic_intent,"pnpm yarn npm auto detection",rtk_rgai,3,14000,2682,931,104,0
+C9,semantic_intent,"pnpm yarn npm auto detection",head_n,3,0,0,0,0,0
+C9,semantic_intent,"pnpm yarn npm auto detection",grep,4,9000,0,0,0,1
+C9,semantic_intent,"pnpm yarn npm auto detection",rtk_grep,4,26000,42,14,1,0
+C9,semantic_intent,"pnpm yarn npm auto detection",rtk_rgai,4,16000,2682,931,104,0
+C9,semantic_intent,"pnpm yarn npm auto detection",head_n,4,0,0,0,0,0
+C9,semantic_intent,"pnpm yarn npm auto detection",grep,5,8000,0,0,0,1
+C9,semantic_intent,"pnpm yarn npm auto detection",rtk_grep,5,27000,42,14,1,0
+C9,semantic_intent,"pnpm yarn npm auto detection",rtk_rgai,5,14000,2682,931,104,0
+C9,semantic_intent,"pnpm yarn npm auto detection",head_n,5,0,0,0,0,0
+C10,semantic_intent,"SQLite retention cleanup policy",grep,1,37000,0,0,0,1
+C10,semantic_intent,"SQLite retention cleanup policy",rtk_grep,1,25000,45,12,1,0
+C10,semantic_intent,"SQLite retention cleanup policy",rtk_rgai,1,15000,806,241,27,0
+C10,semantic_intent,"SQLite retention cleanup policy",head_n,1,0,0,0,0,0
+C10,semantic_intent,"SQLite retention cleanup policy",grep,2,11000,0,0,0,1
+C10,semantic_intent,"SQLite retention cleanup policy",rtk_grep,2,24000,45,12,1,0
+C10,semantic_intent,"SQLite retention cleanup policy",rtk_rgai,2,14000,806,241,27,0
+C10,semantic_intent,"SQLite retention cleanup policy",head_n,2,0,0,0,0,0
+C10,semantic_intent,"SQLite retention cleanup policy",grep,3,11000,0,0,0,1
+C10,semantic_intent,"SQLite retention cleanup policy",rtk_grep,3,29000,45,12,1,0
+C10,semantic_intent,"SQLite retention cleanup policy",rtk_rgai,3,18000,806,241,27,0
+C10,semantic_intent,"SQLite retention cleanup policy",head_n,3,0,0,0,0,0
+C10,semantic_intent,"SQLite retention cleanup policy",grep,4,6000,0,0,0,1
+C10,semantic_intent,"SQLite retention cleanup policy",rtk_grep,4,27000,45,12,1,0
+C10,semantic_intent,"SQLite retention cleanup policy",rtk_rgai,4,13000,806,241,27,0
+C10,semantic_intent,"SQLite retention cleanup policy",head_n,4,0,0,0,0,0
+C10,semantic_intent,"SQLite retention cleanup policy",grep,5,6000,0,0,0,1
+C10,semantic_intent,"SQLite retention cleanup policy",rtk_grep,5,24000,45,12,1,0
+C10,semantic_intent,"SQLite retention cleanup policy",rtk_rgai,5,13000,806,241,27,0
+C10,semantic_intent,"SQLite retention cleanup policy",head_n,5,0,0,0,0,0
+D1,cross_file,"verbose > 0",grep,1,6000,6540,2112,90,0
+D1,cross_file,"verbose > 0",rtk_grep,1,25000,4307,1634,162,0
+D1,cross_file,"verbose > 0",rtk_rgai,1,11000,2238,709,97,0
+D1,cross_file,"verbose > 0",head_n,1,0,6540,2112,90,0
+D1,cross_file,"verbose > 0",grep,2,5000,6540,2112,90,0
+D1,cross_file,"verbose > 0",rtk_grep,2,25000,4307,1634,162,0
+D1,cross_file,"verbose > 0",rtk_rgai,2,11000,2238,709,97,0
+D1,cross_file,"verbose > 0",head_n,2,0,6540,2112,90,0
+D1,cross_file,"verbose > 0",grep,3,6000,6540,2112,90,0
+D1,cross_file,"verbose > 0",rtk_grep,3,25000,4307,1634,162,0
+D1,cross_file,"verbose > 0",rtk_rgai,3,11000,2238,709,97,0
+D1,cross_file,"verbose > 0",head_n,3,0,6540,2112,90,0
+D1,cross_file,"verbose > 0",grep,4,6000,6540,2112,90,0
+D1,cross_file,"verbose > 0",rtk_grep,4,26000,4307,1634,162,0
+D1,cross_file,"verbose > 0",rtk_rgai,4,11000,2238,709,97,0
+D1,cross_file,"verbose > 0",head_n,4,0,6540,2112,90,0
+D1,cross_file,"verbose > 0",grep,5,6000,6540,2112,90,0
+D1,cross_file,"verbose > 0",rtk_grep,5,24000,4307,1634,162,0
+D1,cross_file,"verbose > 0",rtk_rgai,5,11000,2238,709,97,0
+D1,cross_file,"verbose > 0",head_n,5,0,6540,2112,90,0
+D2,cross_file,"anyhow::Result",grep,1,8000,753,235,11,0
+D2,cross_file,"anyhow::Result",rtk_grep,1,24000,954,333,35,0
+D2,cross_file,"anyhow::Result",rtk_rgai,1,12000,2416,765,102,0
+D2,cross_file,"anyhow::Result",head_n,1,0,753,235,11,0
+D2,cross_file,"anyhow::Result",grep,2,8000,753,235,11,0
+D2,cross_file,"anyhow::Result",rtk_grep,2,24000,954,333,35,0
+D2,cross_file,"anyhow::Result",rtk_rgai,2,12000,2416,765,102,0
+D2,cross_file,"anyhow::Result",head_n,2,0,753,235,11,0
+D2,cross_file,"anyhow::Result",grep,3,8000,753,235,11,0
+D2,cross_file,"anyhow::Result",rtk_grep,3,23000,954,333,35,0
+D2,cross_file,"anyhow::Result",rtk_rgai,3,12000,2416,765,102,0
+D2,cross_file,"anyhow::Result",head_n,3,0,753,235,11,0
+D2,cross_file,"anyhow::Result",grep,4,8000,753,235,11,0
+D2,cross_file,"anyhow::Result",rtk_grep,4,23000,954,333,35,0
+D2,cross_file,"anyhow::Result",rtk_rgai,4,12000,2416,765,102,0
+D2,cross_file,"anyhow::Result",head_n,4,0,753,235,11,0
+D2,cross_file,"anyhow::Result",grep,5,8000,753,235,11,0
+D2,cross_file,"anyhow::Result",rtk_grep,5,24000,954,333,35,0
+D2,cross_file,"anyhow::Result",rtk_rgai,5,11000,2416,765,102,0
+D2,cross_file,"anyhow::Result",head_n,5,0,753,235,11,0
+D3,cross_file,"process::exit",grep,1,7000,5234,1474,47,0
+D3,cross_file,"process::exit",rtk_grep,1,24000,3682,1154,84,0
+D3,cross_file,"process::exit",rtk_rgai,1,12000,2538,804,106,0
+D3,cross_file,"process::exit",head_n,1,0,5234,1474,47,0
+D3,cross_file,"process::exit",grep,2,7000,5234,1474,47,0
+D3,cross_file,"process::exit",rtk_grep,2,24000,3682,1154,84,0
+D3,cross_file,"process::exit",rtk_rgai,2,12000,2538,804,106,0
+D3,cross_file,"process::exit",head_n,2,0,5234,1474,47,0
+D3,cross_file,"process::exit",grep,3,8000,5234,1474,47,0
+D3,cross_file,"process::exit",rtk_grep,3,24000,3682,1154,84,0
+D3,cross_file,"process::exit",rtk_rgai,3,12000,2538,804,106,0
+D3,cross_file,"process::exit",head_n,3,0,5234,1474,47,0
+D3,cross_file,"process::exit",grep,4,7000,5234,1474,47,0
+D3,cross_file,"process::exit",rtk_grep,4,24000,3682,1154,84,0
+D3,cross_file,"process::exit",rtk_rgai,4,12000,2538,804,106,0
+D3,cross_file,"process::exit",head_n,4,0,5234,1474,47,0
+D3,cross_file,"process::exit",grep,5,7000,5234,1474,47,0
+D3,cross_file,"process::exit",rtk_grep,5,24000,3682,1154,84,0
+D3,cross_file,"process::exit",rtk_rgai,5,13000,2538,804,106,0
+D3,cross_file,"process::exit",head_n,5,0,5234,1474,47,0
+D4,cross_file,"Command::new",grep,1,5000,9867,2999,111,0
+D4,cross_file,"Command::new",rtk_grep,1,24000,5321,1790,145,0
+D4,cross_file,"Command::new",rtk_rgai,1,11000,2283,769,102,0
+D4,cross_file,"Command::new",head_n,1,0,8937,2700,100,0
+D4,cross_file,"Command::new",grep,2,5000,9867,2999,111,0
+D4,cross_file,"Command::new",rtk_grep,2,25000,5321,1790,145,0
+D4,cross_file,"Command::new",rtk_rgai,2,12000,2283,769,102,0
+D4,cross_file,"Command::new",head_n,2,0,8937,2700,100,0
+D4,cross_file,"Command::new",grep,3,6000,9867,2999,111,0
+D4,cross_file,"Command::new",rtk_grep,3,26000,5321,1790,145,0
+D4,cross_file,"Command::new",rtk_rgai,3,11000,2283,769,102,0
+D4,cross_file,"Command::new",head_n,3,0,8937,2700,100,0
+D4,cross_file,"Command::new",grep,4,5000,9867,2999,111,0
+D4,cross_file,"Command::new",rtk_grep,4,25000,5321,1790,145,0
+D4,cross_file,"Command::new",rtk_rgai,4,12000,2283,769,102,0
+D4,cross_file,"Command::new",head_n,4,0,8937,2700,100,0
+D4,cross_file,"Command::new",grep,5,5000,9867,2999,111,0
+D4,cross_file,"Command::new",rtk_grep,5,24000,5321,1790,145,0
+D4,cross_file,"Command::new",rtk_rgai,5,12000,2283,769,102,0
+D4,cross_file,"Command::new",head_n,5,0,8937,2700,100,0
+D5,cross_file,"from_utf8_lossy",grep,1,7000,17304,5038,157,0
+D5,cross_file,"from_utf8_lossy",rtk_grep,1,23000,8386,2572,168,0
+D5,cross_file,"from_utf8_lossy",rtk_rgai,1,11000,2767,867,94,0
+D5,cross_file,"from_utf8_lossy",head_n,1,0,10775,3127,100,0
+D5,cross_file,"from_utf8_lossy",grep,2,8000,17304,5038,157,0
+D5,cross_file,"from_utf8_lossy",rtk_grep,2,25000,8386,2572,168,0
+D5,cross_file,"from_utf8_lossy",rtk_rgai,2,11000,2767,867,94,0
+D5,cross_file,"from_utf8_lossy",head_n,2,0,10775,3127,100,0
+D5,cross_file,"from_utf8_lossy",grep,3,8000,17304,5038,157,0
+D5,cross_file,"from_utf8_lossy",rtk_grep,3,27000,8386,2572,168,0
+D5,cross_file,"from_utf8_lossy",rtk_rgai,3,11000,2767,867,94,0
+D5,cross_file,"from_utf8_lossy",head_n,3,0,10775,3127,100,0
+D5,cross_file,"from_utf8_lossy",grep,4,7000,17304,5038,157,0
+D5,cross_file,"from_utf8_lossy",rtk_grep,4,25000,8386,2572,168,0
+D5,cross_file,"from_utf8_lossy",rtk_rgai,4,11000,2767,867,94,0
+D5,cross_file,"from_utf8_lossy",head_n,4,0,10775,3127,100,0
+D5,cross_file,"from_utf8_lossy",grep,5,7000,17304,5038,157,0
+D5,cross_file,"from_utf8_lossy",rtk_grep,5,26000,8386,2572,168,0
+D5,cross_file,"from_utf8_lossy",rtk_rgai,5,12000,2767,867,94,0
+D5,cross_file,"from_utf8_lossy",head_n,5,0,10775,3127,100,0
+E1,edge_case,"the",grep,1,9000,19971,5421,178,0
+E1,edge_case,"the",rtk_grep,1,28000,11273,3399,239,0
+E1,edge_case,"the",rtk_rgai,1,11000,2359,779,106,0
+E1,edge_case,"the",head_n,1,0,11771,3170,100,0
+E1,edge_case,"the",grep,2,8000,19971,5421,178,0
+E1,edge_case,"the",rtk_grep,2,26000,11273,3399,239,0
+E1,edge_case,"the",rtk_rgai,2,11000,2359,779,106,0
+E1,edge_case,"the",head_n,2,0,11771,3170,100,0
+E1,edge_case,"the",grep,3,10000,19971,5421,178,0
+E1,edge_case,"the",rtk_grep,3,24000,11273,3399,239,0
+E1,edge_case,"the",rtk_rgai,3,10000,2359,779,106,0
+E1,edge_case,"the",head_n,3,0,11771,3170,100,0
+E1,edge_case,"the",grep,4,8000,19971,5421,178,0
+E1,edge_case,"the",rtk_grep,4,26000,11273,3399,239,0
+E1,edge_case,"the",rtk_rgai,4,10000,2359,779,106,0
+E1,edge_case,"the",head_n,4,0,11771,3170,100,0
+E1,edge_case,"the",grep,5,8000,19971,5421,178,0
+E1,edge_case,"the",rtk_grep,5,27000,11273,3399,239,0
+E1,edge_case,"the",rtk_rgai,5,10000,2359,779,106,0
+E1,edge_case,"the",head_n,5,0,11771,3170,100,0
+E2,edge_case,"fn",grep,1,7000,77939,23141,784,0
+E2,edge_case,"fn",rtk_grep,1,26000,12744,4052,264,0
+E2,edge_case,"fn",rtk_rgai,1,10000,2733,872,101,0
+E2,edge_case,"fn",head_n,1,0,10320,3103,100,0
+E2,edge_case,"fn",grep,2,6000,77939,23141,784,0
+E2,edge_case,"fn",rtk_grep,2,24000,12744,4052,264,0
+E2,edge_case,"fn",rtk_rgai,2,10000,2733,872,101,0
+E2,edge_case,"fn",head_n,2,0,10320,3103,100,0
+E2,edge_case,"fn",grep,3,8000,77939,23141,784,0
+E2,edge_case,"fn",rtk_grep,3,26000,12744,4052,264,0
+E2,edge_case,"fn",rtk_rgai,3,10000,2733,872,101,0
+E2,edge_case,"fn",head_n,3,0,10320,3103,100,0
+E2,edge_case,"fn",grep,4,7000,77939,23141,784,0
+E2,edge_case,"fn",rtk_grep,4,24000,12744,4052,264,0
+E2,edge_case,"fn",rtk_rgai,4,10000,2733,872,101,0
+E2,edge_case,"fn",head_n,4,0,10320,3103,100,0
+E2,edge_case,"fn",grep,5,6000,77939,23141,784,0
+E2,edge_case,"fn",rtk_grep,5,27000,12744,4052,264,0
+E2,edge_case,"fn",rtk_rgai,5,10000,2733,872,101,0
+E2,edge_case,"fn",head_n,5,0,10320,3103,100,0
+E3,edge_case,"error handling retry backoff",grep,1,9000,0,0,0,1
+E3,edge_case,"error handling retry backoff",rtk_grep,1,24000,42,13,1,0
+E3,edge_case,"error handling retry backoff",rtk_rgai,1,14000,2340,756,102,0
+E3,edge_case,"error handling retry backoff",head_n,1,0,0,0,0,0
+E3,edge_case,"error handling retry backoff",grep,2,12000,0,0,0,1
+E3,edge_case,"error handling retry backoff",rtk_grep,2,27000,42,13,1,0
+E3,edge_case,"error handling retry backoff",rtk_rgai,2,13000,2340,756,102,0
+E3,edge_case,"error handling retry backoff",head_n,2,0,0,0,0,0
+E3,edge_case,"error handling retry backoff",grep,3,9000,0,0,0,1
+E3,edge_case,"error handling retry backoff",rtk_grep,3,28000,42,13,1,0
+E3,edge_case,"error handling retry backoff",rtk_rgai,3,13000,2340,756,102,0
+E3,edge_case,"error handling retry backoff",head_n,3,0,0,0,0,0
+E3,edge_case,"error handling retry backoff",grep,4,9000,0,0,0,1
+E3,edge_case,"error handling retry backoff",rtk_grep,4,23000,42,13,1,0
+E3,edge_case,"error handling retry backoff",rtk_rgai,4,13000,2340,756,102,0
+E3,edge_case,"error handling retry backoff",head_n,4,0,0,0,0,0
+E3,edge_case,"error handling retry backoff",grep,5,9000,0,0,0,1
+E3,edge_case,"error handling retry backoff",rtk_grep,5,25000,42,13,1,0
+E3,edge_case,"error handling retry backoff",rtk_rgai,5,14000,2340,756,102,0
+E3,edge_case,"error handling retry backoff",head_n,5,0,0,0,0,0

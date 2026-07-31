@@ -1,0 +1,102 @@
+🧠 52F for 'anyhow::Result' (scan 55F)
+
+📄 diff_cmd.rs [16.3]
+     2: use crate::utils::truncate;
+     3: use anyhow::Result;
+     4: use std::fs;
+       ~ anyhow, result
+
+     7: /// Ultra-condensed diff - only changed lines, no context
+     8: pub fn run(file1: &Path, file2: &Path, verbose: u8) -> Result<()> {
+     9: let timer = tracking::TimedExecution::start();
+       ~ result
+
+  +44 more lines
+
+📄 log_cmd.rs [15.9]
+     1: use crate::tracking;
+     2: use anyhow::Result;
+     3: use regex::Regex;
+       ~ anyhow, result
+
+     9: /// Filter and deduplicate log output
+    10: pub fn run_file(file: &Path, verbose: u8) -> Result<()> {
+    11: let timer = tracking::TimedExecution::start();
+       ~ result
+
+  +28 more lines
+
+📄 tracking.rs [15.8]
+    32: use anyhow::Result;
+    33: use chrono::{DateTime, Utc};
+       ~ anyhow, result
+
+   222: /// ```
+   223: pub fn new() -> Result<Self> {
+   224: let db_path = get_db_path()?;
+       ~ result
+
+  +24 more lines
+
+📄 deps.rs [14.6]
+     1: use crate::tracking;
+     2: use anyhow::Result;
+     3: use regex::Regex;
+       ~ anyhow, result
+
+     7: /// Summarize project dependencies
+     8: pub fn run(path: &Path, verbose: u8) -> Result<()> {
+     9: let timer = tracking::TimedExecution::start();
+       ~ result
+
+  +5 more lines
+
+📄 local_llm.rs [14.5]
+   280: let code = r#"
+   281: use anyhow::Result;
+   282: use std::fs;
+       ~ anyhow, result
+
+     1: use anyhow::{Context, Result};
+     2: use regex::Regex;
+       ~ anyhow, result
+
+  +3 more lines
+
+📄 config.rs [14.4]
+     1: use anyhow::Result;
+     2: use serde::{Deserialize, Serialize};
+       ~ anyhow, result
+
+    72: impl Config {
+    73: pub fn load() -> Result<Self> {
+    74: let path = get_config_path()?;
+       ~ result
+
+  +4 more lines
+
+📄 find_cmd.rs [14.1]
+     1: use crate::tracking;
+     2: use anyhow::Result;
+     3: use ignore::WalkBuilder;
+       ~ anyhow, result
+
+    28: path: &str,
+    29: max_results: usize,
+    30: file_type: &str,
+       ~ result
+
+  +13 more lines
+
+📄 env_cmd.rs [13.6]
+     1: use crate::tracking;
+     2: use anyhow::Result;
+     3: use std::collections::HashSet;
+       ~ anyhow, result
+
+     6: /// Show filtered environment variables (hide sensitive data)
+     7: pub fn run(filter: Option<&str>, show_all: bool, verbose: u8) -> Result<()> {
+     8: let timer = tracking::TimedExecution::start();
+       ~ result
+
+... +44F

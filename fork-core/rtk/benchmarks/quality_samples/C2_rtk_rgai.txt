@@ -1,0 +1,96 @@
+🧠 8F for 'exit code preservation' (scan 55F)
+
+📄 gh_cmd.rs [4.8]
+    70: eprintln!("{}", stderr.trim());
+    71: std::process::exit(output.status.code().unwrap_or(1));
+    72: }
+       ~ exit
+
+   161: eprintln!("{}", stderr.trim());
+   162: std::process::exit(output.status.code().unwrap_or(1));
+   163: }
+       ~ exit
+
+  +13 more lines
+
+📄 git.rs [4.0]
+    62: eprintln!("{}", stderr);
+    63: std::process::exit(output.status.code().unwrap_or(1));
+    64: }
+       ~ exit
+
+   147: eprintln!("{}", stderr);
+   148: std::process::exit(output.status.code().unwrap_or(1));
+   149: }
+       ~ exit
+
+  +4 more lines
+
+📄 go_cmd.rs [3.6]
+    78: if !output.status.success() {
+    79: std::process::exit(output.status.code().unwrap_or(1));
+    80: }
+       ~ exit
+
+   121: if !output.status.success() {
+   122: std::process::exit(output.status.code().unwrap_or(1));
+   123: }
+       ~ exit
+
+  +2 more lines
+
+📄 main.rs [3.4]
+  1331: if !status.success() {
+  1332: std::process::exit(status.code().unwrap_or(1));
+  1333: }
+       ~ exit
+
+  1343: if !status.success() {
+  1344: std::process::exit(status.code().unwrap_or(1));
+  1345: }
+       ~ exit
+
+  +1 more lines
+
+📄 pip_cmd.rs [3.4]
+    81: if !output.status.success() {
+    82: std::process::exit(output.status.code().unwrap_or(1));
+    83: }
+       ~ exit
+
+   116: if !output.status.success() {
+   117: std::process::exit(output.status.code().unwrap_or(1));
+   118: }
+       ~ exit
+
+  +1 more lines
+
+📄 cargo_cmd.rs [3.1]
+    62: if !output.status.success() {
+    63: std::process::exit(output.status.code().unwrap_or(1));
+    64: }
+       ~ exit
+
+   693: if !status.success() {
+   694: std::process::exit(status.code().unwrap_or(1));
+   695: }
+       ~ exit
+
+📄 container.rs [3.1]
+   428: if !status.success() {
+   429: std::process::exit(status.code().unwrap_or(1));
+   430: }
+       ~ exit
+
+   452: if !status.success() {
+   453: std::process::exit(status.code().unwrap_or(1));
+   454: }
+       ~ exit
+
+📄 utils.rs [2.5]
+    77: let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    78: let exit_code = output.status.code().unwrap_or(-1);
+       ~ exit
+
+  +1 more lines
+

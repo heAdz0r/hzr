@@ -1,0 +1,39 @@
+[filters.jest]
+description = "Jest test runner — keep failures/errors and summary, drop passing noise (fork)"
+match_command = "^jest\\b"
+strip_ansi = true
+filter_stderr = true
+strip_lines_matching = [
+  "^\\s*$",
+  "^PASS\\s",
+  "^\\s*✓",
+  "^\\s*[-•]\\s*$",
+  "^RUNS\\s",
+  "^Determining test suites to run",
+]
+max_lines = 120
+
+[[tests.jest]]
+name = "failures and summary kept, passes dropped"
+input = """
+PASS src/utils.test.ts
+FAIL src/auth.test.ts
+  ● auth › refreshes token
+
+    expect(received).toBe(expected)
+
+Tests:       1 failed, 12 passed, 13 total
+Time:        2.135 s
+"""
+expected = "FAIL src/auth.test.ts\n  ● auth › refreshes token\n    expect(received).toBe(expected)\nTests:       1 failed, 12 passed, 13 total\nTime:        2.135 s"
+
+[[tests.jest]]
+name = "all green collapses to summary"
+input = """
+PASS src/a.test.ts
+PASS src/b.test.ts
+
+Tests:       20 passed, 20 total
+Time:        1.0 s
+"""
+expected = "Tests:       20 passed, 20 total\nTime:        1.0 s"

@@ -1,0 +1,159 @@
+🔍 104 in 34F:
+
+📄 /Users/andrew/Programming/rtk/src/cargo_cmd.rs (2):
+    33: let timer = tracking::TimedExecution::start();
+   677: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/container.rs (8):
+    28: let timer = tracking::TimedExecution::start();
+    85: let timer = tracking::TimedExecution::start();
+   155: let timer = tracking::TimedExecution::start();
+   185: let timer = tracking::TimedExecution::start();
+   286: let timer = tracking::TimedExecution::start();
+   360: let timer = tracking::TimedExecution::start();
+   412: let timer = tracking::TimedExecution::start();
+   436: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/curl_cmd.rs (1):
+     8: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/deps.rs (1):
+     9: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/diff_cmd.rs (2):
+     9: let timer = tracking::TimedExecution::start();
+    71: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/env_cmd.rs (1):
+     8: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/find_cmd.rs (1):
+    33: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/gh_cmd.rs (15):
+    49: let timer = tracking::TimedExecution::start();
+   133: let timer = tracking::TimedExecution::start();
+   306: let timer = tracking::TimedExecution::start();
+   392: let timer = tracking::TimedExecution::start();
+   448: let timer = tracking::TimedExecution::start();
+   515: let timer = tracking::TimedExecution::start();
+   613: let timer = tracking::TimedExecution::start();
+   696: let timer = tracking::TimedExecution::start();
+   775: let timer = tracking::TimedExecution::start();
+   845: let timer = tracking::TimedExecution::start();
+  +5
+
+📄 /Users/andrew/Programming/rtk/src/git.rs (13):
+    40: let timer = tracking::TimedExecution::start();
+   127: let timer = tracking::TimedExecution::start();
+   299: let timer = tracking::TimedExecution::start();
+   527: let timer = tracking::TimedExecution::start();
+   583: let timer = tracking::TimedExecution::start();
+   655: let timer = tracking::TimedExecution::start();
+   719: let timer = tracking::TimedExecution::start();
+   780: let timer = tracking::TimedExecution::start();
+   865: let timer = tracking::TimedExecution::start();
+   993: let timer = tracking::TimedExecution::start();
+  +3
+
+📄 /Users/andrew/Programming/rtk/src/go_cmd.rs (4):
+    35: let timer = tracking::TimedExecution::start();
+    86: let timer = tracking::TimedExecution::start();
+   129: let timer = tracking::TimedExecution::start();
+   176: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/golangci_cmd.rs (1):
+    35: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/grep_cmd.rs (1):
+    17: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/json_cmd.rs (2):
+    10: let timer = tracking::TimedExecution::start();
+    32: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/lint_cmd.rs (1):
+    29: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/log_cmd.rs (2):
+    11: let timer = tracking::TimedExecution::start();
+    31: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/ls.rs (1):
+    34: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/main.rs (3):
+  1320: let timer = tracking::TimedExecution::start();
+  1337: let timer = tracking::TimedExecution::start();
+  1404: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/next_cmd.rs (1):
+     8: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/npm_cmd.rs (1):
+     6: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/pip_cmd.rs (1):
+    15: let timer = tracking::TimedExecution::start();
+
+📄 /.../src/playwright_cmd.rs (1):
+   220: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/pnpm_cmd.rs (4):
+   295: let timer = tracking::TimedExecution::start();
+   351: let timer = tracking::TimedExecution::start();
+   402: let timer = tracking::TimedExecution::start();
+   493: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/prettier_cmd.rs (1):
+     6: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/prisma_cmd.rs (3):
+    45: let timer = tracking::TimedExecution::start();
+    80: let timer = tracking::TimedExecution::start();
+   136: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/pytest_cmd.rs (1):
+    15: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/read.rs (2):
+    14: let timer = tracking::TimedExecution::start();
+    81: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/ruff_cmd.rs (1):
+    32: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/runner.rs (2):
+     8: let timer = tracking::TimedExecution::start();
+    59: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/summary.rs (1):
+     9: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/tracking.rs (21):
+    16: //! use rtk::tracking::{TimedExecution, Tracker};
+    19: //! let timer = TimedExecution::start();
+   731: /// use rtk::tracking::TimedExecution;
+   733: /// let timer = TimedExecution::start();
+   739: pub struct TimedExecution {
+   743: impl TimedExecution {
+   753: /// use rtk::tracking::TimedExecution;
+   755: /// let timer = TimedExecution::start();
+   782: /// use rtk::tracking::TimedExecution;
+   784: /// let timer = TimedExecution::start();
+  +11
+
+📄 /Users/andrew/Programming/rtk/src/tree.rs (1):
+    44: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/tsc_cmd.rs (1):
+     9: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/vitest_cmd.rs (1):
+   223: let timer = tracking::TimedExecution::start();
+
+📄 /Users/andrew/Programming/rtk/src/wget_cmd.rs (2):
+     7: let timer = tracking::TimedExecution::start();
+    55: let timer = tracking::TimedExecution::start();
+
+... +19

@@ -1,0 +1,105 @@
+🧠 44F for 'output grouping by file' (scan 55F)
+
+📄 git.rs [11.3]
+   374: /// Filter git log output: truncate long messages, cap lines
+   375: fn filter_log_output(output: &str, limit: usize) -> String {
+   376: let lines: Vec<&str> = output.lines().collect();
+       ~ output
+
+   393: /// Format porcelain output into compact RTK status display
+   394: fn format_status_output(porcelain: &str) -> String {
+   395: let lines: Vec<&str> = porcelain.lines().collect();
+       ~ output
+
+  +175 more lines
+
+📄 cargo_cmd.rs [10.2]
+   100: /// Filter cargo install output - strip dep compilation, keep installed/replaced/errors
+   101: fn filter_cargo_install(output: &str) -> String {
+   102: let mut errors: Vec<String> = Vec::new();
+       ~ output
+
+   272: /// Filter cargo build/check output - strip "Compiling"/"Checking" lines, keep errors + summary
+   273: fn filter_cargo_build(output: &str) -> String {
+   274: let mut errors: Vec<String> = Vec::new();
+       ~ output
+
+  +57 more lines
+
+📄 go_cmd.rs [10.1]
+   216: /// Parse go test -json output (NDJSON format)
+   217: fn filter_go_test_json(output: &str) -> String {
+   218: let mut packages: HashMap<String, PackageResult> = HashMap::new();
+       ~ output
+
+   340: /// Filter go build output - show only errors
+   341: fn filter_go_build(output: &str) -> String {
+   342: let mut errors: Vec<String> = Vec::new();
+       ~ output
+
+  +54 more lines
+
+📄 learn/detector.rs [10.1]
+    75: /// Filters out user rejections - requires actual error-indicating content
+    76: pub fn is_command_error(is_error: bool, output: &str) -> bool {
+    77: if !is_error {
+       ~ output
+
+    97: pub fn classify_error(output: &str) -> ErrorType {
+    98: if UNKNOWN_FLAG_RE.is_match(output) {
+       ~ output
+
+  +51 more lines
+
+📄 summary.rs [9.9]
+    40: fn summarize_output(output: &str, command: &str, success: bool) -> String {
+    41: let lines: Vec<&str> = output.lines().collect();
+       ~ output
+
+    69: #[derive(Debug)]
+    70: enum OutputType {
+    71: TestResults,
+       ~ output
+
+  +44 more lines
+
+📄 prisma_cmd.rs [9.7]
+   168: /// Filter prisma generate output - strip ASCII art, extract counts
+   169: fn filter_prisma_generate(output: &str) -> String {
+   170: let mut models = 0;
+       ~ output
+
+   227: /// Filter migrate dev output - extract migration changes
+   228: fn filter_migrate_dev(output: &str) -> String {
+   229: let mut migration_name = String::new();
+       ~ output
+
+  +33 more lines
+
+📄 pip_cmd.rs [9.6]
+   168: /// Filter pip list JSON output
+   169: fn filter_pip_list(output: &str) -> String {
+   170: let packages: Vec<Package> = match serde_json::from_str(output) {
+       ~ output
+
+   213: /// Filter pip outdated JSON output
+   214: fn filter_pip_outdated(output: &str) -> String {
+   215: let packages: Vec<Package> = match serde_json::from_str(output) {
+       ~ output
+
+  +29 more lines
+
+📄 tracking.rs [9.6]
+   788: /// ```
+   789: pub fn track(&self, original_cmd: &str, rtk_cmd: &str, input: &str, output: &str) {
+   790: let elapsed_ms = self.start.elapsed().as_millis() as u64;
+       ~ output
+
+   880: #[deprecated(note = "Use TimedExecution instead")]
+   881: pub fn track(original_cmd: &str, rtk_cmd: &str, input: &str, output: &str) {
+   882: let input_tokens = estimate_tokens(input);
+       ~ output
+
+  +29 more lines
+
+... +36F

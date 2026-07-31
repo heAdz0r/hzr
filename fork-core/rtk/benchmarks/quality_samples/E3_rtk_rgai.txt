@@ -1,0 +1,102 @@
+🧠 30F for 'error handling retry backoff' (scan 55F)
+
+📄 learn/detector.rs [10.7]
+     4: #[derive(Debug, Clone, PartialEq)]
+     5: pub enum ErrorType {
+     6: UnknownFlag,
+       ~ error
+
+    15: impl ErrorType {
+    16: pub fn as_str(&self) -> &str {
+       ~ error
+
+  +99 more lines
+
+📄 cargo_cmd.rs [10.5]
+   715: #[test]
+   716: fn test_filter_cargo_build_errors() {
+   717: let output = r#"   Compiling rtk v0.5.0
+       ~ error
+
+   996: #[test]
+   997: fn test_filter_cargo_install_error() {
+   998: let output = r#"  Installing rtk v0.11.0
+       ~ error
+
+  +83 more lines
+
+📄 tsc_cmd.rs [9.8]
+    66: struct TsError {
+    67: file: String,
+       ~ error
+
+   197: #[test]
+   198: fn test_every_error_message_shown() {
+   199: let output = "\
+       ~ error
+
+  +37 more lines
+
+📄 parser/error.rs [9.4]
+     4: #[derive(Error, Debug)]
+     5: pub enum ParseError {
+     6: #[error("JSON parse failed at line {line}, column {col}: {msg}")]
+       ~ error
+
+    38: impl From<serde_json::Error> for ParseError {
+    39: fn from(err: serde_json::Error) -> Self {
+       ~ error
+
+  +5 more lines
+
+📄 runner.rs [9.0]
+    90: fn filter_errors(output: &str) -> String {
+    91: lazy_static::lazy_static! {
+       ~ error
+
+   248: #[test]
+   249: fn test_filter_errors() {
+   250: let output = "info: compiling\nerror: something failed\n  at line 10\ninfo: done";
+       ~ error
+
+  +16 more lines
+
+📄 discover/provider.rs [7.7]
+   358: #[test]
+   359: fn test_extract_is_error_flag() {
+   360: let jsonl = make_jsonl(&[
+       ~ error
+
+    18: /// Whether the tool_result indicated an error
+    19: pub is_error: bool,
+    20: /// Chronological sequence index within the session
+       ~ error
+
+  +12 more lines
+
+📄 go_cmd.rs [7.7]
+   464: #[test]
+   465: fn test_filter_go_build_errors() {
+   466: let output = r#"# example.com/foo
+       ~ error
+
+   321: && !line.starts_with("--- FAIL")
+   322: && (lower.contains("error")
+   323: || lower.contains("expected")
+       ~ error
+
+  +12 more lines
+
+📄 wget_cmd.rs [7.2]
+   209: fn parse_error(stderr: &str, stdout: &str) -> String {
+   210: // Common wget error patterns
+       ~ error
+
+    43: } else {
+    44: let error = parse_error(&stderr, &stdout);
+    45: let msg = format!("⬇️ {} FAILED: {}", compact_url(url), error);
+       ~ error
+
+  +6 more lines
+
+... +22F

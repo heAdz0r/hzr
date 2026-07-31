@@ -1,0 +1,94 @@
+🧠 29F for 'from_utf8_lossy' (scan 55F)
+
+📄 git.rs [14.9]
+    60: if !output.status.success() {
+    61: let stderr = String::from_utf8_lossy(&output.stderr);
+    62: eprintln!("{}", stderr);
+       ~ from_utf8_lossy
+
+    66: let stdout = String::from_utf8_lossy(&output.stdout);
+    67: println!("{}", stdout.trim());
+       ~ from_utf8_lossy
+
+  +40 more lines
+
+📄 gh_cmd.rs [14.6]
+    64: let output = cmd.output().context("Failed to run gh pr list")?;
+    65: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+       ~ from_utf8_lossy
+
+   150: let output = cmd.output().context("Failed to run gh pr view")?;
+   151: let raw = String::from_utf8_lossy(&output.stdout).to_string();
+       ~ from_utf8_lossy
+
+  +28 more lines
+
+📄 container.rs [13.5]
+    32: .output()
+    33: .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+    34: .unwrap_or_default();
+       ~ from_utf8_lossy
+
+    45: let stdout = String::from_utf8_lossy(&output.stdout);
+    46: let mut rtk = String::new();
+       ~ from_utf8_lossy
+
+  +7 more lines
+
+📄 prisma_cmd.rs [13.5]
+    62: if !output.status.success() {
+    63: let stderr = String::from_utf8_lossy(&output.stderr);
+    64: anyhow::bail!("prisma generate failed: {}", stderr);
+       ~ from_utf8_lossy
+
+    67: let stdout = String::from_utf8_lossy(&output.stdout);
+    68: let stderr = String::from_utf8_lossy(&output.stderr);
+       ~ from_utf8_lossy
+
+  +7 more lines
+
+📄 go_cmd.rs [13.4]
+    57: let stdout = String::from_utf8_lossy(&output.stdout);
+    58: let stderr = String::from_utf8_lossy(&output.stderr);
+       ~ from_utf8_lossy
+
+   103: let stdout = String::from_utf8_lossy(&output.stdout);
+   104: let stderr = String::from_utf8_lossy(&output.stderr);
+       ~ from_utf8_lossy
+
+  +6 more lines
+
+📄 pip_cmd.rs [13.1]
+    74: let stdout = String::from_utf8_lossy(&output.stdout);
+    75: let stderr = String::from_utf8_lossy(&output.stderr);
+       ~ from_utf8_lossy
+
+   109: let stdout = String::from_utf8_lossy(&output.stdout);
+   110: let stderr = String::from_utf8_lossy(&output.stderr);
+       ~ from_utf8_lossy
+
+  +4 more lines
+
+📄 pnpm_cmd.rs [13.1]
+   308: if !output.status.success() {
+   309: let stderr = String::from_utf8_lossy(&output.stderr);
+   310: anyhow::bail!("pnpm list failed: {}", stderr);
+       ~ from_utf8_lossy
+
+   313: let stdout = String::from_utf8_lossy(&output.stdout);
+       ~ from_utf8_lossy
+
+  +4 more lines
+
+📄 runner.rs [12.8]
+    29: let stdout = String::from_utf8_lossy(&output.stdout);
+    30: let stderr = String::from_utf8_lossy(&output.stderr);
+       ~ from_utf8_lossy
+
+    80: let stdout = String::from_utf8_lossy(&output.stdout);
+    81: let stderr = String::from_utf8_lossy(&output.stderr);
+       ~ from_utf8_lossy
+
+  +2 more lines
+
+... +21F

@@ -1,0 +1,16 @@
+[package]
+name = "hzr-codec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hzr-protocol = { path = "../hzr-protocol" }
+regex.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

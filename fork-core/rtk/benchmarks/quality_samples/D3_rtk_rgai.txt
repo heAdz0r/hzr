@@ -1,0 +1,106 @@
+🧠 30F for 'process::exit' (scan 55F)
+
+📄 gh_cmd.rs [20.2]
+    70: eprintln!("{}", stderr.trim());
+    71: std::process::exit(output.status.code().unwrap_or(1));
+    72: }
+       ~ process, proces, exit
+
+   161: eprintln!("{}", stderr.trim());
+   162: std::process::exit(output.status.code().unwrap_or(1));
+   163: }
+       ~ process, proces, exit
+
+  +14 more lines
+
+📄 git.rs [19.6]
+    62: eprintln!("{}", stderr);
+    63: std::process::exit(output.status.code().unwrap_or(1));
+    64: }
+       ~ process, proces, exit
+
+   147: eprintln!("{}", stderr);
+   148: std::process::exit(output.status.code().unwrap_or(1));
+   149: }
+       ~ process, proces, exit
+
+  +6 more lines
+
+📄 main.rs [19.6]
+  1331: if !status.success() {
+  1332: std::process::exit(status.code().unwrap_or(1));
+  1333: }
+       ~ process, proces, exit
+
+  1343: if !status.success() {
+  1344: std::process::exit(status.code().unwrap_or(1));
+  1345: }
+       ~ process, proces, exit
+
+  +6 more lines
+
+📄 go_cmd.rs [19.2]
+    78: if !output.status.success() {
+    79: std::process::exit(output.status.code().unwrap_or(1));
+    80: }
+       ~ process, proces, exit
+
+   121: if !output.status.success() {
+   122: std::process::exit(output.status.code().unwrap_or(1));
+   123: }
+       ~ process, proces, exit
+
+  +3 more lines
+
+📄 pip_cmd.rs [19.0]
+    81: if !output.status.success() {
+    82: std::process::exit(output.status.code().unwrap_or(1));
+    83: }
+       ~ process, proces, exit
+
+   116: if !output.status.success() {
+   117: std::process::exit(output.status.code().unwrap_or(1));
+   118: }
+       ~ process, proces, exit
+
+  +2 more lines
+
+📄 cargo_cmd.rs [18.8]
+    62: if !output.status.success() {
+    63: std::process::exit(output.status.code().unwrap_or(1));
+    64: }
+       ~ process, proces, exit
+
+   693: if !status.success() {
+   694: std::process::exit(status.code().unwrap_or(1));
+   695: }
+       ~ process, proces, exit
+
+  +1 more lines
+
+📄 container.rs [18.8]
+   428: if !status.success() {
+   429: std::process::exit(status.code().unwrap_or(1));
+   430: }
+       ~ process, proces, exit
+
+   452: if !status.success() {
+   453: std::process::exit(status.code().unwrap_or(1));
+   454: }
+       ~ process, proces, exit
+
+  +1 more lines
+
+📄 pytest_cmd.rs [15.5]
+    71: if !output.status.success() {
+    72: std::process::exit(output.status.code().unwrap_or(1));
+    73: }
+       ~ process, proces, exit
+
+     3: use anyhow::{Context, Result};
+     4: use std::process::Command;
+       ~ process, proces
+
+  +1 more lines
+
+... +22F

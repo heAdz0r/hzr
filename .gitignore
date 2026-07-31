@@ -1,0 +1,12 @@
+/target/
+/fork-core/rtk/target/
+/fork-core/rtk/.grepai/
+/.build/
+/dist/
+/.hzr/
+*.profraw
+*.tmp
+.DS_Store
+.grepai
+.grepai/
+.grepai.hzr-backup-*/

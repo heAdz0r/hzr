@@ -1,0 +1,23 @@
+/Users/andrew/Programming/rtk/src/read.rs:1:use crate::filter::{self, FilterLevel, Language};
+/Users/andrew/Programming/rtk/src/read.rs:9:    level: FilterLevel,
+/Users/andrew/Programming/rtk/src/read.rs:74:    level: FilterLevel,
+/Users/andrew/Programming/rtk/src/read.rs:163:        run(file.path(), FilterLevel::Minimal, None, false, 0)?;
+/Users/andrew/Programming/rtk/src/main.rs:99:        level: filter::FilterLevel,
+/Users/andrew/Programming/rtk/src/filter.rs:6:pub enum FilterLevel {
+/Users/andrew/Programming/rtk/src/filter.rs:12:impl FromStr for FilterLevel {
+/Users/andrew/Programming/rtk/src/filter.rs:17:            "none" => Ok(FilterLevel::None),
+/Users/andrew/Programming/rtk/src/filter.rs:18:            "minimal" => Ok(FilterLevel::Minimal),
+/Users/andrew/Programming/rtk/src/filter.rs:19:            "aggressive" => Ok(FilterLevel::Aggressive),
+/Users/andrew/Programming/rtk/src/filter.rs:25:impl std::fmt::Display for FilterLevel {
+/Users/andrew/Programming/rtk/src/filter.rs:28:            FilterLevel::None => write!(f, "none"),
+/Users/andrew/Programming/rtk/src/filter.rs:29:            FilterLevel::Minimal => write!(f, "minimal"),
+/Users/andrew/Programming/rtk/src/filter.rs:30:            FilterLevel::Aggressive => write!(f, "aggressive"),
+/Users/andrew/Programming/rtk/src/filter.rs:309:pub fn get_filter(level: FilterLevel) -> Box<dyn FilterStrategy> {
+/Users/andrew/Programming/rtk/src/filter.rs:311:        FilterLevel::None => Box::new(NoFilter),
+/Users/andrew/Programming/rtk/src/filter.rs:312:        FilterLevel::Minimal => Box::new(MinimalFilter),
+/Users/andrew/Programming/rtk/src/filter.rs:313:        FilterLevel::Aggressive => Box::new(AggressiveFilter),
+/Users/andrew/Programming/rtk/src/filter.rs:374:        assert_eq!(FilterLevel::from_str("none").unwrap(), FilterLevel::None);
+/Users/andrew/Programming/rtk/src/filter.rs:376:            FilterLevel::from_str("minimal").unwrap(),
+/Users/andrew/Programming/rtk/src/filter.rs:377:            FilterLevel::Minimal
+/Users/andrew/Programming/rtk/src/filter.rs:380:            FilterLevel::from_str("aggressive").unwrap(),
+/Users/andrew/Programming/rtk/src/filter.rs:381:            FilterLevel::Aggressive

@@ -1,0 +1,145 @@
+🔍 111 in 25F:
+
+📄 /Users/andrew/Programming/rtk/src/cargo_cmd.rs (2):
+    35: let mut cmd = Command::new("cargo");
+   682: let status = Command::new("cargo")
+
+📄 /Users/andrew/Programming/rtk/src/ccusage.rs (4):
+    87: Command::new("which")
+    97: return Some(Command::new("ccusage"));
+   101: let npx_check = Command::new("npx")
+   109: let mut cmd = Command::new("npx");
+
+📄 /Users/andrew/Programming/rtk/src/container.rs (10):
+    30: let raw = Command::new("docker")
+    36: let output = Command::new("docker")
+    87: let raw = Command::new("docker")
+    93: let output = Command::new("docker")
+   163: let output = Command::new("docker")
+   187: let mut cmd = Command::new("kubectl");
+   288: let mut cmd = Command::new("kubectl");
+   368: let mut cmd = Command::new("kubectl");
+   417: let status = Command::new("docker")
+   441: let status = Command::new("kubectl")
+
+📄 /Users/andrew/Programming/rtk/src/curl_cmd.rs (1):
+     9: let mut cmd = Command::new("curl");
+
+📄 /Users/andrew/Programming/rtk/src/gh_cmd.rs (15):
+    51: let mut cmd = Command::new("gh");
+   141: let mut cmd = Command::new("gh");
+   314: let mut cmd = Command::new("gh");
+   394: let mut cmd = Command::new("gh");
+   450: let mut cmd = Command::new("gh");
+   523: let mut cmd = Command::new("gh");
+   615: let mut cmd = Command::new("gh");
+   704: let mut cmd = Command::new("gh");
+   777: let mut cmd = Command::new("gh");
+   847: let mut cmd = Command::new("gh");
+  +5
+
+📄 /Users/andrew/Programming/rtk/src/git.rs (26):
+    52: let mut cmd = Command::new("git");
+    80: let mut cmd = Command::new("git");
+    98: let mut diff_cmd = Command::new("git");
+   139: let mut cmd = Command::new("git");
+   164: let mut raw_cmd = Command::new("git");
+   175: let mut summary_cmd = Command::new("git");
+   190: let mut stat_cmd = Command::new("git");
+   203: let mut diff_cmd = Command::new("git");
+   301: let mut cmd = Command::new("git");
+   531: let output = Command::new("git")
+  +16
+
+📄 /Users/andrew/Programming/rtk/src/go_cmd.rs (4):
+    37: let mut cmd = Command::new("go");
+    88: let mut cmd = Command::new("go");
+   131: let mut cmd = Command::new("go");
+   179: let mut cmd = Command::new("go");
+
+📄 /Users/andrew/Programming/rtk/src/golangci_cmd.rs (1):
+    37: let mut cmd = Command::new("golangci-lint");
+
+📄 /Users/andrew/Programming/rtk/src/grep_cmd.rs (2):
+    23: let mut rg_cmd = Command::new("rg");
+    36: .or_else(|_| Command::new("grep").args(["-rn", pattern, path]).output())
+
+📄 /Users/andrew/Programming/rtk/src/ls.rs (1):
+    54: let mut cmd = Command::new("ls");
+
+📄 /Users/andrew/Programming/rtk/src/main.rs (3):
+  1321: let mut cmd = std::process::Command::new("npx");
+  1338: let status = std::process::Command::new("npx")
+  1416: let output = Command::new(cmd_name.as_ref())
+
+📄 /Users/andrew/Programming/rtk/src/next_cmd.rs (3):
+    11: let next_exists = Command::new("which")
+    18: Command::new("next")
+    20: let mut c = Command::new("npx");
+
+📄 /Users/andrew/Programming/rtk/src/npm_cmd.rs (1):
+     8: let mut cmd = Command::new("npm");
+
+📄 /Users/andrew/Programming/rtk/src/parser/README.md (4):
+    18: │  Command::new("vitest").arg("--reporter=json")          │
+    87: let mut cmd = Command::new("pnpm");
+   184: let output = Command::new("vitest").output()?;
+   194: let output = Command::new("vitest")
+
+📄 /Users/andrew/Programming/rtk/src/pip_cmd.rs (4):
+    54: let mut cmd = Command::new(base_cmd);
+    89: let mut cmd = Command::new(base_cmd);
+   124: let mut cmd = Command::new(base_cmd);
+   158: Command::new("which")
+
+📄 /Users/andrew/Programming/rtk/src/pnpm_cmd.rs (4):
+   297: let mut cmd = Command::new("pnpm");
+   353: let mut cmd = Command::new("pnpm");
+   414: let mut cmd = Command::new("pnpm");
+   498: let status = Command::new("pnpm")
+
+📄 /Users/andrew/Programming/rtk/src/prisma_cmd.rs (3):
+    29: let prisma_exists = Command::new("which")
+    36: Command::new("prisma")
+    38: let mut c = Command::new("npx");
+
+📄 /Users/andrew/Programming/rtk/src/pytest_cmd.rs (3):
+    19: Command::new("pytest")
+    22: let mut c = Command::new("python");
+    80: Command::new("which")
+
+📄 /Users/andrew/Programming/rtk/src/ruff_cmd.rs (1):
+    41: let mut cmd = Command::new("ruff");
+
+📄 /Users/andrew/Programming/rtk/src/runner.rs (4):
+    15: Command::new("cmd")
+    21: Command::new("sh")
+    66: Command::new("cmd")
+    72: Command::new("sh")
+
+📄 /Users/andrew/Programming/rtk/src/summary.rs (2):
+    16: Command::new("cmd")
+    22: Command::new("sh")
+
+📄 /Users/andrew/Programming/rtk/src/tree.rs (2):
+    47: let tree_check = Command::new("which").arg("tree").output();
+    58: let mut cmd = Command::new("tree");
+
+📄 /Users/andrew/Programming/rtk/src/tsc_cmd.rs (3):
+    12: let tsc_exists = Command::new("which")
+    19: Command::new("tsc")
+    21: let mut c = Command::new("npx");
+
+📄 /Users/andrew/Programming/rtk/src/utils.rs (6):
+    71: let output = Command::new(cmd)
+   198: let tool_exists = Command::new("which")
+   205: Command::new(tool)
+   210: let mut c = Command::new("pnpm");
+   215: let mut c = Command::new("yarn");
+   220: let mut c = Command::new("npx");
+
+📄 /Users/andrew/Programming/rtk/src/wget_cmd.rs (2):
+    22: let output = Command::new("wget")
+    67: let output = Command::new("wget")
+
+... +21

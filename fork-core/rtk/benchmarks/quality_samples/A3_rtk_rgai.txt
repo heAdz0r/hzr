@@ -1,0 +1,25 @@
+🧠 2F for 'classify_command' (scan 55F)
+
+📄 discover/registry.rs [16.7]
+   313: /// Classify a single (already-split) command.
+   314: pub fn classify_command(cmd: &str) -> Classification {
+   315: let trimmed = cmd.trim();
+       ~ classify_command
+
+   512: assert_eq!(
+   513: classify_command("git status"),
+   514: Classification::Supported {
+       ~ classify_command
+
+  +18 more lines
+
+📄 discover/mod.rs [12.3]
+     8: use provider::{ClaudeProvider, SessionProvider};
+     9: use registry::{category_avg_tokens, classify_command, split_command_chain, Classification};
+    10: use report::{DiscoverReport, SupportedEntry, UnsupportedEntry};
+       ~ classify_command
+
+    84: match classify_command(part) {
+    85: Classification::Supported {
+       ~ classify_command
+

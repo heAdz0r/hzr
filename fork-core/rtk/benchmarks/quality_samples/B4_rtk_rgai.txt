@@ -1,0 +1,101 @@
+🧠 45F for '#\[cfg\(test\)\]' (scan 55F)
+
+📄 vitest_cmd.rs [11.2]
+    13: #[derive(Debug, Deserialize)]
+    14: struct VitestJsonOutput {
+    15: #[serde(rename = "testResults")]
+       ~ test
+
+    31: #[derive(Debug, Deserialize)]
+    32: struct VitestTestFile {
+    33: name: String,
+       ~ test
+
+  +74 more lines
+
+📄 pytest_cmd.rs [11.0]
+    90: /// Parse pytest output using state machine
+    91: fn filter_pytest_output(output: &str) -> String {
+    92: let mut state = ParseState::Header;
+       ~ test
+
+   170: fn build_pytest_summary(summary: &str, _test_files: &[String], failures: &[String]) -> String {
+   171: // Parse summary line
+       ~ test
+
+  +59 more lines
+
+📄 cargo_cmd.rs [10.5]
+    73: fn run_test(args: &[String], verbose: u8) -> Result<()> {
+    74: run_cargo_filtered("test", args, verbose, filter_cargo_test)
+       ~ test
+
+   364: #[derive(Debug, Default, Clone)]
+   365: struct AggregatedTestResult {
+   366: passed: usize,
+       ~ test
+
+  +118 more lines
+
+📄 init.rs [9.6]
+  1095: #[test]
+  1096: fn test_init_mentions_all_top_level_commands() {
+  1097: for cmd in [
+       ~ test
+
+  1122: #[test]
+  1123: fn test_init_has_version_marker() {
+  1124: assert!(
+       ~ test
+
+  +48 more lines
+
+📄 go_cmd.rs [9.5]
+    10: #[allow(dead_code)]
+    11: struct GoTestEvent {
+    12: #[serde(rename = "Time")]
+       ~ test
+
+    34: pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
+    35: let timer = tracking::TimedExecution::start();
+       ~ test
+
+  +45 more lines
+
+📄 discover/registry.rs [9.3]
+   510: #[test]
+   511: fn test_classify_git_status() {
+   512: assert_eq!(
+       ~ test
+
+   523: #[test]
+   524: fn test_classify_git_diff_cached() {
+   525: assert_eq!(
+       ~ test
+
+  +37 more lines
+
+📄 parser/README.md [9.2]
+    47: struct VitestParser;
+       ~ test
+
+    52: fn parse(input: &str) -> ParseResult<TestResult> {
+    53: // Tier 1: Try JSON parsing
+       ~ test
+
+  +32 more lines
+
+📄 playwright_cmd.rs [9.1]
+    42: #[derive(Debug, Deserialize)]
+    43: struct PlaywrightTest {
+    44: title: String,
+       ~ test
+
+    51: #[derive(Debug, Deserialize)]
+    52: struct PlaywrightTestResult {
+    53: #[serde(rename = "status")]
+       ~ test
+
+  +29 more lines
+
+... +37F

@@ -1,0 +1,63 @@
+diff --git a/cli/watch.go b/cli/watch.go
+index d56c1bc..b53a11d 100644
+--- a/cli/watch.go
++++ b/cli/watch.go
+@@ -29,12 +29,13 @@ import (
+ )
+ 
+ var (
+-	watchBackground bool
+-	watchLogDir     string
+-	watchStatus     bool
+-	watchStop       bool
+-	watchWorkspace  string
+-	watchNoUI       bool
++	watchBackground          bool
++	watchLogDir              string
++	watchStatus              bool
++	watchStop                bool
++	watchWorkspace           string
++	watchNoUI                bool
++	watchNoWorktreeDiscovery bool
+ )
+ 
+ var (
+@@ -84,6 +85,7 @@ func init() {
+ 	watchCmd.Flags().BoolVar(&watchStop, "stop", false, "Stop the background watcher")
+ 	watchCmd.Flags().StringVar(&watchWorkspace, "workspace", "", "Workspace name for multi-project mode")
+ 	watchCmd.Flags().BoolVar(&watchNoUI, "no-ui", false, "Disable interactive UI in foreground mode")
++	watchCmd.Flags().BoolVar(&watchNoWorktreeDiscovery, "no-worktree-discovery", false, "Watch only the current worktree")
+ }
+ 
+ func runWatch(cmd *cobra.Command, args []string) error {
+@@ -353,6 +355,9 @@ func startBackgroundWatch(logDir, worktreeID string) error {
+ 	if watchLogDir != "" {
+ 		args = append(args, "--log-dir", watchLogDir)
+ 	}
++	if watchNoWorktreeDiscovery {
++		args = append(args, "--no-worktree-discovery")
++	}
+ 
+ 	// Spawn background process
+ 	var childPID int
+@@ -1850,7 +1855,11 @@ func runWatchForeground() error {
+ 	defer emb.Close()
+ 
+ 	// Discover linked worktrees (only from main worktree) for initial ready semantics.
+-	linkedWorktrees := discoverWorktreesForWatch(projectRoot)
++	discoverWorktrees := discoverWorktreesForWatch
++	if watchNoWorktreeDiscovery {
++		discoverWorktrees = func(string) []string { return nil }
++	}
++	linkedWorktrees := discoverWorktrees(projectRoot)
+ 	initialTotalProjects := 1 + len(linkedWorktrees)
+ 	if len(linkedWorktrees) > 0 {
+ 		if !isBackgroundChild {
+@@ -1948,6 +1957,7 @@ func runWatchForeground() error {
+ 		emb,
+ 		withWatchSupervisorBackgroundChild(isBackgroundChild),
+ 		withWatchSupervisorInitialLinkedWorktrees(linkedWorktrees),
++		withWatchSupervisorDiscoverWorktrees(discoverWorktrees),
+ 		withWatchSupervisorInitialReadySelector(func(mainRoot, currentRoot string) bool {
+ 			if !isBackgroundChild {
+ 				return true

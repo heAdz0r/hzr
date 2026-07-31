@@ -1,0 +1,95 @@
+🧠 10F for 'three tier parser degradation' (scan 55F)
+
+📄 parser/README.md [14.6]
+     5: The parser infrastructure provides a unified, three-tier parsing system for tool outputs with graceful degradation:
+       ~ three, tier, parser, degradation
+
+    47: struct VitestParser;
+       ~ parser
+
+  +40 more lines
+
+📄 parser/mod.rs [13.6]
+    87: /// Parse with explicit tier preference (for testing/debugging)
+    88: fn parse_with_tier(input: &str, max_tier: u8) -> ParseResult<Self::Output> {
+    89: let result = Self::parse(input);
+       ~ tier, parser
+
+    18: #[derive(Debug)]
+    19: pub enum ParseResult<T> {
+    20: /// Tier 1: Full parse with complete structured data
+       ~ parser
+
+  +38 more lines
+
+📄 playwright_cmd.rs [9.7]
+     7: use crate::parser::{
+     8: emit_degradation_warning, emit_passthrough_warning, truncate_output, FormatMode, OutputParser,
+     9: ParseResult, TestFailure, TestResult, TokenFormatter,
+       ~ parser, degradation
+
+    66: /// Parser for Playwright JSON output
+    67: pub struct PlaywrightParser;
+       ~ parser
+
+  +23 more lines
+
+📄 pnpm_cmd.rs [9.7]
+    45: /// Parser for pnpm list output
+    46: pub struct PnpmListParser;
+       ~ parser
+
+    51: fn parse(input: &str) -> ParseResult<DependencyState> {
+    52: // Tier 1: Try JSON parsing
+       ~ parser
+
+  +33 more lines
+
+📄 vitest_cmd.rs [9.6]
+    47: /// Parser for Vitest JSON output
+    48: pub struct VitestParser;
+       ~ parser
+
+    53: fn parse(input: &str) -> ParseResult<TestResult> {
+    54: // Tier 1: Try JSON parsing (with extraction fallback for pnpm/dotenv prefixes)
+       ~ parser
+
+  +32 more lines
+
+📄 prettier_cmd.rs [8.7]
+    46: /// Filter Prettier output - show only files that need formatting
+    47: fn filter_prettier_output(output: &str) -> String {
+    48: let mut files_to_format: Vec<String> = Vec::new();
+       ~ tier
+
+     8: let mut cmd = package_manager_exec("prettier");
+       ~ tier
+
+  +17 more lines
+
+📄 main.rs [4.9]
+    28: mod npm_cmd;
+    29: mod parser;
+    30: mod pip_cmd;
+       ~ parser
+
+    48: use anyhow::{Context, Result};
+    49: use clap::{Parser, Subcommand};
+    50: use std::ffi::OsString;
+       ~ parser
+
+  +9 more lines
+
+📄 gain.rs [3.4]
+    10: quota: bool,
+    11: tier: &str,
+    12: daily: bool,
+       ~ tier
+
+   118: let (quota_tokens, tier_name) = match tier {
+   119: "pro" => (ESTIMATED_PRO_MONTHLY, "Pro ($20/mo)"),
+       ~ tier
+
+  +1 more lines
+
+... +2F

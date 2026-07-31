@@ -1,0 +1,264 @@
+🔍 784 in 54F:
+
+📄 /Users/andrew/Programming/rtk/src/cargo_cmd.rs (41):
+    18: pub fn run(cmd: CargoCommand, args: &[String], verbose: u8) -> Result<()> {
+    29: fn run_cargo_filtered<F>(subcommand: &str, args: &[String], verbose: u8, filter_...
+    52: let filtered = filter_fn(&raw);
+    69: fn run_build(args: &[String], verbose: u8) -> Result<()> {
+    73: fn run_test(args: &[String], verbose: u8) -> Result<()> {
+    77: fn run_clippy(args: &[String], verbose: u8) -> Result<()> {
+    81: fn run_check(args: &[String], verbose: u8) -> Result<()> {
+    85: fn run_install(args: &[String], verbose: u8) -> Result<()> {
+    90: fn format_crate_info(name: &str, version: &str, fallback: &str) -> String {
+   101: fn filter_cargo_install(output: &str) -> String {
+  +31
+
+📄 /Users/andrew/Programming/rtk/src/cc_economics.rs (36):
+    54: fn new(label: &str) -> Self {
+    76: fn set_ccusage(&mut self, metrics: &ccusage::CcusageMetrics) {
+    91: fn set_rtk_from_day(&mut self, stats: &DayStats) {
+    97: fn set_rtk_from_week(&mut self, stats: &WeekStats) {
+   103: fn set_rtk_from_month(&mut self, stats: &MonthStats) {
+   115: fn compute_weighted_metrics(&mut self) {
+   141: fn compute_dual_metrics(&mut self) {
+   184: pub fn run(
+   203: fn merge_daily(cc: Option<Vec<CcusagePeriod>>, rtk: Vec<DayStats>) -> Vec<Period...
+   233: fn merge_weekly(cc: Option<Vec<CcusagePeriod>>, rtk: Vec<WeekStats>) -> Vec<Peri...
+  +26
+
+📄 /Users/andrew/Programming/rtk/src/ccusage.rs (12):
+    86: fn binary_exists() -> bool {
+    95: fn build_command() -> Option<Command> {
+   118: pub fn is_available() -> bool {
+   127: pub fn fetch(granularity: Granularity) -> Result<Option<Vec<CcusagePeriod>>> {
+   176: fn parse_json(json: &str, granularity: Granularity) -> Result<Vec<CcusagePeriod>...
+   222: fn test_parse_monthly_valid() {
+   247: fn test_parse_daily_valid() {
+   270: fn test_parse_weekly_valid() {
+   293: fn test_parse_malformed_json() {
+   300: fn test_parse_missing_required_fields() {
+  +2
+
+📄 /Users/andrew/Programming/rtk/src/config.rs (8):
+    24: fn default() -> Self {
+    41: fn default() -> Self {
+    57: fn default() -> Self {
+    73: pub fn load() -> Result<Self> {
+    85: pub fn save(&self) -> Result<()> {
+    97: pub fn create_default() -> Result<PathBuf> {
+   104: fn get_config_path() -> Result<PathBuf> {
+   109: pub fn show_config() -> Result<()> {
+
+📄 /Users/andrew/Programming/rtk/src/container.rs (10):
+    16: pub fn run(cmd: ContainerCmd, args: &[String], verbose: u8) -> Result<()> {
+    27: fn docker_ps(_verbose: u8) -> Result<()> {
+    84: fn docker_images(_verbose: u8) -> Result<()> {
+   154: fn docker_logs(args: &[String], _verbose: u8) -> Result<()> {
+   184: fn kubectl_pods(args: &[String], _verbose: u8) -> Result<()> {
+   285: fn kubectl_services(args: &[String], _verbose: u8) -> Result<()> {
+   359: fn kubectl_logs(args: &[String], _verbose: u8) -> Result<()> {
+   388: fn compact_ports(ports: &str) -> String {
+   411: pub fn run_docker_passthrough(args: &[OsString], verbose: u8) -> Result<()> {
+   435: pub fn run_kubectl_passthrough(args: &[OsString], verbose: u8) -> Result<()> {
+
+📄 /Users/andrew/Programming/rtk/src/curl_cmd.rs (6):
+     7: pub fn run(args: &[String], verbose: u8) -> Result<()> {
+    50: fn filter_curl_output(output: &str) -> String {
+    88: fn test_filter_curl_json() {
+    97: fn test_filter_curl_json_array() {
+   104: fn test_filter_curl_non_json() {
+   112: fn test_filter_curl_long_output() {
+
+📄 /Users/andrew/Programming/rtk/src/deps.rs (6):
+     8: pub fn run(path: &Path, verbose: u8) -> Result<()> {
+    74: fn summarize_cargo_str(path: &Path) -> Result<String> {
+   127: fn summarize_package_json_str(path: &Path) -> Result<String> {
+   163: fn summarize_requirements_str(path: &Path) -> Result<String> {
+   191: fn summarize_pyproject_str(path: &Path) -> Result<String> {
+   227: fn summarize_gomod_str(path: &Path) -> Result<String> {
+
+📄 /Users/andrew/Programming/rtk/src/diff_cmd.rs (23):
+     8: pub fn run(file1: &Path, file2: &Path, verbose: u8) -> Result<()> {
+    69: pub fn run_stdin(_verbose: u8) -> Result<()> {
+    99: fn compute_diff(lines1: &[&str], lines2: &[&str]) -> DiffResult {
+   145: fn similarity(a: &str, b: &str) -> f64 {
+   159: fn condense_unified_diff(diff: &str) -> String {
+   221: fn test_similarity_identical() {
+   226: fn test_similarity_completely_different() {
+   231: fn test_similarity_empty_strings() {
+   237: fn test_similarity_partial_overlap() {
+   244: fn test_similarity_threshold_for_modified() {
+  +13
+
+📄 /Users/andrew/Programming/rtk/src/discover/mod.rs (3):
+    29: pub fn run(
+   219: fn extract_subcmd(cmd: &str) -> &str {
+   229: fn truncate_command(cmd: &str) -> String {
+
+📄 /.../discover/provider.rs (18):
+    26: fn discover_sessions(
+    31: fn extract_commands(&self, path: &Path) -> Result<Vec<ExtractedCommand>>;
+    38: fn projects_dir() -> Result<PathBuf> {
+    52: pub fn encode_project_path(path: &str) -> String {
+    58: fn discover_sessions(
+   119: fn extract_commands(&self, path: &Path) -> Result<Vec<ExtractedCommand>> {
+   242: fn make_jsonl(lines: &[&str]) -> tempfile::NamedTempFile {
+   252: fn test_extract_assistant_bash() {
+   270: fn test_extract_non_bash_ignored() {
+   281: fn test_extract_non_message_ignored() {
+  +8
+
+📄 /.../discover/registry.rs (30):
+    29: pub fn category_avg_tokens(category: &str, subcmd: &str) -> usize {
+   314: pub fn classify_command(cmd: &str) -> Classification {
+   392: fn extract_base_command(cmd: &str) -> &str {
+   423: pub fn split_command_chain(cmd: &str) -> Vec<&str> {
+   511: fn test_classify_git_status() {
+   524: fn test_classify_git_diff_cached() {
+   537: fn test_classify_cargo_test_filter() {
+   550: fn test_classify_npx_tsc() {
+   563: fn test_classify_cat_file() {
+   576: fn test_classify_grepai_search() {
+  +20
+
+📄 /.../discover/report.rs (7):
+    15: pub fn as_str(&self) -> &'static str {
+    57: pub fn total_saveable_tokens(&self) -> usize {
+    64: pub fn total_supported_count(&self) -> usize {
+    70: pub fn format_text(report: &DiscoverReport, limit: usize, verbose: bool) -> Stri...
+   159: pub fn format_json(report: &DiscoverReport) -> String {
+   163: fn format_tokens(tokens: usize) -> String {
+   173: fn truncate_str(s: &str, max: usize) -> String {
+
+📄 /.../src/display_helpers.rs (55):
+    10: pub fn format_duration(ms: u64) -> String {
+    25: fn icon() -> &'static str;
+    28: fn label() -> &'static str;
+    31: fn period(&self) -> String;
+    34: fn commands(&self) -> usize;
+    37: fn input_tokens(&self) -> usize;
+    40: fn output_tokens(&self) -> usize;
+    43: fn saved_tokens(&self) -> usize;
+    46: fn savings_pct(&self) -> f64;
+    49: fn total_time_ms(&self) -> u64;
+  +45
+
+📄 /Users/andrew/Programming/rtk/src/env_cmd.rs (7):
+     7: pub fn run(filter: Option<&str>, show_all: bool, verbose: u8) -> Result<()> {
+   130: fn get_sensitive_patterns() -> HashSet<&'static str> {
+   146: fn mask_value(value: &str) -> String {
+   157: fn is_lang_var(key: &str) -> bool {
+   165: fn is_cloud_var(key: &str) -> bool {
+   183: fn is_tool_var(key: &str) -> bool {
+   201: fn is_interesting_var(key: &str) -> bool {
+
+📄 /Users/andrew/Programming/rtk/src/filter.rs (20):
+    15: fn from_str(s: &str) -> Result<Self, Self::Err> {
+    26: fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    36: fn filter(&self, content: &str, lang: &Language) -> String;
+    38: fn name(&self) -> &'static str;
+    57: pub fn from_extension(ext: &str) -> Self {
+    73: pub fn comment_patterns(&self) -> CommentPatterns {
+   138: fn filter(&self, content: &str, _lang: &Language) -> String {
+   142: fn name(&self) -> &'static str {
+   155: fn filter(&self, content: &str, lang: &Language) -> String {
+   223: fn name(&self) -> &'static str {
+  +10
+
+📄 /Users/andrew/Programming/rtk/src/find_cmd.rs (14):
+     8: fn glob_match(pattern: &str, name: &str) -> bool {
+    12: fn glob_match_inner(pat: &[u8], name: &[u8]) -> bool {
+    26: pub fn run(
+   212: fn glob_match_star_rs() {
+   220: fn glob_match_star_all() {
+   227: fn glob_match_question_mark() {
+   233: fn glob_match_exact() {
+   239: fn glob_match_complex() {
+   248: fn dot_becomes_star() {
+   257: fn find_rs_files_in_src() {
+  +4
+
+📄 /Users/andrew/Programming/rtk/src/gain.rs (7):
+     7: pub fn run(
+   160: fn print_ascii_graph(data: &[(String, usize)]) {
+   190: fn print_daily_full(tracker: &Tracker) -> Result<()> {
+   196: fn print_weekly(tracker: &Tracker) -> Result<()> {
+   202: fn print_monthly(tracker: &Tracker) -> Result<()> {
+   230: fn export_json(
+   274: fn export_csv(
+
+📄 /Users/andrew/Programming/rtk/src/gh_cmd.rs (26):
+    15: pub fn run(subcommand: &str, args: &[String], verbose: u8, ultra_compact: bool) ...
+    29: fn run_pr(args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+    48: fn list_prs(args: &[String], _verbose: u8, ultra_compact: bool) -> Result<()> {
+   132: fn view_pr(args: &[String], _verbose: u8, ultra_compact: bool) -> Result<()> {
+   305: fn pr_checks(args: &[String], _verbose: u8, _ultra_compact: bool) -> Result<()> ...
+   391: fn pr_status(_verbose: u8, _ultra_compact: bool) -> Result<()> {
+   435: fn run_issue(args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+   447: fn list_issues(args: &[String], _verbose: u8, ultra_compact: bool) -> Result<()>...
+   514: fn view_issue(args: &[String], _verbose: u8) -> Result<()> {
+   600: fn run_workflow(args: &[String], verbose: u8, ultra_compact: bool) -> Result<()>...
+  +16
+
+📄 /Users/andrew/Programming/rtk/src/git.rs (42):
+    22: pub fn run(cmd: GitCommand, args: &[String], max_lines: Option<usize>, verbose: ...
+    39: fn run_diff(args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()...
+   126: fn run_show(args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()...
+   232: pub(crate) fn compact_diff(diff: &str, max_lines: usize) -> String {
+   298: fn run_log(args: &[String], _max_lines: Option<usize>, verbose: u8) -> Result<()...
+   375: fn filter_log_output(output: &str, limit: usize) -> String {
+   394: fn format_status_output(porcelain: &str) -> String {
+   490: fn filter_status_with_args(output: &str) -> String {
+   526: fn run_status(args: &[String], verbose: u8) -> Result<()> {
+   582: fn run_add(args: &[String], verbose: u8) -> Result<()> {
+  +32
+
+📄 /Users/andrew/Programming/rtk/src/go_cmd.rs (15):
+    34: pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
+    85: pub fn run_build(args: &[String], verbose: u8) -> Result<()> {
+   128: pub fn run_vet(args: &[String], verbose: u8) -> Result<()> {
+   171: pub fn run_other(args: &[OsString], verbose: u8) -> Result<()> {
+   217: fn filter_go_test_json(output: &str) -> String {
+   341: fn filter_go_build(output: &str) -> String {
+   384: fn filter_go_vet(output: &str) -> String {
+   416: fn compact_package_name(package: &str) -> String {
+   430: fn test_filter_go_test_all_pass() {
+   443: fn test_filter_go_test_with_failures() {
+  +5
+
+📄 /Users/andrew/Programming/rtk/src/golangci_cmd.rs (6):
+    34: pub fn run(args: &[String], verbose: u8) -> Result<()> {
+    88: fn filter_golangci_json(output: &str) -> String {
+   179: fn compact_path(path: &str) -> String {
+   200: fn test_filter_golangci_no_issues() {
+   208: fn test_filter_golangci_with_issues() {
+   239: fn test_compact_path() {
+
+📄 /Users/andrew/Programming/rtk/src/grep_cmd.rs (8):
+     7: pub fn run(
+   120: fn clean_line(line: &str, max_len: usize, context_only: bool, pattern: &str) -> ...
+   168: fn compact_path(path: &str) -> String {
+   191: fn test_clean_line() {
+   199: fn test_compact_path() {
+   206: fn test_extra_args_accepted() {
+   214: fn test_clean_line_multibyte() {
+   223: fn test_clean_line_emoji() {
+
+📄 /Users/andrew/Programming/rtk/src/init.rs (52):
+   176: pub fn run(
+   192: fn prepare_hook_paths() -> Result<(PathBuf, PathBuf)> {
+   203: fn ensure_hook_installed(hook_path: &Path, verbose: u8) -> Result<bool> {
+   239: fn write_if_changed(path: &Path, content: &str, name: &str, verbose: u8) -> Resu...
+   269: fn atomic_write(path: &Path, content: &str) -> Result<()> {
+   300: fn prompt_user_consent(settings_path: &Path) -> Result<bool> {
+   323: fn print_manual_instructions(hook_path: &Path) {
+   338: fn remove_hook_from_json(root: &mut serde_json::Value) -> bool {
+   369: fn remove_hook_from_settings(verbose: u8) -> Result<bool> {
+   412: pub fn uninstall(global: bool, verbose: u8) -> Result<()> {
+  +42
+
+📄 /Users/andrew/Programming/rtk/src/json_cmd.rs (6):
+     9: pub fn run(file: &Path, max_depth: usize, verbose: u8) -> Result<()> {
+    31: pub fn run_stdin(max_depth: usize, verbose: u8) -> Result<()> {
+
+... +584

@@ -1,0 +1,27 @@
+🧠 2F for 'SQLite retention cleanup policy' (scan 55F)
+
+📄 tracking.rs [7.3]
+   314: fn cleanup_old(&self) -> Result<()> {
+   315: let cutoff = Utc::now() - chrono::Duration::days(HISTORY_DAYS);
+       ~ cleanup
+
+     9: //! - Storage: SQLite database (~/.local/share/rtk/tracking.db)
+    10: //! - Retention: 90-day automatic cleanup
+    11: //! - Metrics: Input/output tokens, savings %, execution time
+       ~ retention, cleanup
+
+  +2 more lines
+
+📄 init.rs [6.9]
+  1198: #[test]
+  1199: fn test_search_priority_policy_in_init_and_slim_templates() {
+  1200: let policy = "Search priority (mandatory): rgai > rg > grep.";
+       ~ policy
+
+  1202: RTK_INSTRUCTIONS.contains(policy),
+  1203: "RTK_INSTRUCTIONS must include strict search priority policy"
+  1204: );
+       ~ policy
+
+  +4 more lines
+

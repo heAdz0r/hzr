@@ -1,0 +1,13 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 4a0037b..4be51a2 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1460,7 +1460,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "icm-cli"
+-version = "0.10.54"
++version = "0.10.61"
+ dependencies = [
+  "anyhow",
+  "axum",

@@ -1,0 +1,90 @@
+ M CHANGELOG.md
+ M CLAUDE.md
+ M Cargo.lock
+ M Cargo.toml
+ M README.md
+ M docs/TROUBLESHOOTING.md
+ M hooks/rtk-awareness.md
+ D hooks/rtk-block-native-grep.sh
+ D hooks/rtk-block-native-read.sh
+ D hooks/rtk-block-native-write.sh
+ D hooks/rtk-block-task.sh
+ M hooks/rtk-rewrite.sh
+ M hooks/test-rtk-rewrite.sh
+ M src/aws_cmd.rs
+ M src/cargo_cmd.rs
+ M src/ccusage.rs
+ M src/container.rs
+ M src/curl_cmd.rs
+ M src/deps.rs
+ M src/diff_cmd.rs
+ M src/discover/lexer.rs
+ M src/discover/registry.rs
+ M src/discover/rules.rs
+ M src/env_cmd.rs
+ M src/find_cmd.rs
+ M src/format_cmd.rs
+ M src/gain.rs
+ M src/git.rs
+ M src/go_cmd.rs
+ M src/gt_cmd.rs
+ M src/init.rs
+ M src/json_cmd.rs
+ M src/lint_cmd.rs
+ M src/log_cmd.rs
+ M src/main.rs
+ M src/memory_layer/cli.rs
+ M src/mypy_cmd.rs
+ M src/parser/mod.rs
+ M src/permissions.rs
+ M src/pip_cmd.rs
+ M src/pipe_cmd.rs
+ M src/playwright_cmd.rs
+ M src/pnpm_cmd.rs
+ M src/prisma_cmd.rs
+ M src/pytest_cmd.rs
+ M src/read.rs
+ M src/ruff_cmd.rs
+ M src/runner.rs
+ M src/summary.rs
+ M src/tee.rs
+ M src/toml_filter.rs
+ M src/trust.rs
+ M src/utils.rs
+ M src/vitest_cmd.rs
+ M src/wget_cmd.rs
+ M tests/git_cli_parity.rs
+ M tests/read_cli.rs
+?? .claude/agents/code-reviewer.md
+?? .claude/agents/debugger.md
+?? .claude/agents/rtk-testing-specialist.md
+?? .claude/agents/rust-rtk.md
+?? .claude/agents/technical-writer.md
+?? .claude/commands/diagnose.md
+?? .claude/commands/test-routing.md
+?? .claude/hooks/bash/pre-commit-format.sh
+?? .claude/hooks/rtk-suggest.sh
+?? .claude/rules/cli-testing.md
+?? .claude/skills/issue-triage/SKILL.md
+?? .claude/skills/issue-triage/templates/issue-comment.md
+?? .claude/skills/performance.md
+?? .claude/skills/pr-triage/SKILL.md
+?? .claude/skills/pr-triage/templates/review-comment.md
+?? .claude/skills/repo-recap.md
+?? .claude/skills/security-guardian.md
+?? .claude/skills/ship.md
+?? docs/issues/20260731_182714_hzr-platform-perf-report.md
+?? docs/review/20260731_182714_hzr-unified-platform_Code-Review.md
+?? hooks/rtk-awareness-codex.md
+?? hooks/rtk-instructions.md
+?? src/args_utils.rs
+?? src/guard.rs
+?? src/search.rs
+?? src/stream.rs
+?? src/telemetry.rs
+?? tasks/prd-hzr-unified-agent-efficiency-platform.md
+?? tasks/prd-upstream-sync-v0.26.md
+?? tests/guard_integration_test.rs
+?? tests/search_compress_test.rs
+?? tests/search_error_test.rs
+?? tests/search_faithful_test.rs

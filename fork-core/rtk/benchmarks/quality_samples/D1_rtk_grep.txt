@@ -1,0 +1,162 @@
+🔍 90 in 37F:
+
+📄 /Users/andrew/Programming/rtk/src/cargo_cmd.rs (2):
+    41: if verbose > 0 {
+   679: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/cc_economics.rs (2):
+   511: if verbose > 0 {
+   589: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/container.rs (2):
+   414: if verbose > 0 {
+   438: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/curl_cmd.rs (1):
+    16: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/deps.rs (1):
+    17: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/diff_cmd.rs (1):
+    11: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/discover/mod.rs (3):
+    54: if verbose > 0 {
+    71: if verbose > 0 {
+   212: _ => print!("{}", report::format_text(&report, limit, verbose > 0)),
+
+📄 /Users/andrew/Programming/rtk/src/env_cmd.rs (1):
+    10: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/find_cmd.rs (1):
+    38: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/git.rs (13):
+    90: if verbose > 0 {
+   214: if verbose > 0 {
+   356: if verbose > 0 {
+   540: if verbose > 0 || !stderr.is_empty() {
+   599: if verbose > 0 {
+   657: if verbose > 0 {
+   721: if verbose > 0 {
+   782: if verbose > 0 {
+   867: if verbose > 0 {
+   995: if verbose > 0 {
+  +3
+
+📄 /Users/andrew/Programming/rtk/src/go_cmd.rs (4):
+    49: if verbose > 0 {
+    95: if verbose > 0 {
+   138: if verbose > 0 {
+   186: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/golangci_cmd.rs (2):
+    54: if verbose > 0 {
+    71: if !stderr.trim().is_empty() && verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/grep_cmd.rs (1):
+    19: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/init.rs (14):
+   209: if verbose > 0 {
+   216: if verbose > 0 {
+   224: if verbose > 0 {
+   245: if verbose > 0 {
+   252: if verbose > 0 {
+   260: if verbose > 0 {
+   374: if verbose > 0 {
+   403: if verbose > 0 {
+   504: if verbose > 0 {
+   535: if verbose > 0 {
+  +4
+
+📄 /Users/andrew/Programming/rtk/src/json_cmd.rs (2):
+    12: if verbose > 0 {
+    34: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/lint_cmd.rs (1):
+    57: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/local_llm.rs (1):
+    10: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/log_cmd.rs (1):
+    13: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/ls.rs (1):
+    94: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/main.rs (1):
+  1412: if cli.verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/next_cmd.rs (1):
+    31: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/npm_cmd.rs (1):
+    19: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/parser/README.md (1):
+   102: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/pip_cmd.rs (4):
+    21: if verbose > 0 && use_uv {
+    66: if verbose > 0 {
+   101: if verbose > 0 {
+   134: if verbose > 0 {
+
+📄 /.../src/playwright_cmd.rs (3):
+   231: if verbose > 0 {
+   249: if verbose > 0 {
+   255: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/pnpm_cmd.rs (6):
+   321: if verbose > 0 {
+   327: if verbose > 0 {
+   373: if verbose > 0 {
+   379: if verbose > 0 {
+   425: if verbose > 0 {
+   495: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/prettier_cmd.rs (1):
+    15: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/prisma_cmd.rs (3):
+    54: if verbose > 0 {
+   107: if verbose > 0 {
+   145: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/pytest_cmd.rs (1):
+    42: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/read.rs (4):
+    16: if verbose > 0 {
+    39: if verbose > 0 {
+    83: if verbose > 0 {
+   105: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/ruff_cmd.rs (1):
+    76: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/runner.rs (2):
+    10: if verbose > 0 {
+    61: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/summary.rs (1):
+    11: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/tree.rs (1):
+    86: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/tsc_cmd.rs (1):
+    30: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/vitest_cmd.rs (2):
+   246: if verbose > 0 {
+   252: if verbose > 0 {
+
+📄 /Users/andrew/Programming/rtk/src/wget_cmd.rs (2):
+     9: if verbose > 0 {
+    57: if verbose > 0 {
+
+... +7

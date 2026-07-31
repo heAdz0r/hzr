@@ -1,0 +1,102 @@
+🧠 50F for 'Command::new' (scan 55F)
+
+📄 main.rs [20.0]
+  1320: let timer = tracking::TimedExecution::start();
+  1321: let mut cmd = std::process::Command::new("npx");
+  1322: for arg in &args {
+       ~ command, new
+
+  1337: let timer = tracking::TimedExecution::start();
+  1338: let status = std::process::Command::new("npx")
+  1339: .arg("prisma")
+       ~ command, new
+
+  +159 more lines
+
+📄 git.rs [19.1]
+    51: // User wants stat or explicitly no compacting - pass through directly
+    52: let mut cmd = Command::new("git");
+    53: cmd.arg("diff");
+       ~ command, new
+
+    79: // Default RTK behavior: stat first, then compacted diff
+    80: let mut cmd = Command::new("git");
+    81: cmd.arg("diff").arg("--stat");
+       ~ command, new
+
+  +64 more lines
+
+📄 runner.rs [18.8]
+    14: let output = if cfg!(target_os = "windows") {
+    15: Command::new("cmd")
+    16: .args(["/C", command])
+       ~ command, new
+
+    20: } else {
+    21: Command::new("sh")
+    22: .args(["-c", command])
+       ~ command, new
+
+  +43 more lines
+
+📄 gh_cmd.rs [18.6]
+    51: let mut cmd = Command::new("gh");
+    52: cmd.args([
+       ~ command, new
+
+   141: let mut cmd = Command::new("gh");
+   142: cmd.args([
+       ~ command, new
+
+  +38 more lines
+
+📄 cargo_cmd.rs [18.5]
+    35: let mut cmd = Command::new("cargo");
+    36: cmd.arg(subcommand);
+       ~ command, new
+
+   681: }
+   682: let status = Command::new("cargo")
+   683: .args(args)
+       ~ command, new
+
+  +34 more lines
+
+📄 prisma_cmd.rs [18.5]
+    28: fn create_prisma_command() -> Command {
+    29: let prisma_exists = Command::new("which")
+    30: .arg("prisma")
+       ~ command, new
+
+    35: if prisma_exists {
+    36: Command::new("prisma")
+    37: } else {
+       ~ command, new
+
+  +33 more lines
+
+📄 summary.rs [18.1]
+    15: let output = if cfg!(target_os = "windows") {
+    16: Command::new("cmd")
+    17: .args(["/C", command])
+       ~ command, new
+
+    21: } else {
+    22: Command::new("sh")
+    23: .args(["-c", command])
+       ~ command, new
+
+  +21 more lines
+
+📄 go_cmd.rs [18.0]
+    37: let mut cmd = Command::new("go");
+    38: cmd.arg("test");
+       ~ command, new
+
+    88: let mut cmd = Command::new("go");
+    89: cmd.arg("build");
+       ~ command, new
+
+  +18 more lines
+
+... +42F

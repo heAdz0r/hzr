@@ -1,0 +1,103 @@
+🧠 36F for 'language aware code filtering' (scan 55F)
+
+📄 filter.rs [15.7]
+    35: pub trait FilterStrategy {
+    36: fn filter(&self, content: &str, lang: &Language) -> String;
+    37: #[allow(dead_code)]
+       ~ language, filter
+
+   137: impl FilterStrategy for NoFilter {
+   138: fn filter(&self, content: &str, _lang: &Language) -> String {
+   139: content.to_string()
+       ~ language, filter
+
+  +63 more lines
+
+📄 cargo_cmd.rs [10.5]
+    28: /// Generic cargo command runner with filtering
+    29: fn run_cargo_filtered<F>(subcommand: &str, args: &[String], verbose: u8, filter_fn: F) -> Result<()>
+    30: where
+       ~ filter
+
+   100: /// Filter cargo install output - strip dep compilation, keep installed/replaced/errors
+   101: fn filter_cargo_install(output: &str) -> String {
+   102: let mut errors: Vec<String> = Vec::new();
+       ~ filter
+
+  +81 more lines
+
+📄 local_llm.rs [10.3]
+     6: use crate::filter::Language;
+       ~ language, filter
+
+    36: fn analyze_code(content: &str, lang: &Language) -> CodeSummary {
+    37: let lines: Vec<&str> = content.lines().collect();
+       ~ language
+
+  +44 more lines
+
+📄 git.rs [10.0]
+   374: /// Filter git log output: truncate long messages, cap lines
+   375: fn filter_log_output(output: &str, limit: usize) -> String {
+   376: let lines: Vec<&str> = output.lines().collect();
+       ~ filter
+
+   489: /// Minimal filtering for git status with user-provided args
+   490: fn filter_status_with_args(output: &str) -> String {
+   491: let mut result = Vec::new();
+       ~ filter
+
+  +47 more lines
+
+📄 go_cmd.rs [9.9]
+   204: &raw,
+   205: &raw, // No filtering for unsupported commands
+   206: );
+       ~ filtering, filter
+
+   216: /// Parse go test -json output (NDJSON format)
+   217: fn filter_go_test_json(output: &str) -> String {
+   218: let mut packages: HashMap<String, PackageResult> = HashMap::new();
+       ~ filter
+
+  +26 more lines
+
+📄 tree.rs [9.2]
+   105: fn filter_tree_output(raw: &str) -> String {
+   106: let lines: Vec<&str> = raw.lines().collect();
+       ~ filter
+
+   140: #[test]
+   141: fn test_filter_removes_summary() {
+   142: let input = ".\n├── src\n│   └── main.rs\n└── Cargo.toml\n\n2 directories, 3 files\n";
+       ~ filter
+
+  +20 more lines
+
+📄 prisma_cmd.rs [9.2]
+   168: /// Filter prisma generate output - strip ASCII art, extract counts
+   169: fn filter_prisma_generate(output: &str) -> String {
+   170: let mut models = 0;
+       ~ filter
+
+   227: /// Filter migrate dev output - extract migration changes
+   228: fn filter_migrate_dev(output: &str) -> String {
+   229: let mut migration_name = String::new();
+       ~ filter
+
+  +19 more lines
+
+📄 pip_cmd.rs [9.1]
+   168: /// Filter pip list JSON output
+   169: fn filter_pip_list(output: &str) -> String {
+   170: let packages: Vec<Package> = match serde_json::from_str(output) {
+       ~ filter
+
+   213: /// Filter pip outdated JSON output
+   214: fn filter_pip_outdated(output: &str) -> String {
+   215: let packages: Vec<Package> = match serde_json::from_str(output) {
+       ~ filter
+
+  +18 more lines
+
+... +28F

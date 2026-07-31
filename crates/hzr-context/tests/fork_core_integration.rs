@@ -1,0 +1,154 @@
+#![cfg(unix)]
+
+use std::fs;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use hzr_context::{ContextPlanner, PlanRequest, SearchRequest};
+use hzr_core::Config;
+use hzr_exec::{ForkCoreConfig, ForkRuntimePaths, PinnedRtkAdapter, RtkRewriteInterface};
+use hzr_memory::{IcmClient, IcmConfig, IcmTransport};
+use hzr_protocol::{CandidateSource, ContextWarningCode, SearchMode, SearchStrategy};
+
+#[tokio::test]
+async fn test_search_and_context_use_managed_fork_core_commands() {
+    let fixture = tempfile::tempdir().expect("fixture directory");
+    let workspace = fixture.path().join("workspace");
+    let engines = fixture.path().join("engines");
+    fs::create_dir_all(workspace.join("src")).expect("workspace source directory");
+    fs::create_dir_all(&engines).expect("engine directory");
+    fs::write(
+        workspace.join("src/lib.rs"),
+        "pub fn managed_fork_hit() {}\n",
+    )
+    .expect("source fixture");
+    let rtk = engines.join("rtk");
+    write_fake_rtk(&rtk);
+
+    let mut config = Config {
+        data_dir: fixture.path().join("data"),
+        ..Config::default()
+    };
+    config.engines.directory = Some(engines);
+    config.engines.auto_index = true;
+    config.daemon.request_timeout_ms = 5_000;
+    config.ensure_layout().expect("HZR data layout");
+
+    let adapter = PinnedRtkAdapter::detect(ForkCoreConfig {
+        binary: rtk,
+        runtime_paths: Some(ForkRuntimePaths::from_data_root(&config.data_dir)),
+        ..ForkCoreConfig::default()
+    })
+    .await;
+    assert!(matches!(
+        adapter.capabilities().rewrite,
+        RtkRewriteInterface::ForkCli
+    ));
+    let planner = ContextPlanner::from_config(
+        &config,
+        unavailable_memory(fixture.path()),
+        adapter.runner(),
+    );
+
+    let search = planner
+        .search(SearchRequest {
+            workspace: workspace.clone(),
+            query: "managed_fork_hit".into(),
+            path: Some(PathBuf::from("src")),
+            limit: 5,
+            mode: SearchMode::Exact,
+            include_content: true,
+        })
+        .await
+        .expect("fork rgai search");
+    assert_eq!(search.strategy, SearchStrategy::ForkRgaiBuiltin);
+    assert_eq!(search.hits.len(), 1);
+    assert_eq!(search.hits[0].path, "src/lib.rs");
+
+    let context = planner
+        .plan(PlanRequest {
+            workspace,
+            intent: "find managed fork hit".into(),
+            path: None,
+            topic: Some("hzr-test".into()),
+            search_limit: 5,
+            memory_limit: 5,
+        })
+        .await
+        .expect("fork memory plan");
+    assert_eq!(
+        context
+            .planner
+            .as_ref()
+            .and_then(|planner| planner.pipeline_version.as_deref()),
+        Some("graph_first_v1")
+    );
+    assert_eq!(context.pack.selected.len(), 1);
+    assert_eq!(context.pack.selected[0].source, CandidateSource::Context);
+    assert_eq!(context.pack.selected[0].path.as_deref(), Some("src/lib.rs"));
+    assert!(
+        context
+            .warnings
+            .iter()
+            .any(|warning| warning.code == ContextWarningCode::MemoryUnavailable)
+    );
+    planner.shutdown().await.expect("index shutdown");
+}
+
+fn unavailable_memory(root: &Path) -> IcmClient {
+    let mut config = IcmConfig::from_data_root(root.join("missing-icm"), root.join("icm"));
+    config.bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 65_534);
+    config.request_timeout = Duration::from_millis(50);
+    config.cli_fallback = false;
+    config.transport = IcmTransport::Http;
+    IcmClient::from_config(config).expect("ICM client fixture")
+}
+
+fn write_fake_rtk(path: &Path) {
+    let script = r#"#!/bin/sh
+case "$1" in
+  --version)
+    printf '%s\n' 'rtk 0.44.1-fork.1'
+    ;;
+  rewrite)
+    if [ "$2" = "--help" ]; then
+      printf '%s\n' 'rtk rewrite - Raw command to rewrite'
+    else
+      exit 64
+    fi
+    ;;
+  proxy)
+    if [ "$2" = "--help" ]; then
+      printf '%s\n' 'rtk proxy - execute without filtering'
+    else
+      exit 64
+    fi
+    ;;
+  rgai)
+    builtin_found=false
+    for argument in "$@"; do
+      if [ "$argument" = "--builtin" ]; then
+        builtin_found=true
+      fi
+    done
+    if [ "$builtin_found" != "true" ]; then
+      exit 65
+    fi
+    printf '%s\n' '{"query":"managed_fork_hit","path":"src","total_hits":1,"shown_hits":1,"scanned_files":1,"skipped_large":0,"skipped_binary":0,"hits":[{"path":"src/lib.rs","score":9.5,"matched_lines":1,"snippets":[{"lines":[{"line":1,"text":"pub fn managed_fork_hit() {}"}],"matched_terms":["managed_fork_hit"]}]}]}'
+    ;;
+  memory)
+    if [ "$2" != "plan" ]; then
+      exit 66
+    fi
+    printf '%s\n' '{"selected":[{"rel_path":"src/lib.rs","features":{},"score":0.9,"sources":["tier_a","call_graph"],"estimated_tokens":200}],"dropped":[],"budget_report":{"token_budget":12000,"estimated_used":200,"candidates_total":1,"candidates_selected":1,"efficiency_score":0.0167},"decision_trace":[],"pipeline_version":"graph_first_v1","semantic_backend_used":"rg-files","graph_candidate_count":1,"semantic_hit_count":1}'
+    ;;
+  *)
+    exit 67
+    ;;
+esac
+"#;
+    fs::write(path, script).expect("fake rtk script");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("fake rtk permissions");
+}

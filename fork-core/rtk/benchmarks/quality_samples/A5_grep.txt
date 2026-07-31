@@ -1,0 +1,20 @@
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:741:test utils::tests::test_strip_ansi_simple ... ok
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:10:use crate::utils::{package_manager_exec, strip_ansi};
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:134:    let clean_output = strip_ansi(output);
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:324:    fn test_strip_ansi() {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:326:        let output = strip_ansi(input);
+/Users/andrew/Programming/rtk/src/next_cmd.rs:2:use crate::utils::{strip_ansi, truncate};
+/Users/andrew/Programming/rtk/src/next_cmd.rs:80:    let clean_output = strip_ansi(output);
+/Users/andrew/Programming/rtk/src/utils.rs:43:/// use rtk::utils::strip_ansi;
+/Users/andrew/Programming/rtk/src/utils.rs:45:/// assert_eq!(strip_ansi(colored), "Error");
+/Users/andrew/Programming/rtk/src/utils.rs:47:pub fn strip_ansi(text: &str) -> String {
+/Users/andrew/Programming/rtk/src/utils.rs:259:    fn test_strip_ansi_simple() {
+/Users/andrew/Programming/rtk/src/utils.rs:261:        assert_eq!(strip_ansi(input), "Error");
+/Users/andrew/Programming/rtk/src/utils.rs:265:    fn test_strip_ansi_multiple() {
+/Users/andrew/Programming/rtk/src/utils.rs:267:        assert_eq!(strip_ansi(input), "Success");
+/Users/andrew/Programming/rtk/src/utils.rs:271:    fn test_strip_ansi_no_codes() {
+/Users/andrew/Programming/rtk/src/utils.rs:272:        assert_eq!(strip_ansi("plain text"), "plain text");
+/Users/andrew/Programming/rtk/src/utils.rs:276:    fn test_strip_ansi_complex() {
+/Users/andrew/Programming/rtk/src/utils.rs:278:        assert_eq!(strip_ansi(input), "Green normal Red");
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:2:use crate::utils::{package_manager_exec, strip_ansi};
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:150:    let clean_output = strip_ansi(output);

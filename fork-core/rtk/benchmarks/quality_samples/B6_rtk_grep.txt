@@ -1,0 +1,32 @@
+🔍 12 in 9F:
+
+📄 /.../discover/registry.rs (1):
+   303: lazy_static! {
+
+📄 /Users/andrew/Programming/rtk/src/filter.rs (2):
+   149: lazy_static! {
+   230: lazy_static! {
+
+📄 /.../learn/detector.rs (1):
+    48: lazy_static! {
+
+📄 /Users/andrew/Programming/rtk/src/next_cmd.rs (2):
+    59: lazy_static::lazy_static! {
+   189: lazy_static::lazy_static! {
+
+📄 /.../src/playwright_cmd.rs (2):
+   141: lazy_static::lazy_static! {
+   197: lazy_static::lazy_static! {
+
+📄 /Users/andrew/Programming/rtk/src/runner.rs (1):
+    91: lazy_static::lazy_static! {
+
+📄 /Users/andrew/Programming/rtk/src/tsc_cmd.rs (1):
+    59: lazy_static::lazy_static! {
+
+📄 /Users/andrew/Programming/rtk/src/utils.rs (1):
+    48: lazy_static::lazy_static! {
+
+📄 /Users/andrew/Programming/rtk/src/vitest_cmd.rs (1):
+   122: lazy_static::lazy_static! {
+

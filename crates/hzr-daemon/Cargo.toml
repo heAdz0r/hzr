@@ -1,0 +1,38 @@
+[package]
+name = "hzr-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum.workspace = true
+fs2.workspace = true
+hzr-codec = { path = "../hzr-codec" }
+hzr-context = { path = "../hzr-context" }
+hzr-core = { path = "../hzr-core" }
+hzr-exec = { path = "../hzr-exec" }
+hzr-index = { path = "../hzr-index" }
+hzr-memory = { path = "../hzr-memory" }
+hzr-protocol = { path = "../hzr-protocol" }
+libc = "0.2.174"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tower.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "hzrd"
+path = "src/main.rs"

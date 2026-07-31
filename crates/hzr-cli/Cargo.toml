@@ -1,0 +1,34 @@
+[package]
+name = "hzr-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+hzr-agent = { path = "../hzr-agent" }
+hzr-codec = { path = "../hzr-codec" }
+hzr-core = { path = "../hzr-core" }
+hzr-daemon = { path = "../hzr-daemon" }
+hzr-exec = { path = "../hzr-exec" }
+hzr-index = { path = "../hzr-index" }
+hzr-memory = { path = "../hzr-memory" }
+hzr-protocol = { path = "../hzr-protocol" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "hzr"
+path = "src/main.rs"

@@ -1,0 +1,12 @@
+scenario,kind,native_exit,rtk_exit,exit_match,side_effect_match,stderr_signal_match
+add_missing_path_failure,failure,128,128,1,1,1
+commit_nothing_to_commit_failure,failure,1,1,1,1,1
+push_without_remote_failure,failure,128,128,1,1,1
+pull_without_remote_failure,failure,1,1,1,1,1
+branch_delete_missing_failure,failure,1,1,1,1,1
+fetch_missing_remote_failure,failure,128,128,1,1,1
+stash_drop_missing_failure,failure,1,1,1,1,1
+worktree_remove_missing_failure,failure,128,128,1,1,1
+add_success,success,0,0,1,1,1
+commit_success,success,0,0,1,1,1
+stash_push_success,success,0,0,1,1,1

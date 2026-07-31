@@ -1,0 +1,102 @@
+🧠 47F for 'token savings tracking database' (scan 55F)
+
+📄 cc_economics.rs [17.3]
+   433: .get_by_month()
+   434: .context("Failed to load monthly token savings from database")?;
+   435: let periods = merge_monthly(cc_monthly, rtk_monthly);
+       ~ token, savings, saving, database
+
+   548: .get_all_days()
+   549: .context("Failed to load daily token savings from database")?;
+   550: let periods = merge_daily(cc_daily, rtk_daily);
+       ~ token, savings, saving, database
+
+  +299 more lines
+
+📄 tracking.rs [17.2]
+     1: //! Token savings tracking and analytics system.
+     2: //!
+       ~ token, savings, saving, tracking, track
+
+   295: self.conn.execute(
+   296: "INSERT INTO commands (timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens, saved_tokens, savings_pct, exec_time_ms)
+   297: VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+       ~ token, savings, saving
+
+  +166 more lines
+
+📄 gain.rs [15.8]
+    29: .get_summary()
+    30: .context("Failed to load token savings summary from database")?;
+       ~ token, savings, saving, database
+
+    33: println!("No tracking data yet.");
+    34: println!("Run some rtk commands to start tracking savings.");
+    35: return Ok(());
+       ~ savings, saving, tracking, track
+
+  +61 more lines
+
+📄 display_helpers.rs [14.4]
+    45: /// Savings percentage
+    46: fn savings_pct(&self) -> f64;
+       ~ savings, saving
+
+   173: fn savings_pct(&self) -> f64 {
+   174: self.savings_pct
+       ~ savings, saving
+
+  +60 more lines
+
+📄 discover/registry.rs [13.5]
+   694: #[test]
+   695: fn test_classify_cargo_clippy_savings() {
+   696: assert_eq!(
+       ~ savings, saving
+
+     7: category: &'static str,
+     8: savings_pct: f64,
+     9: subcmd_savings: &'static [(&'static str, f64)],
+       ~ savings, saving
+
+  +72 more lines
+
+📄 config.rs [12.1]
+    15: #[derive(Debug, Serialize, Deserialize)]
+    16: pub struct TrackingConfig {
+    17: pub enabled: bool,
+       ~ tracking, track
+
+    23: impl Default for TrackingConfig {
+    24: fn default() -> Self {
+       ~ tracking, track
+
+  +3 more lines
+
+📄 discover/report.rs [12.0]
+    30: pub category: &'static str,
+    31: pub estimated_savings_tokens: usize,
+    32: pub estimated_savings_pct: f64,
+       ~ token, savings, saving
+
+    59: .iter()
+    60: .map(|s| s.estimated_savings_tokens)
+    61: .sum()
+       ~ token, savings, saving
+
+  +15 more lines
+
+📄 discover/mod.rs [11.9]
+   114: let savings =
+   115: (output_tokens as f64 * estimated_savings_pct / 100.0) as usize;
+   116: bucket.total_output_tokens += savings;
+       ~ token, savings, saving
+
+   177: category: bucket.category,
+   178: estimated_savings_tokens: bucket.total_output_tokens,
+   179: estimated_savings_pct: bucket.savings_pct,
+       ~ token, savings, saving
+
+  +13 more lines
+
+... +39F

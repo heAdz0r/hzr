@@ -1,0 +1,71 @@
+schema_version = 1
+
+[[engine]]
+name = "grepai"
+version = "0.35.0"
+tag = "v0.35.0"
+commit = "65c345ca32122c17a39a5bbec2780c2eea773a12"
+repository = "https://github.com/yoanbernabeu/grepai"
+license = "MIT"
+binary = "grepai"
+patches = ["patches/grepai/0.35.0-disable-worktree-discovery.patch"]
+patch_sha256 = ["55535352bc9f4837198c652b8c44ec54a0a7ef82fbd81e11b4ec11f4c4082991"]
+
+[[engine]]
+name = "icm"
+version = "0.10.61"
+tag = "icm-v0.10.61"
+commit = "c3a1bac7cfe401b55fd66af16dfc0c774c02167a"
+repository = "https://github.com/rtk-ai/icm"
+license = "Apache-2.0"
+binary = "icm"
+patches = ["patches/icm/0.10.61-refresh-workspace-lock.patch"]
+patch_sha256 = ["cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586"]
+
+[[engine]]
+name = "rtk"
+version = "0.44.1-fork.1"
+tag = "worktree-snapshot"
+commit = "5f403c465cbdbe148e9ca03e0ac8e856eef0bfee"
+repository = "https://github.com/heAdz0r/rtk.git"
+license = "MIT"
+binary = "rtk"
+runtime = true
+source_kind = "immutable-worktree-snapshot"
+source_path = "fork-core/rtk"
+snapshot_schema = 2
+snapshot_sha256 = "f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16"
+content_manifest_sha256 = "072a62adc754b728ec99a507d2c1a223d83077d067a9249a26d357eec890b4cc"
+source_diff_sha256 = "37551ca1f2ac13661923b5c2225465c9538af6f3b146e6782158257d2dcc5fbc"
+source_status_sha256 = "cc3d82662a190ffcc5f9e7cd8bfff3dec985fd1a068bc58acc40c62fec8d69d4"
+
+[[engine]]
+name = "rtk-upstream-reference"
+version = "0.44.1"
+tag = "v0.44.1"
+commit = "36591fb00d650bf987b57483c0b3a395a35a8dc1"
+repository = "https://github.com/rtk-ai/rtk"
+license = "Apache-2.0"
+binary = ""
+runtime = false
+source_kind = "reference-only"
+
+[[engine]]
+name = "caveman"
+version = "1.9.1"
+tag = "v1.9.1"
+commit = "0d95a81d35a9f2d123a5e9430d1cfc43d55f1bb0"
+repository = "https://github.com/JuliusBrussee/caveman"
+license = "MIT"
+binary = ""
+
+[[engine]]
+name = "caveman-code"
+version = "0.65.2"
+tag = "npm:0.65.2"
+commit = "4700b8fad23e45cedbb1a850f03ee9e2d4d49116"
+repository = "https://github.com/JuliusBrussee/caveman-code"
+license = "MIT"
+binary = ""
+package = "@juliusbrussee/caveman-code"
+integrity = "sha512-rs7sOI7WCycpBq8qNQ3MQagxfiXAgymfyj2BjPnoaVNNPsgtFK08calhYGEhMkrH0N6prHt0KHJm4AOuuMNEpw=="

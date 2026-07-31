@@ -1,0 +1,41 @@
+name: Write Benchmark Gates
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  write-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run write benchmark
+        run: bash benchmarks/write/bench_write.sh
+
+      - name: Analyze write benchmark (enforce thresholds)
+        run: python3 benchmarks/write/analyze_write.py --fail-on-thresholds
+
+      - name: Run analyzer tests
+        run: python3 -m unittest discover -s benchmarks/write/tests -p 'test_*.py'
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: write-benchmark-results
+          path: |
+            benchmarks/write/results_raw.csv
+            benchmarks/write/results_env.txt
+            benchmarks/write/RESULTS.md

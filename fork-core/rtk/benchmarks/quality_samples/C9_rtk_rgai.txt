@@ -1,0 +1,104 @@
+🧠 13F for 'pnpm yarn npm auto detection' (scan 55F)
+
+📄 pnpm_cmd.rs [16.0]
+    14: #[derive(Debug, Deserialize)]
+    15: struct PnpmListOutput {
+    16: #[serde(flatten)]
+       ~ pnpm, npm
+
+    20: #[derive(Debug, Deserialize)]
+    21: struct PnpmPackage {
+    22: version: Option<String>,
+       ~ pnpm, npm
+
+  +60 more lines
+
+📄 main.rs [11.8]
+   623: #[derive(Subcommand)]
+   624: enum PnpmCommands {
+   625: /// List installed packages (ultra-dense)
+       ~ pnpm, npm
+
+    31: mod playwright_cmd;
+    32: mod pnpm_cmd;
+    33: mod prettier_cmd;
+       ~ pnpm, npm
+
+  +29 more lines
+
+📄 utils.rs [9.8]
+   371: let pm = detect_package_manager();
+   372: assert!(["pnpm", "yarn", "npm"].contains(&pm));
+   373: }
+       ~ pnpm, yarn, npm
+
+   185: pub fn detect_package_manager() -> &'static str {
+   186: if std::path::Path::new("pnpm-lock.yaml").exists() {
+   187: "pnpm"
+       ~ pnpm, npm
+
+  +10 more lines
+
+📄 npm_cmd.rs [9.7]
+    45: /// Filter npm run output - strip boilerplate, progress bars, npm WARN
+    46: fn filter_npm_output(output: &str) -> String {
+    47: let mut result = Vec::new();
+       ~ npm
+
+    84: #[test]
+    85: fn test_filter_npm_output() {
+    86: let output = r#"
+       ~ npm
+
+  +15 more lines
+
+📄 parser/mod.rs [9.1]
+   260: #[test]
+   261: fn test_extract_json_object_with_pnpm_prefix() {
+   262: let input = r#"
+       ~ pnpm, npm
+
+   124: /// Extract a complete JSON object from input that may have non-JSON prefix (pnpm banner, dotenv messages, etc.)
+   125: ///
+       ~ pnpm, npm
+
+  +1 more lines
+
+📄 vitest_cmd.rs [8.9]
+   331: #[test]
+   332: fn test_vitest_parser_with_pnpm_prefix() {
+   333: let input = r#"
+       ~ pnpm, npm
+
+    53: fn parse(input: &str) -> ParseResult<TestResult> {
+    54: // Tier 1: Try JSON parsing (with extraction fallback for pnpm/dotenv prefixes)
+    55: let json_result = serde_json::from_str::<VitestJsonOutput>(input).or_else(|first_err| {
+       ~ pnpm, npm
+
+📄 init.rs [8.4]
+   104: ```bash
+   105: rtk pnpm list           # Compact dependency tree (70%)
+   106: rtk pnpm outdated       # Compact outdated packages (80%)
+       ~ pnpm, npm
+
+   165: | GitHub | gh pr, gh run, gh issue | 26-87% |
+   166: | Package Managers | pnpm, npm, npx | 70-90% |
+   167: | Files | ls, read, grep, rgai, find | 60-85% |
+       ~ pnpm, npm
+
+  +10 more lines
+
+📄 discover/registry.rs [8.3]
+    54: r"^cargo\s+(build|test|clippy|check|fmt)",
+    55: r"^pnpm\s+(list|ls|outdated|install)",
+    56: r"^npm\s+(run|exec)",
+       ~ pnpm, npm
+
+    63: r"^find\s+",
+    64: r"^(npx\s+|pnpm\s+)?tsc(\s|$)",
+    65: r"^(npx\s+|pnpm\s+)?(eslint|biome|lint)(\s|$)",
+       ~ pnpm, npm
+
+  +9 more lines
+
+... +5F

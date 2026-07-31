@@ -1,0 +1,12 @@
+/Users/andrew/Programming/rtk/src/learn/detector.rs:48:lazy_static! {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:303:lazy_static! {
+/Users/andrew/Programming/rtk/src/runner.rs:91:    lazy_static::lazy_static! {
+/Users/andrew/Programming/rtk/src/tsc_cmd.rs:59:    lazy_static::lazy_static! {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:122:    lazy_static::lazy_static! {
+/Users/andrew/Programming/rtk/src/filter.rs:149:lazy_static! {
+/Users/andrew/Programming/rtk/src/filter.rs:230:lazy_static! {
+/Users/andrew/Programming/rtk/src/next_cmd.rs:59:    lazy_static::lazy_static! {
+/Users/andrew/Programming/rtk/src/next_cmd.rs:189:    lazy_static::lazy_static! {
+/Users/andrew/Programming/rtk/src/utils.rs:48:    lazy_static::lazy_static! {
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:141:    lazy_static::lazy_static! {
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:197:    lazy_static::lazy_static! {

@@ -1,0 +1,101 @@
+🧠 54F for 'fn' (scan 55F)
+
+📄 display_helpers.rs [9.7]
+     9: /// Format duration in milliseconds to human-readable string
+    10: pub fn format_duration(ms: u64) -> String {
+    11: if ms < 1000 {
+       ~ fn
+
+    24: /// Icon for this period type (e.g., "📅", "📊", "📆")
+    25: fn icon() -> &'static str;
+       ~ fn
+
+  +53 more lines
+
+📄 init.rs [9.6]
+   175: /// Main entry point for `rtk init`
+   176: pub fn run(
+   177: global: bool,
+       ~ fn
+
+   191: /// Prepare hook directory and return paths (hook_dir, hook_path)
+   192: fn prepare_hook_paths() -> Result<(PathBuf, PathBuf)> {
+   193: let claude_dir = resolve_claude_dir()?;
+       ~ fn
+
+  +50 more lines
+
+📄 cargo_cmd.rs [9.4]
+    18: pub fn run(cmd: CargoCommand, args: &[String], verbose: u8) -> Result<()> {
+    19: match cmd {
+       ~ fn
+
+    28: /// Generic cargo command runner with filtering
+    29: fn run_cargo_filtered<F>(subcommand: &str, args: &[String], verbose: u8, filter_fn: F) -> Result<()>
+    30: where
+       ~ fn
+
+  +40 more lines
+
+📄 git.rs [9.4]
+    22: pub fn run(cmd: GitCommand, args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()> {
+    23: match cmd {
+       ~ fn
+
+    39: fn run_diff(args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()> {
+    40: let timer = tracking::TimedExecution::start();
+       ~ fn
+
+  +40 more lines
+
+📄 cc_economics.rs [9.3]
+    53: impl PeriodEconomics {
+    54: fn new(label: &str) -> Self {
+    55: Self {
+       ~ fn
+
+    76: fn set_ccusage(&mut self, metrics: &ccusage::CcusageMetrics) {
+    77: self.cc_cost = Some(metrics.total_cost);
+       ~ fn
+
+  +34 more lines
+
+📄 utils.rs [9.2]
+    23: /// ```
+    24: pub fn truncate(s: &str, max_len: usize) -> String {
+    25: let char_count = s.chars().count();
+       ~ fn
+
+    46: /// ```
+    47: pub fn strip_ansi(text: &str) -> String {
+    48: lazy_static::lazy_static! {
+       ~ fn
+
+  +32 more lines
+
+📄 discover/registry.rs [9.1]
+    28: /// Average token counts per category for estimation when no output_len available.
+    29: pub fn category_avg_tokens(category: &str, subcmd: &str) -> usize {
+    30: match category {
+       ~ fn
+
+   313: /// Classify a single (already-split) command.
+   314: pub fn classify_command(cmd: &str) -> Classification {
+   315: let trimmed = cmd.trim();
+       ~ fn
+
+  +28 more lines
+
+📄 gh_cmd.rs [9.0]
+    14: /// Run a gh command with token-optimized output
+    15: pub fn run(subcommand: &str, args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+    16: match subcommand {
+       ~ fn
+
+    29: fn run_pr(args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+    30: if args.is_empty() {
+       ~ fn
+
+  +24 more lines
+
+... +46F

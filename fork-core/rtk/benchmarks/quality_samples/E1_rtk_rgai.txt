@@ -1,0 +1,106 @@
+🧠 42F for 'the' (scan 55F)
+
+📄 init.rs [17.4]
+  1338: #[test]
+  1339: fn test_hook_not_present_other_hooks() {
+  1340: let json_content = serde_json::json!({
+       ~ the
+
+  1408: #[test]
+  1409: fn test_insert_hook_preserves_other_keys() {
+  1410: let mut json_content = serde_json::json!({
+       ~ the
+
+  +18 more lines
+
+📄 cargo_cmd.rs [15.8]
+   419: /// Merge another test result into this one
+   420: fn merge(&mut self, other: &Self) {
+   421: self.passed += other.passed;
+       ~ the
+
+   423: self.ignored += other.ignored;
+   424: self.measured += other.measured;
+   425: self.filtered_out += other.filtered_out;
+       ~ the
+
+  +10 more lines
+
+📄 discover/provider.rs [13.8]
+    83: if let Some(filter) = project_filter {
+    84: let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    85: if !dir_name.contains(filter) {
+       ~ the
+
+    96: let file_path = walk_entry.path();
+    97: if file_path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+    98: continue;
+       ~ the
+
+  +18 more lines
+
+📄 main.rs [13.5]
+    57: about = "Rust Token Killer - Minimize LLM token consumption",
+    58: long_about = "A high-performance CLI proxy designed to filter and summarize system outputs before they reach your LLM context."
+    59: )]
+       ~ the
+
+   619: #[command(external_subcommand)]
+   620: Other(Vec<OsString>),
+   621: }
+       ~ the
+
+  +13 more lines
+
+📄 discover/registry.rs [13.2]
+   286: "sh ",
+   287: "then\n",
+   288: "then ",
+       ~ the
+
+   403: .find(char::is_whitespace)
+   404: .and_then(|i| {
+   405: let rest = &cmd[i..];
+       ~ the
+
+  +9 more lines
+
+📄 learn/detector.rs [13.2]
+    11: PermissionDenied,
+    12: Other(String),
+    13: }
+       ~ the
+
+    23: ErrorType::PermissionDenied => "Permission Denied",
+    24: ErrorType::Other(s) => s,
+    25: }
+       ~ the
+
+  +9 more lines
+
+📄 git.rs [13.0]
+   327: })
+   328: .and_then(|arg| arg[1..].parse::<usize>().ok())
+   329: .unwrap_or(10)
+       ~ the
+
+   816: .next()
+   817: .and_then(|n| n.parse().ok())
+   818: .unwrap_or(0);
+       ~ the
+
+  +7 more lines
+
+📄 env_cmd.rs [12.9]
+    22: let mut tool_vars = Vec::new();
+    23: let mut other_vars = Vec::new();
+       ~ the
+
+    58: } else if filter.is_some() || is_interesting_var(key) {
+    59: other_vars.push(entry);
+    60: }
+       ~ the
+
+  +6 more lines
+
+... +34F

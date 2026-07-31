@@ -1,0 +1,104 @@
+🧠 26F for 'hook installation settings json' (scan 55F)
+
+📄 init.rs [19.3]
+   479: /// Handles reading, checking, prompting, merging, backing up, and atomic writing
+   480: fn patch_settings_json(hook_path: &Path, mode: PatchMode, verbose: u8) -> Result<PatchResult> {
+   481: let claude_dir = resolve_claude_dir()?;
+       ~ hook, settings, setting, json
+
+   368: /// Backs up before modification, returns true if hook was found and removed
+   369: fn remove_hook_from_settings(verbose: u8) -> Result<bool> {
+   370: let claude_dir = resolve_claude_dir()?;
+       ~ hook, settings, setting
+
+  +250 more lines
+
+📄 main.rs [9.8]
+   307: /// Remove all RTK artifacts (hook, RTK.md, CLAUDE.md reference, settings.json entry)
+   308: #[arg(long)]
+       ~ hook, settings, setting, json
+
+   299: /// Auto-patch settings.json without prompting
+   300: #[arg(long = "auto-patch", group = "patch")]
+       ~ settings, setting, json
+
+  +12 more lines
+
+📄 vitest_cmd.rs [8.8]
+    13: #[derive(Debug, Deserialize)]
+    14: struct VitestJsonOutput {
+    15: #[serde(rename = "testResults")]
+       ~ json
+
+    99: /// Extract failures from JSON structure
+   100: fn extract_failures_from_json(json: &VitestJsonOutput) -> Vec<TestFailure> {
+   101: let mut failures = Vec::new();
+       ~ json
+
+  +20 more lines
+
+📄 ccusage.rs [8.7]
+   176: fn parse_json(json: &str, granularity: Granularity) -> Result<Vec<CcusagePeriod>> {
+   177: match granularity {
+       ~ json
+
+   292: #[test]
+   293: fn test_parse_malformed_json() {
+   294: let json = r#"{ "monthly": [ { "broken": }"#;
+       ~ json
+
+  +17 more lines
+
+📄 pnpm_cmd.rs [8.6]
+   519: #[test]
+   520: fn test_pnpm_list_parser_json() {
+   521: let json = r#"{
+       ~ json
+
+   540: #[test]
+   541: fn test_pnpm_outdated_parser_json() {
+   542: let json = r#"{
+       ~ json
+
+  +16 more lines
+
+📄 json_cmd.rs [8.4]
+    51: /// Useful for piping JSON from other commands (e.g., `gh api`, `curl`).
+    52: pub fn filter_json_string(json_str: &str, max_depth: usize) -> Result<String> {
+    53: let value: Value = serde_json::from_str(json_str).context("Failed to parse JSON")?;
+       ~ json
+
+     2: use anyhow::{Context, Result};
+     3: use serde_json::Value;
+     4: use std::fs;
+       ~ json
+
+  +11 more lines
+
+📄 parser/mod.rs [8.4]
+   133: /// Returns `None` if no valid JSON object found.
+   134: pub fn extract_json_object(input: &str) -> Option<&str> {
+   135: // Try vitest-specific marker first (most reliable)
+       ~ json
+
+   253: #[test]
+   254: fn test_extract_json_object_clean() {
+   255: let input = r#"{"numTotalTests": 13, "numPassedTests": 13}"#;
+       ~ json
+
+  +12 more lines
+
+📄 playwright_cmd.rs [8.4]
+    13: #[derive(Debug, Deserialize)]
+    14: struct PlaywrightJsonOutput {
+    15: #[serde(rename = "stats")]
+       ~ json
+
+   287: #[test]
+   288: fn test_playwright_parser_json() {
+   289: let json = r#"{
+       ~ json
+
+  +12 more lines
+
+... +18F

@@ -1,0 +1,158 @@
+🔍 116 in 34F:
+
+📄 /Users/andrew/Programming/rtk/src/cargo_cmd.rs (1):
+    55: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/container.rs (12):
+    51: timer.track("docker ps", "rtk docker ps", &raw, &rtk);
+    80: timer.track("docker ps", "rtk docker ps", &raw, &rtk);
+   105: timer.track("docker images", "rtk docker images", &raw, &rtk);
+   150: timer.track("docker images", "rtk docker images", &raw, &rtk);
+   175: timer.track(
+   202: timer.track("kubectl get pods", "rtk kubectl pods", &raw, &rtk);
+   211: timer.track("kubectl get pods", "rtk kubectl pods", &raw, &rtk);
+   281: timer.track("kubectl get pods", "rtk kubectl pods", &raw, &rtk);
+   303: timer.track("kubectl get svc", "rtk kubectl svc", &raw, &rtk);
+   312: timer.track("kubectl get svc", "rtk kubectl svc", &raw, &rtk);
+  +2
+
+📄 /Users/andrew/Programming/rtk/src/curl_cmd.rs (1):
+    40: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/deps.rs (1):
+    70: timer.track("cat */deps", "rtk deps", &raw, &rtk);
+
+📄 /Users/andrew/Programming/rtk/src/diff_cmd.rs (3):
+    27: timer.track(
+    59: timer.track(
+    80: timer.track("diff (stdin)", "rtk diff (stdin)", &input, &condensed);
+
+📄 /Users/andrew/Programming/rtk/src/env_cmd.rs (1):
+   126: timer.track("env", "rtk env", &raw, &rtk);
+
+📄 /Users/andrew/Programming/rtk/src/find_cmd.rs (2):
+   101: timer.track(
+   195: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/gh_cmd.rs (28):
+    69: timer.track("gh pr list", "rtk gh pr list", &stderr, &stderr);
+   128: timer.track("gh pr list", "rtk gh pr list", &raw, &filtered);
+   155: timer.track(
+   296: timer.track(
+   322: timer.track(
+   382: timer.track(
+   407: timer.track("gh pr status", "rtk gh pr status", &stderr, &stderr);
+   431: timer.track("gh pr status", "rtk gh pr status", &raw, &filtered);
+   462: timer.track("gh issue list", "rtk gh issue list", &stderr, &stderr);
+   510: timer.track("gh issue list", "rtk gh issue list", &raw, &filtered);
+  +18
+
+📄 /Users/andrew/Programming/rtk/src/git.rs (22):
+    69: timer.track(
+   116: timer.track(
+   153: timer.track(
+   222: timer.track(
+   364: timer.track(
+   548: timer.track(
+   577: timer.track("git status", "rtk git status", &raw_output, &formatted);
+   631: timer.track(
+   689: timer.track(
+   698: timer.track(
+  +12
+
+📄 /Users/andrew/Programming/rtk/src/go_cmd.rs (4):
+    70: timer.track(
+   113: timer.track(
+   156: timer.track(
+   201: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/golangci_cmd.rs (1):
+    75: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/grep_cmd.rs (2):
+    46: timer.track(
+   110: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/json_cmd.rs (2):
+    21: timer.track(
+    46: timer.track("cat - (stdin)", "rtk json -", &content, &schema);
+
+📄 /Users/andrew/Programming/rtk/src/lint_cmd.rs (1):
+    89: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/log_cmd.rs (2):
+    20: timer.track(
+    43: timer.track("log (stdin)", "rtk log (stdin)", &content, &result);
+
+📄 /Users/andrew/Programming/rtk/src/ls.rs (1):
+   113: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/main.rs (1):
+  1430: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/next_cmd.rs (1):
+    47: timer.track("next build", "rtk next build", &raw, &filtered);
+
+📄 /Users/andrew/Programming/rtk/src/npm_cmd.rs (1):
+    31: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/pip_cmd.rs (1):
+    43: timer.track(
+
+📄 /.../src/playwright_cmd.rs (1):
+   268: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/pnpm_cmd.rs (3):
+   340: timer.track(
+   396: timer.track("pnpm outdated", "rtk pnpm outdated", &combined, &filtered);
+   442: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/prettier_cmd.rs (1):
+    31: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/prisma_cmd.rs (3):
+    74: timer.track("prisma generate", "rtk prisma generate", &raw, &filtered);
+   130: timer.track(cmd_name, &format!("rtk {}", cmd_name), &raw, &filtered);
+   163: timer.track("prisma db push", "rtk prisma db push", &raw, &filtered);
+
+📄 /Users/andrew/Programming/rtk/src/pytest_cmd.rs (1):
+    63: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/read.rs (2):
+    64: timer.track(
+   131: timer.track("cat - (stdin)", "rtk read -", &content, &rtk_output);
+
+📄 /Users/andrew/Programming/rtk/src/ruff_cmd.rs (1):
+    99: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/runner.rs (2):
+    53: timer.track(command, "rtk run-err", &raw, &rtk);
+    86: timer.track(command, "rtk run-test", &raw, &summary);
+
+📄 /Users/andrew/Programming/rtk/src/summary.rs (1):
+    36: timer.track(command, "rtk summary", &raw, &summary);
+
+📄 /Users/andrew/Programming/rtk/src/tracking.rs (6):
+    22: //! timer.track("ls -la", "rtk ls", input, output);
+   736: /// timer.track("ls -la", "rtk ls", &input, &output);
+   757: /// timer.track("cmd", "rtk cmd", "input", "output");
+   787: /// timer.track("ls -la", "rtk ls", input, output);
+   878: /// timer.track("ls -la", "rtk ls", "input", "output");
+   988: timer.track("test cmd", "rtk test", "raw input data", "filtered");
+
+📄 /Users/andrew/Programming/rtk/src/tree.rs (1):
+   100: timer.track("tree", "rtk tree", &raw, &filtered);
+
+📄 /Users/andrew/Programming/rtk/src/tsc_cmd.rs (1):
+    46: timer.track(
+
+📄 /Users/andrew/Programming/rtk/src/vitest_cmd.rs (1):
+   265: timer.track("vitest run", "rtk vitest run", &combined, &filtered);
+
+📄 /Users/andrew/Programming/rtk/src/wget_cmd.rs (4):
+    42: timer.track(&format!("wget {}", url), "rtk wget", &raw_output, &msg);
+    47: timer.track(&format!("wget {}", url), "rtk wget", &raw_output, &msg);
+    98: timer.track(
+   109: timer.track(&format!("wget -O - {}", url), "rtk wget -o", &stderr, &msg);
+
+... +32

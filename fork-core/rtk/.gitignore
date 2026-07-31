@@ -1,0 +1,52 @@
+# Build
+/target
+
+# Environment & Secrets
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+credentials.json
+secrets.json
+*.secret
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.cast.bak
+__pycache__/
+*.py[cod]
+
+# Benchmark results
+scripts/benchmark/
+benchmark-report.md
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+rtk_tracking.db
+claudedocs
+
+# grepai local index (project-specific, not portable)
+.grepai/
+
+# Claude Code local settings (user-specific)
+.claude/settings.local.json
+
+# RTK write lock files (temp, never commit)
+*.rtk-lock
+
+# Generated search indices
+data/

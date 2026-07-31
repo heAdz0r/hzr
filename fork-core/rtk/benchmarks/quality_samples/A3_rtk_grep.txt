@@ -1,0 +1,20 @@
+🔍 22 in 2F:
+
+📄 /Users/andrew/Programming/rtk/src/discover/mod.rs (2):
+     9: ...ry::{category_avg_tokens, classify_command, split_command_chain, Classification}...
+    84: match classify_command(part) {
+
+📄 /.../discover/registry.rs (20):
+   314: pub fn classify_command(cmd: &str) -> Classification {
+   513: classify_command("git status"),
+   526: classify_command("git diff --cached"),
+   539: classify_command("cargo test filter::"),
+   552: classify_command("npx tsc --noEmit"),
+   565: classify_command("cat src/main.rs"),
+   578: classify_command("grepai search auth middleware"),
+   591: classify_command("rgai auth middleware"),
+   603: assert_eq!(classify_command("cd /tmp"), Classification::Ignored);
+   608: assert_eq!(classify_command("rtk git status"), Classification::Ignored);
+  +10
+
+... +10

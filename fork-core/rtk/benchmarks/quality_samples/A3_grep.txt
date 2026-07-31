@@ -1,0 +1,22 @@
+/Users/andrew/Programming/rtk/src/discover/registry.rs:314:pub fn classify_command(cmd: &str) -> Classification {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:513:            classify_command("git status"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:526:            classify_command("git diff --cached"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:539:            classify_command("cargo test filter::"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:552:            classify_command("npx tsc --noEmit"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:565:            classify_command("cat src/main.rs"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:578:            classify_command("grepai search auth middleware"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:591:            classify_command("rgai auth middleware"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:603:        assert_eq!(classify_command("cd /tmp"), Classification::Ignored);
+/Users/andrew/Programming/rtk/src/discover/registry.rs:608:        assert_eq!(classify_command("rtk git status"), Classification::Ignored);
+/Users/andrew/Programming/rtk/src/discover/registry.rs:614:            classify_command("echo hello world"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:621:        match classify_command("terraform plan -var-file=prod.tfvars") {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:632:            classify_command("GIT_SSH_COMMAND=ssh git push"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:645:            classify_command("sudo docker ps"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:658:            classify_command("cargo check"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:671:            classify_command("cargo check --all-targets"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:684:            classify_command("cargo fmt"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:697:            classify_command("cargo clippy --all-targets"),
+/Users/andrew/Programming/rtk/src/discover/registry.rs:722:            match classify_command(&cmd) {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:737:            match classify_command(&cmd) {
+/Users/andrew/Programming/rtk/src/discover/mod.rs:9:use registry::{category_avg_tokens, classify_command, split_command_chain, Classification};
+/Users/andrew/Programming/rtk/src/discover/mod.rs:84:                match classify_command(part) {

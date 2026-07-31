@@ -1,0 +1,25 @@
+🔍 23 in 3F:
+
+📄 /Users/andrew/Programming/rtk/src/filter.rs (18):
+     6: pub enum FilterLevel {
+    12: impl FromStr for FilterLevel {
+    17: "none" => Ok(FilterLevel::None),
+    18: "minimal" => Ok(FilterLevel::Minimal),
+    19: "aggressive" => Ok(FilterLevel::Aggressive),
+    25: impl std::fmt::Display for FilterLevel {
+    28: FilterLevel::None => write!(f, "none"),
+    29: FilterLevel::Minimal => write!(f, "minimal"),
+    30: FilterLevel::Aggressive => write!(f, "aggressive"),
+   309: pub fn get_filter(level: FilterLevel) -> Box<dyn FilterStrategy> {
+  +8
+
+📄 /Users/andrew/Programming/rtk/src/main.rs (1):
+    99: level: filter::FilterLevel,
+
+📄 /Users/andrew/Programming/rtk/src/read.rs (4):
+     1: use crate::filter::{self, FilterLevel, Language};
+     9: level: FilterLevel,
+    74: level: FilterLevel,
+   163: run(file.path(), FilterLevel::Minimal, None, false, 0)?;
+
+... +8

@@ -1,0 +1,93 @@
+🧠 37F for 'timer\.track\(' (scan 55F)
+
+📄 tracking.rs [11.5]
+   987: std::thread::sleep(std::time::Duration::from_millis(10));
+   988: timer.track("test cmd", "rtk test", "raw input data", "filtered");
+       ~ timer, track
+
+   999: let timer = TimedExecution::start();
+  1000: timer.track_passthrough("git tag", "rtk git tag (passthrough)");
+       ~ timer, track
+
+  +33 more lines
+
+📄 git.rs [10.7]
+    39: fn run_diff(args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()> {
+    40: let timer = tracking::TimedExecution::start();
+       ~ timer, track
+
+    69: timer.track(
+    70: &format!("git diff {}", args.join(" ")),
+       ~ timer, track
+
+  +51 more lines
+
+📄 gh_cmd.rs [10.5]
+    48: fn list_prs(args: &[String], _verbose: u8, ultra_compact: bool) -> Result<()> {
+    49: let timer = tracking::TimedExecution::start();
+       ~ timer, track
+
+    68: let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    69: timer.track("gh pr list", "rtk gh pr list", &stderr, &stderr);
+    70: eprintln!("{}", stderr.trim());
+       ~ timer, track
+
+  +44 more lines
+
+📄 container.rs [9.9]
+    27: fn docker_ps(_verbose: u8) -> Result<()> {
+    28: let timer = tracking::TimedExecution::start();
+       ~ timer, track
+
+    50: println!("{}", rtk);
+    51: timer.track("docker ps", "rtk docker ps", &raw, &rtk);
+    52: return Ok(());
+       ~ timer, track
+
+  +23 more lines
+
+📄 cc_economics.rs [9.4]
+   429: fn display_summary(tracker: &Tracker, verbose: u8) -> Result<()> {
+   430: let cc_monthly =
+       ~ track
+
+   544: fn display_daily(tracker: &Tracker, verbose: u8) -> Result<()> {
+   545: let cc_daily =
+       ~ track
+
+  +25 more lines
+
+📄 gain.rs [9.4]
+   190: fn print_daily_full(tracker: &Tracker) -> Result<()> {
+   191: let days = tracker.get_all_days()?;
+       ~ track
+
+   196: fn print_weekly(tracker: &Tracker) -> Result<()> {
+   197: let weeks = tracker.get_by_week()?;
+       ~ track
+
+  +24 more lines
+
+📄 pnpm_cmd.rs [9.1]
+   294: fn run_list(depth: usize, args: &[String], verbose: u8) -> Result<()> {
+   295: let timer = tracking::TimedExecution::start();
+       ~ timer, track
+
+   340: timer.track(
+   341: &format!("pnpm list --depth={}", depth),
+       ~ timer, track
+
+  +8 more lines
+
+📄 go_cmd.rs [9.0]
+    34: pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
+    35: let timer = tracking::TimedExecution::start();
+       ~ timer, track
+
+    70: timer.track(
+    71: &format!("go test {}", args.join(" ")),
+       ~ timer, track
+
+  +7 more lines
+
+... +29F

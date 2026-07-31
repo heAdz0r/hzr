@@ -1,0 +1,23 @@
+🧠 2F for 'HISTORY_DAYS' (scan 55F)
+
+📄 config.rs [16.5]
+    17: pub enabled: bool,
+    18: pub history_days: u32,
+    19: #[serde(skip_serializing_if = "Option::is_none")]
+       ~ history_days, history_day
+
+    26: enabled: true,
+    27: history_days: 90,
+    28: database_path: None,
+       ~ history_days, history_day
+
+📄 tracking.rs [16.5]
+    40: /// Number of days to retain tracking history before automatic cleanup.
+    41: const HISTORY_DAYS: i64 = 90;
+       ~ history_days, history_day
+
+   314: fn cleanup_old(&self) -> Result<()> {
+   315: let cutoff = Utc::now() - chrono::Duration::days(HISTORY_DAYS);
+   316: self.conn.execute(
+       ~ history_days, history_day
+

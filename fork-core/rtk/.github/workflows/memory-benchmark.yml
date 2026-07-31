@@ -1,0 +1,41 @@
+name: Memory Benchmark Gates
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  memory-benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run memory benchmark
+        run: bash benchmarks/memory/bench_memory.sh
+
+      - name: Analyze memory benchmark (enforce thresholds)
+        run: python3 benchmarks/memory/analyze_memory.py --fail-on-thresholds
+
+      - name: Run analyzer tests
+        run: python3 -m unittest discover -s benchmarks/memory/tests -p 'test_*.py'
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-benchmark-results
+          path: |
+            benchmarks/memory/results_raw.csv
+            benchmarks/memory/results_env.txt
+            benchmarks/memory/RESULTS.md

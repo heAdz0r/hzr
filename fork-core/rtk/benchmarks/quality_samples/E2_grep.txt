@@ -1,0 +1,784 @@
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:14:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:53:fn run_list(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, String)> {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:88:fn run_outdated(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, String)> {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:123:fn run_passthrough(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, String)> {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:157:fn which_command(cmd: &str) -> Option<String> {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:169:fn filter_pip_list(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:214:fn filter_pip_outdated(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:259:    fn test_filter_pip_list() {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:274:    fn test_filter_pip_list_empty() {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:281:    fn test_filter_pip_outdated_none() {
+/Users/andrew/Programming/rtk/src/pip_cmd.rs:289:    fn test_filter_pip_outdated_some() {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:14:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:79:fn which_command(cmd: &str) -> Option<String> {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:91:fn filter_pytest_output(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:170:fn build_pytest_summary(summary: &str, _test_files: &[String], failures: &[String]) -> String {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:249:fn parse_summary_line(summary: &str) -> (usize, usize, usize) {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:286:    fn test_filter_pytest_all_pass() {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:301:    fn test_filter_pytest_with_failures() {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:327:    fn test_filter_pytest_multiple_failures() {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:354:    fn test_filter_pytest_no_tests() {
+/Users/andrew/Programming/rtk/src/pytest_cmd.rs:365:    fn test_parse_summary_line() {
+/Users/andrew/Programming/rtk/src/ls.rs:33:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/ls.rs:124:fn human_size(bytes: u64) -> String {
+/Users/andrew/Programming/rtk/src/ls.rs:137:fn compact_ls(raw: &str, show_all: bool) -> String {
+/Users/andrew/Programming/rtk/src/ls.rs:233:    fn test_compact_basic() {
+/Users/andrew/Programming/rtk/src/ls.rs:254:    fn test_compact_filters_noise() {
+/Users/andrew/Programming/rtk/src/ls.rs:270:    fn test_compact_show_all() {
+/Users/andrew/Programming/rtk/src/ls.rs:280:    fn test_compact_empty() {
+/Users/andrew/Programming/rtk/src/ls.rs:287:    fn test_compact_summary() {
+/Users/andrew/Programming/rtk/src/ls.rs:300:    fn test_human_size() {
+/Users/andrew/Programming/rtk/src/ls.rs:310:    fn test_compact_handles_filenames_with_spaces() {
+/Users/andrew/Programming/rtk/src/ls.rs:318:    fn test_compact_symlinks() {
+/Users/andrew/Programming/rtk/src/local_llm.rs:9:pub fn run(file: &Path, _model: &str, _force_download: bool, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:36:fn analyze_code(content: &str, lang: &Language) -> CodeSummary {
+/Users/andrew/Programming/rtk/src/local_llm.rs:62:        (!functions.is_empty()).then(|| format!("{} fn", functions.len())),
+/Users/andrew/Programming/rtk/src/local_llm.rs:97:        let key_fns: Vec<&str> = functions.iter().take(3).map(|s| s.as_str()).collect();
+/Users/andrew/Programming/rtk/src/local_llm.rs:99:            details.push(format!("defines: {}", key_fns.join(", ")));
+/Users/andrew/Programming/rtk/src/local_llm.rs:112:fn lang_display_name(lang: &Language) -> &'static str {
+/Users/andrew/Programming/rtk/src/local_llm.rs:128:fn extract_imports(content: &str, lang: &Language) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:159:fn is_std_import(name: &str, lang: &Language) -> bool {
+/Users/andrew/Programming/rtk/src/local_llm.rs:167:fn extract_functions(content: &str, lang: &Language) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:169:        Language::Rust => r"(?:pub\s+)?(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+/Users/andrew/Programming/rtk/src/local_llm.rs:195:fn extract_structs(content: &str, lang: &Language) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:212:fn extract_traits(content: &str, lang: &Language) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:226:fn detect_patterns(content: &str, lang: &Language) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:279:    fn test_rust_analysis() {
+/Users/andrew/Programming/rtk/src/local_llm.rs:288:pub fn load_config() -> Result<Config> {
+/Users/andrew/Programming/rtk/src/local_llm.rs:292:fn helper() {}
+/Users/andrew/Programming/rtk/src/local_llm.rs:296:        assert!(summary.line1.contains("fn"));
+/Users/andrew/Programming/rtk/src/local_llm.rs:300:    fn test_python_analysis() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:16:    pub fn as_str(&self) -> &str {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:76:pub fn is_command_error(is_error: bool, output: &str) -> bool {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:97:pub fn classify_error(output: &str) -> ErrorType {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:124:pub fn extract_base_command(cmd: &str) -> String {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:145:pub fn command_similarity(a: &str, b: &str) -> f64 {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:182:fn is_tdd_cycle_error(error_type: &ErrorType, output: &str) -> bool {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:199:fn differs_only_by_path(a: &str, b: &str) -> bool {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:213:pub fn find_corrections(commands: &[CommandExecution]) -> Vec<CorrectionPair> {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:283:fn extract_diff_token(wrong: &str, right: &str) -> String {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:305:pub fn deduplicate_corrections(pairs: Vec<CorrectionPair>) -> Vec<CorrectionRule> {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:357:    fn test_is_command_error_requires_error_flag() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:363:    fn test_is_command_error_filters_user_rejection() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:370:    fn test_is_command_error_requires_error_content() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:378:    fn test_classify_error_unknown_flag() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:394:    fn test_classify_error_command_not_found() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:406:    fn test_classify_error_all_types() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:426:    fn test_extract_base_command() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:440:    fn test_command_similarity_same_base() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:451:    fn test_find_corrections_basic() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:473:    fn test_find_corrections_window_limit() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:508:    fn test_find_corrections_excludes_tdd_cycle() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:527:    fn test_find_corrections_path_exploration() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:549:    fn test_find_corrections_min_confidence() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:571:    fn test_deduplicate_corrections_merges_same() {
+/Users/andrew/Programming/rtk/src/learn/detector.rs:605:    fn test_deduplicate_corrections_keeps_distinct() {
+/Users/andrew/Programming/rtk/src/learn/report.rs:7:pub fn format_console_report(
+/Users/andrew/Programming/rtk/src/learn/report.rs:52:pub fn write_rules_file(rules: &[CorrectionRule], path: &str) -> Result<()> {
+/Users/andrew/Programming/rtk/src/learn/report.rs:110:fn capitalize_first(s: &str) -> String {
+/Users/andrew/Programming/rtk/src/learn/report.rs:124:    fn test_format_console_report_empty() {
+/Users/andrew/Programming/rtk/src/learn/report.rs:132:    fn test_format_console_report_with_rules() {
+/Users/andrew/Programming/rtk/src/learn/report.rs:162:    fn test_write_rules_file_markdown() {
+/Users/andrew/Programming/rtk/src/learn/mod.rs:9:pub fn run(
+/Users/andrew/Programming/rtk/src/discover/registry.rs:29:pub fn category_avg_tokens(category: &str, subcmd: &str) -> usize {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:314:pub fn classify_command(cmd: &str) -> Classification {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:392:fn extract_base_command(cmd: &str) -> &str {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:423:pub fn split_command_chain(cmd: &str) -> Vec<&str> {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:511:    fn test_classify_git_status() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:524:    fn test_classify_git_diff_cached() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:537:    fn test_classify_cargo_test_filter() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:550:    fn test_classify_npx_tsc() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:563:    fn test_classify_cat_file() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:576:    fn test_classify_grepai_search() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:589:    fn test_classify_plain_rgai() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:602:    fn test_classify_cd_ignored() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:607:    fn test_classify_rtk_already() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:612:    fn test_classify_echo_ignored() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:620:    fn test_classify_terraform_unsupported() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:630:    fn test_classify_env_prefix_stripped() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:643:    fn test_classify_sudo_stripped() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:656:    fn test_classify_cargo_check() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:669:    fn test_classify_cargo_check_all_targets() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:682:    fn test_classify_cargo_fmt_passthrough() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:695:    fn test_classify_cargo_clippy_savings() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:708:    fn test_patterns_rules_length_match() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:717:    fn test_registry_covers_all_cargo_subcommands() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:730:    fn test_registry_covers_all_git_subcommands() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:745:    fn test_split_chain_and() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:750:    fn test_split_chain_semicolon() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:755:    fn test_split_pipe_first_only() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:760:    fn test_split_single() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:765:    fn test_split_quoted_and() {
+/Users/andrew/Programming/rtk/src/discover/registry.rs:773:    fn test_split_heredoc_no_split() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:26:    fn discover_sessions(
+/Users/andrew/Programming/rtk/src/discover/provider.rs:31:    fn extract_commands(&self, path: &Path) -> Result<Vec<ExtractedCommand>>;
+/Users/andrew/Programming/rtk/src/discover/provider.rs:38:    fn projects_dir() -> Result<PathBuf> {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:52:    pub fn encode_project_path(path: &str) -> String {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:58:    fn discover_sessions(
+/Users/andrew/Programming/rtk/src/discover/provider.rs:119:    fn extract_commands(&self, path: &Path) -> Result<Vec<ExtractedCommand>> {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:242:    fn make_jsonl(lines: &[&str]) -> tempfile::NamedTempFile {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:252:    fn test_extract_assistant_bash() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:270:    fn test_extract_non_bash_ignored() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:281:    fn test_extract_non_message_ignored() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:291:    fn test_extract_multiple_tools() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:304:    fn test_extract_malformed_line() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:317:    fn test_encode_project_path() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:325:    fn test_encode_project_path_trailing_slash() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:333:    fn test_match_project_filter() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:340:    fn test_extract_output_content() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:359:    fn test_extract_is_error_flag() {
+/Users/andrew/Programming/rtk/src/discover/provider.rs:373:    fn test_extract_sequence_ordering() {
+/Users/andrew/Programming/rtk/src/discover/report.rs:15:    pub fn as_str(&self) -> &'static str {
+/Users/andrew/Programming/rtk/src/discover/report.rs:57:    pub fn total_saveable_tokens(&self) -> usize {
+/Users/andrew/Programming/rtk/src/discover/report.rs:64:    pub fn total_supported_count(&self) -> usize {
+/Users/andrew/Programming/rtk/src/discover/report.rs:70:pub fn format_text(report: &DiscoverReport, limit: usize, verbose: bool) -> String {
+/Users/andrew/Programming/rtk/src/discover/report.rs:159:pub fn format_json(report: &DiscoverReport) -> String {
+/Users/andrew/Programming/rtk/src/discover/report.rs:163:fn format_tokens(tokens: usize) -> String {
+/Users/andrew/Programming/rtk/src/discover/report.rs:173:fn truncate_str(s: &str, max: usize) -> String {
+/Users/andrew/Programming/rtk/src/discover/mod.rs:29:pub fn run(
+/Users/andrew/Programming/rtk/src/discover/mod.rs:219:fn extract_subcmd(cmd: &str) -> &str {
+/Users/andrew/Programming/rtk/src/discover/mod.rs:229:fn truncate_command(cmd: &str) -> String {
+/Users/andrew/Programming/rtk/src/wget_cmd.rs:6:pub fn run(url: &str, args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/wget_cmd.rs:54:pub fn run_stdout(url: &str, args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/wget_cmd.rs:115:fn extract_filename_from_output(stderr: &str, url: &str, args: &[String]) -> String {
+/Users/andrew/Programming/rtk/src/wget_cmd.rs:172:fn get_file_size(filename: &str) -> u64 {
+/Users/andrew/Programming/rtk/src/wget_cmd.rs:176:fn format_size(bytes: u64) -> String {
+/Users/andrew/Programming/rtk/src/wget_cmd.rs:191:fn compact_url(url: &str) -> String {
+/Users/andrew/Programming/rtk/src/wget_cmd.rs:209:fn parse_error(stderr: &str, stdout: &str) -> String {
+/Users/andrew/Programming/rtk/src/wget_cmd.rs:253:fn truncate_line(line: &str, max: usize) -> String {
+/Users/andrew/Programming/rtk/src/npm_cmd.rs:5:pub fn run(args: &[String], verbose: u8, skip_env: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/npm_cmd.rs:46:fn filter_npm_output(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/npm_cmd.rs:85:    fn test_filter_npm_output() {
+/Users/andrew/Programming/rtk/src/npm_cmd.rs:104:    fn test_filter_npm_output_empty() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:18:pub fn run(cmd: CargoCommand, args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:29:fn run_cargo_filtered<F>(subcommand: &str, args: &[String], verbose: u8, filter_fn: F) -> Result<()>
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:52:    let filtered = filter_fn(&raw);
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:69:fn run_build(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:73:fn run_test(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:77:fn run_clippy(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:81:fn run_check(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:85:fn run_install(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:90:fn format_crate_info(name: &str, version: &str, fallback: &str) -> String {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:101:fn filter_cargo_install(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:273:fn filter_cargo_build(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:379:    fn parse_line(line: &str) -> Option<Self> {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:420:    fn merge(&mut self, other: &Self) {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:432:    fn format_compact(&self) -> String {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:462:fn filter_cargo_test(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:580:fn filter_cargo_clippy(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:676:pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:704:    fn test_filter_cargo_build_success() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:716:    fn test_filter_cargo_build_errors() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:733:    fn test_filter_cargo_test_all_pass() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:756:    fn test_filter_cargo_test_failures() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:779:    fn test_filter_cargo_test_multi_suite_all_pass() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:812:    fn test_filter_cargo_test_multi_suite_with_failures() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:847:    fn test_filter_cargo_test_all_suites_zero_tests() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:875:    fn test_filter_cargo_test_with_ignored_and_filtered() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:895:    fn test_filter_cargo_test_single_suite_compact() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:910:    fn test_filter_cargo_test_regex_fallback() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:926:    fn test_filter_cargo_clippy_clean() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:935:    fn test_filter_cargo_clippy_warnings() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:946:16| pub fn run(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, g: i32, h: i32) {}
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:959:    fn test_filter_cargo_install_success() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:983:    fn test_filter_cargo_install_replace() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:997:    fn test_filter_cargo_install_error() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:1016:    fn test_filter_cargo_install_already_installed() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:1025:    fn test_filter_cargo_install_up_to_date() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:1034:    fn test_filter_cargo_install_empty_output() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:1041:    fn test_filter_cargo_install_path_warning() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:1060:    fn test_filter_cargo_install_multiple_errors() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:1089:    fn test_filter_cargo_install_locking_and_blocking() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:1107:    fn test_filter_cargo_install_from_path() {
+/Users/andrew/Programming/rtk/src/cargo_cmd.rs:1119:    fn test_format_crate_info() {
+/Users/andrew/Programming/rtk/src/ccusage.rs:86:fn binary_exists() -> bool {
+/Users/andrew/Programming/rtk/src/ccusage.rs:95:fn build_command() -> Option<Command> {
+/Users/andrew/Programming/rtk/src/ccusage.rs:118:pub fn is_available() -> bool {
+/Users/andrew/Programming/rtk/src/ccusage.rs:127:pub fn fetch(granularity: Granularity) -> Result<Option<Vec<CcusagePeriod>>> {
+/Users/andrew/Programming/rtk/src/ccusage.rs:176:fn parse_json(json: &str, granularity: Granularity) -> Result<Vec<CcusagePeriod>> {
+/Users/andrew/Programming/rtk/src/ccusage.rs:222:    fn test_parse_monthly_valid() {
+/Users/andrew/Programming/rtk/src/ccusage.rs:247:    fn test_parse_daily_valid() {
+/Users/andrew/Programming/rtk/src/ccusage.rs:270:    fn test_parse_weekly_valid() {
+/Users/andrew/Programming/rtk/src/ccusage.rs:293:    fn test_parse_malformed_json() {
+/Users/andrew/Programming/rtk/src/ccusage.rs:300:    fn test_parse_missing_required_fields() {
+/Users/andrew/Programming/rtk/src/ccusage.rs:314:    fn test_parse_default_cache_fields() {
+/Users/andrew/Programming/rtk/src/ccusage.rs:335:    fn test_is_available() {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:34:pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:85:pub fn run_build(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:128:pub fn run_vet(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:171:pub fn run_other(args: &[OsString], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:217:fn filter_go_test_json(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:341:fn filter_go_build(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:384:fn filter_go_vet(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:416:fn compact_package_name(package: &str) -> String {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:430:    fn test_filter_go_test_all_pass() {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:443:    fn test_filter_go_test_with_failures() {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:457:    fn test_filter_go_build_success() {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:465:    fn test_filter_go_build_errors() {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:477:    fn test_filter_go_vet_no_issues() {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:485:    fn test_filter_go_vet_with_issues() {
+/Users/andrew/Programming/rtk/src/go_cmd.rs:496:    fn test_compact_package_name() {
+/Users/andrew/Programming/rtk/src/config.rs:24:    fn default() -> Self {
+/Users/andrew/Programming/rtk/src/config.rs:41:    fn default() -> Self {
+/Users/andrew/Programming/rtk/src/config.rs:57:    fn default() -> Self {
+/Users/andrew/Programming/rtk/src/config.rs:73:    pub fn load() -> Result<Self> {
+/Users/andrew/Programming/rtk/src/config.rs:85:    pub fn save(&self) -> Result<()> {
+/Users/andrew/Programming/rtk/src/config.rs:97:    pub fn create_default() -> Result<PathBuf> {
+/Users/andrew/Programming/rtk/src/config.rs:104:fn get_config_path() -> Result<PathBuf> {
+/Users/andrew/Programming/rtk/src/config.rs:109:pub fn show_config() -> Result<()> {
+/Users/andrew/Programming/rtk/src/lint_cmd.rs:28:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/lint_cmd.rs:100:fn filter_eslint_json(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/lint_cmd.rs:192:fn filter_generic_lint(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/lint_cmd.rs:229:fn compact_path(path: &str) -> String {
+/Users/andrew/Programming/rtk/src/lint_cmd.rs:249:    fn test_filter_eslint_json() {
+/Users/andrew/Programming/rtk/src/lint_cmd.rs:296:    fn test_compact_path() {
+/Users/andrew/Programming/rtk/src/curl_cmd.rs:7:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/curl_cmd.rs:50:fn filter_curl_output(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/curl_cmd.rs:88:    fn test_filter_curl_json() {
+/Users/andrew/Programming/rtk/src/curl_cmd.rs:97:    fn test_filter_curl_json_array() {
+/Users/andrew/Programming/rtk/src/curl_cmd.rs:104:    fn test_filter_curl_non_json() {
+/Users/andrew/Programming/rtk/src/curl_cmd.rs:112:    fn test_filter_curl_long_output() {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:19:pub fn run(cmd: PrismaCommand, args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:28:fn create_prisma_command() -> Command {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:44:fn run_generate(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:79:fn run_migrate(subcommand: MigrateSubcommand, args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:135:fn run_db_push(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:169:fn filter_prisma_generate(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:228:fn filter_migrate_dev(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:300:fn filter_migrate_status(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:334:fn filter_migrate_deploy(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:362:fn filter_db_push(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:393:fn extract_number(line: &str) -> Option<usize> {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:399:fn extract_table_name(line: &str) -> Option<String> {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:416:fn extract_index_name(line: &str) -> Option<String> {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:437:    fn test_filter_generate() {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:457:    fn test_filter_migrate_dev() {
+/Users/andrew/Programming/rtk/src/prisma_cmd.rs:478:    fn test_extract_number() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:54:    fn new(label: &str) -> Self {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:76:    fn set_ccusage(&mut self, metrics: &ccusage::CcusageMetrics) {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:91:    fn set_rtk_from_day(&mut self, stats: &DayStats) {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:97:    fn set_rtk_from_week(&mut self, stats: &WeekStats) {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:103:    fn set_rtk_from_month(&mut self, stats: &MonthStats) {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:115:    fn compute_weighted_metrics(&mut self) {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:141:    fn compute_dual_metrics(&mut self) {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:184:pub fn run(
+/Users/andrew/Programming/rtk/src/cc_economics.rs:203:fn merge_daily(cc: Option<Vec<CcusagePeriod>>, rtk: Vec<DayStats>) -> Vec<PeriodEconomics> {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:233:fn merge_weekly(cc: Option<Vec<CcusagePeriod>>, rtk: Vec<WeekStats>) -> Vec<PeriodEconomics> {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:271:fn merge_monthly(cc: Option<Vec<CcusagePeriod>>, rtk: Vec<MonthStats>) -> Vec<PeriodEconomics> {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:304:fn convert_saturday_to_monday(saturday: &str) -> Option<String> {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:314:fn compute_totals(periods: &[PeriodEconomics]) -> Totals {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:402:fn display_text(
+/Users/andrew/Programming/rtk/src/cc_economics.rs:429:fn display_summary(tracker: &Tracker, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:544:fn display_daily(tracker: &Tracker, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:558:fn display_weekly(tracker: &Tracker, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:572:fn display_monthly(tracker: &Tracker, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:586:fn print_period_table(periods: &[PeriodEconomics], verbose: u8) {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:665:fn export_json(
+/Users/andrew/Programming/rtk/src/cc_economics.rs:724:fn export_csv(
+/Users/andrew/Programming/rtk/src/cc_economics.rs:773:fn print_csv_row(p: &PeriodEconomics) {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:834:    fn test_convert_saturday_to_monday() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:846:    fn test_period_economics_new() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:854:    fn test_compute_dual_metrics_with_data() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:877:    fn test_compute_dual_metrics_zero_tokens() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:896:    fn test_compute_dual_metrics_no_ccusage_data() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:910:    fn test_merge_monthly_both_present() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:942:    fn test_merge_monthly_only_ccusage() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:962:    fn test_merge_monthly_only_rtk() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:981:    fn test_merge_monthly_sorted() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:1012:    fn test_compute_weighted_input_cpt() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:1037:    fn test_compute_weighted_metrics_zero_tokens() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:1053:    fn test_compute_weighted_metrics_no_cache() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:1078:    fn test_set_ccusage_stores_per_type_tokens() {
+/Users/andrew/Programming/rtk/src/cc_economics.rs:1100:    fn test_compute_totals() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:8:fn glob_match(pattern: &str, name: &str) -> bool {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:12:fn glob_match_inner(pat: &[u8], name: &[u8]) -> bool {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:26:pub fn run(
+/Users/andrew/Programming/rtk/src/find_cmd.rs:212:    fn glob_match_star_rs() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:220:    fn glob_match_star_all() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:227:    fn glob_match_question_mark() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:233:    fn glob_match_exact() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:239:    fn glob_match_complex() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:248:    fn dot_becomes_star() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:257:    fn find_rs_files_in_src() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:264:    fn find_dot_pattern_works() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:271:    fn find_no_matches() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:277:    fn find_respects_max() {
+/Users/andrew/Programming/rtk/src/find_cmd.rs:284:    fn find_gitignored_excluded() {
+/Users/andrew/Programming/rtk/src/gain.rs:7:pub fn run(
+/Users/andrew/Programming/rtk/src/gain.rs:160:fn print_ascii_graph(data: &[(String, usize)]) {
+/Users/andrew/Programming/rtk/src/gain.rs:190:fn print_daily_full(tracker: &Tracker) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gain.rs:196:fn print_weekly(tracker: &Tracker) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gain.rs:202:fn print_monthly(tracker: &Tracker) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gain.rs:230:fn export_json(
+/Users/andrew/Programming/rtk/src/gain.rs:274:fn export_csv(
+/Users/andrew/Programming/rtk/src/golangci_cmd.rs:34:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/golangci_cmd.rs:88:fn filter_golangci_json(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/golangci_cmd.rs:179:fn compact_path(path: &str) -> String {
+/Users/andrew/Programming/rtk/src/golangci_cmd.rs:200:    fn test_filter_golangci_no_issues() {
+/Users/andrew/Programming/rtk/src/golangci_cmd.rs:208:    fn test_filter_golangci_with_issues() {
+/Users/andrew/Programming/rtk/src/golangci_cmd.rs:239:    fn test_compact_path() {
+/Users/andrew/Programming/rtk/src/git.rs:22:pub fn run(cmd: GitCommand, args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:39:fn run_diff(args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:126:fn run_show(args: &[String], max_lines: Option<usize>, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:232:pub(crate) fn compact_diff(diff: &str, max_lines: usize) -> String {
+/Users/andrew/Programming/rtk/src/git.rs:298:fn run_log(args: &[String], _max_lines: Option<usize>, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:375:fn filter_log_output(output: &str, limit: usize) -> String {
+/Users/andrew/Programming/rtk/src/git.rs:394:fn format_status_output(porcelain: &str) -> String {
+/Users/andrew/Programming/rtk/src/git.rs:490:fn filter_status_with_args(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/git.rs:526:fn run_status(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:582:fn run_add(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:654:fn run_commit(message: &str, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:718:fn run_push(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:779:fn run_pull(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:864:fn run_branch(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:938:fn filter_branch_output(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/git.rs:992:fn run_fetch(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:1036:fn run_stash(subcommand: Option<&str>, args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:1153:fn filter_stash_list(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/git.rs:1174:fn run_worktree(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:1237:fn filter_worktree_list(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/git.rs:1265:pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/git.rs:1293:    fn test_compact_diff() {
+/Users/andrew/Programming/rtk/src/git.rs:1298: fn main() {
+/Users/andrew/Programming/rtk/src/git.rs:1308:    fn test_filter_branch_output() {
+/Users/andrew/Programming/rtk/src/git.rs:1320:    fn test_filter_branch_no_remotes() {
+/Users/andrew/Programming/rtk/src/git.rs:1329:    fn test_filter_stash_list() {
+/Users/andrew/Programming/rtk/src/git.rs:1338:    fn test_filter_worktree_list() {
+/Users/andrew/Programming/rtk/src/git.rs:1348:    fn test_format_status_output_clean() {
+/Users/andrew/Programming/rtk/src/git.rs:1355:    fn test_format_status_output_modified_files() {
+/Users/andrew/Programming/rtk/src/git.rs:1367:    fn test_format_status_output_untracked_files() {
+/Users/andrew/Programming/rtk/src/git.rs:1379:    fn test_format_status_output_mixed_changes() {
+/Users/andrew/Programming/rtk/src/git.rs:1398:    fn test_format_status_output_truncation() {
+/Users/andrew/Programming/rtk/src/git.rs:1419:    fn test_run_passthrough_accepts_args() {
+/Users/andrew/Programming/rtk/src/git.rs:1426:    fn test_filter_log_output() {
+/Users/andrew/Programming/rtk/src/git.rs:1435:    fn test_filter_log_output_truncate_long() {
+/Users/andrew/Programming/rtk/src/git.rs:1444:    fn test_filter_log_output_cap_lines() {
+/Users/andrew/Programming/rtk/src/git.rs:1454:    fn test_filter_status_with_args() {
+/Users/andrew/Programming/rtk/src/git.rs:1476:    fn test_filter_status_with_args_clean() {
+/Users/andrew/Programming/rtk/src/git.rs:1483:    fn test_filter_log_output_multibyte() {
+/Users/andrew/Programming/rtk/src/git.rs:1495:    fn test_filter_log_output_emoji() {
+/Users/andrew/Programming/rtk/src/git.rs:1503:    fn test_format_status_output_thai_filename() {
+/Users/andrew/Programming/rtk/src/git.rs:1513:    fn test_format_status_output_emoji_filename() {
+/Users/andrew/Programming/rtk/src/runner.rs:7:pub fn run_err(command: &str, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/runner.rs:58:pub fn run_test(command: &str, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/runner.rs:90:fn filter_errors(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/runner.rs:147:fn extract_test_summary(output: &str, command: &str) -> String {
+/Users/andrew/Programming/rtk/src/runner.rs:249:    fn test_filter_errors() {
+/Users/andrew/Programming/rtk/src/deps.rs:8:pub fn run(path: &Path, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/deps.rs:74:fn summarize_cargo_str(path: &Path) -> Result<String> {
+/Users/andrew/Programming/rtk/src/deps.rs:127:fn summarize_package_json_str(path: &Path) -> Result<String> {
+/Users/andrew/Programming/rtk/src/deps.rs:163:fn summarize_requirements_str(path: &Path) -> Result<String> {
+/Users/andrew/Programming/rtk/src/deps.rs:191:fn summarize_pyproject_str(path: &Path) -> Result<String> {
+/Users/andrew/Programming/rtk/src/deps.rs:227:fn summarize_gomod_str(path: &Path) -> Result<String> {
+/Users/andrew/Programming/rtk/src/parser/error.rs:39:    fn from(err: serde_json::Error) -> Self {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:16:    pub fn from_verbosity(verbosity: u8) -> Self {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:28:    fn format_compact(&self) -> String;
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:31:    fn format_verbose(&self) -> String;
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:34:    fn format_ultra(&self) -> String;
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:37:    fn format(&self, mode: FormatMode) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:47:    fn format_compact(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:75:    fn format_verbose(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:106:    fn format_ultra(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:118:    fn format_compact(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:154:    fn format_verbose(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:187:    fn format_ultra(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:196:    fn format_compact(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:224:    fn format_verbose(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:253:    fn format_ultra(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:259:    fn format_compact(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:286:    fn format_verbose(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/formatter.rs:326:    fn format_ultra(&self) -> String {
+/Users/andrew/Programming/rtk/src/parser/README.md:52:    fn parse(input: &str) -> ParseResult<TestResult> {
+/Users/andrew/Programming/rtk/src/parser/README.md:86:pub fn run_vitest(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/parser/README.md:183:fn run_vitest(args: &[String]) -> Result<()> {
+/Users/andrew/Programming/rtk/src/parser/README.md:193:fn run_vitest(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/parser/README.md:229:fn test_vitest_json_parsing() {
+/Users/andrew/Programming/rtk/src/parser/README.md:237:fn test_vitest_regex_fallback() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:32:    pub fn unwrap(self) -> T {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:41:    pub fn tier(&self) -> u8 {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:50:    pub fn is_ok(&self) -> bool {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:55:    pub fn map<U, F>(self, f: F) -> ParseResult<U>
+/Users/andrew/Programming/rtk/src/parser/mod.rs:67:    pub fn warnings(&self) -> Vec<String> {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:85:    fn parse(input: &str) -> ParseResult<Self::Output>;
+/Users/andrew/Programming/rtk/src/parser/mod.rs:88:    fn parse_with_tier(input: &str, max_tier: u8) -> ParseResult<Self::Output> {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:99:pub fn truncate_output(output: &str, max_chars: usize) -> String {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:115:pub fn emit_degradation_warning(tool: &str, reason: &str) {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:120:pub fn emit_passthrough_warning(tool: &str, reason: &str) {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:134:pub fn extract_json_object(input: &str) -> Option<&str> {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:195:    fn test_parse_result_tier() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:211:    fn test_parse_result_map() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:225:    fn test_truncate_output() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:236:    fn test_truncate_output_multibyte() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:247:    fn test_truncate_output_emoji() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:254:    fn test_extract_json_object_clean() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:261:    fn test_extract_json_object_with_pnpm_prefix() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:275:    fn test_extract_json_object_with_dotenv_prefix() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:287:    fn test_extract_json_object_nested_braces() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:298:    fn test_extract_json_object_no_json() {
+/Users/andrew/Programming/rtk/src/parser/mod.rs:305:    fn test_extract_json_object_string_with_braces() {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:51:    fn parse(input: &str) -> ParseResult<DependencyState> {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:87:fn collect_dependencies(
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:115:fn extract_list_text(output: &str) -> Option<DependencyState> {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:168:    fn parse(input: &str) -> ParseResult<DependencyState> {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:214:fn extract_outdated_text(output: &str) -> Option<DependencyState> {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:264:fn is_valid_package_name(name: &str) -> bool {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:286:pub fn run(cmd: PnpmCommand, args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:294:fn run_list(depth: usize, args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:350:fn run_outdated(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:401:fn run_install(packages: &[String], args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:453:fn filter_pnpm_install(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:492:pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:520:    fn test_pnpm_list_parser_json() {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:541:    fn test_pnpm_outdated_parser_json() {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:560:    fn test_package_name_validation() {
+/Users/andrew/Programming/rtk/src/pnpm_cmd.rs:568:    fn test_run_passthrough_accepts_args() {
+/Users/andrew/Programming/rtk/src/tree.rs:43:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/tree.rs:105:fn filter_tree_output(raw: &str) -> String {
+/Users/andrew/Programming/rtk/src/tree.rs:141:    fn test_filter_removes_summary() {
+/Users/andrew/Programming/rtk/src/tree.rs:151:    fn test_filter_preserves_structure() {
+/Users/andrew/Programming/rtk/src/tree.rs:162:    fn test_filter_handles_empty() {
+/Users/andrew/Programming/rtk/src/tree.rs:169:    fn test_filter_removes_trailing_empty_lines() {
+/Users/andrew/Programming/rtk/src/tree.rs:176:    fn test_filter_summary_variations() {
+/Users/andrew/Programming/rtk/src/tree.rs:199:    fn test_noise_dirs_constant() {
+/Users/andrew/Programming/rtk/src/log_cmd.rs:10:pub fn run_file(file: &Path, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/log_cmd.rs:30:pub fn run_stdin(_verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/log_cmd.rs:49:pub fn run_stdin_str(content: &str) -> String {
+/Users/andrew/Programming/rtk/src/log_cmd.rs:53:fn analyze_logs(content: &str) -> String {
+/Users/andrew/Programming/rtk/src/log_cmd.rs:202:fn normalize_log_line(
+/Users/andrew/Programming/rtk/src/log_cmd.rs:223:    fn test_analyze_logs() {
+/Users/andrew/Programming/rtk/src/log_cmd.rs:237:    fn test_analyze_logs_multibyte() {
+/Users/andrew/Programming/rtk/src/ruff_cmd.rs:31:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/ruff_cmd.rs:115:fn filter_ruff_check_json(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/ruff_cmd.rs:217:fn filter_ruff_format(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/ruff_cmd.rs:303:fn compact_path(path: &str) -> String {
+/Users/andrew/Programming/rtk/src/ruff_cmd.rs:324:    fn test_filter_ruff_check_no_issues() {
+/Users/andrew/Programming/rtk/src/ruff_cmd.rs:332:    fn test_filter_ruff_check_with_issues() {
+/Users/andrew/Programming/rtk/src/ruff_cmd.rs:370:    fn test_filter_ruff_format_all_formatted() {
+/Users/andrew/Programming/rtk/src/ruff_cmd.rs:378:    fn test_filter_ruff_format_needs_formatting() {
+/Users/andrew/Programming/rtk/src/ruff_cmd.rs:390:    fn test_compact_path() {
+/Users/andrew/Programming/rtk/src/grep_cmd.rs:7:pub fn run(
+/Users/andrew/Programming/rtk/src/grep_cmd.rs:120:fn clean_line(line: &str, max_len: usize, context_only: bool, pattern: &str) -> String {
+/Users/andrew/Programming/rtk/src/grep_cmd.rs:168:fn compact_path(path: &str) -> String {
+/Users/andrew/Programming/rtk/src/grep_cmd.rs:191:    fn test_clean_line() {
+/Users/andrew/Programming/rtk/src/grep_cmd.rs:199:    fn test_compact_path() {
+/Users/andrew/Programming/rtk/src/grep_cmd.rs:206:    fn test_extra_args_accepted() {
+/Users/andrew/Programming/rtk/src/grep_cmd.rs:214:    fn test_clean_line_multibyte() {
+/Users/andrew/Programming/rtk/src/grep_cmd.rs:223:    fn test_clean_line_emoji() {
+/Users/andrew/Programming/rtk/src/json_cmd.rs:9:pub fn run(file: &Path, max_depth: usize, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/json_cmd.rs:31:pub fn run_stdin(max_depth: usize, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/json_cmd.rs:52:pub fn filter_json_string(json_str: &str, max_depth: usize) -> Result<String> {
+/Users/andrew/Programming/rtk/src/json_cmd.rs:57:fn extract_schema(value: &Value, depth: usize, max_depth: usize) -> String {
+/Users/andrew/Programming/rtk/src/json_cmd.rs:151:    fn test_extract_schema_simple() {
+/Users/andrew/Programming/rtk/src/json_cmd.rs:160:    fn test_extract_schema_array() {
+/Users/andrew/Programming/rtk/src/read.rs:7:pub fn run(
+/Users/andrew/Programming/rtk/src/read.rs:73:pub fn run_stdin(
+/Users/andrew/Programming/rtk/src/read.rs:135:fn format_with_line_numbers(content: &str) -> String {
+/Users/andrew/Programming/rtk/src/read.rs:152:    fn test_read_rust_file() -> Result<()> {
+/Users/andrew/Programming/rtk/src/read.rs:157:fn main() {{
+/Users/andrew/Programming/rtk/src/read.rs:168:    fn test_stdin_support_signature() {
+/Users/andrew/Programming/rtk/src/tsc_cmd.rs:8:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/tsc_cmd.rs:58:fn filter_tsc_output(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/tsc_cmd.rs:180:    fn test_filter_tsc_output() {
+/Users/andrew/Programming/rtk/src/tsc_cmd.rs:198:    fn test_every_error_message_shown() {
+/Users/andrew/Programming/rtk/src/tsc_cmd.rs:215:    fn test_continuation_lines_preserved() {
+/Users/andrew/Programming/rtk/src/tsc_cmd.rs:228:    fn test_no_file_limit() {
+/Users/andrew/Programming/rtk/src/tsc_cmd.rs:249:    fn test_filter_no_errors() {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:53:    fn parse(input: &str) -> ParseResult<TestResult> {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:100:fn extract_failures_from_json(json: &VitestJsonOutput) -> Vec<TestFailure> {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:121:fn extract_stats_regex(output: &str) -> Option<TestResult> {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:178:fn extract_failures_regex(output: &str) -> Vec<TestFailure> {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:216:pub fn run(cmd: VitestCommand, args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:222:fn run_vitest(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:276:    fn test_vitest_parser_json() {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:299:    fn test_vitest_parser_regex_fallback() {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:316:    fn test_vitest_parser_passthrough() {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:324:    fn test_strip_ansi() {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:332:    fn test_vitest_parser_with_pnpm_prefix() {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:350:    fn test_vitest_parser_with_dotenv_prefix() {
+/Users/andrew/Programming/rtk/src/vitest_cmd.rs:368:    fn test_vitest_parser_with_nested_json() {
+/Users/andrew/Programming/rtk/src/tracking.rs:223:    pub fn new() -> Result<Self> {
+/Users/andrew/Programming/rtk/src/tracking.rs:280:    pub fn record(
+/Users/andrew/Programming/rtk/src/tracking.rs:314:    fn cleanup_old(&self) -> Result<()> {
+/Users/andrew/Programming/rtk/src/tracking.rs:342:    pub fn get_summary(&self) -> Result<GainSummary> {
+/Users/andrew/Programming/rtk/src/tracking.rs:399:    fn get_by_command(&self) -> Result<Vec<(String, usize, usize, f64, u64)>> {
+/Users/andrew/Programming/rtk/src/tracking.rs:421:    fn get_by_day(&self) -> Result<Vec<(String, usize)>> {
+/Users/andrew/Programming/rtk/src/tracking.rs:457:    pub fn get_all_days(&self) -> Result<Vec<DayStats>> {
+/Users/andrew/Programming/rtk/src/tracking.rs:522:    pub fn get_by_week(&self) -> Result<Vec<WeekStats>> {
+/Users/andrew/Programming/rtk/src/tracking.rs:589:    pub fn get_by_month(&self) -> Result<Vec<MonthStats>> {
+/Users/andrew/Programming/rtk/src/tracking.rs:657:    pub fn get_recent(&self, limit: usize) -> Result<Vec<CommandRecord>> {
+/Users/andrew/Programming/rtk/src/tracking.rs:680:fn get_db_path() -> Result<PathBuf> {
+/Users/andrew/Programming/rtk/src/tracking.rs:717:pub fn estimate_tokens(text: &str) -> usize {
+/Users/andrew/Programming/rtk/src/tracking.rs:759:    pub fn start() -> Self {
+/Users/andrew/Programming/rtk/src/tracking.rs:789:    pub fn track(&self, original_cmd: &str, rtk_cmd: &str, input: &str, output: &str) {
+/Users/andrew/Programming/rtk/src/tracking.rs:825:    pub fn track_passthrough(&self, original_cmd: &str, rtk_cmd: &str) {
+/Users/andrew/Programming/rtk/src/tracking.rs:848:pub fn args_display(args: &[OsString]) -> String {
+/Users/andrew/Programming/rtk/src/tracking.rs:881:pub fn track(original_cmd: &str, rtk_cmd: &str, input: &str, output: &str) {
+/Users/andrew/Programming/rtk/src/tracking.rs:896:    fn test_estimate_tokens() {
+/Users/andrew/Programming/rtk/src/tracking.rs:906:    fn test_args_display() {
+/Users/andrew/Programming/rtk/src/tracking.rs:917:    fn test_tracker_record_and_recent() {
+/Users/andrew/Programming/rtk/src/tracking.rs:941:    fn test_track_passthrough_no_dilution() {
+/Users/andrew/Programming/rtk/src/tracking.rs:985:    fn test_timed_execution_records_time() {
+/Users/andrew/Programming/rtk/src/tracking.rs:998:    fn test_timed_execution_passthrough() {
+/Users/andrew/Programming/rtk/src/tracking.rs:1017:    fn test_custom_db_path_env() {
+/Users/andrew/Programming/rtk/src/tracking.rs:1031:    fn test_default_db_path() {
+/Users/andrew/Programming/rtk/src/main.rs:825:fn main() -> Result<()> {
+/Users/andrew/Programming/rtk/src/main.rs:1447:fn normalize_rgai_args(mut query_parts: Vec<String>, mut path: String) -> (String, String) {
+/Users/andrew/Programming/rtk/src/main.rs:1460:fn looks_like_path_token(token: &str) -> bool {
+/Users/andrew/Programming/rtk/src/main.rs:1473:    fn normalize_rgai_keeps_multiword_query() {
+/Users/andrew/Programming/rtk/src/main.rs:1483:    fn normalize_rgai_supports_old_positional_path() {
+/Users/andrew/Programming/rtk/src/main.rs:1493:    fn normalize_rgai_does_not_treat_plain_word_as_path() {
+/Users/andrew/Programming/rtk/src/init.rs:176:pub fn run(
+/Users/andrew/Programming/rtk/src/init.rs:192:fn prepare_hook_paths() -> Result<(PathBuf, PathBuf)> {
+/Users/andrew/Programming/rtk/src/init.rs:203:fn ensure_hook_installed(hook_path: &Path, verbose: u8) -> Result<bool> {
+/Users/andrew/Programming/rtk/src/init.rs:239:fn write_if_changed(path: &Path, content: &str, name: &str, verbose: u8) -> Result<bool> {
+/Users/andrew/Programming/rtk/src/init.rs:269:fn atomic_write(path: &Path, content: &str) -> Result<()> {
+/Users/andrew/Programming/rtk/src/init.rs:300:fn prompt_user_consent(settings_path: &Path) -> Result<bool> {
+/Users/andrew/Programming/rtk/src/init.rs:323:fn print_manual_instructions(hook_path: &Path) {
+/Users/andrew/Programming/rtk/src/init.rs:338:fn remove_hook_from_json(root: &mut serde_json::Value) -> bool {
+/Users/andrew/Programming/rtk/src/init.rs:369:fn remove_hook_from_settings(verbose: u8) -> Result<bool> {
+/Users/andrew/Programming/rtk/src/init.rs:412:pub fn uninstall(global: bool, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/init.rs:480:fn patch_settings_json(hook_path: &Path, mode: PatchMode, verbose: u8) -> Result<PatchResult> {
+/Users/andrew/Programming/rtk/src/init.rs:559:fn clean_double_blanks(content: &str) -> String {
+/Users/andrew/Programming/rtk/src/init.rs:592:fn insert_hook_entry(root: &mut serde_json::Value, hook_command: &str) {
+/Users/andrew/Programming/rtk/src/init.rs:628:fn hook_already_present(root: &serde_json::Value, hook_command: &str) -> bool {
+/Users/andrew/Programming/rtk/src/init.rs:652:fn run_default_mode(_global: bool, _patch_mode: PatchMode, _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/init.rs:660:fn run_default_mode(global: bool, patch_mode: PatchMode, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/init.rs:715:fn run_hook_only_mode(_global: bool, _patch_mode: PatchMode, _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/init.rs:720:fn run_hook_only_mode(global: bool, patch_mode: PatchMode, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/init.rs:760:fn run_claude_md_mode(global: bool, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/init.rs:839:fn upsert_rtk_block(content: &str, block: &str) -> (String, RtkBlockUpsert) {
+/Users/andrew/Programming/rtk/src/init.rs:882:fn patch_claude_md(path: &Path, verbose: u8) -> Result<bool> {
+/Users/andrew/Programming/rtk/src/init.rs:931:fn remove_rtk_block(content: &str) -> (String, bool) {
+/Users/andrew/Programming/rtk/src/init.rs:969:fn resolve_claude_dir() -> Result<PathBuf> {
+/Users/andrew/Programming/rtk/src/init.rs:976:pub fn show_config() -> Result<()> {
+/Users/andrew/Programming/rtk/src/init.rs:1096:    fn test_init_mentions_all_top_level_commands() {
+/Users/andrew/Programming/rtk/src/init.rs:1123:    fn test_init_has_version_marker() {
+/Users/andrew/Programming/rtk/src/init.rs:1131:    fn test_hook_has_guards() {
+/Users/andrew/Programming/rtk/src/init.rs:1144:    fn test_migration_removes_old_block() {
+/Users/andrew/Programming/rtk/src/init.rs:1161:    fn test_migration_warns_on_missing_end_marker() {
+/Users/andrew/Programming/rtk/src/init.rs:1170:    fn test_default_mode_creates_hook_and_rtk_md() {
+/Users/andrew/Programming/rtk/src/init.rs:1189:    fn test_claude_md_mode_creates_full_injection() {
+/Users/andrew/Programming/rtk/src/init.rs:1199:    fn test_search_priority_policy_in_init_and_slim_templates() {
+/Users/andrew/Programming/rtk/src/init.rs:1212:    fn test_files_search_examples_prioritize_rgai_before_grep() {
+/Users/andrew/Programming/rtk/src/init.rs:1226:    fn test_upsert_rtk_block_appends_when_missing() {
+/Users/andrew/Programming/rtk/src/init.rs:1235:    fn test_upsert_rtk_block_updates_stale_block() {
+/Users/andrew/Programming/rtk/src/init.rs:1254:    fn test_upsert_rtk_block_noop_when_already_current() {
+/Users/andrew/Programming/rtk/src/init.rs:1262:    fn test_upsert_rtk_block_detects_malformed_block() {
+/Users/andrew/Programming/rtk/src/init.rs:1270:    fn test_init_is_idempotent() {
+/Users/andrew/Programming/rtk/src/init.rs:1282:    fn test_local_init_unchanged() {
+/Users/andrew/Programming/rtk/src/init.rs:1295:    fn test_hook_already_present_exact_match() {
+/Users/andrew/Programming/rtk/src/init.rs:1313:    fn test_hook_already_present_different_path() {
+/Users/andrew/Programming/rtk/src/init.rs:1332:    fn test_hook_not_present_empty() {
+/Users/andrew/Programming/rtk/src/init.rs:1339:    fn test_hook_not_present_other_hooks() {
+/Users/andrew/Programming/rtk/src/init.rs:1358:    fn test_insert_hook_entry_empty_root() {
+/Users/andrew/Programming/rtk/src/init.rs:1380:    fn test_insert_hook_entry_preserves_existing() {
+/Users/andrew/Programming/rtk/src/init.rs:1409:    fn test_insert_hook_preserves_other_keys() {
+/Users/andrew/Programming/rtk/src/init.rs:1430:    fn test_atomic_write() {
+/Users/andrew/Programming/rtk/src/init.rs:1444:    fn test_preserve_order_round_trip() {
+/Users/andrew/Programming/rtk/src/init.rs:1462:    fn test_clean_double_blanks() {
+/Users/andrew/Programming/rtk/src/init.rs:1474:    fn test_clean_double_blanks_preserves_single() {
+/Users/andrew/Programming/rtk/src/init.rs:1481:    fn test_remove_hook_from_json() {
+/Users/andrew/Programming/rtk/src/init.rs:1516:    fn test_remove_hook_when_not_present() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:8:pub fn run(file1: &Path, file2: &Path, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:69:pub fn run_stdin(_verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:99:fn compute_diff(lines1: &[&str], lines2: &[&str]) -> DiffResult {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:145:fn similarity(a: &str, b: &str) -> f64 {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:159:fn condense_unified_diff(diff: &str) -> String {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:221:    fn test_similarity_identical() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:226:    fn test_similarity_completely_different() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:231:    fn test_similarity_empty_strings() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:237:    fn test_similarity_partial_overlap() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:244:    fn test_similarity_threshold_for_modified() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:252:    fn test_truncate_short_string() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:257:    fn test_truncate_exact_length() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:262:    fn test_truncate_long_string() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:269:    fn test_compute_diff_identical() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:280:    fn test_compute_diff_added_lines() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:289:    fn test_compute_diff_removed_lines() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:298:    fn test_compute_diff_modified_line() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:309:    fn test_compute_diff_completely_different_line() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:320:    fn test_compute_diff_empty_inputs() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:330:    fn test_condense_unified_diff_single_file() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:335: fn main() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:347:    fn test_condense_unified_diff_multiple_files() {
+/Users/andrew/Programming/rtk/src/diff_cmd.rs:363:    fn test_condense_unified_diff_empty() {
+/Users/andrew/Programming/rtk/src/filter.rs:15:    fn from_str(s: &str) -> Result<Self, Self::Err> {
+/Users/andrew/Programming/rtk/src/filter.rs:26:    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+/Users/andrew/Programming/rtk/src/filter.rs:36:    fn filter(&self, content: &str, lang: &Language) -> String;
+/Users/andrew/Programming/rtk/src/filter.rs:38:    fn name(&self) -> &'static str;
+/Users/andrew/Programming/rtk/src/filter.rs:57:    pub fn from_extension(ext: &str) -> Self {
+/Users/andrew/Programming/rtk/src/filter.rs:73:    pub fn comment_patterns(&self) -> CommentPatterns {
+/Users/andrew/Programming/rtk/src/filter.rs:138:    fn filter(&self, content: &str, _lang: &Language) -> String {
+/Users/andrew/Programming/rtk/src/filter.rs:142:    fn name(&self) -> &'static str {
+/Users/andrew/Programming/rtk/src/filter.rs:155:    fn filter(&self, content: &str, lang: &Language) -> String {
+/Users/andrew/Programming/rtk/src/filter.rs:223:    fn name(&self) -> &'static str {
+/Users/andrew/Programming/rtk/src/filter.rs:234:        r"^(pub\s+)?(async\s+)?(fn|def|function|func|class|struct|enum|trait|interface|type)\s+\w+"
+/Users/andrew/Programming/rtk/src/filter.rs:240:    fn filter(&self, content: &str, lang: &Language) -> String {
+/Users/andrew/Programming/rtk/src/filter.rs:304:    fn name(&self) -> &'static str {
+/Users/andrew/Programming/rtk/src/filter.rs:309:pub fn get_filter(level: FilterLevel) -> Box<dyn FilterStrategy> {
+/Users/andrew/Programming/rtk/src/filter.rs:317:pub fn smart_truncate(content: &str, max_lines: usize, _lang: &Language) -> String {
+/Users/andrew/Programming/rtk/src/filter.rs:373:    fn test_filter_level_parsing() {
+/Users/andrew/Programming/rtk/src/filter.rs:386:    fn test_language_detection() {
+/Users/andrew/Programming/rtk/src/filter.rs:393:    fn test_minimal_filter_removes_comments() {
+/Users/andrew/Programming/rtk/src/filter.rs:396:fn main() {
+/Users/andrew/Programming/rtk/src/filter.rs:403:        assert!(result.contains("fn main()"));
+/Users/andrew/Programming/rtk/src/display_helpers.rs:10:pub fn format_duration(ms: u64) -> String {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:25:    fn icon() -> &'static str;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:28:    fn label() -> &'static str;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:31:    fn period(&self) -> String;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:34:    fn commands(&self) -> usize;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:37:    fn input_tokens(&self) -> usize;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:40:    fn output_tokens(&self) -> usize;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:43:    fn saved_tokens(&self) -> usize;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:46:    fn savings_pct(&self) -> f64;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:49:    fn total_time_ms(&self) -> u64;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:52:    fn avg_time_ms(&self) -> u64;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:55:    fn period_width() -> usize;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:58:    fn separator_width() -> usize;
+/Users/andrew/Programming/rtk/src/display_helpers.rs:62:pub fn print_period_table<T: PeriodStats>(data: &[T]) {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:145:    fn icon() -> &'static str {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:149:    fn label() -> &'static str {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:153:    fn period(&self) -> String {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:157:    fn commands(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:161:    fn input_tokens(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:165:    fn output_tokens(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:169:    fn saved_tokens(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:173:    fn savings_pct(&self) -> f64 {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:177:    fn total_time_ms(&self) -> u64 {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:181:    fn avg_time_ms(&self) -> u64 {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:185:    fn period_width() -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:189:    fn separator_width() -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:195:    fn icon() -> &'static str {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:199:    fn label() -> &'static str {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:203:    fn period(&self) -> String {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:217:    fn commands(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:221:    fn input_tokens(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:225:    fn output_tokens(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:229:    fn saved_tokens(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:233:    fn savings_pct(&self) -> f64 {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:237:    fn total_time_ms(&self) -> u64 {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:241:    fn avg_time_ms(&self) -> u64 {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:245:    fn period_width() -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:249:    fn separator_width() -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:255:    fn icon() -> &'static str {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:259:    fn label() -> &'static str {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:263:    fn period(&self) -> String {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:267:    fn commands(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:271:    fn input_tokens(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:275:    fn output_tokens(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:279:    fn saved_tokens(&self) -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:283:    fn savings_pct(&self) -> f64 {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:287:    fn total_time_ms(&self) -> u64 {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:291:    fn avg_time_ms(&self) -> u64 {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:295:    fn period_width() -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:299:    fn separator_width() -> usize {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:309:    fn test_day_stats_trait() {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:330:    fn test_week_stats_trait() {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:350:    fn test_month_stats_trait() {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:369:    fn test_print_period_table_empty() {
+/Users/andrew/Programming/rtk/src/display_helpers.rs:376:    fn test_print_period_table_with_data() {
+/Users/andrew/Programming/rtk/src/prettier_cmd.rs:5:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/prettier_cmd.rs:47:fn filter_prettier_output(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/prettier_cmd.rs:146:    fn test_filter_all_formatted() {
+/Users/andrew/Programming/rtk/src/prettier_cmd.rs:157:    fn test_filter_files_need_formatting() {
+/Users/andrew/Programming/rtk/src/prettier_cmd.rs:172:    fn test_filter_many_files() {
+/Users/andrew/Programming/rtk/src/next_cmd.rs:7:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/next_cmd.rs:58:fn filter_next_build(output: &str) -> String {
+/Users/andrew/Programming/rtk/src/next_cmd.rs:188:fn extract_time(line: &str) -> Option<String> {
+/Users/andrew/Programming/rtk/src/next_cmd.rs:203:    fn test_filter_next_build() {
+/Users/andrew/Programming/rtk/src/next_cmd.rs:233:    fn test_extract_time() {
+/Users/andrew/Programming/rtk/src/env_cmd.rs:7:pub fn run(filter: Option<&str>, show_all: bool, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/env_cmd.rs:130:fn get_sensitive_patterns() -> HashSet<&'static str> {
+/Users/andrew/Programming/rtk/src/env_cmd.rs:146:fn mask_value(value: &str) -> String {
+/Users/andrew/Programming/rtk/src/env_cmd.rs:157:fn is_lang_var(key: &str) -> bool {
+/Users/andrew/Programming/rtk/src/env_cmd.rs:165:fn is_cloud_var(key: &str) -> bool {
+/Users/andrew/Programming/rtk/src/env_cmd.rs:183:fn is_tool_var(key: &str) -> bool {
+/Users/andrew/Programming/rtk/src/env_cmd.rs:201:fn is_interesting_var(key: &str) -> bool {
+/Users/andrew/Programming/rtk/src/container.rs:16:pub fn run(cmd: ContainerCmd, args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/container.rs:27:fn docker_ps(_verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/container.rs:84:fn docker_images(_verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/container.rs:154:fn docker_logs(args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/container.rs:184:fn kubectl_pods(args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/container.rs:285:fn kubectl_services(args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/container.rs:359:fn kubectl_logs(args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/container.rs:388:fn compact_ports(ports: &str) -> String {
+/Users/andrew/Programming/rtk/src/container.rs:411:pub fn run_docker_passthrough(args: &[OsString], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/container.rs:435:pub fn run_kubectl_passthrough(args: &[OsString], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/utils.rs:24:pub fn truncate(s: &str, max_len: usize) -> String {
+/Users/andrew/Programming/rtk/src/utils.rs:47:pub fn strip_ansi(text: &str) -> String {
+/Users/andrew/Programming/rtk/src/utils.rs:70:pub fn execute_command(cmd: &str, args: &[&str]) -> Result<(String, String, i32)> {
+/Users/andrew/Programming/rtk/src/utils.rs:98:pub fn format_tokens(n: usize) -> String {
+/Users/andrew/Programming/rtk/src/utils.rs:124:pub fn format_usd(amount: f64) -> String {
+/Users/andrew/Programming/rtk/src/utils.rs:150:pub fn format_cpt(cpt: f64) -> String {
+/Users/andrew/Programming/rtk/src/utils.rs:167:pub fn ok_confirmation(action: &str, detail: &str) -> String {
+/Users/andrew/Programming/rtk/src/utils.rs:185:pub fn detect_package_manager() -> &'static str {
+/Users/andrew/Programming/rtk/src/utils.rs:197:pub fn package_manager_exec(tool: &str) -> Command {
+/Users/andrew/Programming/rtk/src/utils.rs:233:    fn test_truncate_short_string() {
+/Users/andrew/Programming/rtk/src/utils.rs:238:    fn test_truncate_long_string() {
+/Users/andrew/Programming/rtk/src/utils.rs:244:    fn test_truncate_exact_length() {
+/Users/andrew/Programming/rtk/src/utils.rs:249:    fn test_truncate_edge_case() {
+/Users/andrew/Programming/rtk/src/utils.rs:259:    fn test_strip_ansi_simple() {
+/Users/andrew/Programming/rtk/src/utils.rs:265:    fn test_strip_ansi_multiple() {
+/Users/andrew/Programming/rtk/src/utils.rs:271:    fn test_strip_ansi_no_codes() {
+/Users/andrew/Programming/rtk/src/utils.rs:276:    fn test_strip_ansi_complex() {
+/Users/andrew/Programming/rtk/src/utils.rs:282:    fn test_execute_command_success() {
+/Users/andrew/Programming/rtk/src/utils.rs:291:    fn test_execute_command_failure() {
+/Users/andrew/Programming/rtk/src/utils.rs:297:    fn test_format_tokens_millions() {
+/Users/andrew/Programming/rtk/src/utils.rs:303:    fn test_format_tokens_thousands() {
+/Users/andrew/Programming/rtk/src/utils.rs:309:    fn test_format_tokens_small() {
+/Users/andrew/Programming/rtk/src/utils.rs:315:    fn test_format_usd_large() {
+/Users/andrew/Programming/rtk/src/utils.rs:321:    fn test_format_usd_medium() {
+/Users/andrew/Programming/rtk/src/utils.rs:327:    fn test_format_usd_small() {
+/Users/andrew/Programming/rtk/src/utils.rs:333:    fn test_format_usd_edge() {
+/Users/andrew/Programming/rtk/src/utils.rs:339:    fn test_ok_confirmation_with_detail() {
+/Users/andrew/Programming/rtk/src/utils.rs:348:    fn test_ok_confirmation_no_detail() {
+/Users/andrew/Programming/rtk/src/utils.rs:353:    fn test_format_cpt_normal() {
+/Users/andrew/Programming/rtk/src/utils.rs:360:    fn test_format_cpt_edge_cases() {
+/Users/andrew/Programming/rtk/src/utils.rs:368:    fn test_detect_package_manager_default() {
+/Users/andrew/Programming/rtk/src/utils.rs:376:    fn test_truncate_multibyte_thai() {
+/Users/andrew/Programming/rtk/src/utils.rs:386:    fn test_truncate_multibyte_emoji() {
+/Users/andrew/Programming/rtk/src/utils.rs:393:    fn test_truncate_multibyte_cjk() {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:15:pub fn run(subcommand: &str, args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:29:fn run_pr(args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:48:fn list_prs(args: &[String], _verbose: u8, ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:132:fn view_pr(args: &[String], _verbose: u8, ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:305:fn pr_checks(args: &[String], _verbose: u8, _ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:391:fn pr_status(_verbose: u8, _ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:435:fn run_issue(args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:447:fn list_issues(args: &[String], _verbose: u8, ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:514:fn view_issue(args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:600:fn run_workflow(args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:612:fn list_runs(args: &[String], _verbose: u8, ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:695:fn view_run(args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:763:fn run_repo(args: &[String], _verbose: u8, _ultra_compact: bool) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:844:fn pr_create(args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:882:fn pr_merge(args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:928:fn pr_diff(args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:962:fn pr_action(action: &str, args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:1014:fn run_api(args: &[String], _verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:1058:fn run_passthrough(cmd: &str, subcommand: &str, args: &[String]) -> Result<()> {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:1089:    fn test_truncate() {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:1098:    fn test_truncate_multibyte_utf8() {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:1108:    fn test_truncate_empty_and_short() {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:1115:    fn test_ok_confirmation_pr_create() {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:1122:    fn test_ok_confirmation_pr_merge() {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:1128:    fn test_ok_confirmation_pr_comment() {
+/Users/andrew/Programming/rtk/src/gh_cmd.rs:1134:    fn test_ok_confirmation_pr_edit() {
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:72:    fn parse(input: &str) -> ParseResult<TestResult> {
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:108:fn collect_test_results(
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:140:fn extract_playwright_regex(output: &str) -> Option<TestResult> {
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:196:fn extract_failures_regex(output: &str) -> Vec<TestFailure> {
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:219:pub fn run(args: &[String], verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:288:    fn test_playwright_parser_json() {
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:322:    fn test_playwright_parser_regex_fallback() {
+/Users/andrew/Programming/rtk/src/playwright_cmd.rs:334:    fn test_playwright_parser_passthrough() {
+/Users/andrew/Programming/rtk/src/summary.rs:8:pub fn run(command: &str, verbose: u8) -> Result<()> {
+/Users/andrew/Programming/rtk/src/summary.rs:40:fn summarize_output(output: &str, command: &str, success: bool) -> String {
+/Users/andrew/Programming/rtk/src/summary.rs:79:fn detect_output_type(output: &str, command: &str) -> OutputType {
+/Users/andrew/Programming/rtk/src/summary.rs:110:fn summarize_tests(output: &str, result: &mut Vec<String>) {
+/Users/andrew/Programming/rtk/src/summary.rs:161:fn summarize_build(output: &str, result: &mut Vec<String>) {
+/Users/andrew/Programming/rtk/src/summary.rs:207:fn summarize_logs_quick(output: &str, result: &mut Vec<String>) {
+/Users/andrew/Programming/rtk/src/summary.rs:230:fn summarize_list(output: &str, result: &mut Vec<String>) {
+/Users/andrew/Programming/rtk/src/summary.rs:242:fn summarize_json(output: &str, result: &mut Vec<String>) {
+/Users/andrew/Programming/rtk/src/summary.rs:269:fn summarize_generic(output: &str, result: &mut Vec<String>) {
+/Users/andrew/Programming/rtk/src/summary.rs:292:fn extract_number(text: &str, after: &str) -> Option<usize> {
