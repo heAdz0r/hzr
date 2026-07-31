@@ -523,6 +523,14 @@ fn contract_asset_path(source_dir: &Path) -> PathBuf {
     // Installed releases live at <root>/versions/<release>/bin while <root>/current
     // is the upgradeable public pointer. Keep instructions on that pointer instead
     // of canonicalizing them onto the release that ran `hzr install`.
+    if let Some(current) = source_dir.parent()
+        && current.file_name().is_some_and(|name| name == "current")
+    {
+        let stable_contract = current.join("share/hzr/HZR.md");
+        if stable_contract.is_file() {
+            return stable_contract;
+        }
+    }
     if let Some(release_root) = source_dir.parent()
         && release_root
             .parent()
@@ -1141,5 +1149,23 @@ mod tests {
         assert_eq!(stable, directory.path().join("current/share/hzr/HZR.md"));
         assert!(!stable.to_string_lossy().contains("/versions/"));
         assert!(Path::new(&stable).is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn contract_keeps_a_logical_current_source_upgradeable() {
+        let directory = tempdir().expect("temporary directory");
+        let release = directory.path().join("versions/v0.2.0-test");
+        let contract = release.join("share/hzr/HZR.md");
+        std::fs::create_dir_all(release.join("bin")).expect("release bin");
+        std::fs::create_dir_all(contract.parent().expect("contract parent"))
+            .expect("release share");
+        std::fs::write(&contract, "contract").expect("contract fixture");
+        let current = directory.path().join("current");
+        std::os::unix::fs::symlink(&release, &current).expect("current symlink");
+
+        let stable = contract_asset_path(&current.join("bin"));
+        assert_eq!(stable, current.join("share/hzr/HZR.md"));
+        assert!(!stable.to_string_lossy().contains("/versions/"));
     }
 }
