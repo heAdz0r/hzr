@@ -21,6 +21,10 @@ pub struct EnginePin {
     pub patches: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patch_sha256: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifact_sha256: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,6 +96,17 @@ mod tests {
             "4700b8fad23e45cedbb1a850f03ee9e2d4d49116"
         );
         assert!(caveman_code.integrity.is_some());
+
+        let node = manifest
+            .engine
+            .iter()
+            .find(|engine| engine.name == "nodejs")
+            .expect("Node.js runtime pin");
+        assert_eq!(node.version, "22.17.1");
+        assert_eq!(node.binary, "node");
+        assert_eq!(node.runtime, Some(true));
+        assert_eq!(node.artifacts.len(), 4);
+        assert_eq!(node.artifacts.len(), node.artifact_sha256.len());
 
         let fork = manifest
             .engine

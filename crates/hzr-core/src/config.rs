@@ -38,9 +38,27 @@ impl Config {
             path: path.to_path_buf(),
             source,
         })?;
-        let config: Self = toml::from_str(&content).map_err(ConfigError::Parse)?;
+        let mut config: Self = toml::from_str(&content).map_err(ConfigError::Parse)?;
+        config.migrate_pinned_engine_directory();
         config.validate()?;
         Ok(config)
+    }
+
+    /// Repair a configuration written before the engines path became upgrade-stable.
+    ///
+    /// Existing installs persisted the canonicalized `versions/<release>/engines`, which
+    /// keeps launching the engines of the release that was current at first run. Rewriting
+    /// it in memory on every load is enough — and safer than a one-shot file migration,
+    /// because it also corrects a config copied between machines. The translation only
+    /// applies when `current/engines` resolves to the very same directory, so a dangling
+    /// or foreign `current` can never hijack engine execution.
+    fn migrate_pinned_engine_directory(&mut self) {
+        if let Some(directory) = self.engines.directory.clone() {
+            let stable = stable_engine_directory(&directory);
+            if stable != directory {
+                self.engines.directory = Some(stable);
+            }
+        }
     }
 
     pub fn load_or_default(path: &Path) -> Result<Self, ConfigError> {
@@ -178,6 +196,9 @@ pub struct EngineConfig {
     pub directory: Option<PathBuf>,
     pub strict_versions: bool,
     pub auto_start_icm: bool,
+    /// Enable ICM's embedding model. The default stays FTS-only so a clean install never
+    /// blocks its first memory mutation on an implicit model download.
+    pub icm_embeddings: bool,
     pub auto_index: bool,
 }
 
@@ -187,6 +208,7 @@ impl Default for EngineConfig {
             directory: discover_bundle_engine_directory(),
             strict_versions: true,
             auto_start_icm: true,
+            icm_embeddings: false,
             auto_index: true,
         }
     }
@@ -194,7 +216,7 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub fn binary(&self, name: &str) -> PathBuf {
-        const MANAGED_BINARIES: [&str; 3] = ["grepai", "icm", "rtk"];
+        const MANAGED_BINARIES: [&str; 4] = ["grepai", "icm", "node", "rtk"];
         if MANAGED_BINARIES.contains(&name) {
             return self
                 .directory
@@ -215,12 +237,65 @@ fn discover_bundle_engine_directory() -> Option<PathBuf> {
     sibling_engine_directory(&executable)
 }
 
-fn sibling_engine_directory(executable: &Path) -> Option<PathBuf> {
-    let directory = executable.parent()?.parent()?.join("engines");
-    ["rtk", "grepai", "icm"]
+/// Engine executables a bundle engine directory must contain to be usable.
+const BUNDLE_ENGINES: [&str; 4] = ["rtk", "grepai", "icm", "node"];
+
+fn has_all_engines(directory: &Path) -> bool {
+    BUNDLE_ENGINES
         .iter()
         .all(|name| directory.join(name).is_file())
-        .then(|| std::fs::canonicalize(&directory).unwrap_or(directory))
+}
+
+fn sibling_engine_directory(executable: &Path) -> Option<PathBuf> {
+    let directory = executable.parent()?.parent()?.join("engines");
+    if !has_all_engines(&directory) {
+        return None;
+    }
+    // Canonicalize to reject traversal, then translate the physical location back to the
+    // upgrade-stable one. Storing the canonical path directly would pin the config to
+    // `versions/v0.2.0-<platform>/engines`, so after the next upgrade a new `hzr` would
+    // keep launching the *previous* RTK/grepai/ICM/Node.
+    let physical = std::fs::canonicalize(&directory).unwrap_or(directory);
+    Some(stable_engine_directory(&physical))
+}
+
+/// Map `<root>/versions/<release>/engines` back to `<root>/current/engines` when that
+/// indirection exists and resolves to the same directory.
+///
+/// `current_exe()` is already fully resolved on Linux (`/proc/self/exe`) and macOS, so a
+/// bundle launched through `<root>/current/bin/hzr` reports the versioned path and the
+/// `current` symlink is lost before we ever see it. Recovering it here is what makes an
+/// upgrade actually switch engines; anything else is pinned to the release that happened
+/// to be current at first run.
+pub fn stable_engine_directory(physical: &Path) -> PathBuf {
+    let Some(release_root) = physical.parent() else {
+        return physical.to_path_buf();
+    };
+    let Some(versions_dir) = release_root.parent() else {
+        return physical.to_path_buf();
+    };
+    if versions_dir.file_name().and_then(|name| name.to_str()) != Some("versions") {
+        return physical.to_path_buf();
+    }
+    let Some(install_root) = versions_dir.parent() else {
+        return physical.to_path_buf();
+    };
+    let stable = install_root.join("current").join("engines");
+    // Only trust the stable path when it currently resolves to the same physical engines
+    // directory. A dangling or foreign `current` must never redirect engine execution.
+    // Both sides are canonicalized before comparison: the caller may pass an
+    // uncanonicalized path, and on macOS `/var` versus `/private/var` would otherwise
+    // make an identical directory look like a mismatch.
+    let canonical_physical =
+        std::fs::canonicalize(physical).unwrap_or_else(|_| physical.to_path_buf());
+    let resolves_here = std::fs::canonicalize(&stable)
+        .map(|resolved| resolved == canonical_physical)
+        .unwrap_or(false);
+    if resolves_here && has_all_engines(&stable) {
+        stable
+    } else {
+        physical.to_path_buf()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -337,7 +412,127 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{Config, ConfigError, EngineConfig, sibling_engine_directory};
+    use super::{
+        Config, ConfigError, EngineConfig, sibling_engine_directory, stable_engine_directory,
+    };
+
+    /// Build `<root>/versions/<release>/{bin,engines}` plus a `current` symlink, i.e. the
+    /// exact layout `install.sh` produces.
+    fn versioned_bundle(root: &Path, release: &str) -> std::path::PathBuf {
+        let release_root = root.join("versions").join(release);
+        let bin = release_root.join("bin");
+        let engines = release_root.join("engines");
+        fs::create_dir_all(&bin).expect("bin directory");
+        fs::create_dir_all(&engines).expect("engines directory");
+        fs::write(bin.join("hzr"), []).expect("hzr fixture");
+        for engine in ["rtk", "grepai", "icm", "node"] {
+            fs::write(engines.join(engine), []).expect("engine fixture");
+        }
+        release_root
+    }
+
+    #[cfg(unix)]
+    fn point_current_at(root: &Path, release_root: &Path) {
+        let current = root.join("current");
+        let _ = fs::remove_file(&current);
+        std::os::unix::fs::symlink(release_root, &current).expect("current symlink");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_engine_directory_uses_upgrade_stable_current_path() {
+        let directory = tempdir().expect("temporary directory");
+        let root = directory.path();
+        let release = versioned_bundle(root, "v0.2.0-darwin-arm64");
+        point_current_at(root, &release);
+
+        let resolved = stable_engine_directory(&release.join("engines"));
+        assert_eq!(
+            resolved,
+            root.join("current").join("engines"),
+            "a versioned path must translate to the stable current/ path"
+        );
+        assert!(
+            !resolved.to_string_lossy().contains("versions/"),
+            "pinning versions/ would keep old engines after an upgrade"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_pinned_engine_directory_is_migrated_on_load() {
+        let directory = tempdir().expect("temporary directory");
+        let root = directory.path();
+        let release = versioned_bundle(root, "v0.2.0-darwin-arm64");
+        point_current_at(root, &release);
+
+        let config_path = root.join("config.toml");
+        let mut config = Config::default();
+        // Simulate a config written before the fix.
+        config.engines.directory = Some(release.join("engines"));
+        config.write(&config_path).expect("write legacy config");
+
+        let loaded = Config::load(&config_path).expect("load migrates the pinned path");
+        assert_eq!(
+            loaded.engines.directory,
+            Some(root.join("current").join("engines")),
+            "loading must repair a config pinned to a physical release path"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_upgrade_switches_engines_through_current() {
+        let directory = tempdir().expect("temporary directory");
+        let root = directory.path();
+        let old = versioned_bundle(root, "v0.2.0-darwin-arm64");
+        point_current_at(root, &old);
+        let stable = stable_engine_directory(&old.join("engines"));
+
+        // Upgrade: a new release becomes current, exactly as install.sh repoints it.
+        let new = versioned_bundle(root, "v0.3.0-darwin-arm64");
+        fs::write(new.join("engines").join("rtk"), b"new").expect("new engine bytes");
+        point_current_at(root, &new);
+
+        assert_eq!(
+            fs::read(stable.join("rtk")).expect("engine through stable path"),
+            b"new",
+            "the stable path must follow current/ to the upgraded engines"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_foreign_or_dangling_current_never_redirects_engines() {
+        let directory = tempdir().expect("temporary directory");
+        let root = directory.path();
+        let release = versioned_bundle(root, "v0.2.0-darwin-arm64");
+        let other = versioned_bundle(root, "v0.9.9-other");
+
+        // `current` pointing at a different release must not capture this one.
+        point_current_at(root, &other);
+        assert_eq!(
+            stable_engine_directory(&release.join("engines")),
+            release.join("engines"),
+            "a foreign current must not redirect engine execution"
+        );
+
+        // A dangling `current` must fall back to the physical path, not break.
+        let current = root.join("current");
+        fs::remove_file(&current).expect("remove current");
+        std::os::unix::fs::symlink(root.join("versions/absent"), &current).expect("dangling");
+        assert_eq!(
+            stable_engine_directory(&release.join("engines")),
+            release.join("engines")
+        );
+    }
+
+    #[test]
+    fn test_non_versioned_layout_is_left_unchanged() {
+        let directory = tempdir().expect("temporary directory");
+        let engines = directory.path().join("engines");
+        assert_eq!(stable_engine_directory(&engines), engines);
+    }
 
     #[test]
     fn test_bundle_engine_directory_requires_all_managed_engines() {
@@ -350,7 +545,7 @@ mod tests {
         fs::write(&executable, []).expect("write executable fixture");
 
         assert!(sibling_engine_directory(&executable).is_none());
-        for engine in ["rtk", "grepai", "icm"] {
+        for engine in ["rtk", "grepai", "icm", "node"] {
             fs::write(engines.join(engine), []).expect("write engine fixture");
         }
 
@@ -377,6 +572,13 @@ mod tests {
     }
 
     #[test]
+    fn test_clean_install_defaults_to_fts_only_memory() {
+        let config = EngineConfig::default();
+
+        assert!(!config.icm_embeddings);
+    }
+
+    #[test]
     fn test_config_rejects_non_loopback_bind() {
         let mut config = Config::default();
         config.daemon.bind = SocketAddr::from(([0, 0, 0, 0], 47_391));
@@ -398,6 +600,7 @@ mod tests {
             engines.binary("grepai"),
             Path::new("/opt/hzr/engines/grepai")
         );
+        assert_eq!(engines.binary("node"), Path::new("/opt/hzr/engines/node"));
         assert_eq!(engines.binary("git"), Path::new("git"));
         assert_eq!(engines.binary("rg"), Path::new("rg"));
     }

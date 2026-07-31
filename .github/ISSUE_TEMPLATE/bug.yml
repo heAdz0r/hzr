@@ -1,0 +1,78 @@
+name: Bug report
+description: Report a reproducible HZR defect or regression
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve HZR. Remove secrets and prompt contents from logs before attaching them.
+  - type: input
+    id: version
+    attributes:
+      label: HZR version
+      description: Output of `hzr --version`.
+      placeholder: hzr 0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS Apple Silicon
+        - macOS Intel
+        - Linux x86_64
+        - Linux ARM64
+        - Other / source build
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      options:
+        - Installation or upgrade
+        - Doctor or ownership
+        - Hooks or agent instructions
+        - MCP
+        - Search or index
+        - Memory
+        - Execution or rewrite
+        - Codec or managed agent
+        - Stats or accounting
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Minimal commands and inputs needed to reproduce the problem.
+      placeholder: |
+        1. Run ...
+        2. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Paste redacted `hzr doctor --json` output and relevant logs.
+      render: shell
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, bearer tokens, prompts, and private repository content.
+          required: true
+        - label: I searched existing issues for the same problem.
+          required: true

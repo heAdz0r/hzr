@@ -17,6 +17,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v5
         with:
@@ -27,12 +29,16 @@ jobs:
           cache: npm
           cache-dependency-path: integrations/caveman-code/package-lock.json
       - run: scripts/build-bundle.sh "$RUNNER_TEMP/hzr-dist"
+      - run: scripts/package-release.sh "$RUNNER_TEMP/hzr-dist" "$RUNNER_TEMP/hzr-release"
+      - run: scripts/smoke-install.sh "$RUNNER_TEMP/hzr-release/hzr-v0.2.0-linux-x64.tar.gz" "$RUNNER_TEMP/hzr-release/SHA256SUMS"
 
   fork-core:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - run: bash -n scripts/*.sh
       - run: ./scripts/verify-fork-core.sh --test
@@ -65,6 +71,7 @@ jobs:
           cache: npm
           cache-dependency-path: integrations/caveman-code/package-lock.json
       - run: npm ci --prefix integrations/caveman-code
+      - run: node --test integrations/caveman-code/bridge.test.mjs
       - run: npm audit --omit=dev --audit-level=high --prefix integrations/caveman-code
       - run: node --check integrations/caveman-code/bridge.mjs
 

@@ -1,163 +1,200 @@
-# HZR — heAdz0r's Zero-Redundancy engine
+# HZR
 
-**HZR** = **h**eAdz0r + **Z**ero **R**edundancy. Буква `Z` работает дважды: это и ник автора, и главный технический принцип продукта. Если `RTK` = Rust Token Killer, то `HZR` — его преемник по смыслу: **RTK убивал токены, HZR убивает избыточность.**
+> **heAdz0r's Zero-Redundancy engine** — авторский local-first control plane и unified efficiency engine для coding-агентов.
 
-Избыточность и есть потраченные деньги: второй semantic index, второй memory store, второй pre-read pack, повторно попавший в контекст один и тот же файл, дублирующий compression layer агента. Поэтому «zero redundancy» — не слоган, а буквальное содержание [PRD](PRD.md): один index, один ICM process, один владелец на каждый concern (§5.1), дедупликация по content hash (§5.2), запрет дублей в data layout (§7) и ноль упрощённых reimplementations в runtime-пути (§4.1).
+![HZR control-plane banner](docs/assets/hzr-hero.png)
 
-HZR 0.1.0 — самостоятельная local-first платформа для экономии токенов coding-агентов. Она построена **вокруг полного текущего `heAdz0r/rtk` fork**, а не вместо него: 516 файлов фактического worktree перенесены byte-for-byte как закрытое от изменений ядро, а HZR добавляет снаружи единый control plane, централизованные ICM и grepai, Caveman-derived response contract и managed caveman-code agent.
+[![Version](https://img.shields.io/badge/version-0.2.0-e64a19)](Cargo.toml)
+[![CI](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg)](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/heAdz0r/hzr?include_prereleases&color=ef6c00)](https://github.com/heAdz0r/hzr/releases)
+[![License](https://img.shields.io/badge/control_plane-Apache--2.0-37474f)](LICENSE)
 
-> Release 0.1.0: функциональные gates, exact fork suite и assembled local-platform bundle прошли; экономический KPI требует отдельного paired provider benchmark.
+HZR — самостоятельный продукт heAdz0r, который превращает разрозненные слои оптимизации агента в один управляемый execution path. Единый control plane владеет поиском, памятью, контекстным бюджетом, выполнением, плотностью ответов и учётом usage — без повторной работы и конкурирующих контуров.
 
-Подробные продуктовые требования и обоснования находятся в [PRD.md](PRD.md), доказательство сохранности fork — в [FORK_PARITY.md](FORK_PARITY.md).
+**Главный инвариант дистрибутива 0.2.0:** один installer ставит весь versioned self-contained runtime. Отдельные установки внутренних движков и их runtime dependencies не нужны. Единственным внешним runtime prerequisite остаётся системный Git.
 
-## Главный инвариант
+> HZR не заявляет неподтверждённый процент экономии. Functional и supply-chain gates определены и проходят повторную release-проверку; end-to-end экономический эффект ещё должен быть измерен paired provider-billed benchmark на одинаковых задачах.
 
-`fork-core/rtk` — полный immutable snapshot доказавшего эффективность fork версии `0.44.1-fork.1`. HZR не переносит его возможности выборочно и не содержит упрощённой «RTK-compatible» замены.
+## Зачем HZR
 
-- canonical snapshot v2: `f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16`;
-- source: ветка `feat/upstream-0.42-fork.1`, `HEAD 5f403c465cbdbe148e9ca03e0ac8e856eef0bfee`;
-- 516 включённых файлов и 4 зафиксированных tracked deletion;
-- paths, types, modes, sizes, bytes, dirty diff, source status и exclusions входят в проверяемую identity;
-- stock RTK не собирается и не используется как fallback.
+Независимо установленные инструменты оптимизации часто повторяют одну и ту же работу: сканируют repository, строят параллельные индексы, вспоминают одинаковый контекст, сжимают его несколько раз и записывают несовместимые telemetry estimates. HZR назначает одного владельца каждому concern.
 
-Интеграция выполняется только через process, environment, storage и typed API adapters. Исходный репозиторий `/Users/andrew/Programming/rtk` HZR не изменяет.
+## Архитектура: один владелец на каждый concern
 
-## Единая архитектура
+Внутри HZR полный проверенный fork-core и pinned специализированные engines работают за единым protocol, lifecycle и policy boundary:
+
+| Concern | Единственный владелец в HZR |
+|---|---|
+| command rewrite, filters, `rgai`, IMG planner, read/write, guards | полный HZR fork-core RTK |
+| semantic code index и watcher | patched grepai 0.35.0 |
+| durable cross-session memory | один HZR-supervised ICM 0.10.61 |
+| policy, lifecycle, auth, hard budget, usage ledger | HZR / `hzrd` |
+| provider-aware agent loop | managed caveman-code 0.65.2 |
+| response-density contract и protected spans | HZR Codec + Caveman-derived contract |
 
 ```mermaid
 flowchart LR
-    U["User / hzr CLI"] --> D["hzrd control plane"]
-    C["managed caveman-code"] --> D
-    D --> F["exact heAdz0r/rtk fork-core"]
-    D --> I["one grepai 0.35 store + watcher"]
-    D --> M["one centralized ICM"]
-    D --> K["protected response contract / codec"]
-    D --> L["actual + estimated usage ledger"]
-    F --> R["rewrite, filters, rgai, IMG planner, read/write, guards"]
-    R --> I
+    A["Coding agent / user"] --> H["hzr CLI + one hook dispatcher"]
+    H --> D["hzrd control plane"]
+    D --> R["full RTK fork-core"]
+    D --> G["one grepai index"]
+    D --> I["one centralized ICM"]
+    D --> C["HZR codec + usage ledger"]
+    V["managed caveman-code"] --> D
+    N["bundled Node.js 22.17.1"] --> V
 ```
 
-| Область | Единственный владелец |
-|---|---|
-| rewrite, command filters, `rgai`, IMG planner, read/write, guards, полный compatibility CLI | exact fork-core |
-| orchestration, policy, hard budget, lifecycle, auth | HZR |
-| code embeddings, symbols и graph index | grepai 0.35.0 |
-| ranking/rendering semantic search | сохранённый fork `rgai` |
-| durable cross-session memory | один HZR-supervised ICM 0.10.61 |
-| agent loop и provider UX | managed caveman-code 0.65.2 |
-| response density и protected spans | HZR Codec + короткий Caveman-derived contract |
-| actual/estimated usage | HZR Ledger, в разных полях |
+«Все инструменты как единое целое» не означает обязательный вызов каждого engine на каждом turn. HZR выбирает минимальный достаточный путь, дедуплицирует evidence по content hash и не оплачивает лишний semantic pass.
 
-«Все инструменты как единое целое» означает один ownership graph, а не обязательный повторный вызов каждого движка на каждом turn. Лишний semantic pass сам расходует tokens и latency.
+## Установка
 
-### Контекст задачи
+### Готовый release bundle
 
-1. Исходный intent остаётся неизменным.
-2. Fork `memory plan` строит основной structural context; одновременно выполняется ровно один project-scoped ICM recall.
-3. HZR нормализует provenance, дедуплицирует candidates и применяет hard budget к оценке evidence; источник счётчика явно маркируется как estimate.
-4. Только когда fork planner не вернул code candidates, выполняется один fork `rgai` fallback.
-5. Semantic/auto search заранее подготавливает единственный HZR-owned grepai store; exact mode вызывает fork `rgai --builtin`.
-6. В prompt передаются компактные references и evidence metadata. Выбранные файлы агент читает exact fork-backed tool через HZR, а не через второй native file layer.
+Поддерживаемые форматы artifact:
 
-Внутренняя semantic stage fork IMG planner использует сохранённый builtin `rgai --files`. HZR не запускает поверх неё ещё один безусловный grepai query: это уменьшает дублирование и сохраняет доказанный pipeline fork. Отдельные `hzr search`, agent search и пустой-plan fallback используют актуальный canonical grepai через fork `rgai`.
+| OS | Архитектура | Artifact tooling | Текущий уровень проверки |
+|---|---:|---|---|
+| Linux | x86_64 | есть | native release workflow + clean-install smoke |
+| Linux | ARM64 | есть | native release workflow + clean-install smoke |
+| macOS | Apple Silicon | есть | native release workflow + clean-install smoke |
+| macOS | Intel | есть | native release workflow + clean-install smoke |
 
-### Выполнение и ответы
+Windows artifact в 0.2.0 отсутствует. Скрипты собирают native artifact, а не выполняют cross-compilation.
 
-- Полная shell-строка, включая pipes, redirects, heredoc, multiline, `&&`, `||` и xargs, передаётся в fork `rtk rewrite` без реконструкции.
-- Exit `0/1/2/3` сохраняет fork semantics: rewritten / raw / deny / explicit approval.
-- `hzr exec approve|deny` использует одноразовый decision ID с TTL.
-- Agent read/edit/write идут через allowlisted fork API; path traversal и symlink escape блокируются.
-- `RTK_TEE=0` и `RTK_TELEMETRY_DISABLED=1` выставляются для managed path.
-- Короткий стабильный density contract задаётся до model generation. Code, JSON, commands, paths, identifiers, numbers и diagnostics не подвергаются lossy rewrite.
-- Provider usage записывается один раз как `completed`, `invalid_response` или `failed`; actual и estimates никогда не смешиваются.
-
-## Зафиксированные компоненты
-
-| Компонент | Версия / роль |
-|---|---|
-| HZR | 0.1.0 |
-| heAdz0r fork-core | 0.44.1-fork.1, runtime |
-| upstream RTK | 0.44.1, provenance reference only |
-| grepai | 0.35.0 + минимальный watcher patch |
-| ICM | 0.10.61 + минимальный upstream lockfile patch |
-| Caveman | 1.9.1, design/reference |
-| caveman-code | npm 0.65.2, managed runtime |
-
-Точные commits, integrity и patch digests находятся в [engines.lock.toml](engines.lock.toml). Notices и причины двух минимальных patches описаны в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-## Bundle
-
-Собранный local-platform bundle имеет один публичный продукт и приватные engines:
-
-```text
-hzr-dist/
-  bin/
-    hzr
-    hzrd
-    rtk -> hzr              compatibility alias, не второй RTK
-  engines/
-    rtk                     exact private fork-core binary
-    grepai
-    icm
-    caveman-code/
-      bridge.mjs
-      package*.json
-      node_modules/
-  share/hzr/                pins, snapshot metadata и exact patches
-  licenses/
-```
-
-`bin/rtk <args>` нормализуется в `hzr rtk -- <args>` и затем `exec`-заменяется приватным `engines/rtk`, сохраняя argv, cwd, stdin/stdout/stderr, signals и exit code.
-
-Сборка из исходников требует Rust 1.85+, Go, Git, Node `>=20.18.1,<26`, npm и доступ к pinned upstream sources:
+Скачайте и проверьте installer перед запуском:
 
 ```bash
-scripts/build-bundle.sh /absolute/path/to/hzr-dist
+curl --proto '=https' --tlsv1.2 -fL \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.2.0/install.sh \
+  -o /tmp/hzr-install.sh
+less /tmp/hzr-install.sh
+sh /tmp/hzr-install.sh
 ```
 
-Скрипт проверяет snapshot, patches, upstream versions, fork release build, npm integrity/audit, HZR release build и assembled smoke.
+Installer скачивает platform artifact и `SHA256SUMS` из GitHub Releases, проверяет внешний checksum и внутренний bundle manifest, затем создаёт:
+
+```text
+~/.local/share/hzr/
+  versions/v0.2.0-<platform>/   # version-scoped self-contained bundle
+  current -> versions/...
+
+~/.local/bin/
+  hzr
+  hzrd
+  rtk -> hzr                    # compatibility alias, не второй RTK
+```
+
+По умолчанию installer также выполняет `hzr init` и подтверждённую adoption-настройку: один Claude `PreToolUse` dispatcher, idempotent `SessionStart`, HZR-managed blocks в `CLAUDE.md` и `AGENTS.md`. Перед изменением существующих файлов создаются content-addressed backups.
+
+Если сначала нужна только установка файлов без hooks и agent instructions:
+
+```bash
+HZR_INSTALL_HOOKS=0 sh /tmp/hzr-install.sh
+hzr install --dry-run
+hzr install --force
+```
+
+Доступные installer overrides: `HZR_INSTALL_ROOT`, `HZR_BIN_DIR`, `HZR_INSTALL_HOOKS=0`, `HZR_INSTALL_SERVICE=0`, `HZR_FORCE=1` и `HZR_VERSION`. Для скачивания нужны обычные POSIX utilities: `sh`, `tar`, `curl` или `wget`, а также `shasum` или `sha256sum`. Для работы HZR требуется системный `git`; внешние Node.js, npm, Go, Rust и отдельные engine binaries не требуются.
+
+### Что входит в один bundle
+
+| Компонент | Pin | Поставка |
+|---|---:|---|
+| HZR | 0.2.0 | public CLI + daemon |
+| HZR fork-core RTK | 0.44.1-fork.1 | private native engine; весь inherited surface |
+| grepai | 0.35.0 + ownership patch | private native engine |
+| ICM | 0.10.61 + lockfile patch | private native engine |
+| caveman-code | 0.65.2 + exact production lock | managed JS runtime |
+| Node.js | 22.17.1 | bundled official runtime |
+| Caveman | 1.9.1 | design/reference, не отдельный runtime |
+
+Точные commits, archive checksums, npm integrity и patch digests находятся в [`engines.lock.toml`](engines.lock.toml). Bundle сохраняет source provenance, applied patches и применимые license texts.
 
 ## Быстрый старт
 
-В распакованном bundle:
+В Git repository:
 
 ```bash
-./bin/hzr init
-./bin/hzr doctor --workspace .
+hzr doctor --workspace .
+hzr daemon service status
+hzr daemon status
 ```
 
-Запустите singleton daemon в отдельном terminal:
+Release installer создаёт user service (`launchd` на macOS, `systemd --user` на Linux)
+и привязывает его к stable `current/bin/hzrd`. Для source-only разработки foreground
+режим остаётся доступен как `hzr daemon serve`. Daemon слушает только loopback.
 
 ```bash
-./bin/hzr daemon serve
+hzr index status --workspace .
+hzr search "where is command policy" --workspace .
+hzr context plan "change command policy" --workspace .
+hzr exec rewrite 'cargo test 2>&1 | tail -80'
+hzr agent run "Implement the requested change" --workspace .
+hzr stats
 ```
 
-После этого доступны, например:
+Полный fork CLI сохранён:
 
 ```bash
-./bin/hzr index status --workspace .
-./bin/hzr search "where is command policy" --workspace .
-./bin/hzr context plan "change command policy" --workspace .
-./bin/hzr exec rewrite 'cargo test 2>&1 | tail -80'
-./bin/hzr agent run "Implement the requested change" --workspace .
-./bin/rtk --version
+hzr rtk -- --version
+rtk --version
 ```
 
-Если `doctor` или `index status` сообщает о real legacy `.grepai`, сначала выполните read-only scan, затем явную миграцию:
+Обе команды доходят до приватного `engines/rtk`; alias `rtk` не создаёт второй control plane и не использует stock RTK fallback.
+
+## Как собирается контекст
+
+1. HZR сохраняет исходный intent и строит один structural plan полным fork IMG planner.
+2. Одновременно выполняется один project-scoped recall из централизованного ICM.
+3. Evidence нормализуется, дедуплицируется и помещается под hard token budget.
+4. Fork `rgai` fallback вызывается только при пустом code plan; semantic search использует тот же canonical grepai store.
+5. Managed caveman-code получает bounded context один раз и работает только через allowlisted HZR tools.
+6. Перед generation добавляется короткий cache-stable response contract; code, JSON, commands, paths, identifiers, numbers и diagnostics защищены от lossy rewrite.
+
+Native memory, repo-map, RTK, hooks, compression, skills и tools caveman-code отключаются до первой model session и проверяются runtime-тестом. Это сохраняет caveman-code как agent loop, не превращая его во второй control plane.
+
+## Один index и одна memory
+
+```text
+<hzr-data>/
+  runtime/                              # daemon token + singleton locks
+  fork/                                 # derived fork caches, не embeddings DB
+  workspaces/<repo>/<worktree>/index/grepai/
+  memory/icm/                           # одна DB/process
+  ledger/hzr.sqlite                    # единый usage + efficiency ledger
+  migrations/<repo>/<worktree>/
+```
+
+- `.grepai` в project может быть только проверенным symlink на managed store.
+- Один worktree owner lock исключает второй grepai watcher.
+- ICM имеет один lifecycle и одну physical DB; repository namespace задаётся HZR, а не клиентом.
+- Fork `mem.db` остаётся derived structural cache. Он не является вторым embedding index или durable agent memory.
+- Legacy, nested и foreign stores обнаруживаются, но никогда автоматически не удаляются.
+
+Безопасная миграция начинается с read-only scan:
 
 ```bash
-./bin/hzr migrate scan --workspace .
-./bin/hzr migrate apply --workspace .
+hzr migrate scan --workspace .
+hzr migrate apply --workspace .
+hzr migrate history --dry-run
+hzr migrate history --force
 ```
 
-Migration не удаляет исходные данные. Она создаёт full-SHA backup `.grepai.hzr-backup-<sha256>`, immutable `prepared`/`applied` manifests, canonical copy и проверенный `.grepai` symlink. Foreign links, nested duplicates, active HZR owner, escaping symlinks, special files и partial targets блокируют операцию.
+`apply` требует явного запуска, сохраняет full-SHA backup и проверяет immutable prepared/applied manifests. Unsafe symlinks, special files, partial targets и active foreign owner блокируют операцию.
+`history` снимает SQLite Online Backup platform RTK history в read-only режиме,
+импортирует каждую source row один раз и сохраняет content-addressed snapshot с JSON manifest.
 
-## Фактический CLI 0.1.0
+## Основные команды
 
 ```text
 hzr init
+hzr install|uninstall                 adoption, hooks и agent instructions
+hzr hooks status
+hzr mcp serve                         stdio MCP для клиентов без hooks
+hzr mcp config --client codex|claude-desktop
 hzr doctor
 hzr daemon serve|status|engines
+hzr daemon service install|start|stop|restart|status
 hzr engines status
 hzr index status|init
 hzr search|rgai
@@ -166,74 +203,129 @@ hzr memory recall|store|status
 hzr exec rewrite|run|approve|deny
 hzr codec compile
 hzr agent run
-hzr savings
-hzr migrate scan|apply
+hzr stats                              global cumulative efficiency ledger
+hzr migrate scan|apply|history|memory
 hzr rtk -- <fork arguments>
 ```
 
-Daemon `start/stop`, engine auto-update/sync и hook installer не входят в 0.1.0. Foreground supervision и explicit migration дают проверяемую lifecycle boundary; совместимый fork CLI остаётся полностью доступен через `hzr rtk`/`bin/rtk`.
+Важно различать два уровня установки:
 
-## Data root и отсутствие дублей
+- repository-level `install.sh` устанавливает весь versioned self-contained release bundle,
+  re-attest-ит same-version root и запускает production user service;
+- CLI-команда `hzr install` настраивает durable PATH entry, hooks, agent instructions
+  и HZR-owned MCP registrations. Она поддерживает `--dry-run`, требует `--force`
+  для изменений и не запускается во время build/test.
 
-```text
-<hzr-data>/
-  runtime/{hzrd.token,hzrd.token.lock,hzrd.lock}
-  fork/{mem.db,history.db,tee/,audit/}
-  workspaces/<repository-id>/<worktree-id>/index/grepai/
-  migrations/<repository-id>/<worktree-id>/{grepai-v1.prepared.json,grepai-v1.json}
-  memory/icm/{memories.db,auth.token,icm.log,runtime/}
-  ledger/usage.sqlite
-  sessions/<session-id>/
+## MCP для клиентов без hooks
+
+Claude Code получает HZR через hooks и `CLAUDE.md`. Codex app-server и Claude desktop hooks не имеют, и memory у них доступна только по MCP — поэтому раньше каждый регистрировал `icm serve` напрямую. Это ровно тот второй memory layer, который запрещает §6.5, и именно он оставил 8 orphaned `icm serve` от мёртвых Codex-сессий.
+
+```bash
+hzr mcp config --client codex           # печатает [mcp_servers.hzr] блок
+hzr mcp config --client claude-desktop  # печатает mcpServers блок
 ```
 
-- Один `hzrd` владеет data root через filesystem lock.
-- Один watcher на worktree удерживает canonical owner lock.
-- `.grepai` содержит только symlink на managed store; real directory требует migration.
-- Fork `mem.db` — derived structural cache с project keys, не второй code-embedding index и не замена ICM.
-- ICM использует одну DB/process, а HZR namespace/project filter изолирует память репозиториев.
-- Backup migration не считается активным index и никогда автоматически не удаляется.
+`hzr install --dry-run` показывает транзакционную замену direct ICM registrations,
+а подтверждённый `hzr install --force` применяет её с full-SHA backup/CAS. Команда
+`hzr mcp config` остаётся read-only способом получить snippet для ручной интеграции.
 
-## Проверки
+Tools: `hzr_memory_recall`, `hzr_memory_store`, `hzr_search` — та же единственная БД и тот же индекс, что у CLI. Полный контракт для агентов — в [HZR.md](HZR.md).
+
+MCP layer реализован в 0.2.0 как stateless stdio gateway: он не хранит собственные
+данные и не порождает внутренние engines. Каждый клиентский process завершается по EOF,
+а durable ownership остаётся у production `hzrd`; installer мигрирует direct ICM
+registrations и service lifecycle проверяется `hzr doctor`.
+
+Legacy durable memory переносится отдельно и без удаления исходной DB:
+
+```bash
+hzr migrate memory --workspace "$PWD" --dry-run
+hzr daemon service stop
+hzr migrate memory --workspace "$PWD" --force
+hzr daemon service start
+```
+
+Операция делает SQLite-consistent content-addressed snapshots legacy и canonical DB,
+импортирует durable memory rows в repository namespace, пишет проверяемый manifest и
+на повторном запуске является no-op. Hook telemetry, raw pending extractions и derived
+code-area observations остаются только в сохранённом snapshot.
+
+Глобальные тексты запросов/ответов Claude и Codex помечаются doctor как
+`unintercepted`: эти hosts не предоставляют безопасный global response hook. HZR не
+начисляет codec savings для этого пути; codec применяется только в managed `hzr agent`.
+
+Почему параллельные `hzr mcp serve` безопасны, а параллельные `icm serve` — нет: adapter не имеет своего store (всё уходит в единственный `hzrd`) и завершается по EOF на stdin, то есть не может пережить родителя. `hzr doctor` продолжает репортить любые оставшиеся unmanaged `icm serve`/`grepai watch` как `error`, но никогда не убивает их сам.
+
+## Сборка из исходников
+
+Для contributors нужны Rust 1.85+, Go (CI pin 1.24.2), Git, Bash, curl и стандартные Unix build utilities. Системный Node/npm не нужен для bundle build: скрипт скачивает checksum-pinned Node.js 22.17.1 и использует его для production npm tree.
+
+```bash
+scripts/build-bundle.sh "$PWD/dist"
+scripts/package-release.sh "$PWD/dist" "$PWD/dist-release"
+HZR_RELEASE_ARCHIVE="$(find "$PWD/dist-release" -maxdepth 1 \
+  -name 'hzr-v0.2.0-*.tar.gz' -print -quit)"
+scripts/smoke-install.sh "$HZR_RELEASE_ARCHIVE" "$PWD/dist-release/SHA256SUMS"
+```
+
+Последнее имя artifact зависит от нормализованной платформы (`darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`); используйте фактическое имя из `dist-release/`.
+
+Поддерживаемые gates:
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 cargo +1.85.0 check --workspace --all-targets --all-features
-bash -n scripts/*.sh
+PATH="$PWD/dist/runtime/node/bin:$PATH" \
+  "$PWD/dist/runtime/node/bin/npm" ci --prefix integrations/caveman-code
+"$PWD/dist/runtime/node/bin/node" --test integrations/caveman-code/bridge.test.mjs
+PATH="$PWD/dist/runtime/node/bin:$PATH" \
+  "$PWD/dist/runtime/node/bin/npm" audit --omit=dev --audit-level=high \
+  --prefix integrations/caveman-code
 scripts/verify-fork-core.sh --test
-node --check integrations/caveman-code/bridge.mjs
-npm audit --omit=dev --audit-level=high --prefix integrations/caveman-code
 ```
 
-CI отдельно проверяет Rust, MSRV, exact fork suite, Caveman bridge, patched grepai и полную assembled bundle.
+Не запускайте `cargo test` напрямую внутри `fork-core/rtk`: официальный gate создаёт synthetic Git history, нужную унаследованному test suite, и одновременно проверяет immutable baseline плюс current-engine manifest.
 
-## Честные границы 0.1.0
+## Проверяемые гарантии и честные границы
 
-- HZR функционально собирает все движки в один control plane, но целевые проценты экономии остаются KPI для парного provider-billed benchmark, а не заявленным результатом этой сборки.
-- ICM может работать без ONNX в FTS-only режиме; health явно показывает degradation.
-- Caveman-code 0.65.2 при создании session выполняет неактивный `cavemem --version` probe. HZR блокирует builtin tools/resources и их выполнение, но полное удаление самого probe потребует upstream SDK patch.
-- Жёсткий `SIGKILL` способен прервать финальный usage POST; crash-safe exactly-once потребует daemon outbox в следующей версии.
-- Local release gate выполняется на текущей платформе; Windows paths покрыты cfg/tests, но Windows artifact 0.1.0 локально не проверен.
+| Гарантия | Состояние 0.2.0 |
+|---|---|
+| Полный fork baseline и current engine имеют проверяемую identity | реализовано |
+| Stock RTK отсутствует в production path | реализовано |
+| Release bundle работает без внешних Node/RTK/grepai/ICM | native clean-install smoke проходит и входит в release gate |
+| Actual usage не смешивается с estimates | реализовано |
+| Paired provider-billed savings benchmark | ещё не выполнен; 0/9 product metrics |
+| Windows release artifact | отсутствует |
 
-## Handoff для LOOP-агентов
+Дополнительные границы:
 
-Checkpoint релиза `v0.1.0`:
+- ICM по умолчанию работает в FTS-only режиме, поэтому первая запись не запускает
+  скрытую загрузку модели и не падает по timeout; после provisioning модели можно
+  включить `engines.icm_embeddings = true`, а health явно различает оба режима.
+- До запуска `hzrd` hook использует тот же pinned fork-core, но daemon-free rewrite не попадает в SQLite ledger; `doctor` и `stats` помечают accounting incomplete.
+- Жёсткий `SIGKILL` может прервать финальный usage POST; crash-safe outbox оставлен для следующей версии.
+- caveman-code создаёт неактивный upstream `cavemem --version` probe. HZR блокирует builtin resources/tools; устранение самого probe требует отдельного SDK patch.
+- Fresh install и повторная установка той же версии проверяют внешний checksum, внутренний manifest, mandatory layout, digests и отсутствие symlink injection. Повреждённый root никогда не становится `current`.
 
-- HZR является новым Git repository на `main`, а не fork history;
-- immutable core: source `HEAD 5f403c465cbdbe148e9ca03e0ac8e856eef0bfee`, 516 files, 4 deletions, snapshot v2 `f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16`;
-- исходный `/Users/andrew/Programming/rtk` после работы сохранил тот же HEAD, diff digest `37551ca1…` и full status digest `cc3d8266…`;
-- workspace Rust gate: 160 tests passed, fmt/clippy `-D warnings` green, Rust 1.85.0 MSRV check green;
-- exact fork synthetic-Git gate: 1699 passed, 1 ignored; snapshot verification green;
-- Caveman bridge SHA-256 `ef96d21b0745b1885bab9c05f9af88ce6419debd63dbe9d5d70c211533817f74`, 23 agent tests, npm audit — 0 vulnerabilities;
-- assembled bundle smoke доказал versions, licenses/provenance, `hzr rtk`, direct `bin/rtk`, daemon auth/health/singleton и clean shutdown;
-- HZR workspace index мигрирован в canonical store без дублей; retained backup: `.grepai.hzr-backup-034bc104400e6c66ad32c367ed5628181e29565ebc3b5b67d78f3eefa13240ad`;
-- centralized ICM handoff хранится project-scoped под kind `loop-handoff`; глобальный legacy topic `hzr` не является managed source.
+## Дальнейшее развитие
 
-Перед продолжением прочитайте [AGENTS.md](AGENTS.md), [PRD.md](PRD.md), этот README, [FORK_PARITY.md](FORK_PARITY.md), текущий `git status` и выполните `hzr memory recall "HZR current checkpoint" --topic loop-handoff --workspace .`. Не изменяйте `fork-core/rtk` и исходный `/Users/andrew/Programming/rtk`.
+После стабилизации 0.2.0 развитие MCP surface сосредоточится на versioned schema negotiation, дополнительных безопасных HZR tools и сквозном trace от client request до `hzr stats`. Инвариант остаётся прежним: MCP — protocol facade над HZR Core, а не новый index, memory store или control plane.
 
-Следующий измеримый этап один: paired baseline-vs-HZR benchmark на одинаковых repositories, revisions, models и max-turn settings с provider-billed input/output/cache, task success и regression list. Не заменять его estimated percentage.
+## Документация
 
-## Лицензии
+- [`CHANGELOG.md`](CHANGELOG.md) — история публичных релизов.
+- [`PRD.md`](PRD.md) — архитектура, требования и acceptance criteria 0.2.0.
+- [`PRD_STATUS_0.2.0.md`](PRD_STATUS_0.2.0.md) — текущий release status и открытые измерения.
+- [`PRD_ADOPTION.md`](PRD_ADOPTION.md) — hooks, degraded path и безопасная adoption-модель.
+- [`FORK_PARITY.md`](FORK_PARITY.md) — provenance полного fork и regression contract.
+- [`HZR.md`](HZR.md) — короткий tool contract для coding-агентов.
+- [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — pins, patches и лицензии.
+- [`NOTICE`](NOTICE) — copyright и ссылка на bundled attribution.
 
-HZR control plane распространяется под Apache-2.0. Fork-core и остальные engines сохраняют собственные licenses и provenance; bundle включает применимые полные license texts и [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+## Происхождение и лицензии
+
+HZR — новый самостоятельный repository и продукт, не fork history. `v0.1.0` зафиксировал byte-for-byte baseline фактического `heAdz0r/rtk` worktree: 516 entries, четыре tracked deletions и canonical snapshot v2 `f4296ec4…`. Начиная с 0.2.0 полный engine развивается только в `fork-core/rtk` внутри HZR; baseline остаётся неизменяемым доказательством происхождения.
+
+HZR control plane распространяется под Apache-2.0. Fork-core и bundled engines сохраняют собственные лицензии и provenance; подробности — в [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

@@ -37,8 +37,9 @@ impl AppState {
             .ensure_layout()
             .map_err(|error| DaemonError::Config(error.to_string()))?;
 
-        let icm_config =
+        let mut icm_config =
             IcmConfig::from_data_root(config.engines.binary("icm"), config.data_dir.clone());
+        icm_config.embeddings = config.engines.icm_embeddings;
         let memory = Arc::new(IcmSupervisor::new(icm_config).map_err(DaemonError::Memory)?);
         let memory_start = if config.engines.auto_start_icm {
             MemoryStartState::Starting

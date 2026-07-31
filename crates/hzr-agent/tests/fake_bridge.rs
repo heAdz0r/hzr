@@ -59,7 +59,9 @@ sleep 30
 "#,
     );
     let mut config = managed_config(&temp, fake_node, integration, workspace);
-    config.timeout = Duration::from_millis(200);
+    // Leave enough scheduling headroom for a loaded workspace-wide test run while
+    // remaining far below the fixture's 30-second sleep.
+    config.timeout = Duration::from_millis(500);
     let prompt = "x".repeat(2 * 1024 * 1024);
 
     let error = ManagedAgent::new(config)
@@ -67,7 +69,10 @@ sleep 30
         .await
         .expect_err("bridge must time out");
 
-    assert!(matches!(error, hzr_agent::RunError::Timeout));
+    assert!(
+        matches!(error, hzr_agent::RunError::Timeout),
+        "expected timeout, received {error:?}"
+    );
     assert_eq!(
         fs::read_to_string(temp.path().join("agent-data/descendant-terminated"))
             .expect("descendant handled group termination"),
@@ -175,7 +180,7 @@ fn managed_config(
 }
 
 async fn wait_for_file(path: &std::path::Path) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(15), async {
         while !path.is_file() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

@@ -24,6 +24,48 @@ pub enum Command {
         force: bool,
         #[arg(long, value_name = "DIR")]
         data_dir: Option<PathBuf>,
+        #[arg(long, conflicts_with = "force")]
+        if_needed: bool,
+        #[arg(long, requires = "if_needed")]
+        quiet: bool,
+    },
+    #[command(
+        about = "Adopt HZR as the default entry point: PATH binaries, one hook dispatcher, and agent instructions"
+    )]
+    Install {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        force: bool,
+        /// Directory that receives durable `hzr`/`hzrd` binaries and must be on PATH.
+        #[arg(long, value_name = "DIR")]
+        prefix: Option<PathBuf>,
+        /// Explicit binary the hooks should invoke instead of the resolved current executable.
+        #[arg(long, value_name = "PATH")]
+        binary: Option<PathBuf>,
+        /// Allow hooks to point at a `target/debug` or `target/release` build (development only).
+        #[arg(long)]
+        allow_dev_path: bool,
+        /// Keep external `icm hook` entries instead of centralizing memory ownership in HZR.
+        #[arg(long)]
+        keep_external_icm: bool,
+        /// Skip `CLAUDE.md`/`AGENTS.md` instruction wiring and install hooks only.
+        #[arg(long)]
+        skip_instructions: bool,
+    },
+    #[command(about = "Remove HZR adoption hooks without restoring RTK implicitly")]
+    Uninstall {
+        #[arg(long)]
+        keep_data: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        force: bool,
+    },
+    #[command(about = "Inspect or execute the single HZR hook dispatcher")]
+    Hooks {
+        #[command(subcommand)]
+        command: HooksCommand,
     },
     #[command(about = "Verify pins, ownership, daemon health, and duplicate indexes")]
     Doctor {
@@ -74,7 +116,16 @@ pub enum Command {
         #[command(subcommand)]
         command: AgentCommand,
     },
-    #[command(about = "Report observed usage and cost without mixing estimates into actuals")]
+    #[command(
+        about = "Serve HZR-owned tools to external agents over stdio MCP (one store, no orphans)"
+    )]
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
+    #[command(about = "Show global cumulative zero-redundancy gains and observed model usage")]
+    Stats,
+    #[command(hide = true)]
     Savings,
     #[command(about = "Inspect or safely centralize legacy state")]
     Migrate {
@@ -86,6 +137,36 @@ pub enum Command {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum McpCommand {
+    #[command(
+        about = "Serve stdio MCP until the parent agent closes stdin; routes to the one HZR store"
+    )]
+    Serve {
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "Print the MCP server registration snippet for an agent configuration")]
+    Config {
+        #[arg(long, value_enum, default_value_t = McpClientArg::Codex)]
+        client: McpClientArg,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum McpClientArg {
+    Codex,
+    ClaudeDesktop,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HooksCommand {
+    #[command(about = "Report HZR, legacy RTK, and external ICM hook ownership")]
+    Status,
+    #[command(hide = true)]
+    Dispatch,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum DaemonCommand {
     #[command(about = "Serve hzrd in the foreground until interrupted")]
     Serve,
@@ -93,6 +174,25 @@ pub enum DaemonCommand {
     Status,
     #[command(about = "Read the pinned engine manifest from the daemon")]
     Engines,
+    #[command(about = "Manage the production user service that owns the single hzrd")]
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Subcommand)]
+pub enum ServiceCommand {
+    #[command(about = "Install and start the platform user service idempotently")]
+    Install,
+    #[command(about = "Start the installed platform user service")]
+    Start,
+    #[command(about = "Stop the platform user service without deleting its definition")]
+    Stop,
+    #[command(about = "Restart the platform user service on the active bundle")]
+    Restart,
+    #[command(about = "Report whether the platform user service is active")]
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -264,6 +364,24 @@ pub enum MigrateCommand {
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
+    #[command(
+        about = "Snapshot and idempotently import platform RTK history into the canonical ledger"
+    )]
+    History {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        force: bool,
+    },
+    #[command(about = "Snapshot and idempotently import the legacy ICM database into HZR memory")]
+    Memory {
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, conflicts_with = "dry_run")]
+        force: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -392,8 +510,42 @@ mod tests {
     use clap::Parser;
 
     use super::{
-        Cli, Command, ContextCommand, DaemonCommand, ExecCommand, IndexCommand, MigrateCommand,
+        Cli, Command, ContextCommand, DaemonCommand, ExecCommand, HooksCommand, IndexCommand,
+        MigrateCommand, ServiceCommand,
     };
+
+    #[test]
+    fn test_cli_parses_adoption_and_idempotent_init_surface() {
+        let install =
+            Cli::try_parse_from(["hzr", "install", "--dry-run"]).expect("valid install preview");
+        let hooks = Cli::try_parse_from(["hzr", "hooks", "status", "--json"]).expect("hook status");
+        let init = Cli::try_parse_from(["hzr", "init", "--if-needed", "--quiet"])
+            .expect("idempotent init");
+
+        assert!(matches!(
+            install.command,
+            Command::Install {
+                dry_run: true,
+                force: false,
+                ..
+            }
+        ));
+        assert!(hooks.json);
+        assert!(matches!(
+            hooks.command,
+            Command::Hooks {
+                command: HooksCommand::Status
+            }
+        ));
+        assert!(matches!(
+            init.command,
+            Command::Init {
+                if_needed: true,
+                quiet: true,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn test_cli_accepts_global_json_after_subcommand() {
@@ -405,6 +557,21 @@ mod tests {
             cli.command,
             Command::Daemon {
                 command: DaemonCommand::Status
+            }
+        ));
+    }
+
+    #[test]
+    fn test_cli_parses_daemon_service_lifecycle() {
+        let cli = Cli::try_parse_from(["hzr", "daemon", "service", "restart", "--json"])
+            .expect("service restart");
+        assert!(cli.json);
+        assert!(matches!(
+            cli.command,
+            Command::Daemon {
+                command: DaemonCommand::Service {
+                    command: ServiceCommand::Restart
+                }
             }
         ));
     }
@@ -501,6 +668,33 @@ mod tests {
             Command::Migrate {
                 command: MigrateCommand::Apply { ref workspace }
             } if workspace.as_deref() == Some(std::path::Path::new("/workspace"))
+        ));
+    }
+
+    #[test]
+    fn test_cli_requires_explicit_history_migration_mode() {
+        let preview = Cli::try_parse_from(["hzr", "migrate", "history", "--dry-run"])
+            .expect("history preview");
+        let apply =
+            Cli::try_parse_from(["hzr", "migrate", "history", "--force"]).expect("history apply");
+
+        assert!(matches!(
+            preview.command,
+            Command::Migrate {
+                command: MigrateCommand::History {
+                    dry_run: true,
+                    force: false
+                }
+            }
+        ));
+        assert!(matches!(
+            apply.command,
+            Command::Migrate {
+                command: MigrateCommand::History {
+                    dry_run: false,
+                    force: true
+                }
+            }
         ));
     }
 

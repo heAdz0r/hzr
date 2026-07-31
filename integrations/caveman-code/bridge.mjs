@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -8,7 +10,7 @@ import {
 import { Type } from "@sinclair/typebox";
 
 const EXPECTED_VERSION = "0.65.2";
-const EXPECTED_HZR_VERSION = "0.1.0";
+const EXPECTED_HZR_VERSION = "0.2.0";
 const EXPECTED_PROTOCOL_VERSION = 1;
 const CUSTOM_TOOL_NAMES = [
   "hzr_context",
@@ -114,9 +116,9 @@ function readEnvironment() {
   return { endpoint: url, token, agentDir };
 }
 
-function configureSettings() {
-  assertFunction(SettingsManager, "inMemory");
-  const settings = SettingsManager.inMemory();
+function configureSettings(settingsManager = SettingsManager) {
+  assertFunction(settingsManager, "inMemory");
+  const settings = settingsManager.inMemory();
   const requiredSetters = [
     "setRtkEnabled",
     "setCaveModeEnabled",
@@ -616,6 +618,91 @@ async function recordUsage(callHzr, session, requestId, outcome, retries, starte
   }
 }
 
+export async function prepareManagedRuntime({
+  request,
+  environment,
+  callHzr,
+  workspace = process.cwd(),
+  createSession = createAgentSession,
+  onSessionCreated = () => {},
+}) {
+  await assertRuntimeVersion();
+  const health = await preflightHealth(callHzr);
+  process.env.CAVE_OMIT_CLAUDE_MD = "1";
+  process.env.CAVE_MEMORY_AUTO_RECORD = "0";
+  process.env.CAVE_CHAT_MODE = "auto";
+
+  const settings = configureSettings();
+  const responseContract =
+    request.response_format === "json" ? JSON_RESPONSE_CONTRACT : TEXT_RESPONSE_CONTRACT;
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: workspace,
+    agentDir: environment.agentDir,
+    settingsManager: settings,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    systemPrompt: "",
+    appendSystemPrompt: responseContract,
+    systemPromptOverride: () => undefined,
+    appendSystemPromptOverride: () => [responseContract],
+    agentsFilesOverride: () => ({ agentsFiles: [] }),
+  });
+  await resourceLoader.reload();
+  assertManagedSettings(settings);
+  assertResourceInvariants(resourceLoader, responseContract);
+
+  const prefetchedContext = await callHzr(
+    "/v1/context/plan",
+    {
+      workspace,
+      intent: request.prompt,
+      search_limit: 10,
+      memory_limit: 5,
+    },
+    AbortSignal.timeout(30_000),
+  );
+  const { session, modelFallbackMessage } = await createSession({
+    cwd: workspace,
+    agentDir: environment.agentDir,
+    settingsManager: settings,
+    sessionManager: SessionManager.inMemory(),
+    resourceLoader,
+    tools: [],
+    customTools: createHzrTools(callHzr, workspace),
+    maxTurns: request.max_turns,
+  });
+  onSessionCreated(session);
+  configureSessionState(session);
+  assertFunction(session, "abort");
+  const toolGuard = installManagedToolGuard(
+    session,
+    settings,
+    resourceLoader,
+    responseContract,
+  );
+  const sessionState = assertSessionInvariants(
+    session,
+    settings,
+    resourceLoader,
+    responseContract,
+    toolGuard,
+  );
+
+  return {
+    health,
+    settings,
+    resourceLoader,
+    responseContract,
+    prefetchedContext,
+    session,
+    modelFallbackMessage,
+    toolGuard,
+    sessionState,
+  };
+}
+
 async function run() {
   const input = await new Promise((resolveInput, rejectInput) => {
     let buffer = "";
@@ -638,53 +725,9 @@ async function run() {
   const request = readRequest(line);
   activeRequestId = request.request_id;
   const environment = readEnvironment();
-  await assertRuntimeVersion();
   const callHzr = createHzrClient(environment.endpoint, environment.token);
-  const health = await preflightHealth(callHzr);
-  process.env.CAVE_OMIT_CLAUDE_MD = "1";
-  process.env.CAVE_MEMORY_AUTO_RECORD = "0";
-  process.env.CAVE_CHAT_MODE = "auto";
-  const settings = configureSettings();
   const workspace = process.cwd();
-  const responseContract =
-    request.response_format === "json" ? JSON_RESPONSE_CONTRACT : TEXT_RESPONSE_CONTRACT;
-  const resourceLoader = new DefaultResourceLoader({
-    cwd: workspace,
-    agentDir: environment.agentDir,
-    settingsManager: settings,
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    systemPrompt: "",
-    appendSystemPrompt: responseContract,
-    systemPromptOverride: () => undefined,
-    appendSystemPromptOverride: () => [responseContract],
-    agentsFilesOverride: () => ({ agentsFiles: [] }),
-  });
-  await resourceLoader.reload();
-  assertManagedSettings(settings);
-  assertResourceInvariants(resourceLoader, responseContract);
-  const prefetchedContext = await callHzr(
-    "/v1/context/plan",
-    {
-      workspace,
-      intent: request.prompt,
-      search_limit: 10,
-      memory_limit: 5,
-    },
-    AbortSignal.timeout(30_000),
-  );
-  const { session, modelFallbackMessage } = await createAgentSession({
-    cwd: workspace,
-    agentDir: environment.agentDir,
-    settingsManager: settings,
-    sessionManager: SessionManager.inMemory(),
-    resourceLoader,
-    tools: [],
-    customTools: createHzrTools(callHzr, workspace),
-    maxTurns: request.max_turns,
-  });
+  let session = null;
   let unsubscribe;
   let invariantFailure = null;
   let primaryError = null;
@@ -692,23 +735,29 @@ async function run() {
   let retries = 0;
   let outcome = "failed";
   let usage = { recorded: false, warning: null };
+  let preflightWarnings = [];
   const startedAt = performance.now();
   try {
-    configureSessionState(session);
-    assertFunction(session, "abort");
-    const toolGuard = installManagedToolGuard(
-      session,
+    const prepared = await prepareManagedRuntime({
+      request,
+      environment,
+      callHzr,
+      workspace,
+      onSessionCreated(value) {
+        session = value;
+      },
+    });
+    const {
+      health,
       settings,
       resourceLoader,
       responseContract,
-    );
-    const sessionState = assertSessionInvariants(
-      session,
-      settings,
-      resourceLoader,
-      responseContract,
+      prefetchedContext,
+      modelFallbackMessage,
       toolGuard,
-    );
+      sessionState,
+    } = prepared;
+    preflightWarnings = health.warnings;
     emit("ready", {
       caveman_code: EXPECTED_VERSION,
       control_plane: "hzr",
@@ -780,12 +829,14 @@ async function run() {
   } catch (error) {
     primaryError = invariantFailure ?? (error instanceof Error ? error : new Error(String(error)));
   } finally {
-    usage = await recordUsage(callHzr, session, request.request_id, outcome, retries, startedAt);
+    if (session !== null) {
+      usage = await recordUsage(callHzr, session, request.request_id, outcome, retries, startedAt);
+    }
     try {
       unsubscribe?.();
     } catch {}
     try {
-      session.dispose();
+      session?.dispose();
     } catch {}
   }
   if (primaryError !== null) {
@@ -798,7 +849,7 @@ async function run() {
   }
   emit("result", {
     ...result,
-    preflight_warnings: health.warnings,
+    preflight_warnings: preflightWarnings,
     usage_recorded: usage.recorded,
     usage_warning: usage.warning,
   });
@@ -810,11 +861,17 @@ function exitWithFailure() {
   process.stdout.write("", () => process.exit(1));
 }
 
-run()
-  .then((success) => {
-    if (!success) exitWithFailure();
-  })
-  .catch((error) => {
-    emit("error", { message: errorMessage(error) });
-    exitWithFailure();
-  });
+export function isDirectExecution(entry = process.argv[1]) {
+  return typeof entry === "string" && import.meta.url === pathToFileURL(resolve(entry)).href;
+}
+
+if (isDirectExecution()) {
+  run()
+    .then((success) => {
+      if (!success) exitWithFailure();
+    })
+    .catch((error) => {
+      emit("error", { message: errorMessage(error) });
+      exitWithFailure();
+    });
+}

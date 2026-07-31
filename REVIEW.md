@@ -1,5 +1,7 @@
 # HZR 0.1.0 — независимый review реализации и качества
 
+> Исторический независимый review `v0.1.0`. Все G1–G7 из этого документа исправлены в development line 0.2.0; findings не переписаны задним числом. Реализация добавила regression tests и отдельную current-engine identity поверх неизменяемого `v0.1.0` baseline.
+
 **Дата review:** 2026-07-31
 **Reviewer:** независимая проверка против [PRD.md](PRD.md) и [FORK_PARITY.md](FORK_PARITY.md)
 **Метод:** запуск всех gate самостоятельно + end-to-end прогон продукта из чистого data root, а не чтение отчётов

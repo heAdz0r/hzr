@@ -34,8 +34,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::cell::RefCell;
-use std::ffi::OsString;
-use std::path::PathBuf;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock; // H4: project_path cache
 use std::time::Instant;
 
@@ -80,8 +80,9 @@ fn project_where_clause(scoped: bool) -> &'static str {
     }
 }
 
-/// Number of days to retain tracking history before automatic cleanup.
-const HISTORY_DAYS: i64 = 90;
+/// Standalone RTK keeps a bounded history. HZR sets `RTK_HISTORY_DAYS=0` for its
+/// product-owned cumulative ledger.
+const DEFAULT_HISTORY_DAYS: i64 = 90;
 /// Minimum interval between cleanup runs to reduce write amplification.
 const CLEANUP_INTERVAL_SECS: i64 = 60 * 60; // 1 hour
 
@@ -158,6 +159,15 @@ pub struct GainSummary {
     pub by_command: Vec<(String, usize, usize, f64, u64)>,
     /// Last 30 days of activity: (date, saved_tokens)
     pub by_day: Vec<(String, usize)>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CommandStats {
+    pub command: String,
+    pub executions: usize,
+    pub saved_tokens: usize,
+    pub avg_savings_pct: f64,
+    pub avg_time_ms: u64,
 }
 
 /// Daily statistics for token savings and execution metrics.
@@ -272,6 +282,10 @@ impl Tracker {
     /// ```
     pub fn new() -> Result<Self> {
         let db_path = get_db_path()?;
+        Self::open(&db_path)
+    }
+
+    fn open(db_path: &Path) -> Result<Self> {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -413,6 +427,9 @@ impl Tracker {
     }
 
     fn maybe_cleanup_old(&self) -> Result<()> {
+        let Some(history_days) = history_days() else {
+            return Ok(());
+        };
         let now = Utc::now().timestamp();
         let last_cleanup: Option<i64> = self
             .conn
@@ -430,7 +447,7 @@ impl Tracker {
             return Ok(());
         }
 
-        self.cleanup_old()?;
+        self.cleanup_old(history_days)?;
         self.conn.execute(
             "INSERT INTO tracking_meta (key, value)
              VALUES ('last_cleanup_ts', ?1)
@@ -440,8 +457,8 @@ impl Tracker {
         Ok(())
     }
 
-    fn cleanup_old(&self) -> Result<()> {
-        let cutoff = Utc::now() - chrono::Duration::days(HISTORY_DAYS);
+    fn cleanup_old(&self, history_days: i64) -> Result<()> {
+        let cutoff = Utc::now() - chrono::Duration::days(history_days);
         self.conn.execute(
             "DELETE FROM commands WHERE timestamp < ?1",
             params![cutoff.to_rfc3339()],
@@ -557,15 +574,35 @@ impl Tracker {
         &self,
         project_path: Option<&str>, // added
     ) -> Result<Vec<(String, usize, usize, f64, u64)>> {
+        Ok(self
+            .get_all_by_command_filtered(project_path)?
+            .into_iter()
+            .take(10)
+            .map(|stats| {
+                (
+                    stats.command,
+                    stats.executions,
+                    stats.saved_tokens,
+                    stats.avg_savings_pct,
+                    stats.avg_time_ms,
+                )
+            })
+            .collect())
+    }
+
+    pub fn get_all_by_command_filtered(
+        &self,
+        project_path: Option<&str>,
+    ) -> Result<Vec<CommandStats>> {
         let (project_exact, project_glob) = project_filter_params(project_path); // added
         let cmd_mapper = |row: &rusqlite::Row<'_>| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)? as usize,
-                row.get::<_, i64>(2)? as usize,
-                row.get::<_, f64>(3)?,
-                row.get::<_, f64>(4)? as u64,
-            ))
+            Ok(CommandStats {
+                command: row.get(0)?,
+                executions: row.get::<_, i64>(1)? as usize,
+                saved_tokens: row.get::<_, i64>(2)? as usize,
+                avg_savings_pct: row.get(3)?,
+                avg_time_ms: row.get::<_, f64>(4)? as u64,
+            })
         };
         // CR-08: два отдельных SQL-текста → SQLite кеширует и оптимизирует независимо
         let rows: Vec<_> = match (project_exact.as_deref(), project_glob.as_deref()) {
@@ -574,7 +611,7 @@ impl Tracker {
                 .prepare_cached(
                     "SELECT rtk_cmd, COUNT(*), SUM(saved_tokens), AVG(savings_pct), AVG(exec_time_ms)
                      FROM commands WHERE (project_path = ?1 OR project_path GLOB ?2)
-                     GROUP BY rtk_cmd ORDER BY SUM(saved_tokens) DESC LIMIT 10",
+                     GROUP BY rtk_cmd ORDER BY SUM(saved_tokens) DESC",
                 )?
                 .query_map(params![exact, glob], cmd_mapper)?
                 .collect::<Result<Vec<_>, _>>()?,
@@ -583,7 +620,7 @@ impl Tracker {
                 .prepare_cached(
                     "SELECT rtk_cmd, COUNT(*), SUM(saved_tokens), AVG(savings_pct), AVG(exec_time_ms)
                      FROM commands
-                     GROUP BY rtk_cmd ORDER BY SUM(saved_tokens) DESC LIMIT 10",
+                     GROUP BY rtk_cmd ORDER BY SUM(saved_tokens) DESC",
                 )?
                 .query_map([], cmd_mapper)?
                 .collect::<Result<Vec<_>, _>>()?,
@@ -1005,22 +1042,41 @@ impl Tracker {
     }
 }
 
+fn history_days() -> Option<i64> {
+    match std::env::var("RTK_HISTORY_DAYS") {
+        Ok(value) => match value.trim().parse::<i64>() {
+            Ok(0) => None,
+            Ok(days) if days > 0 => Some(days),
+            _ => Some(DEFAULT_HISTORY_DAYS),
+        },
+        Err(_) => Some(DEFAULT_HISTORY_DAYS),
+    }
+}
+
 fn get_db_path() -> Result<PathBuf> {
-    // Priority 1: Environment variable RTK_DB_PATH
-    if let Ok(custom_path) = std::env::var("RTK_DB_PATH") {
-        return Ok(PathBuf::from(custom_path));
-    }
+    let configured_path = crate::config::Config::load()
+        .ok()
+        .and_then(|config| config.tracking.database_path);
+    Ok(resolve_db_path(
+        std::env::var_os("RTK_DB_PATH").as_deref(),
+        configured_path,
+        dirs::data_local_dir(),
+    ))
+}
 
-    // Priority 2: Configuration file
-    if let Ok(config) = crate::config::Config::load() {
-        if let Some(db_path) = config.tracking.database_path {
-            return Ok(db_path);
-        }
-    }
-
-    // Priority 3: Default platform-specific location
-    let data_dir = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
-    Ok(data_dir.join("rtk").join("history.db"))
+fn resolve_db_path(
+    environment_path: Option<&OsStr>,
+    configured_path: Option<PathBuf>,
+    data_dir: Option<PathBuf>,
+) -> PathBuf {
+    environment_path
+        .map(PathBuf::from)
+        .or(configured_path)
+        .unwrap_or_else(|| {
+            data_dir
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("rtk/history.db")
+        })
 }
 
 /// Estimate token count from text using ~4 chars = 1 token heuristic.
@@ -1141,19 +1197,26 @@ impl TimedExecution {
     /// timer.track("ls -la", "rtk ls", input, output);
     /// ```
     pub fn track(&self, original_cmd: &str, rtk_cmd: &str, input: &str, output: &str) {
-        let elapsed_ms = self.start.elapsed().as_millis() as u64;
-        let input_tokens = estimate_tokens(input);
-        let output_tokens = estimate_tokens(output);
-
         with_cached_tracker(|tracker| {
-            let _ = tracker.record(
-                original_cmd,
-                rtk_cmd,
-                input_tokens,
-                output_tokens,
-                elapsed_ms,
-            );
+            let _ = self.track_with(tracker, original_cmd, rtk_cmd, input, output);
         });
+    }
+
+    fn track_with(
+        &self,
+        tracker: &Tracker,
+        original_cmd: &str,
+        rtk_cmd: &str,
+        input: &str,
+        output: &str,
+    ) -> Result<()> {
+        tracker.record(
+            original_cmd,
+            rtk_cmd,
+            estimate_tokens(input),
+            estimate_tokens(output),
+            self.start.elapsed().as_millis() as u64,
+        )
     }
 
     /// Track passthrough commands (timing-only, no token counting).
@@ -1177,11 +1240,25 @@ impl TimedExecution {
     /// timer.track_passthrough("git tag", "rtk git tag");
     /// ```
     pub fn track_passthrough(&self, original_cmd: &str, rtk_cmd: &str) {
-        let elapsed_ms = self.start.elapsed().as_millis() as u64;
         // input_tokens=0, output_tokens=0 won't dilute savings statistics
         with_cached_tracker(|tracker| {
-            let _ = tracker.record(original_cmd, rtk_cmd, 0, 0, elapsed_ms);
+            let _ = self.track_passthrough_with(tracker, original_cmd, rtk_cmd);
         });
+    }
+
+    fn track_passthrough_with(
+        &self,
+        tracker: &Tracker,
+        original_cmd: &str,
+        rtk_cmd: &str,
+    ) -> Result<()> {
+        tracker.record(
+            original_cmd,
+            rtk_cmd,
+            0,
+            0,
+            self.start.elapsed().as_millis() as u64,
+        )
     }
 }
 
@@ -1330,27 +1407,47 @@ mod tests {
     // 5. TimedExecution::track records with exec_time > 0
     #[test]
     fn test_timed_execution_records_time() {
+        let temp = tempfile::tempdir().expect("Failed to create temporary database directory");
+        let tracker = Tracker::open(&temp.path().join("history.db"))
+            .expect("Failed to create isolated tracker");
         let timer = TimedExecution::start();
         std::thread::sleep(std::time::Duration::from_millis(10));
-        timer.track("test cmd", "rtk test", "raw input data", "filtered");
+        timer
+            .track_with(
+                &tracker,
+                "test cmd",
+                "rtk test",
+                "raw input data",
+                "filtered",
+            )
+            .expect("Failed to track timed execution");
 
-        // Verify via DB that record exists
-        let tracker = Tracker::new().expect("Failed to create tracker");
-        let recent = tracker.get_recent(5).expect("Failed to get recent");
-        assert!(recent.iter().any(|r| r.rtk_cmd == "rtk test"));
+        let elapsed_ms: u64 = tracker
+            .conn
+            .query_row(
+                "SELECT exec_time_ms FROM commands WHERE rtk_cmd = ?1",
+                ["rtk test"],
+                |row| row.get(0),
+            )
+            .expect("Timed execution record not found");
+        assert!(elapsed_ms >= 10);
     }
 
     // 6. TimedExecution::track_passthrough records with 0 tokens
     #[test]
     fn test_timed_execution_passthrough() {
+        let temp = tempfile::tempdir().expect("Failed to create temporary database directory");
+        let tracker = Tracker::open(&temp.path().join("history.db"))
+            .expect("Failed to create isolated tracker");
         let timer = TimedExecution::start();
-        timer.track_passthrough("git tag", "rtk git tag (passthrough)");
+        timer
+            .track_passthrough_with(&tracker, "git tag", "rtk git tag (passthrough)")
+            .expect("Failed to track passthrough execution");
 
-        let tracker = Tracker::new().expect("Failed to create tracker");
-        let recent = tracker.get_recent(5).expect("Failed to get recent");
-
-        let pt = recent
-            .iter()
+        let pt = tracker
+            .get_recent(1)
+            .expect("Failed to get recent")
+            .into_iter()
             .find(|r| r.rtk_cmd.contains("passthrough"))
             .expect("Passthrough record not found");
 
@@ -1362,26 +1459,15 @@ mod tests {
     // 7. get_db_path respects environment variable RTK_DB_PATH
     #[test]
     fn test_custom_db_path_env() {
-        use std::env;
-
         let custom_path = "/tmp/rtk_test_custom.db";
-        env::set_var("RTK_DB_PATH", custom_path);
-
-        let db_path = get_db_path().expect("Failed to get db path");
+        let db_path = resolve_db_path(Some(OsStr::new(custom_path)), None, None);
         assert_eq!(db_path, PathBuf::from(custom_path));
-
-        env::remove_var("RTK_DB_PATH");
     }
 
     // 8. get_db_path falls back to default when no custom config
     #[test]
     fn test_default_db_path() {
-        use std::env;
-
-        // Ensure no env var is set
-        env::remove_var("RTK_DB_PATH");
-
-        let db_path = get_db_path().expect("Failed to get db path");
+        let db_path = resolve_db_path(None, None, Some(PathBuf::from("/tmp/rtk-data")));
         assert!(db_path.ends_with("rtk/history.db"));
     }
 

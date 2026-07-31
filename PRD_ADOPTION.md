@@ -1,7 +1,7 @@
 # PRD addendum §16 — HZR как default entry point (замена RTK-хуков)
 
-**Статус:** спецификация, не реализовано
-**Родитель:** [PRD.md](PRD.md) · закрывает ⚪ пункт «HZR hook installer/background service manager» из [FORK_PARITY.md](FORK_PARITY.md)
+**Статус:** release candidate 0.2.0; hook/control-plane, durable PATH placement, Claude/Codex instructions, MCP migration и production user service реализованы; live deployment фиксируется отдельным audit record
+**Родитель:** [PRD.md](PRD.md) · закрывает adoption, client MCP ownership и background service lifecycle
 **Целевая версия:** 0.2.0 (расширяет CLI surface §6.8 и mutation surface §14 — вне рамок 0.1.0)
 **Принятые решения:** hybrid daemon→fork fallback · `HZR` = heAdz0r's Zero-Redundancy engine
 
@@ -38,12 +38,12 @@ hzr-rewrite.sh
 Правила:
 
 - **Шелл не ломается никогда.** Отсутствие `hzrd` — не ошибка хука. Это ровно тот путь, который PRD §10 уже разрешает: «`hzrd` недоступен → exact compatibility `hzr rtk`/`bin/rtk` остаётся прямым process path».
-- **Деградация видима, а не молчалива.** Каждый degraded вызов инкрементит счётчик, `hzr doctor` показывает `degraded_rewrites=N`, и `hzr savings` помечает период как частично неучтённый. Это соблюдает §4.2: неучтённое не выдаётся за учтённое.
+- **Деградация видима, а не молчалива.** Каждый degraded вызов инкрементит счётчик, `hzr doctor` показывает `degraded_rewrites=N`, и `hzr stats` помечает период как частично неучтённый. Это соблюдает §4.2: неучтённое не выдаётся за учтённое.
 - **Никакого silent fallback на stock RTK.** Fallback идёт в `hzr rtk --`, то есть в тот же pinned fork-core `0.44.1-fork.1`. Запрет §1.1.8 не нарушается.
 - **Timeout хука жёсткий** (предлагаю 2 s на probe демона): просроченный probe немедленно уходит в degraded, а не висит в терминале.
-- Автостарта демона нет. Он остаётся явной операцией (`hzr daemon serve`), как и решено в §14.
+- Release installer ставит и запускает production user service (`launchd`/`systemd --user`) на stable `current/bin/hzrd`; foreground `hzr daemon serve` остаётся development-режимом.
 
-**Цена решения, зафиксированная явно:** пока демон не запущен, rewrite не попадает в ledger. Полный учёт требует либо запущенного `hzrd`, либо будущего background supervisor (§14 п.4).
+**Цена решения, зафиксированная явно:** если service недоступен, rewrite сохраняет fork-вердикт, но не попадает в SQLite ledger. `doctor` и `stats` обязаны показать неполный accounting; installer восстанавливает service idempotent-командами `hzr daemon service install|restart`.
 
 ## 16.4 Автоматический `hzr init`
 
@@ -64,19 +64,36 @@ hzr-rewrite.sh
 ## 16.5 Новый CLI surface (расширение §6.8)
 
 ```text
-hzr install [--dry-run] [--force]      # идемпотентно: хуки + инструкции + миграция rtk-записей
-hzr uninstall [--keep-data]            # полное снятие; RTK-записи не восстанавливаются молча
-hzr hooks status [--json]              # что зарегистрировано, кем, и есть ли конфликт с rtk
+hzr install [--dry-run] [--force] [--prefix DIR] [--binary PATH]
+            [--allow-dev-path] [--keep-external-icm] [--skip-instructions]
+hzr uninstall [--keep-data] [--dry-run] [--force] # hooks + instruction blocks; RTK не восстанавливается
+hzr hooks status [--json]              # hooks + instructions + PATH + foreign processes
 hzr init --if-needed [--quiet]         # для SessionStart
 ```
 
-`hzr install` обязан:
+`hzr install` выполняет адопцию целиком, в одном подтверждённом действии, по порядку
+«binaries → hooks → instructions», чтобы hook-команда и `CLAUDE.md` ссылались на путь,
+который к этому моменту уже существует:
 
-1. Сделать **backup** `settings.json` с full-SHA в имени, как это делает migration (§11) — тот же проверенный паттерн, не новый.
-2. Показать точный diff и требовать подтверждения; `--dry-run` — обязательный первоклассный режим.
-3. Быть idempotent: повторный запуск даёт `already_installed`, не дублирует записи.
-4. **Обнаружить и заменить** rtk-записи (`rtk-rewrite.sh`, `rtk-mem-context.sh`, `rtk-block-native-explore.sh`), сохранив их в backup.
-5. Никогда не трогать `icm hook *` записи, если ICM управляется вне HZR — но пометить их в `hooks status` как потенциальный дубль memory-слоя (HZR уже владеет ICM по §6.5).
+1. **Durable binaries на PATH.** `hzr`/`hzrd` копируются в `--prefix` (по умолчанию `~/.local/bin`, где уже живут остальные движки), помечаются `0755`, и отсутствие prefix в `PATH` репортится отдельным warning и `doctor`-check `hzr_on_path`. Alias `rtk` на PATH **не** создаётся: это был бы второй entry point.
+2. **Backup** каждого изменяемого файла с full-SHA в имени, тот же проверенный паттерн, что и migration (§11).
+3. `--dry-run` — первоклассный режим: показывает `before_sha256`/`after_sha256`, backup path и целевой hook binary, не записывая ничего. Без `--force` запись отклоняется с указанием сначала посмотреть preview.
+4. **Idempotent по всем трём поверхностям**: повторный запуск даёт `changed=false` для hooks, prefix и instructions, не создаёт второй backup и не дублирует записи.
+5. **Обнаружить и заменить** rtk-записи (`rtk-rewrite.sh`, `rtk-mem-context.sh`, `rtk-block-native-explore.sh`, `rtk hook …`), сохранив исходник в backup.
+6. **Централизовать memory ownership:** прямые `icm hook …` записи удаляются, потому что они пишут в store, который HZR не супервизирует, — то есть второй durable memory layer против §6.5. Осознанный отказ — `--keep-external-icm`; тогда `doctor` продолжает репортить дубль как `error`.
+7. **Неизвестные сторонние handlers не трогаются никогда** — ни при install, ни при uninstall.
+
+**Hook binary никогда не берётся из `current_exe()` наивно.** Установка из `cargo run` или из распакованного во временную директорию bundle привязала бы hook к `target/debug/hzr` или к пути, который исчезнет, — и тогда ломается каждая Bash-команда. Поэтому hook всегда именует durable копию в prefix; `--binary` задаёт путь явно; `target/debug|release` отклоняется с диагностикой, а `--allow-dev-path` оставлен только для разработки. Путь канонизируется, поэтому symlink или `..` не могут спрятать build-директорию.
+
+Реализованный matcher учитывает современный Claude Code `Agent` и legacy `Task`: один `PreToolUse:Bash|Agent|Task` handler вызывает скрытый `hzr hooks dispatch`. Fork exit `0/1/2/3` не возвращается как process exit hook-а: dispatcher преобразует его в typed `allow/ask/deny` JSON при exit 0, как требует Claude hook protocol. Managed probe ограничен 2 s; fallback использует `PinnedRtkAdapter` той же версии `0.44.1-fork.1`.
+
+### 16.5.1 Foreign engine processes
+
+`doctor` и `hooks status` перечисляют `icm serve` и `grepai watch`, запущенные вне HZR data root, и репортят их как `error`: несколько `icm serve` означают несколько писателей в memory store, а сторонний `grepai watch` пересканирует дерево, которым HZR уже владеет. Процессы внутри HZR data root распознаются как свои и не считаются чужими.
+
+**HZR их не останавливает.** Автоматическое завершение внешних процессов запрещено §4.3 и §11: неверно убитый watcher теряет in-flight состояние индекса. Отчёт — обязателен, остановка — решение пользователя.
+
+Реализованный matcher учитывает современный Claude Code `Agent` и legacy `Task`: один `PreToolUse:Bash|Agent|Task` handler вызывает скрытый `hzr hooks dispatch`. Fork exit `0/1/2/3` не возвращается как process exit hook-а: dispatcher преобразует его в typed `allow/ask/deny` JSON при exit 0, как требует Claude hook protocol. Managed probe ограничен 2 s; fallback использует `PinnedRtkAdapter` той же версии `0.44.1-fork.1`.
 
 ## 16.6 Инструкции агентов
 
@@ -84,18 +101,30 @@ Fork-core уже содержит готовый образец обеих по�
 
 | Артефакт | Назначение |
 |---|---|
-| `HZR.md` | Канонический контракт инструмента: `hzr read/grep/rgai/write/exec`, когда raw, когда exact |
-| `hooks/hzr-awareness.md` | Claude Code: приоритет `hzr` над нативными Read/Grep/Edit |
-| `hooks/hzr-awareness-codex.md` | Codex: тот же контракт в его формате инструкций |
-| Ссылка в `~/.claude/CLAUDE.md` | Одна строка `@HZR.md`, устанавливается `hzr install` |
+| `HZR.md` | Канонический контракт инструмента: HZR-owned read/search/write/exec/memory/context paths, когда raw, когда exact |
+| `integrations/claude-code/hzr-awareness.md` | Claude Code: приоритет `hzr` над нативными Read/Grep/Edit |
+| `integrations/claude-code/hzr-awareness-codex.md` | Codex: тот же контракт в его формате инструкций |
+| Ссылка в `~/.claude/CLAUDE.md` | ✅ реализовано: `install` вставляет managed-блок с `@<abs>/HZR.md` и снимает legacy `@RTK.md` |
+| Блок в `~/.codex/AGENTS.md` | ✅ реализовано: тот же контракт в форме, которую Codex читает буквально (у него нет `@import`) |
+
+**Как это устроено, чтобы не портить пользовательские файлы.** HZR владеет ровно одним
+делимитированным блоком `<!-- hzr:begin … -->` / `<!-- hzr:end … -->` и никогда не
+перезаписывает файл целиком. Пользовательский текст остаётся сверху, managed-блок
+добавляется последним. Legacy-импорт снимается только при совпадении **всей строки**
+(`@RTK.md`), поэтому проза, которая просто упоминает `RTK.md`, сохраняется. Незакрытый
+маркер не приводит к обрезке содержимого. `uninstall` снимает блок и восстанавливает
+исходное тело: оставленная инструкция продолжала бы требовать `hzr` после снятия hooks.
+Путь до `HZR.md` абсолютный, потому что относительный `@`-импорт не выживает перемещение
+bundle. Мутации идут через тот же backup/CAS/atomic путь, что и `settings.json`, но с
+отдельным lock-файлом на каждый целевой файл.
 
 Единый контракт для обоих агентов (замена текущей RTK-таблицы):
 
 ```text
-Read     → hzr read <file>            (или hzr rtk -- read при отсутствии демона)
+Read     → hzr rtk -- read <file>
 Grep     → hzr rgai "<intent>" | hzr search <pattern>
-Edit     → hzr write patch|replace|set
-Bash     → перехватывается hzr-rewrite.sh автоматически
+Edit     → hzr rtk -- write patch|replace|set ...
+Bash     → перехватывается hzr hooks dispatch автоматически
 Memory   → hzr memory recall|store    (единственный durable store, §6.5)
 Context  → hzr context plan "<intent>"
 ```
@@ -115,7 +144,33 @@ Context  → hzr context plan "<intent>"
 - `init --if-needed` на инициализированном workspace — байт-в-байт no-op по файловой системе;
 - `init` не трогает реальную `.grepai` и требует migration;
 - `uninstall` снимает все записи и не оставляет битых путей;
-- fallback уходит в pinned fork `0.44.1-fork.1`, а не в stock RTK (версионный ассерт).
+- fallback уходит в pinned fork `0.44.1-fork.1`, а не в stock RTK (версионный ассерт);
+- hook binary отклоняется при `target/debug|release` и при несуществующем пути; `--allow-dev-path` его разрешает;
+- `install` в prefix idempotent, ставит exec-бит и не перезаписывает уже совпадающий байт-в-байт бинарь;
+- `rtk` alias **не** появляется на PATH;
+- managed-блок instruction-файла idempotent, снимает `@RTK.md` только как целую строку, сохраняет прозу с упоминанием `RTK.md`, не обрезает содержимое при незакрытом маркере, и `uninstall` восстанавливает исходное тело;
+- Codex-поверхность использует литеральную ссылку, а не `@import`;
+- foreign-scan отличает процессы внутри HZR data root от чужих и никогда не репортит собственный вызов.
+
+## 16.7.1 Что сознательно не делается: глобальный перехват codec
+
+Требование «Caveman codec перехватывает глобальные запросы и ответы Claude/Codex»
+**не реализуется**, и не из-за объёма работы:
+
+1. **Технически невозможно через hooks.** Claude Code не предоставляет hook, который
+   переписывает payload, уходящий провайдеру, или ответ модели. `UserPromptSubmit` умеет
+   *добавлять* контекст, `Stop` умеет блокировать остановку — ни один не даёт mutable
+   provider request/response. Перехват существует только там, где запрос действительно
+   проходит через HZR, то есть в `hzr agent run`.
+2. **Противоречит собственной доказательной базе PRD.** §3.4 фиксирует, что input
+   compression в среднем **повышает** стоимость и снижает accuracy (CAVEWOMAN), а §4.3
+   прямо объявляет non-goal сжатие reasoning провайдера. Глобальное сжатие входа Claude
+   было бы реализацией того, что PRD уже отверг на данных.
+
+Реализуемая и реализованная часть — **instruction-level density contract**: managed-блок
+в `CLAUDE.md`/`AGENTS.md` задаёт плотность ответа до генерации, что и есть тот же приём,
+которым managed bridge пользуется через `appendSystemPrompt`. Это влияет на output-токены
+без lossy-переписывания и без второго прохода.
 
 ## 16.8 Риски
 
@@ -125,16 +180,18 @@ Context  → hzr context plan "<intent>"
 | Хук ломает терминал при мёртвом демоне | hybrid fallback (§16.3) + жёсткий timeout |
 | Молчаливо неполный ledger | Счётчик degraded + отражение в `doctor`/`savings` (§4.2) |
 | Повреждение `settings.json` | Full-SHA backup + `--dry-run` + diff-подтверждение (паттерн §11) |
-| Рост mutation surface против §14 | Ограничить его ровно четырьмя командами §16.5; автостарта демона нет |
-| Дубль memory-слоя с внешним `icm hook` | `hooks status` помечает; HZR владеет ICM по §6.5 |
+| Рост mutation surface против §14 | Ограничить mutations transaction-safe adoption, client-config migration и platform service lifecycle; каждый шаг имеет dry-run/backup либо idempotent service semantics |
+| Дубль memory-слоя с внешним `icm hook` | `install` централизует ICM по умолчанию; `--keep-external-icm` — явный opt-out, который остаётся видимым в `doctor` |
 
-## 16.9 Порядок работ
+## 16.9 Delivery status
 
-1. `hzr-rewrite.sh` + hybrid-логика и её exit-code-эквивалентность (ядро; без него остальное бессмысленно).
-2. `hzr install/uninstall/hooks status` с backup, dry-run и заменой rtk-записей.
-3. `hzr init --if-needed` + регистрация `SessionStart`.
-4. `HZR.md` + awareness для Claude и Codex.
-5. Contract tests §16.7 и `doctor`-проверка сосуществования.
-6. Обновить §6.8 (CLI), §7 (layout), §12.2 (tests), §14 (delivery status) в PRD.md.
+1. ✅ `hzr hooks dispatch` + hybrid daemon→pinned-fork path.
+2. ✅ `hzr install/uninstall/hooks status` с backup, dry-run, centralized ICM и заменой RTK-записей.
+3. ✅ `hzr init --if-needed` + регистрация `SessionStart`.
+4. ✅ `HZR.md` + Claude/Codex managed blocks с backup/CAS/atomic mutation.
+5. ✅ Contract tests §16.7 и `doctor`-проверка ownership/conflicts.
+6. ✅ Direct ICM registrations в Codex/Claude Desktop транзакционно заменяются на `hzr mcp serve` с backup/CAS.
+7. ✅ Production user service устанавливается на stable `current/bin/hzrd`; lifecycle доступен через `hzr daemon service`.
+8. ✅ Родительский PRD и release documentation синхронизированы с 0.2.0.
 
-Рекомендую делать 1–2 и остановиться на проверке: до записи в `~/.claude/settings.json` нужен ваш явный прогон `--dry-run`, потому что это глобальный конфиг, а не файл проекта.
+Standalone adoption по-прежнему начинается с `hzr install --dry-run` и требует явный `--force`. Repository-level release installer выполняет эту подтверждённую стадию по умолчанию; `HZR_INSTALL_HOOKS=0` устанавливает bundle без изменения hooks/instructions.

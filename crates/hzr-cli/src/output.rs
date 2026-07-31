@@ -1,10 +1,10 @@
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::process::ExitCode;
 
 use hzr_agent::AgentRun;
 use hzr_codec::Transform;
-use hzr_core::{EngineManifest, LedgerSummary};
+use hzr_core::EngineManifest;
 use hzr_exec::{
     CanonicalCommand, CapturedContent, CapturedStream, ExecutionOutcome, NotStarted,
     RewriteDecision, TerminationCause,
@@ -16,6 +16,7 @@ use serde::Serialize;
 
 use crate::diagnostics::{CheckStatus, DoctorReport};
 use crate::migration::MigrationScan;
+use crate::stats::StatsReport;
 
 pub fn print_json(value: &impl Serialize) -> io::Result<()> {
     let stdout = io::stdout();
@@ -306,31 +307,167 @@ pub fn print_agent(run: &AgentRun, json: bool) -> io::Result<()> {
     io::stdout().lock().write_all(run.text.as_bytes())
 }
 
-pub fn print_savings(summary: &LedgerSummary) -> io::Result<()> {
+pub fn print_stats(report: &StatsReport) -> io::Result<()> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
-    writeln!(output, "tasks: {}", summary.tasks)?;
-    writeln!(output, "accepted: {}", summary.accepted)?;
+    let color = stdout.is_terminal();
+    let title = style("HZR // ZERO-REDUNDANCY LEDGER", "1;38;5;208", color);
+    writeln!(output, "{title}")?;
+    writeln!(output, "{}", "═".repeat(62))?;
+    writeln!(output, "scope                 global lifetime")?;
     writeln!(
         output,
-        "actual input tokens: {}",
-        summary.actual_input_tokens
+        "tokens eliminated     {}  ({:.1}%)",
+        format_count(report.direct_savings.net_avoided_tokens_estimated.max(0) as u64),
+        report.direct_savings.reduction_pct
     )?;
     writeln!(
         output,
-        "actual output tokens: {}",
-        summary.actual_output_tokens
+        "before HZR            {}",
+        format_count(report.direct_savings.input_tokens_estimated)
     )?;
     writeln!(
         output,
-        "estimated input tokens: {}",
-        summary.estimated_input_tokens
+        "delivered             {}",
+        format_count(report.direct_savings.delivered_tokens_estimated)
     )?;
     writeln!(
         output,
-        "observed cost: ${:.6}",
-        summary.cost_microusd as f64 / 1_000_000.0
+        "optimized operations  {}",
+        format_count(report.direct_savings.operations)
+    )?;
+    writeln!(
+        output,
+        "efficiency            {}",
+        efficiency_bar(report.direct_savings.reduction_pct, color)
+    )?;
+
+    if !report.by_subsystem.is_empty() {
+        writeln!(output)?;
+        writeln!(output, "{}", style("EFFICIENCY VEINS", "1;38;5;208", color))?;
+        writeln!(
+            output,
+            "{:<14} {:>10} {:>14} {:>8}",
+            "subsystem", "calls", "saved", "share"
+        )?;
+        for subsystem in &report.by_subsystem {
+            writeln!(
+                output,
+                "{:<14} {:>10} {:>14} {:>7.1}%",
+                subsystem.subsystem,
+                format_count(subsystem.operations),
+                format_count(subsystem.net_avoided_tokens_estimated.max(0) as u64),
+                subsystem.share_pct
+            )?;
+        }
+    }
+
+    if !report.by_command.is_empty() {
+        writeln!(output)?;
+        writeln!(output, "{}", style("HOT PATHS", "1;38;5;208", color))?;
+        writeln!(
+            output,
+            "{:<28} {:>9} {:>13} {:>8}",
+            "command", "calls", "saved", "avg"
+        )?;
+        for command in report.by_command.iter().take(12) {
+            writeln!(
+                output,
+                "{:<28} {:>9} {:>13} {:>7.1}%",
+                truncate(&command.command, 28),
+                format_count(command.executions),
+                format_count(command.net_avoided_tokens_estimated.max(0) as u64),
+                command.avg_savings_pct
+            )?;
+        }
+    }
+
+    let usage = report.observed_model_usage;
+    writeln!(output)?;
+    writeln!(
+        output,
+        "{}",
+        style("OBSERVED MODEL USAGE", "1;38;5;208", color)
+    )?;
+    writeln!(
+        output,
+        "tasks                 {}",
+        format_count(usage.tasks)
+    )?;
+    writeln!(
+        output,
+        "actual input          {}",
+        format_count(usage.actual_input_tokens)
+    )?;
+    writeln!(
+        output,
+        "actual output         {}",
+        format_count(usage.actual_output_tokens)
+    )?;
+    writeln!(
+        output,
+        "estimated input       {}",
+        format_count(usage.estimated_input_tokens)
+    )?;
+    writeln!(
+        output,
+        "observed cost         ${:.6}",
+        usage.cost_microusd as f64 / 1_000_000.0
+    )?;
+
+    writeln!(output)?;
+    writeln!(
+        output,
+        "accounting            {}",
+        if report.runtime_accounting_complete {
+            style("complete", "1;32", color)
+        } else {
+            style("incomplete", "1;31", color)
+        }
+    )?;
+    writeln!(output, "degraded rewrites     {}", report.degraded_rewrites)?;
+    writeln!(
+        output,
+        "measurement           estimated before/after; provider usage stays actual"
     )
+}
+
+fn style(text: &str, code: &str, enabled: bool) -> String {
+    if enabled {
+        format!("\x1b[{code}m{text}\x1b[0m")
+    } else {
+        text.to_owned()
+    }
+}
+
+fn efficiency_bar(percentage: f64, color: bool) -> String {
+    const WIDTH: usize = 24;
+    let filled = ((percentage.clamp(0.0, 100.0) / 100.0) * WIDTH as f64).round() as usize;
+    let bar = format!("{}{}", "◆".repeat(filled), "·".repeat(WIDTH - filled));
+    format!("{}  {:.1}%", style(&bar, "38;5;208", color), percentage)
+}
+
+fn format_count(value: u64) -> String {
+    if value >= 1_000_000_000 {
+        format!("{:.2}B", value as f64 / 1_000_000_000.0)
+    } else if value >= 1_000_000 {
+        format!("{:.2}M", value as f64 / 1_000_000.0)
+    } else if value >= 1_000 {
+        format!("{:.1}K", value as f64 / 1_000.0)
+    } else {
+        value.to_string()
+    }
+}
+
+fn truncate(value: &str, width: usize) -> String {
+    if value.chars().count() <= width {
+        return value.to_owned();
+    }
+    value
+        .chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>()
+        + "…"
 }
 
 pub fn print_doctor(report: &DoctorReport) -> io::Result<()> {

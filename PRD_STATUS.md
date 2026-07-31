@@ -1,5 +1,7 @@
 # PRD: HZR 0.1.0 — статус реализации по разделам
 
+> Исторический аудит `v0.1.0`; сводки, gap registry и acceptance ниже намеренно не переписываются задним числом. В release candidate 0.2.0 G1–G7 и instruction-wiring gap A1 закрыты, а один installer поставляет versioned self-contained bundle с full fork-core, patched grepai, ICM, caveman-code и Node.js 22.17.1. Актуальный статус, включая platform-verification boundary и неизмеренный economic KPI, находится в [PRD_STATUS_0.2.0.md](PRD_STATUS_0.2.0.md); требования — в [PRD.md](PRD.md) и [PRD_ADOPTION.md](PRD_ADOPTION.md).
+
 **Дата аудита:** 2026-07-31
 **База:** [PRD.md](PRD.md) · перекрёстно с [FORK_PARITY.md](FORK_PARITY.md) · детали в [REVIEW.md](REVIEW.md)
 **Метод:** самостоятельный запуск gate + end-to-end прогон продукта из чистого data root
@@ -154,7 +156,7 @@ Canonical paths + git common dir, стабильные ID, один config/watch
 | Protected spans: code fences, inline code, URLs, flags, hashes, versions | 🟢 | Покрыты регексом, проверено |
 | Protected spans: **paths, identifiers, enum-like, structured payloads** | 🟡 | `src/main.rs`, `MAX_RETRIES`, `handle_budget_overflow`, `{"k":1}` → `protected_spans: []` → **G2** |
 
-Причина G1 — [lib.rs:106](crates/hzr-codec/src/lib.rs:106): short-circuit покрывает только `Exact` и `Off`; `Shadow` проваливается в `deduplicate_paragraphs`. Ни один из 5 тестов codec не покрывает `Shadow`.
+Причина G1 — [lib.rs:106](crates/hzr-codec/src/lib.rs#L106): short-circuit покрывает только `Exact` и `Off`; `Shadow` проваливается в `deduplicate_paragraphs`. Ни один из 5 тестов codec не покрывает `Shadow`.
 
 ### §6.7 `hzr-agent` — 🟡
 
@@ -176,7 +178,7 @@ Canonical paths + git common dir, стабильные ID, один config/watch
 
 ### §6.8 `hzrd` и `hzr-cli` — ✅ точное совпадение
 
-**12/12 routes** в [server.rs:22-33](crates/hzr-daemon/src/server.rs:22) — health, engines, search, context/plan, memory/recall, memory/store, exec/rewrite, exec/run, exec/approval, fork/run, codec/compile, usage. Без лишних и без недостающих.
+**12/12 routes** в [server.rs:22-33](crates/hzr-daemon/src/server.rs#L22) — health, engines, search, context/plan, memory/recall, memory/store, exec/rewrite, exec/run, exec/approval, fork/run, codec/compile, usage. Без лишних и без недостающих.
 
 **15/15 команд CLI** — `init, doctor, daemon, engines, index, search, rgai, context, memory, exec, codec, agent, savings, migrate, rtk`.
 
@@ -313,3 +315,7 @@ cargo test --workspace --all-targets   → 160 passed; 0 failed
 ## Открытый вопрос релиза
 
 Не gap, а незавершённое измерение: **0 из 9 метрик §4.2**. Функциональные предпосылки для paired benchmark (§14 п.1–2) готовы — ledger разделяет actual/estimated, outcome-метки пишутся, `savings` не подменяет отсутствие данных прогнозом. До получения данных утверждения о −30% cost / −20% turns / −35% uncached input остаются гипотезой, что PRD признаёт прямо.
+
+## Следующий архитектурный этап: HZR MCP
+
+После стабилизации и публикации 0.2.0 запланирован HZR-owned MCP gateway. Он обязан переиспользовать canonical HZR Index, Memory, execution, codec, policy и ledger; создание параллельных индексов, memory stores или daemon owners запрещено. Claude и Codex должны подключаться к одному HZR entrypoint вместо прямого запуска внутренних engines. Полная спецификация — §14.1 `PRD.md`.

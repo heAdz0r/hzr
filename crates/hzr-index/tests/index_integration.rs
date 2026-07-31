@@ -158,6 +158,51 @@ async fn test_managed_placement_creates_one_central_index_and_project_symlink() 
 }
 
 #[tokio::test]
+async fn test_ensure_managed_location_is_read_only_after_initialization() {
+    let repo = git_repo();
+    let data = tempfile::tempdir().expect("managed data root must be created");
+    let workspace = Workspace::discover_managed(
+        repo.path(),
+        Path::new("git"),
+        data.path(),
+        Duration::from_secs(3),
+    )
+    .await
+    .expect("managed workspace discovery must succeed");
+
+    workspace
+        .ensure_managed_location()
+        .expect("managed location must be created");
+    let link_before = fs::symlink_metadata(&workspace.index.project_entry)
+        .expect("managed link metadata")
+        .modified()
+        .expect("managed link modification time");
+    let directory_before = fs::metadata(&workspace.index.directory)
+        .expect("managed directory metadata")
+        .modified()
+        .expect("managed directory modification time");
+
+    workspace
+        .ensure_managed_location()
+        .expect("existing managed location must be accepted");
+
+    assert_eq!(
+        fs::symlink_metadata(&workspace.index.project_entry)
+            .expect("managed link metadata after no-op")
+            .modified()
+            .expect("managed link modification time after no-op"),
+        link_before
+    );
+    assert_eq!(
+        fs::metadata(&workspace.index.directory)
+            .expect("managed directory metadata after no-op")
+            .modified()
+            .expect("managed directory modification time after no-op"),
+        directory_before
+    );
+}
+
+#[tokio::test]
 async fn test_managed_discovery_adopts_legacy_project_index_without_second_database() {
     let repo = git_repo();
     let data = tempfile::tempdir().expect("managed data root must be created");
@@ -371,7 +416,9 @@ async fn connect(root: &Path, binary: PathBuf) -> GrepAi {
 
 fn deadlines() -> Deadlines {
     Deadlines {
-        version: Duration::from_secs(5),
+        // These tests intentionally launch several isolated fake engines in parallel.
+        // Keep the bounded probe above worst-case scheduler latency under workspace CI.
+        version: Duration::from_secs(15),
         initialize: Duration::from_secs(5),
         watch_start: Duration::from_secs(5),
         watch_stop: Duration::from_secs(5),

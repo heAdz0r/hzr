@@ -25,7 +25,9 @@ pub struct Deadlines {
 impl Default for Deadlines {
     fn default() -> Self {
         Self {
-            version: Duration::from_secs(3),
+            // Process launch can exceed three seconds on a loaded CI/macOS host even
+            // though the pinned binary returns immediately once scheduled.
+            version: Duration::from_secs(10),
             initialize: Duration::from_secs(30),
             watch_start: Duration::from_secs(120),
             watch_stop: Duration::from_secs(35),

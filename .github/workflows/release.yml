@@ -1,0 +1,107 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify tag, baseline, and release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(p["version"] for p in data["packages"] if p["name"] == "hzr-cli"))')"
+          test "${GITHUB_REF_NAME}" = "v${version}"
+          git rev-parse --verify 'refs/tags/v0.1.0^{commit}' >/dev/null
+          grep -F "HZR_VERSION=\"\${HZR_VERSION:-${version}}\"" install.sh >/dev/null
+          scripts/verify-fork-core.sh
+
+  native-bundles:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux-x64
+          - runner: ubuntu-22.04-arm
+            platform: linux-arm64
+          - runner: macos-15
+            platform: darwin-arm64
+          - runner: macos-15-intel
+            platform: darwin-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.2
+      - name: Build self-contained bundle
+        run: scripts/build-bundle.sh "$RUNNER_TEMP/hzr-dist"
+      - name: Package native release archive
+        run: scripts/package-release.sh "$RUNNER_TEMP/hzr-dist" "$RUNNER_TEMP/hzr-release"
+      - name: Prove clean install without external engines
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/smoke-install.sh \
+            "$RUNNER_TEMP/hzr-release/hzr-${GITHUB_REF_NAME}-${{ matrix.platform }}.tar.gz" \
+            "$RUNNER_TEMP/hzr-release/SHA256SUMS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hzr-${{ matrix.platform }}
+          path: ${{ runner.temp }}/hzr-release/hzr-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: native-bundles
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hzr-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify matrix and create aggregate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find release-assets -maxdepth 1 -name '*.tar.gz' -type f | wc -l | tr -d ' ')" = 4
+          (cd release-assets && sha256sum ./*.tar.gz | sed 's# \./#  #' | LC_ALL=C sort > SHA256SUMS)
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: release-assets/*.tar.gz
+      - name: Publish GitHub pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}"
+          release-assets/*.tar.gz release-assets/SHA256SUMS
+          --repo "${GITHUB_REPOSITORY}"
+          --verify-tag
+          --prerelease
+          --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
+          --title "HZR ${GITHUB_REF_NAME#v}"

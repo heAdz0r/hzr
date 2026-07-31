@@ -4,7 +4,7 @@ use crate::display_helpers::{format_duration, print_period_table};
 use crate::memory_layer::get_memory_gain_stats; // T3
 use crate::session_stats::{self, CacheCompoundingSavings}; // cache compounding
 use crate::tracking::ParseFailureSummary; // fix #200
-use crate::tracking::{DayStats, MonthStats, Tracker, WeekStats};
+use crate::tracking::{CommandStats, DayStats, MonthStats, Tracker, WeekStats};
 use crate::utils::{format_tokens, format_usd}; // added format_usd for cache compounding
 use anyhow::{Context, Result};
 use colored::Colorize; // added: terminal colors
@@ -566,6 +566,7 @@ fn print_monthly(tracker: &Tracker, project_scope: Option<&str>) -> Result<()> {
 #[derive(Serialize)]
 struct ExportData {
     summary: ExportSummary,
+    by_command: Vec<CommandStats>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cache_compounding: Option<CacheCompoundingSavings>, // cache compounding effect
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -609,6 +610,7 @@ fn export_json(
             total_time_ms: summary.total_time_ms,
             avg_time_ms: summary.avg_time_ms,
         },
+        by_command: tracker.get_all_by_command_filtered(project_scope)?,
         cache_compounding: compute_cache_compounding(summary.total_saved), // cache compounding
         daily: if all || daily {
             Some(tracker.get_all_days_filtered(project_scope)?) // changed: use filtered

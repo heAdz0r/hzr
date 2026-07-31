@@ -8,7 +8,7 @@ use thiserror::Error;
 
 static PROTECTED: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?ms)\x60\x60\x60.*?\x60\x60\x60|~~~.*?~~~|\x60[^\x60\n]+\x60|https?://[^\s<>"']+|(?:^|[\s("'=])(?:\./|\.\./|/)[A-Za-z0-9_.@%+~/-]+|--?[A-Za-z][A-Za-z0-9_-]*|\b(?:[A-Fa-f0-9]{7,64}|v?\d+(?:\.\d+){1,3})\b"#,
+        r#"(?ms)\x60\x60\x60.*?\x60\x60\x60|~~~.*?~~~|\x60[^\x60\n]+\x60|https?://[^\s<>"']+|\{[^\r\n{}]*\}|\[[^\r\n\[\]]*\]|(?:\./|\.\./|/)[A-Za-z0-9_.@%+~/-]+|\b(?:[A-Za-z0-9_.@%+~-]+/)+[A-Za-z0-9_.@%+~-]+\b|--?[A-Za-z][A-Za-z0-9_-]*|\b[A-Za-z_][A-Za-z0-9_]*_[A-Za-z0-9_]+\b|\b(?:[A-Fa-f0-9]{7,64}|v?\d+(?:\.\d+){1,3})\b"#,
     )
     .expect("protected-span regex is a static invariant")
 });
@@ -70,6 +70,16 @@ pub struct Transform {
     pub changed: bool,
     pub profile: CodecProfile,
     pub protected_spans: Vec<ProtectedSpan>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub counterfactual: Option<CounterfactualSize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CounterfactualSize {
+    pub input_bytes: usize,
+    pub output_bytes: usize,
+    pub saved_bytes: usize,
+    pub would_change: bool,
 }
 
 #[derive(Debug, Error)]
@@ -103,30 +113,39 @@ pub fn transform(
     profile: CodecProfile,
 ) -> Result<Transform, CodecError> {
     let spans = protected_spans(input);
+    if profile == CodecProfile::Shadow {
+        let candidate = candidate_transform(input, fidelity);
+        return Ok(Transform {
+            content: input.to_owned(),
+            changed: false,
+            profile,
+            protected_spans: spans,
+            counterfactual: Some(CounterfactualSize {
+                input_bytes: input.len(),
+                output_bytes: candidate.len(),
+                saved_bytes: input.len().saturating_sub(candidate.len()),
+                would_change: candidate != input,
+            }),
+        });
+    }
     if fidelity == FidelityClass::Exact || profile == CodecProfile::Off {
         return Ok(Transform {
             content: input.to_owned(),
             changed: false,
             profile,
             protected_spans: spans,
+            counterfactual: None,
         });
     }
 
-    let content = deduplicate_paragraphs(input);
-    if validate_protected(input, &content).is_err() {
-        return Ok(Transform {
-            content: input.to_owned(),
-            changed: false,
-            profile,
-            protected_spans: spans,
-        });
-    }
+    let content = candidate_transform(input, fidelity);
 
     Ok(Transform {
         changed: content != input,
         content,
         profile,
         protected_spans: spans,
+        counterfactual: None,
     })
 }
 
@@ -157,18 +176,57 @@ fn classify(value: &str) -> &'static str {
         "flag"
     } else if value.contains('/') {
         "path"
+    } else if value.starts_with('{') || value.starts_with('[') {
+        "structured"
+    } else if value.contains('_')
+        && value.chars().all(|character| {
+            character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        })
+    {
+        "enum"
+    } else if value.contains('_') {
+        "identifier"
     } else {
         "literal"
     }
 }
 
+fn candidate_transform(input: &str, fidelity: FidelityClass) -> String {
+    if fidelity == FidelityClass::Exact {
+        return input.to_owned();
+    }
+    let candidate = deduplicate_paragraphs(input);
+    if validate_protected(input, &candidate).is_ok() {
+        candidate
+    } else {
+        input.to_owned()
+    }
+}
+
 fn deduplicate_paragraphs(input: &str) -> String {
+    let trailing_newlines = input
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\n')
+        .count();
     let mut seen = HashSet::new();
-    input
+    let mut output = input
         .split("\n\n")
         .filter(|paragraph| seen.insert(paragraph.trim()))
         .collect::<Vec<_>>()
-        .join("\n\n")
+        .join("\n\n");
+    let output_trailing_newlines = output
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\n')
+        .count();
+    output.extend(std::iter::repeat_n(
+        '\n',
+        trailing_newlines.saturating_sub(output_trailing_newlines),
+    ));
+    output
 }
 
 fn validate_protected(original: &str, transformed: &str) -> Result<(), CodecError> {
@@ -193,7 +251,10 @@ fn protected_values(input: &str) -> HashSet<&str> {
 mod tests {
     use hzr_protocol::{CodecProfile, FidelityClass, RiskClass};
 
-    use super::{Density, EconomicInput, choose_density, compact_catalog_description, transform};
+    use super::{
+        Density, EconomicInput, choose_density, compact_catalog_description, protected_spans,
+        transform,
+    };
 
     #[test]
     fn test_exact_content_is_never_changed() {
@@ -216,6 +277,54 @@ mod tests {
         );
         assert!(result.content.contains("STARTER/BUSINESS"));
         assert!(result.content.contains("--mode"));
+        assert!(result.counterfactual.is_none());
+    }
+
+    #[test]
+    fn test_shadow_reports_counterfactual_without_changing_content() {
+        let input = "The budget is exhausted.\n\nSecond paragraph.\n\nThe budget is exhausted.";
+        let result = transform(
+            input,
+            FidelityClass::LosslessStructural,
+            CodecProfile::Shadow,
+        )
+        .expect("shadow transform");
+
+        assert_eq!(result.content, input);
+        assert!(!result.changed);
+        let counterfactual = result.counterfactual.expect("shadow measurement");
+        assert!(counterfactual.would_change);
+        assert_eq!(counterfactual.input_bytes, input.len());
+        assert!(counterfactual.output_bytes < counterfactual.input_bytes);
+        assert_eq!(
+            counterfactual.saved_bytes,
+            input.len() - counterfactual.output_bytes
+        );
+    }
+
+    #[test]
+    fn test_protected_spans_cover_relative_paths_identifiers_enums_and_json() {
+        let input =
+            r#"Edit src/main.rs and set MAX_RETRIES for handle_budget_overflow with {"k":1}."#;
+        let spans = protected_spans(input);
+        let protected = spans
+            .iter()
+            .map(|span| (&input[span.start..span.end], span.kind.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(protected.contains(&("src/main.rs", "path")));
+        assert!(protected.contains(&("MAX_RETRIES", "enum")));
+        assert!(protected.contains(&("handle_budget_overflow", "identifier")));
+        assert!(protected.contains(&(r#"{"k":1}"#, "structured")));
+    }
+
+    #[test]
+    fn test_structural_transform_preserves_trailing_newline_after_deduplication() {
+        let input = "First paragraph.\n\nSecond paragraph.\n\nFirst paragraph.\n";
+        let result = compact_catalog_description(input).expect("description must compact");
+
+        assert_eq!(result.content, "First paragraph.\n\nSecond paragraph.\n");
+        assert!(result.changed);
     }
 
     #[test]

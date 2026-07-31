@@ -1,11 +1,21 @@
+mod adoption;
 mod cli;
 mod client;
+mod client_config;
 mod diagnostics;
+mod foreign;
 mod fork;
+mod hook_runner;
 mod input;
+mod instructions;
 mod invocation;
+mod mcp;
+mod memory_migration;
 mod migration;
 mod output;
+mod prefix;
+mod service;
+mod stats;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -15,8 +25,10 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use hzr_agent::{BearerToken, HzrApi, ManagedAgent, ManagedAgentConfig};
-use hzr_core::{Config, ConfigPaths, Ledger, LedgerSummary};
-use hzr_index::{Deadlines, GrepAi, InitOptions, Workspace, migrate_legacy_index};
+use hzr_core::{
+    Config, ConfigPaths, Ledger, discover_legacy_rtk_history, inspect_legacy_efficiency,
+};
+use hzr_index::{Deadlines, GrepAi, IndexPlacement, InitOptions, Workspace, migrate_legacy_index};
 use hzr_protocol::{
     CodecApiRequest, ContextPlanApiRequest, ExecApiRequest, ExecApprovalApiRequest,
     MemoryRecallApiRequest, MemoryStoreApiRequest, PROTOCOL_VERSION, SearchApiRequest, SearchMode,
@@ -25,7 +37,8 @@ use hzr_protocol::{
 
 use crate::cli::{
     AgentCommand, Cli, CodecCommand, Command, ContextCommand, ContextPlanArgs, DaemonCommand,
-    EnginesCommand, ExecArgs, ExecCommand, IndexCommand, MemoryCommand, MigrateCommand, SearchArgs,
+    EnginesCommand, ExecArgs, ExecCommand, HooksCommand, IndexCommand, McpCommand, MemoryCommand,
+    MigrateCommand, SearchArgs, ServiceCommand,
 };
 use crate::client::DaemonClient;
 use crate::diagnostics::{doctor, integration_layout};
@@ -35,7 +48,7 @@ use crate::migration::scan;
 use crate::output::{
     print_agent, print_context, print_doctor, print_engines, print_execution, print_health,
     print_index_init, print_index_status, print_json, print_memories, print_memory_health,
-    print_migration, print_migration_apply, print_rewrite, print_savings, print_search,
+    print_migration, print_migration_apply, print_rewrite, print_search, print_stats,
     print_transform,
 };
 
@@ -67,7 +80,113 @@ async fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<ExitCode> {
     let paths = ConfigPaths::discover();
     let config_path = cli.config.unwrap_or(paths.config_file);
-    if let Command::Init { force, data_dir } = &cli.command {
+    match &cli.command {
+        Command::Install {
+            dry_run,
+            force,
+            prefix: prefix_arg,
+            binary,
+            allow_dev_path,
+            keep_external_icm,
+            skip_instructions,
+        } => {
+            return run_install(
+                InstallOptions {
+                    dry_run: *dry_run,
+                    force: *force,
+                    prefix: prefix_arg.clone(),
+                    binary: binary.clone(),
+                    allow_dev_path: *allow_dev_path,
+                    adopt_icm: !*keep_external_icm,
+                    wire_instructions: !*skip_instructions,
+                },
+                cli.json,
+            );
+        }
+        Command::Uninstall {
+            keep_data,
+            dry_run,
+            force,
+        } => {
+            let _ = keep_data;
+            let path = adoption::default_settings_path()?;
+            let report = adoption::uninstall(&path, *dry_run, *force)?;
+            // Instruction blocks are removed too: leaving them would keep telling the
+            // agent to call `hzr` after its hooks are gone. Binaries on PATH stay —
+            // deleting a binary the user may invoke directly is not ours to decide.
+            let mut instruction_reports = Vec::new();
+            for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
+                let target = surface.default_path()?;
+                instruction_reports
+                    .push(instructions::uninstall(surface, &target, *dry_run, *force)?);
+            }
+            return print_adoption_bundle(&report, None, &instruction_reports, &[], None, cli.json);
+        }
+        Command::Hooks {
+            command: HooksCommand::Status,
+        } => {
+            let status = adoption::status(&adoption::default_settings_path()?)?;
+            // Adoption is only real when hooks, instructions and PATH all agree, so
+            // report all three rather than letting hooks alone imply success.
+            let claude_md = instructions::Surface::Claude.default_path()?;
+            let codex_md = instructions::Surface::Codex.default_path()?;
+            let claude_wired = instructions::is_installed(&claude_md)?;
+            let codex_wired = instructions::is_installed(&codex_md)?;
+            let prefix_dir = prefix::default_prefix()?;
+            let hzr_on_path = prefix::is_on_path(&prefix_dir) && prefix_dir.join("hzr").exists();
+            let foreign_report = foreign::scan(&ConfigPaths::discover().data_dir).ok();
+
+            if cli.json {
+                print_json(&serde_json::json!({
+                    "hooks": status,
+                    "instructions": {
+                        "claude": {"path": claude_md, "installed": claude_wired},
+                        "codex": {"path": codex_md, "installed": codex_wired},
+                    },
+                    "path": {"prefix": prefix_dir, "hzr_reachable": hzr_on_path},
+                    "foreign": foreign_report,
+                }))?;
+            } else {
+                println!(
+                    "HZR={} RTK={} external-ICM={} installed={} conflict={}",
+                    status.hzr_entries,
+                    status.rtk_entries,
+                    status.external_icm_entries,
+                    status.installed,
+                    status.conflict
+                );
+                println!(
+                    "instructions claude={claude_wired} codex={codex_wired}; \
+                     hzr-on-path={hzr_on_path} ({})",
+                    prefix_dir.display()
+                );
+                if let Some(report) = &foreign_report {
+                    for (engine, count) in &report.unmanaged_by_engine {
+                        println!("unmanaged {engine} process(es): {count}");
+                    }
+                    for (engine, count) in &report.unmanaged_wrappers_by_engine {
+                        println!("unmanaged {engine} wrapper(s): {count}");
+                    }
+                }
+            }
+            return Ok(if status.conflict {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            });
+        }
+        _ => {}
+    }
+    if let Command::Init {
+        force,
+        data_dir,
+        if_needed,
+        quiet,
+    } = &cli.command
+    {
+        if *if_needed {
+            return initialize_if_needed(&config_path, data_dir.as_deref(), *quiet, cli.json).await;
+        }
         return initialize(&config_path, *force, data_dir.as_deref(), cli.json);
     }
 
@@ -75,6 +194,18 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         .with_context(|| format!("failed to load {}", config_path.display()))?;
     match cli.command {
         Command::Init { .. } => bail!("init command entered configured execution path"),
+        Command::Install { .. } | Command::Uninstall { .. } => {
+            bail!("adoption command entered configured execution path")
+        }
+        Command::Hooks {
+            command: HooksCommand::Status,
+        } => bail!("hook status entered configured execution path"),
+        Command::Hooks {
+            command: HooksCommand::Dispatch,
+        } => {
+            hook_runner::dispatch(&config).await?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Doctor { workspace } => {
             let workspace = canonical_directory(workspace.as_deref())?;
             let report = doctor(&config_path, &config, &workspace).await;
@@ -107,6 +238,27 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             }
             DaemonCommand::Engines => show_engines(&config, cli.json).await,
+            DaemonCommand::Service { command } => {
+                let report = service::execute(command)?;
+                if cli.json {
+                    print_json(&report)?;
+                } else {
+                    println!(
+                        "service {} manager={:?} active={} changed={} definition={} binary={}",
+                        report.action,
+                        report.manager,
+                        report.active,
+                        report.changed,
+                        report.definition.display(),
+                        report.binary.display()
+                    );
+                }
+                Ok(if command == ServiceCommand::Status && !report.active {
+                    ExitCode::FAILURE
+                } else {
+                    ExitCode::SUCCESS
+                })
+            }
         },
         Command::Engines {
             command: EnginesCommand::Status,
@@ -125,7 +277,22 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Exec { command } => execute_command(&config, command, cli.json).await,
         Command::Codec { command } => execute_codec(&config, command, cli.json).await,
         Command::Agent { command } => execute_agent(&config, command, cli.json).await,
-        Command::Savings => show_savings(&config, cli.json),
+        Command::Mcp { command } => match command {
+            McpCommand::Serve { workspace } => {
+                let workspace = canonical_directory(workspace.as_deref())?;
+                mcp::serve(&config, &workspace).await?;
+                Ok(ExitCode::SUCCESS)
+            }
+            McpCommand::Config { client } => {
+                // Printing the snippet rather than editing the agent's config keeps the
+                // one-writer rule: HZR owns its own files, and a third-party MCP config
+                // stays the user's to change.
+                let binary = prefix::default_prefix()?.join("hzr");
+                print!("{}", mcp::registration_snippet(client, &binary));
+                Ok(ExitCode::SUCCESS)
+            }
+        },
+        Command::Stats | Command::Savings => show_stats(&config, cli.json).await,
         Command::Migrate { command } => match command {
             MigrateCommand::Scan { workspace } => {
                 let workspace = canonical_directory(workspace.as_deref())?;
@@ -153,9 +320,328 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 }
                 Ok(ExitCode::SUCCESS)
             }
+            MigrateCommand::History { dry_run, force } => {
+                if !dry_run && !force {
+                    bail!(
+                        "history migration requires `--dry-run` for inspection or `--force` to apply"
+                    );
+                }
+                let sources = discover_legacy_rtk_history();
+                if dry_run {
+                    let reports = sources
+                        .iter()
+                        .map(|source| inspect_legacy_efficiency(source))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if cli.json {
+                        print_json(&reports)?;
+                    } else if reports.is_empty() {
+                        println!("no platform RTK history database found");
+                    } else {
+                        for report in reports {
+                            println!(
+                                "history {} sha256={} operations={} gross={} regressions={} net={}",
+                                report.path.display(),
+                                report.sha256,
+                                report.operations,
+                                report.gross_avoided_tokens_estimated,
+                                report.regression_tokens_estimated,
+                                report.net_avoided_tokens_estimated
+                            );
+                        }
+                    }
+                } else {
+                    let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?;
+                    let migration_root = config.data_dir.join("migrations");
+                    let reports = sources
+                        .iter()
+                        .map(|source| ledger.migrate_legacy_efficiency(source, &migration_root))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if cli.json {
+                        print_json(&reports)?;
+                    } else if reports.is_empty() {
+                        println!("no platform RTK history database found");
+                    } else {
+                        for report in reports {
+                            println!(
+                                "history {} imported={} failures={} changed={} backup={} manifest={}",
+                                report.source.path.display(),
+                                report.imported_commands,
+                                report.imported_parse_failures,
+                                report.changed,
+                                report.backup_path.display(),
+                                report.manifest_path.display()
+                            );
+                        }
+                    }
+                }
+                Ok(ExitCode::SUCCESS)
+            }
+            MigrateCommand::Memory {
+                workspace,
+                dry_run,
+                force,
+            } => {
+                if !dry_run && !force {
+                    bail!(
+                        "memory migration requires `--dry-run` for inspection or `--force` to apply"
+                    );
+                }
+                let workspace = canonical_directory(workspace.as_deref())?;
+                let source = memory_migration::discover_legacy_icm_database()
+                    .ok_or_else(|| anyhow::anyhow!("no platform legacy ICM database found"))?;
+                if dry_run {
+                    let report = memory_migration::inspect(&source)?;
+                    if cli.json {
+                        print_json(&report)?;
+                    } else {
+                        println!(
+                            "memory {} sha256={} rows={}",
+                            report.path.display(),
+                            report.sha256,
+                            report.rows_by_table.values().sum::<u64>()
+                        );
+                    }
+                } else {
+                    let managed = Workspace::discover_managed(
+                        &workspace,
+                        Path::new("git"),
+                        &config.data_dir,
+                        Deadlines::default().version,
+                    )
+                    .await?;
+                    let report = memory_migration::migrate(
+                        &source,
+                        &config.data_dir.join("memory/icm/memories.db"),
+                        &config.data_dir.join("migrations"),
+                        &managed.identity.repository_id,
+                    )?;
+                    if cli.json {
+                        print_json(&report)?;
+                    } else {
+                        println!(
+                            "memory {} imported={} changed={} backup={} canonical-backup={} manifest={}",
+                            report.source.path.display(),
+                            report.imported_rows,
+                            report.changed,
+                            report.source_backup.display(),
+                            report.canonical_backup.display(),
+                            report.manifest_path.display()
+                        );
+                    }
+                }
+                Ok(ExitCode::SUCCESS)
+            }
         },
         Command::Rtk(arguments) => fork::passthrough(&config, &arguments.args).await,
     }
+}
+
+struct InstallOptions {
+    dry_run: bool,
+    force: bool,
+    prefix: Option<PathBuf>,
+    binary: Option<PathBuf>,
+    allow_dev_path: bool,
+    adopt_icm: bool,
+    wire_instructions: bool,
+}
+
+/// Full adoption in one confirmed operation: durable binaries on PATH, one hook
+/// dispatcher, and agent instructions. Ordering matters — binaries are placed first
+/// so the hook command and the `CLAUDE.md` contract both name a path that already
+/// exists, and so a `--dry-run` preview shows the same target the real run will use.
+fn run_install(options: InstallOptions, json: bool) -> Result<ExitCode> {
+    let source_dir = std::env::current_exe()
+        .context("cannot resolve the HZR executable")?
+        .parent()
+        .context("HZR executable has no parent directory")?
+        .to_path_buf();
+
+    let prefix_dir = match options.prefix.clone() {
+        Some(prefix) => prefix,
+        None => prefix::default_prefix()?,
+    };
+    let prefix_report = prefix::install(&prefix_dir, &source_dir, options.dry_run, options.force)?;
+
+    // Hooks always name the durable copy in the prefix — never the binary that happens
+    // to be running, which may live in `target/debug` or a temporary bundle. During
+    // `--dry-run` that copy does not exist yet, so the preview is allowed to name the
+    // path the confirmed run will create. An explicit --binary still wins.
+    let hook_binary = match options.binary.clone() {
+        Some(binary) => {
+            adoption::resolve_hook_binary(Some(&binary), options.allow_dev_path, false)?
+        }
+        None => adoption::resolve_hook_binary(
+            Some(&prefix_dir.join("hzr")),
+            options.allow_dev_path,
+            options.dry_run,
+        )?,
+    };
+
+    let settings_path = adoption::default_settings_path()?;
+    let hooks = adoption::install(
+        &settings_path,
+        &hook_binary,
+        options.adopt_icm,
+        options.dry_run,
+        options.force,
+    )?;
+
+    let mut instruction_reports = Vec::new();
+    if options.wire_instructions {
+        let contract = contract_asset_path(&source_dir);
+        for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
+            let target = surface.default_path()?;
+            instruction_reports.push(instructions::install(
+                surface,
+                &target,
+                &contract,
+                options.dry_run,
+                options.force,
+            )?);
+        }
+    }
+
+    let client_reports = client_config::install_all(&hook_binary, options.dry_run, options.force)?;
+
+    let foreign_report = foreign::scan(&ConfigPaths::discover().data_dir).ok();
+
+    print_adoption_bundle(
+        &hooks,
+        Some(&prefix_report),
+        &instruction_reports,
+        &client_reports,
+        foreign_report.as_ref(),
+        json,
+    )
+}
+
+/// Locate `HZR.md`. An assembled bundle ships it under `share/hzr/`; a development
+/// tree has it at the repository root. Both are resolved relative to the binary so
+/// the reference written into `CLAUDE.md` stays valid after relocation.
+fn contract_asset_path(source_dir: &Path) -> PathBuf {
+    let candidates = [
+        source_dir.join("../share/hzr/HZR.md"),
+        source_dir.join("../../HZR.md"),
+        source_dir.join("../../../HZR.md"),
+    ];
+    for candidate in candidates {
+        if let Ok(resolved) = candidate.canonicalize() {
+            return resolved;
+        }
+    }
+    source_dir.join("../share/hzr/HZR.md")
+}
+
+fn print_adoption_bundle(
+    hooks: &adoption::AdoptionReport,
+    prefix_report: Option<&prefix::PrefixReport>,
+    instruction_reports: &[instructions::InstructionReport],
+    client_reports: &[client_config::ClientConfigReport],
+    foreign_report: Option<&foreign::ForeignReport>,
+    json: bool,
+) -> Result<ExitCode> {
+    if json {
+        print_json(&serde_json::json!({
+            "hooks": hooks,
+            "prefix": prefix_report,
+            "instructions": instruction_reports,
+            "client_mcp": client_reports,
+            "foreign": foreign_report,
+        }))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    print_adoption(hooks, false)?;
+    if let Some(report) = prefix_report {
+        println!(
+            "prefix {} changed={} on_path={}",
+            report.prefix.display(),
+            report.changed,
+            report.on_path
+        );
+        if !report.on_path {
+            println!(
+                "warning: {} is not on PATH; add it so agents can run `hzr` by name",
+                report.prefix.display()
+            );
+        }
+    }
+    for report in instruction_reports {
+        println!(
+            "instructions {} {} changed={} installed={} legacy-rtk-imports-removed={} legacy-directives-migrated={}",
+            report.surface.as_str(),
+            report.path.display(),
+            report.changed,
+            report.installed,
+            report.legacy_rtk_imports_removed,
+            report.legacy_directives_migrated
+        );
+    }
+    for report in client_reports {
+        println!(
+            "client-mcp {} {} changed={} direct-icm-removed={} hzr-registered={}",
+            report.client.as_str(),
+            report.path.display(),
+            report.changed,
+            report.direct_icm_removed,
+            report.hzr_registered
+        );
+    }
+    if let Some(report) = foreign_report {
+        let total = report.unmanaged_active_total();
+        if total > 0 {
+            let detail = report
+                .unmanaged_by_engine
+                .iter()
+                .map(|(engine, count)| format!("{engine}={count}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "warning: {total} unmanaged engine process(es) detected ({detail}); \
+                 HZR never stops them automatically — review with `hzr doctor`"
+            );
+        }
+        let wrappers = report.unmanaged_wrapper_total();
+        if wrappers > 0 {
+            let detail = report
+                .unmanaged_wrappers_by_engine
+                .iter()
+                .map(|(engine, count)| format!("{engine}={count}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            println!(
+                "warning: {wrappers} client wrapper(s) still reference direct engines ({detail}); restart those clients after migration"
+            );
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn print_adoption(report: &adoption::AdoptionReport, json: bool) -> Result<ExitCode> {
+    if json {
+        print_json(report)?;
+    } else {
+        println!(
+            "{}: changed={} dry_run={} HZR={} RTK={} external-ICM={}",
+            report.action,
+            report.changed,
+            report.dry_run,
+            report.status.hzr_entries,
+            report.status.rtk_entries,
+            report.status.external_icm_entries
+        );
+        println!(
+            "settings {} sha256 {} -> {}",
+            report.settings_path.display(),
+            report.before_sha256,
+            report.after_sha256
+        );
+        if let Some(backup) = &report.backup_path {
+            println!("backup {}", backup.display());
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn execute_index(config: &Config, command: IndexCommand, json: bool) -> Result<ExitCode> {
@@ -227,6 +713,83 @@ fn initialize(path: &Path, force: bool, data_dir: Option<&Path>, json: bool) -> 
         let mut output = stdout.lock();
         writeln!(output, "initialized {}", path.display())?;
         writeln!(output, "data root {}", config.data_dir.display())?;
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn initialize_if_needed(
+    config_path: &Path,
+    data_dir: Option<&Path>,
+    quiet: bool,
+    json: bool,
+) -> Result<ExitCode> {
+    let (config, config_created) = if config_path.exists() {
+        let config = Config::load_or_default(config_path)
+            .with_context(|| format!("failed to load {}", config_path.display()))?;
+        if let Some(requested) = data_dir {
+            if requested != config.data_dir {
+                bail!(
+                    "configured data root is {}; --data-dir requested {}",
+                    config.data_dir.display(),
+                    requested.display()
+                );
+            }
+        }
+        (config, false)
+    } else {
+        let mut config = Config::default();
+        if let Some(data_dir) = data_dir {
+            config.data_dir = data_dir.to_path_buf();
+        }
+        config.ensure_layout()?;
+        config.write(config_path)?;
+        (config, true)
+    };
+
+    let workspace_path = canonical_directory(None)?;
+    let workspace = Workspace::discover_managed(
+        &workspace_path,
+        Path::new("git"),
+        &config.data_dir,
+        Deadlines::default().version,
+    )
+    .await?;
+    let (outcome, changed) = if workspace.identity.git_common_dir.is_none() {
+        ("not_a_repository", false)
+    } else {
+        workspace.require_single_index()?;
+        match workspace.placement()? {
+            IndexPlacement::ManagedSymlink { .. } => ("already_initialized", false),
+            IndexPlacement::Missing { .. } => {
+                workspace.ensure_managed_location()?;
+                ("initialized", true)
+            }
+            IndexPlacement::LegacyProject { .. } => ("migration_required", false),
+            placement => bail!("unsupported grepai placement: {placement:?}"),
+        }
+    };
+
+    if json {
+        print_json(&serde_json::json!({
+            "outcome": outcome,
+            "changed": changed,
+            "config_created": config_created,
+            "workspace": workspace.identity.root,
+            "repository_id": workspace.identity.repository_id,
+            "worktree_id": workspace.identity.worktree_id,
+            "index": workspace.index.directory,
+        }))?;
+    } else if !quiet {
+        let stdout = io::stdout();
+        let mut output = stdout.lock();
+        writeln!(output, "{outcome} {}", workspace.identity.root.display())?;
+        if outcome == "migration_required" {
+            writeln!(
+                output,
+                "run `hzr migrate apply --workspace {}`",
+                workspace.identity.root.display()
+            )?;
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -470,7 +1033,7 @@ async fn execute_agent(config: &Config, command: AgentCommand, json: bool) -> Re
     let api = HzrApi::new(client.endpoint().into(), token)?;
     let node = std::env::var_os("HZR_NODE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("node"));
+        .unwrap_or_else(|| config.engines.binary("node"));
     let agent_data = config
         .data_dir
         .join("sessions")
@@ -485,17 +1048,12 @@ async fn execute_agent(config: &Config, command: AgentCommand, json: bool) -> Re
     Ok(ExitCode::SUCCESS)
 }
 
-fn show_savings(config: &Config, json: bool) -> Result<ExitCode> {
-    let path = config.data_dir.join("ledger/usage.sqlite");
-    let summary = if path.is_file() {
-        Ledger::open(&path)?.summary()?
-    } else {
-        LedgerSummary::default()
-    };
+async fn show_stats(config: &Config, json: bool) -> Result<ExitCode> {
+    let report = stats::collect(config)?;
     if json {
-        print_json(&summary)?;
+        print_json(&report)?;
     } else {
-        print_savings(&summary)?;
+        print_stats(&report)?;
     }
     Ok(ExitCode::SUCCESS)
 }

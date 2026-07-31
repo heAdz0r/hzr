@@ -1,8 +1,9 @@
-# HZR 0.1.0 — fork-core parity ledger
+# HZR 0.2.0 — fork-core parity ledger
 
 **Audit date:** 2026-07-31
-**Status:** HZR 0.1.0; functional parity и assembled local-platform gate green
-**Runtime core:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1`
+**Status:** HZR 0.2.0 development; G1–G7/adoption implemented, functional all-gates green
+**Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
+**Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
 Этот ledger различает четыре проверяемых утверждения:
 
@@ -29,10 +30,12 @@
 | Runtime source | [`fork-core/rtk`](fork-core/rtk) |
 | Canonical manifest | [`fork-core/SNAPSHOT_V2.tsv`](fork-core/SNAPSHOT_V2.tsv) |
 | Metadata | [`fork-core/SNAPSHOT.toml`](fork-core/SNAPSHOT.toml) |
+| Current engine manifest | [`fork-core/CURRENT_ENGINE.toml`](fork-core/CURRENT_ENGINE.toml) + `CURRENT_ENGINE_V1.tsv` |
+| Current engine content list | `CURRENT_FILES` + `CURRENT_SHA256SUMS` |
 
 Snapshot v2 включает ordered path, entry type, Git-portable mode, size и content/target digest, а также source identity, tracked deletions, dirty diff/status hashes и explicit exclusions. Verifier отклоняет missing/extra files, type/mode/byte drift, traversal, undeclared deletion и nested `.git`.
 
-`fork-core/rtk` immutable. HZR adapters, patches внешних engines и packaging находятся за его границей.
+Baseline identity immutable. `fork-core/rtk` после `v0.1.0` развивается прямо в HZR: каждый delta обязан сохранять inherited capability surface, обновлять current-engine identity/parity и проходить полный regression suite. Старый `/Users/andrew/Programming/rtk` не изменяется.
 
 ## Статусы
 
@@ -40,7 +43,7 @@ Snapshot v2 включает ordered path, entry type, Git-portable mode, size �
 |---|---|
 | ✅ | Реализовано и локально проверено в указанной области |
 | 🟡 | Рабочий путь есть, но остаётся честно описанная граница |
-| ⚪ | Осознанно не входит в 0.1.0; exact compatibility path не затронут |
+| ⚪ | Осознанно не входит в 0.2.0; exact compatibility path не затронут |
 
 ## Capability и routing matrix
 
@@ -69,11 +72,13 @@ Snapshot v2 включает ordered path, entry type, Git-portable mode, size �
 | Fork runtime state | `RTK_MEM_DB_PATH`, `RTK_DB_PATH`, private PATH/audit dirs | Managed path also sets `RTK_TEE=0`, `RTK_TELEMETRY_DISABLED=1` | ✅ |
 | Trust/custom filters | Fork остаётся источником rewrite/filter verdict | HZR сохраняет exact output/exit and approval state | ✅ |
 | Caveman response density | Short stable contract injected before generation | No post-hoc lossy rewrite; strict JSON parses, empty output fails | ✅ |
+| Explicit codec | Exact duplicate-paragraph transform + protected spans/raw guard | Shadow returns original with counterfactual bytes; trailing newline preserved | ✅ |
 | Caveman tool boundary | Exact HZR custom-tool allowlist; native layers/resources disabled and repeatedly asserted | SDK still makes inactive `cavemem --version` probe at session construction | 🟡 |
 | Usage ledger | Bridge finalizer posts one terminal outcome; daemon separates actual/estimated | `SIGKILL` can bypass finalizer; `accepted` requires external/user label | 🟡 |
 | Daemon ownership | Filesystem singleton lock acquired before services | Symlink/non-regular lock targets rejected; RAII release | ✅ |
 | Assembled bundle | Public `bin/hzr`, compatibility `bin/rtk`, private `engines/*`, managed npm runtime | Local-platform build/smoke; real provider run needs credentials and is not a release build step | ✅ |
-| Hook installer | Managed Caveman path disables hooks; full fork init remains via explicit passthrough | HZR-owned install/status/uninstall intentionally deferred | ⚪ |
+| Hook installer | `install/uninstall/hooks status`, one combined dispatcher, SessionStart init | Full-SHA backup, CAS lock, atomic write, RTK replacement, ICM/unknown preservation | ✅ |
+| Hook degraded path | 2 s managed rewrite then `PinnedRtkAdapter` fallback | Typed allow/ask/deny at hook exit 0; doctor/savings expose unaccounted calls | ✅ |
 | Cross-platform/legal/KPI proof | CI covers Linux; local gate covers development platform | Windows artifact, formal legal review and paired provider benchmark remain external gates | ⚪ |
 
 ## Compatibility boundary
@@ -133,13 +138,13 @@ flowchart TD
 
 ## Caveman boundary
 
-Managed bridge отключает native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills и extensions. Перед каждым tool call действует exact custom-tool allowlist. До agent session проверяются Node/npm integrity; до prompt — authenticated daemon health с protocol 1, HZR 0.1.0 и ровно одним ready `rtk`.
+Managed bridge отключает native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills и extensions. Перед каждым tool call действует exact custom-tool allowlist. До agent session проверяются Node/npm integrity; до prompt — authenticated daemon health с protocol 1, HZR 0.2.0 и ровно одним ready `rtk`. Порядок проверяется реальным Node runtime test через тот же `prepareManagedRuntime`, который вызывает production `run()`.
 
 Response density задаётся до generation коротким cache-stable contract. HZR Codec остаётся отдельным explicit protected transform для CLI/API. Text quality защищена инструкцией, native layer guards и raw exact tools; это не формальный semantic equivalence proof.
 
 ## Release gates
 
-### Функциональные 0.1.0 gates
+### Функциональные 0.2.0 gates
 
 - [x] Exact dirty fork snapshot v2 imported and verified.
 - [x] Exact fork builds and its synthetic-Git suite passes.
@@ -158,7 +163,8 @@ Response density задаётся до generation коротким cache-stable 
 
 - [ ] Финальный paired provider-billed benchmark и accepted-task feedback workflow.
 - [ ] Crash-safe usage outbox for hard process termination.
-- [ ] HZR hook installer/background service manager/engine updater.
+- [x] HZR hook installer/status/uninstall и hybrid dispatcher.
+- [ ] Background service manager/engine updater.
 - [ ] Runtime re-attestation of compiled fork binary beyond verified build chain + exact version.
 - [ ] Windows assembled artifact and formal third-party legal review.
 

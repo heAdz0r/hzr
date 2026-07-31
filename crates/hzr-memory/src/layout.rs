@@ -52,17 +52,38 @@ impl IcmLayout {
     }
 
     pub(crate) fn load_or_create_token(&self) -> Result<String> {
-        let token_lock = OpenOptions::new()
+        let mut lock_options = OpenOptions::new();
+        lock_options
             .create(true)
             .truncate(false)
             .read(true)
-            .write(true)
-            .open(&self.token_lock_file)
-            .map_err(|source| MemoryError::Io {
-                operation: "open ICM token lock",
-                path: self.token_lock_file.clone(),
-                source,
-            })?;
+            .write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+
+            lock_options.mode(0o600);
+        }
+        let token_lock =
+            lock_options
+                .open(&self.token_lock_file)
+                .map_err(|source| MemoryError::Io {
+                    operation: "open ICM token lock",
+                    path: self.token_lock_file.clone(),
+                    source,
+                })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            token_lock
+                .set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|source| MemoryError::Io {
+                    operation: "secure ICM token lock",
+                    path: self.token_lock_file.clone(),
+                    source,
+                })?;
+        }
         token_lock
             .lock_exclusive()
             .map_err(|source| MemoryError::Io {
@@ -185,4 +206,39 @@ fn create_secret_file(path: &Path) -> std::io::Result<File> {
 #[cfg(not(unix))]
 fn secure_existing_secret(_path: &Path) -> std::io::Result<()> {
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use tempfile::tempdir;
+
+    use super::IcmLayout;
+
+    #[test]
+    fn test_token_lock_is_created_and_repaired_with_private_permissions() {
+        let directory = tempdir().expect("temporary directory");
+        let layout = IcmLayout::prepare(directory.path()).expect("ICM layout");
+
+        layout.load_or_create_token().expect("token creation");
+
+        let created_mode = fs::metadata(&layout.token_lock_file)
+            .expect("created token lock metadata")
+            .permissions()
+            .mode();
+        assert_eq!(created_mode & 0o777, 0o600);
+
+        fs::set_permissions(&layout.token_lock_file, fs::Permissions::from_mode(0o666))
+            .expect("relax token lock permissions");
+
+        layout.load_or_create_token().expect("existing token load");
+
+        let repaired_mode = fs::metadata(layout.token_lock_file)
+            .expect("repaired token lock metadata")
+            .permissions()
+            .mode();
+        assert_eq!(repaired_mode & 0o777, 0o600);
+    }
 }

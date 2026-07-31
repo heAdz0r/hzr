@@ -25,7 +25,7 @@ impl ForkRuntimePaths {
         let root = data_root.join("fork");
         Self {
             memory_db: root.join("mem.db"),
-            history_db: root.join("history.db"),
+            history_db: data_root.join("ledger/hzr.sqlite"),
             tee_dir: root.join("tee"),
             audit_dir: root.join("audit"),
         }
@@ -75,6 +75,7 @@ impl ForkRuntimePaths {
             .env("RTK_TEE_DIR", &self.tee_dir)
             .env("RTK_AUDIT_DIR", &self.audit_dir)
             .env("RTK_TEE", "0")
+            .env("RTK_HISTORY_DAYS", "0")
             .env("RTK_TELEMETRY_DISABLED", "1")
             .env("PATH", prefixed_path(binary_directory)?);
         Ok(())
@@ -96,6 +97,7 @@ impl ForkRuntimePaths {
             ("RTK_TEE_DIR", path_text(&self.tee_dir)?),
             ("RTK_AUDIT_DIR", path_text(&self.audit_dir)?),
             ("RTK_TEE", "0"),
+            ("RTK_HISTORY_DAYS", "0"),
             ("RTK_TELEMETRY_DISABLED", "1"),
         ] {
             environment.set.insert(key.to_owned(), value.to_owned());
@@ -126,6 +128,7 @@ impl ForkRuntimePaths {
             .env("RTK_TEE_DIR", &self.tee_dir)
             .env("RTK_AUDIT_DIR", &self.audit_dir)
             .env("RTK_TEE", "0")
+            .env("RTK_HISTORY_DAYS", "0")
             .env("RTK_TELEMETRY_DISABLED", "1")
             .env("PATH", prefixed_path(binary_directory)?);
         Ok(())
@@ -140,7 +143,7 @@ impl ForkRuntimePaths {
                     path: binary_directory.to_owned(),
                 })?;
         Ok(format!(
-            "RTK_MEM_DB_PATH={}\nRTK_DB_PATH={}\nRTK_TEE_DIR={}\nRTK_AUDIT_DIR={}\nRTK_TEE=0\nRTK_TELEMETRY_DISABLED=1\nPATH={}${{PATH:+\":$PATH\"}}\nexport RTK_MEM_DB_PATH RTK_DB_PATH RTK_TEE_DIR RTK_AUDIT_DIR RTK_TEE RTK_TELEMETRY_DISABLED PATH\n",
+            "RTK_MEM_DB_PATH={}\nRTK_DB_PATH={}\nRTK_TEE_DIR={}\nRTK_AUDIT_DIR={}\nRTK_TEE=0\nRTK_HISTORY_DAYS=0\nRTK_TELEMETRY_DISABLED=1\nPATH={}${{PATH:+\":$PATH\"}}\nexport RTK_MEM_DB_PATH RTK_DB_PATH RTK_TEE_DIR RTK_AUDIT_DIR RTK_TEE RTK_HISTORY_DAYS RTK_TELEMETRY_DISABLED PATH\n",
             shell_quote(path_text(&self.memory_db)?),
             shell_quote(path_text(&self.history_db)?),
             shell_quote(path_text(&self.tee_dir)?),

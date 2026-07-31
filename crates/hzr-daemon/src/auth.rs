@@ -49,12 +49,25 @@ pub fn load_or_create_token(data_root: &Path) -> Result<(AuthToken, PathBuf), st
     fs::create_dir_all(&runtime)?;
     let token_path = runtime.join("hzrd.token");
     let lock_path = runtime.join("hzrd.token.lock");
-    let lock = OpenOptions::new()
+    let mut lock_options = OpenOptions::new();
+    lock_options
         .create(true)
         .truncate(false)
         .read(true)
-        .write(true)
-        .open(lock_path)?;
+        .write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        lock_options.mode(0o600);
+    }
+    let lock = lock_options.open(&lock_path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        lock.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
     lock.lock_exclusive()?;
     let result = load_or_create_locked(&token_path);
     FileExt::unlock(&lock)?;
@@ -156,6 +169,11 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     use tempfile::tempdir;
 
     use super::load_or_create_token;
@@ -169,5 +187,31 @@ mod tests {
         assert_eq!(first.expose(), second.expose());
         assert!(first.expose().len() >= 64);
         assert!(path.is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_token_lock_is_created_and_repaired_with_private_permissions() {
+        let directory = tempdir().expect("temporary directory");
+        let lock_path = directory.path().join("runtime/hzrd.token.lock");
+
+        load_or_create_token(directory.path()).expect("token creation");
+
+        let created_mode = fs::metadata(&lock_path)
+            .expect("created token lock metadata")
+            .permissions()
+            .mode();
+        assert_eq!(created_mode & 0o777, 0o600);
+
+        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o666))
+            .expect("relax token lock permissions");
+
+        load_or_create_token(directory.path()).expect("existing token load");
+
+        let repaired_mode = fs::metadata(lock_path)
+            .expect("repaired token lock metadata")
+            .permissions()
+            .mode();
+        assert_eq!(repaired_mode & 0o777, 0o600);
     }
 }

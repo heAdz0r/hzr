@@ -19,7 +19,12 @@ The default is one supervised MCP process, launched without a shell:
 icm --db <HZR_DATA_ROOT>/memory/icm/memories.db serve --compact
 ```
 
-`--no-embeddings` is inserted before `serve` when embeddings are disabled.
+`--no-embeddings` is inserted before `serve` when embeddings are disabled. HZR
+defaults to this FTS-only mode so a clean install cannot turn its first durable
+write into an implicit model download. Set `engines.icm_embeddings = true` in
+the HZR config only after provisioning ICM's embedding runtime/model; health
+then reports full readiness. FTS-only operation is reported as a degraded
+capability warning, not a failed memory store.
 HZR initializes JSON-RPC/MCP `2024-11-05`, sends
 `notifications/initialized`, and serializes every request through one bounded
 stdio connection. Process, request, and framing failures have typed errors and

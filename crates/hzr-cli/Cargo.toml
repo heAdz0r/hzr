@@ -9,6 +9,9 @@ repository.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+directories.workspace = true
+fs2.workspace = true
+hex.workspace = true
 hzr-agent = { path = "../hzr-agent" }
 hzr-codec = { path = "../hzr-codec" }
 hzr-core = { path = "../hzr-core" }
@@ -18,13 +21,14 @@ hzr-index = { path = "../hzr-index" }
 hzr-memory = { path = "../hzr-memory" }
 hzr-protocol = { path = "../hzr-protocol" }
 reqwest.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
+toml_edit.workspace = true
 
 [lints]
 workspace = true

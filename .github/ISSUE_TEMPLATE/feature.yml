@@ -1,0 +1,34 @@
+name: Feature request
+description: Propose an extension that preserves HZR ownership invariants
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the workflow or inefficiency this should address.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Include the expected CLI, MCP, hook, or API contract when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: ownership
+    attributes:
+      label: Ownership and redundancy impact
+      description: Explain which existing HZR owner should implement it and how duplicate indexes, stores, interceptors, or accounting are avoided.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Success evidence
+      description: State the test, benchmark, or observable acceptance criterion.
+    validations:
+      required: true

@@ -11,6 +11,12 @@ pub enum ContextError {
     #[error("managed fork-core is unavailable: {0}")]
     ForkUnavailable(String),
 
+    /// The canonical semantic index is not usable *for this request*. Distinct from
+    /// `Index`, which is a lifecycle failure: this one is expected during a cold warm-up
+    /// and must degrade to exact search rather than fail the request.
+    #[error("canonical semantic index is not ready: {0}")]
+    IndexNotReady(String),
+
     #[error("managed fork-core invocation failed: {0}")]
     Fork(#[from] hzr_exec::ExecError),
 

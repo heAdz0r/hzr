@@ -1,12 +1,13 @@
 use std::collections::{BTreeMap, btree_map::Entry};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use hzr_core::{BudgetPlanner, Config, FusionInput};
 use hzr_exec::{
     CaptureConfig, CaptureOverflow, CapturedContent, ExecutionOutcome, ForkCoreInvocation,
     ForkCoreRunner, TerminationCause,
 };
-use hzr_index::{Deadlines, IndexCoordinator, IndexGeneration, Workspace};
+use hzr_index::{Deadlines, IndexCoordinator, IndexGeneration, PreparedIndex, Workspace};
 use hzr_memory::{
     IcmClient, RecallRequest, isolate_project_memories, namespaced_topic, recall_candidate_limit,
     validate_memory_kind,
@@ -32,6 +33,12 @@ const MAX_WARNING_BYTES: usize = 512;
 const SEARCH_CAPTURE_BYTES: usize = 2 * 1024 * 1024;
 const PLAN_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
 const FORK_TIMEOUT_MARGIN_MS: u64 = 500;
+
+/// Share of the request budget a cold semantic index may consume before the request
+/// degrades to exact search. A quarter leaves ample time for the exact pass that follows.
+const SEMANTIC_READY_BUDGET_DIVISOR: u64 = 4;
+const SEMANTIC_READY_BUDGET_MIN_MS: u64 = 1_000;
+const SEMANTIC_READY_BUDGET_MAX_MS: u64 = 8_000;
 const PLAN_WEIGHT: f32 = 1.0;
 const MEMORY_WEIGHT: f32 = 0.8;
 
@@ -127,7 +134,7 @@ impl ContextPlanner {
         let (workspace, generation, fallback_reason) = if request.mode == SearchMode::Exact {
             (workspace, initial_generation, None)
         } else {
-            match self.indexes.prepare_workspace(workspace.clone()).await {
+            match self.prepare_within_request_budget(&workspace).await {
                 Ok(prepared) => (prepared.workspace, prepared.generation, None),
                 Err(error) => {
                     request.mode = SearchMode::Exact;
@@ -223,6 +230,47 @@ impl ContextPlanner {
         Ok(())
     }
 
+    /// Wait for the canonical semantic index only as long as a request may afford.
+    ///
+    /// `IndexCoordinator` legitimately allows a cold watcher up to `watch_start`
+    /// (120 s) to finish its first scan — on a large tree that is normal. But a request
+    /// deadline is shorter than that, so awaiting readiness directly made `/v1/search`
+    /// and `/v1/context/plan` die at the transport with an opaque "error sending
+    /// request" instead of degrading. PRD §10 requires the opposite: a missing or
+    /// not-yet-ready index degrades to exact search with visible `degraded` status.
+    ///
+    /// Two properties matter here:
+    ///
+    /// * the wait is bounded by a fraction of the request budget, leaving time for the
+    ///   exact search that follows a timeout;
+    /// * the preparation is **not cancelled** when the wait elapses. Dropping the future
+    ///   would abort the warming watcher, so every request would restart the initial scan
+    ///   and the index could never become ready — which also leaked one runtime directory
+    ///   per attempt. Running it detached lets this request degrade while the next one
+    ///   finds a warm index.
+    async fn prepare_within_request_budget(&self, workspace: &Workspace) -> Result<PreparedIndex> {
+        let budget = Duration::from_millis(
+            (self.fork_timeout_ms / SEMANTIC_READY_BUDGET_DIVISOR)
+                .clamp(SEMANTIC_READY_BUDGET_MIN_MS, SEMANTIC_READY_BUDGET_MAX_MS),
+        );
+        let indexes = self.indexes.clone();
+        let target = workspace.clone();
+        // Detached so an elapsed wait never aborts the warm-up in flight.
+        let preparation = tokio::spawn(async move { indexes.prepare_workspace(target).await });
+        match tokio::time::timeout(budget, preparation).await {
+            Ok(Ok(result)) => result.map_err(ContextError::from),
+            // The preparation task itself failed (panic or cancellation): treat as not
+            // ready rather than propagating, so search still degrades instead of failing.
+            Ok(Err(error)) => Err(ContextError::IndexNotReady(format!(
+                "index preparation task did not complete: {error}"
+            ))),
+            Err(_) => Err(ContextError::IndexNotReady(format!(
+                "semantic index was not ready within {} ms; it keeps warming in the background",
+                budget.as_millis()
+            ))),
+        }
+    }
+
     async fn code_plan(
         &self,
         workspace: &Workspace,
@@ -230,7 +278,7 @@ impl ContextPlanner {
         request: &PlanRequest,
     ) -> Result<CodePlanResult> {
         let mut warnings = Vec::new();
-        let prepared = self.indexes.prepare_workspace(workspace.clone()).await;
+        let prepared = self.prepare_within_request_budget(workspace).await;
         let (generation, adaptive_search_ready) = match prepared {
             Ok(prepared) => (prepared.generation, true),
             Err(error) => {

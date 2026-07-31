@@ -202,7 +202,7 @@ pub enum ClientError {
     NonLoopback(std::net::SocketAddr),
     #[error("failed to build daemon HTTP client: {0}")]
     Build(reqwest::Error),
-    #[error("failed to read daemon token {path}: {source}; run `hzr daemon serve`")]
+    #[error("failed to read daemon token {path}; run `hzr daemon serve`")]
     TokenRead {
         path: PathBuf,
         source: std::io::Error,
@@ -233,6 +233,7 @@ pub enum ClientError {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
     use std::fs;
 
     use hzr_core::Config;
@@ -256,6 +257,25 @@ mod tests {
         }
 
         assert_eq!(read_token(&path).expect("valid token"), "a".repeat(64));
+    }
+
+    #[test]
+    fn test_read_token_alternate_error_chain_does_not_duplicate_os_error() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("missing-hzrd.token");
+        let error = read_token(&path).expect_err("missing token must fail");
+        let os_error = error.source().map(ToString::to_string).unwrap_or_default();
+        assert!(
+            !os_error.is_empty(),
+            "token read error must retain its source"
+        );
+        let rendered = format!("{:#}", anyhow::Error::new(error));
+
+        assert!(rendered.starts_with(&format!(
+            "failed to read daemon token {}; run `hzr daemon serve`",
+            path.display()
+        )));
+        assert_eq!(rendered.matches(&os_error).count(), 1);
     }
 
     #[cfg(unix)]
@@ -299,7 +319,7 @@ mod tests {
             let rendered = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
             assert!(rendered.contains("get /v1/health http/1.1"));
             assert!(rendered.contains(&expected_auth));
-            let body = br#"{"protocol_version":1,"hzr_version":"0.1.0","state":"ready","workspace_root":null,"engines":[],"capabilities":[]}"#;
+            let body = br#"{"protocol_version":1,"hzr_version":"0.2.0","state":"ready","workspace_root":null,"engines":[],"capabilities":[]}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                 body.len()
@@ -323,7 +343,7 @@ mod tests {
             .expect("typed health response");
         server.await.expect("test server completion");
 
-        assert_eq!(health.hzr_version, "0.1.0");
+        assert_eq!(health.hzr_version, "0.2.0");
         assert_eq!(health.protocol_version, 1);
     }
 }

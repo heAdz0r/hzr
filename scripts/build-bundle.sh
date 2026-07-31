@@ -6,6 +6,7 @@ HZR_OUTPUT_ROOT="${1:-${HZR_REPOSITORY_ROOT}/dist}"
 HZR_ENGINE_OUTPUT="${HZR_OUTPUT_ROOT}/engines"
 HZR_BINARY_OUTPUT="${HZR_OUTPUT_ROOT}/bin"
 HZR_LICENSE_OUTPUT="${HZR_OUTPUT_ROOT}/licenses"
+HZR_RUNTIME_OUTPUT="${HZR_OUTPUT_ROOT}/runtime"
 HZR_CAVEMAN_OUTPUT="${HZR_ENGINE_OUTPUT}/caveman-code"
 HZR_PROVENANCE_OUTPUT="${HZR_OUTPUT_ROOT}/share/hzr"
 HZR_BUILD_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-build.XXXXXX")"
@@ -54,6 +55,7 @@ verify_sha256() {
 }
 
 require_command cargo
+require_command curl
 require_command git
 require_command go
 require_command awk
@@ -62,11 +64,10 @@ require_command install
 require_command kill
 require_command ln
 require_command mv
-require_command node
-require_command npm
 require_command readlink
 require_command shasum
 require_command sleep
+require_command tar
 
 "${HZR_REPOSITORY_ROOT}/scripts/verify-fork-core.sh"
 
@@ -74,9 +75,50 @@ mkdir -p \
   "${HZR_ENGINE_OUTPUT}" \
   "${HZR_BINARY_OUTPUT}" \
   "${HZR_LICENSE_OUTPUT}" \
+  "${HZR_RUNTIME_OUTPUT}" \
   "${HZR_PROVENANCE_OUTPUT}/fork-core" \
   "${HZR_PROVENANCE_OUTPUT}/patches/grepai" \
   "${HZR_PROVENANCE_OUTPUT}/patches/icm"
+
+HZR_NODE_VERSION="22.17.1"
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64)
+    HZR_NODE_PLATFORM="darwin-arm64"
+    HZR_NODE_SHA256="a983f4f2a7b71512b78d7935b9ccf6b72120a255810070afd635c4146bca7b31"
+    ;;
+  Darwin-x86_64)
+    HZR_NODE_PLATFORM="darwin-x64"
+    HZR_NODE_SHA256="b925103150fac0d23a44a45b2d88a01b73e5fff101e5dcfbae98d32c08d4bee3"
+    ;;
+  Linux-aarch64 | Linux-arm64)
+    HZR_NODE_PLATFORM="linux-arm64"
+    HZR_NODE_SHA256="f53510706998cf044f634190416f0588e7e1937aecea938768952e0f0ac1f41b"
+    ;;
+  Linux-x86_64)
+    HZR_NODE_PLATFORM="linux-x64"
+    # SHA-256 of node-v22.17.1-linux-x64.tar.gz. The previous value was the .tar.xz
+    # digest while HZR_NODE_ARCHIVE downloads .tar.gz, so every linux-x64 bundle build
+    # failed verification. Keep these paired with the .tar.gz suffix below.
+    HZR_NODE_SHA256="cfb6ac0cf339825fe36efd1f18a79016b02aca19fbfa6c9547c57e27dc09f6ea"
+    ;;
+  *)
+    echo "unsupported Node.js bundle platform: $(uname -s)-$(uname -m)" >&2
+    exit 1
+    ;;
+esac
+HZR_NODE_ARCHIVE="node-v${HZR_NODE_VERSION}-${HZR_NODE_PLATFORM}.tar.gz"
+HZR_NODE_DOWNLOAD="${HZR_BUILD_TEMP}/${HZR_NODE_ARCHIVE}"
+curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+  "https://nodejs.org/download/release/v${HZR_NODE_VERSION}/${HZR_NODE_ARCHIVE}" \
+  --output "${HZR_NODE_DOWNLOAD}"
+verify_sha256 "${HZR_NODE_SHA256}" "${HZR_NODE_DOWNLOAD}"
+HZR_NODE_ROOT="${HZR_RUNTIME_OUTPUT}/node"
+mkdir -p "${HZR_NODE_ROOT}"
+tar -xzf "${HZR_NODE_DOWNLOAD}" -C "${HZR_NODE_ROOT}" --strip-components=1
+HZR_NODE_BINARY="${HZR_NODE_ROOT}/bin/node"
+HZR_NPM_BINARY="${HZR_NODE_ROOT}/bin/npm"
+"${HZR_NODE_BINARY}" --version | grep -Fx "v${HZR_NODE_VERSION}" >/dev/null
+ln -s ../runtime/node/bin/node "${HZR_ENGINE_OUTPUT}/node"
 
 verify_sha256 \
   "55535352bc9f4837198c652b8c44ec54a0a7ef82fbd81e11b4ec11f4c4082991" \
@@ -131,10 +173,12 @@ install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/package.json" 
   "${HZR_CAVEMAN_STAGE}/package.json"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/package-lock.json" \
   "${HZR_CAVEMAN_STAGE}/package-lock.json"
-npm ci --omit=dev --prefix "${HZR_CAVEMAN_STAGE}"
-npm audit --omit=dev --audit-level=high \
+PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ci --omit=dev \
   --prefix "${HZR_CAVEMAN_STAGE}"
-node --check "${HZR_CAVEMAN_STAGE}/bridge.mjs"
+PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" audit \
+  --omit=dev --audit-level=high \
+  --prefix "${HZR_CAVEMAN_STAGE}"
+"${HZR_NODE_BINARY}" --check "${HZR_CAVEMAN_STAGE}/bridge.mjs"
 if [[ -e "${HZR_CAVEMAN_OUTPUT}" ]]; then
   echo "refusing to merge a managed Caveman runtime into existing output: ${HZR_CAVEMAN_OUTPUT}" >&2
   exit 1
@@ -148,6 +192,7 @@ install -m 0755 "${HZR_REPOSITORY_ROOT}/target/release/hzr" "${HZR_BINARY_OUTPUT
 install -m 0755 "${HZR_REPOSITORY_ROOT}/target/release/hzrd" "${HZR_BINARY_OUTPUT}/hzrd"
 ln -s hzr "${HZR_BINARY_OUTPUT}/rtk"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/LICENSE" "${HZR_LICENSE_OUTPUT}/HZR-Apache-2.0.txt"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/NOTICE" "${HZR_LICENSE_OUTPUT}/NOTICE"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/THIRD_PARTY_NOTICES.md" \
   "${HZR_LICENSE_OUTPUT}/THIRD_PARTY_NOTICES.md"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/fork-core/rtk/LICENSE" \
@@ -158,6 +203,8 @@ install -m 0644 "${HZR_BUILD_TEMP}/icm/LICENSE" \
   "${HZR_LICENSE_OUTPUT}/ICM-Apache-2.0.txt"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/licenses/caveman-code-MIT.txt" \
   "${HZR_LICENSE_OUTPUT}/caveman-code-MIT.txt"
+install -m 0644 "${HZR_NODE_ROOT}/LICENSE" \
+  "${HZR_LICENSE_OUTPUT}/Node.js-MIT-and-dependencies.txt"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/engines.lock.toml" \
   "${HZR_PROVENANCE_OUTPUT}/engines.lock.toml"
 for HZR_FORK_PROVENANCE in \
@@ -165,6 +212,10 @@ for HZR_FORK_PROVENANCE in \
   SNAPSHOT_V2.tsv \
   SHA256SUMS \
   FORK_FILES \
+  CURRENT_ENGINE.toml \
+  CURRENT_ENGINE_V1.tsv \
+  CURRENT_SHA256SUMS \
+  CURRENT_FILES \
   TRACKED_DELETIONS \
   SOURCE_STATUS \
   TRACKED_CHANGES.patch; do
@@ -172,6 +223,13 @@ for HZR_FORK_PROVENANCE in \
     "${HZR_REPOSITORY_ROOT}/fork-core/${HZR_FORK_PROVENANCE}" \
     "${HZR_PROVENANCE_OUTPUT}/fork-core/${HZR_FORK_PROVENANCE}"
 done
+mkdir -p "${HZR_PROVENANCE_OUTPUT}/integrations/claude-code"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/HZR.md" \
+  "${HZR_PROVENANCE_OUTPUT}/HZR.md"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/claude-code/hzr-awareness.md" \
+  "${HZR_PROVENANCE_OUTPUT}/integrations/claude-code/hzr-awareness.md"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/claude-code/hzr-awareness-codex.md" \
+  "${HZR_PROVENANCE_OUTPUT}/integrations/claude-code/hzr-awareness-codex.md"
 install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"

@@ -343,7 +343,7 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::OK);
-        let summary = hzr_core::Ledger::open(&directory.path().join("data/ledger/usage.sqlite"))
+        let summary = hzr_core::Ledger::open(&directory.path().join("data/ledger/hzr.sqlite"))
             .expect("ledger opens")
             .summary()
             .expect("ledger summary");

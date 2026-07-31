@@ -352,7 +352,7 @@ pub async fn usage(
     Json(request): Json<UsageApiRequest>,
 ) -> Result<Json<UsageApiResponse>, ApiError> {
     validate_usage(&request)?;
-    let ledger_path = state.config.data_dir.join("ledger/usage.sqlite");
+    let ledger_path = state.config.data_dir.join("ledger/hzr.sqlite");
     let record = LedgerRecord {
         trace_id: TraceId::from_string(request.trace_id),
         provider: request.provider,
@@ -692,6 +692,10 @@ fn context_error(error: ContextError) -> ApiError {
         ContextError::ForkUnavailable(message) => {
             ApiError::service("fork_core_unavailable", message, true)
         }
+        // Recoverable by construction: the index keeps warming, so a retry succeeds.
+        // Reaching this arm means the caller asked for semantic-only work; ordinary
+        // search and planning degrade internally and never surface it.
+        ContextError::IndexNotReady(message) => ApiError::service("index_not_ready", message, true),
         error @ (ContextError::Fork(_)
         | ContextError::ForkCommand { .. }
         | ContextError::InvalidForkOutput { .. }) => {
@@ -715,9 +719,15 @@ async fn memory_engine_health(state: &AppState) -> EngineHealth {
     let (engine_state, detail) = match immediate {
         Some(result) => result,
         None => match state.memory.status().await {
-            ServiceStatus::Running { .. } | ServiceStatus::Attached { .. } => {
+            ServiceStatus::Running { health, .. } | ServiceStatus::Attached { health }
+                if health.has_embedder =>
+            {
                 (EngineState::Ready, "ICM singleton is ready".into())
             }
+            ServiceStatus::Running { .. } | ServiceStatus::Attached { .. } => (
+                EngineState::Degraded,
+                "ICM singleton is ready in FTS-only mode; embeddings are disabled".into(),
+            ),
             other => (EngineState::Degraded, format!("{other:?}")),
         },
     };

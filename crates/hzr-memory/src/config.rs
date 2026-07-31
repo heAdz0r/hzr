@@ -38,7 +38,9 @@ impl IcmConfig {
             circuit_failure_threshold: 3,
             circuit_reset_timeout: Duration::from_secs(20),
             cli_fallback: true,
-            embeddings: true,
+            // A clean install must not turn the first durable write into an implicit,
+            // unbounded model download. The daemon may opt in from its explicit config.
+            embeddings: false,
             transport: IcmTransport::StdioMcp,
         }
     }

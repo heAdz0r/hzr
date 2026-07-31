@@ -1,6 +1,29 @@
 schema_version = 1
 
 [[engine]]
+name = "nodejs"
+version = "22.17.1"
+tag = "v22.17.1"
+commit = "1073ab06c8f80b6d7c995a1362502767cf498c0b"
+repository = "https://github.com/nodejs/node"
+license = "MIT"
+binary = "node"
+runtime = true
+source_kind = "official-binary-distribution"
+artifacts = [
+  "node-v22.17.1-darwin-arm64.tar.gz",
+  "node-v22.17.1-darwin-x64.tar.gz",
+  "node-v22.17.1-linux-arm64.tar.gz",
+  "node-v22.17.1-linux-x64.tar.gz",
+]
+artifact_sha256 = [
+  "a983f4f2a7b71512b78d7935b9ccf6b72120a255810070afd635c4146bca7b31",
+  "b925103150fac0d23a44a45b2d88a01b73e5fff101e5dcfbae98d32c08d4bee3",
+  "f53510706998cf044f634190416f0588e7e1937aecea938768952e0f0ac1f41b",
+  "cfb6ac0cf339825fe36efd1f18a79016b02aca19fbfa6c9547c57e27dc09f6ea",
+]
+
+[[engine]]
 name = "grepai"
 version = "0.35.0"
 tag = "v0.35.0"

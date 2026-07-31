@@ -209,6 +209,15 @@ impl Workspace {
         crate::paths::normalize_result(&self.identity.root, path)
     }
 
+    /// Create the canonical managed index directory and project symlink when absent.
+    ///
+    /// Existing managed placements are a read-only no-op. Legacy directories and
+    /// foreign entries are rejected so callers cannot bypass explicit migration.
+    pub fn ensure_managed_location(&self) -> Result<()> {
+        self.require_managed_index()?;
+        self.prepare_index_location()
+    }
+
     pub(crate) fn prepare_index_location(&self) -> Result<()> {
         let placement = self.placement()?;
         require_supported_placement(placement.clone())?;
