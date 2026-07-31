@@ -182,14 +182,14 @@ fn collect_markers(
             Some(name) if name.ends_with(".pid") => Some("process_marker"),
             _ => None,
         };
-        if let Some(kind) = kind
-            && seen.insert(path.clone())
-        {
-            artifacts.push(LegacyArtifact {
-                kind: kind.into(),
-                path,
-                symlink: false,
-            });
+        if let Some(kind) = kind {
+            if seen.insert(path.clone()) {
+                artifacts.push(LegacyArtifact {
+                    kind: kind.into(),
+                    path,
+                    symlink: false,
+                });
+            }
         }
     }
 }
