@@ -484,10 +484,10 @@ mod tests {
     fn replaces_first_version_assignment_only() {
         let src = r#"let a = "x";
 version = "0.1.0"
-version = "0.3.0"
+version = "0.3.1"
 "#;
         let out = replace_first_version_assignment(src, "9.9.9").expect("replacement expected");
         assert!(out.contains("version = \"9.9.9\""));
-        assert!(out.contains("version = \"0.3.0\""));
+        assert!(out.contains("version = \"0.3.1\""));
     }
 }

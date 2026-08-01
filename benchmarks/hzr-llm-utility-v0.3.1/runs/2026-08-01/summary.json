@@ -1,0 +1,30 @@
+{
+  "all_passed": true,
+  "binary": "fork-core/rtk/target/debug/rtk",
+  "binary_sha256": "9c7d66fa9fa7c401a9af9e4cea1b6556930fac7ebf7027f5c4f1e1a82a3656e9",
+  "fork_version": "rtk 0.44.1-fork.1",
+  "gates": {
+    "batch_dry_run_unchanged": true,
+    "batch_write_4_of_4": true,
+    "create_idempotent_content_and_mtime": true,
+    "read_contract_6_of_6": true,
+    "read_exact_sha256_match": true,
+    "read_range_exact": true,
+    "single_write_4_of_4": true,
+    "write_is_hzr_only_vs_upstream_v0_44_1": true,
+    "write_json_schema_v1": true
+  },
+  "passed": 9,
+  "product_version": "0.3.1",
+  "read_contract_signals": {
+    "bounded_lead_preview_is_present": true,
+    "full_exact_recovery_is_explicit": true,
+    "omission_is_explicit": true,
+    "range_recovery_is_explicit": true,
+    "section_coverage_is_explicit": true,
+    "source_size_is_explicit": true
+  },
+  "schema": "hzr-llm-utility-v1",
+  "total": 9,
+  "upstream_help": "benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01/upstream-help.txt"
+}

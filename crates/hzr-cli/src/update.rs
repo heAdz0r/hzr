@@ -550,8 +550,8 @@ fn classify_cache(cached: &CachedRelease, now: u64, current: ReleaseVersion) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        CacheStatus, CachedRelease, checksum_for_artifact, classify_cache, parse_release_version,
-        select_release,
+        CacheStatus, CachedRelease, checksum_for_artifact, classify_cache, notice,
+        parse_release_version, select_release,
     };
 
     #[test]
@@ -566,7 +566,7 @@ mod tests {
             {"tag_name":"v0.3.1","draft":false,"prerelease":false,"assets":[]}
         ]"#;
 
-        let current = parse_release_version("0.3.0").expect("current version");
+        let current = parse_release_version("0.3.1").expect("current version");
         let release = select_release(releases, current, "darwin-arm64")
             .expect("valid GitHub response")
             .expect("newer usable release");
@@ -596,7 +596,7 @@ mod tests {
             checked_at_unix_seconds: 1_000,
             latest_version: Some("0.4.0".to_owned()),
         };
-        let current = parse_release_version("0.3.0").expect("current version");
+        let current = parse_release_version("0.3.1").expect("current version");
 
         assert_eq!(
             classify_cache(&cached, 1_000 + 86_399, current),
@@ -605,6 +605,32 @@ mod tests {
         assert_eq!(
             classify_cache(&cached, 1_000 + 86_400, current),
             CacheStatus::Expired
+        );
+    }
+
+    #[test]
+    fn startup_notice_names_the_only_install_command() {
+        let current = parse_release_version("0.3.1").expect("current version");
+        let latest = parse_release_version("0.4.0").expect("latest version");
+
+        assert_eq!(
+            notice(current, latest),
+            "HZR 0.4.0 is available (current 0.3.1). Run `hzr update` to install it."
+        );
+    }
+
+    #[test]
+    fn release_assets_must_use_the_official_github_download_url() {
+        let releases = br#"[{"tag_name":"v0.4.0","draft":false,"prerelease":false,"assets":[
+            {"name":"hzr-v0.4.0-linux-x64.tar.gz","browser_download_url":"https://example.invalid/hzr-v0.4.0-linux-x64.tar.gz"},
+            {"name":"SHA256SUMS","browser_download_url":"https://github.com/heAdz0r/hzr/releases/download/v0.4.0/SHA256SUMS"}
+        ]}]"#;
+        let current = parse_release_version("0.3.1").expect("current version");
+
+        assert!(
+            select_release(releases, current, "linux-x64")
+                .expect("valid GitHub response")
+                .is_none()
         );
     }
 }

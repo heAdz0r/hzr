@@ -1421,6 +1421,11 @@ main {
   scrollbar-color: var(--ink-700) transparent;
 }
 
+.activity-entry:nth-child(odd) {
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
 .activity-row {
   grid-template-columns: 70px 72px minmax(82px, 0.45fr) minmax(160px, 1fr) 96px 62px 52px;
   gap: 10px;
@@ -1511,6 +1516,32 @@ main {
 
 .activity-latency {
   text-align: right;
+}
+
+.activity-advice {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr);
+  gap: 5px 10px;
+  padding: 2px 10px 10px 162px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.activity-advice span {
+  color: var(--warning);
+  font-weight: 700;
+}
+
+.activity-advice code {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-advice small {
+  grid-column: 2;
+  font-size: 11px;
 }
 
 .activity-empty {

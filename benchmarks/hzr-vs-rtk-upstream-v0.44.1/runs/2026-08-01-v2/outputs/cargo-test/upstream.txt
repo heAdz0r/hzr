@@ -1,0 +1,18 @@
+---- cmds::cloud::curl_cmd::tests::test_filter_curl_multibyte_boundary stdout ----
+
+thread 'cmds::cloud::curl_cmd::tests::test_filter_curl_multibyte_boundary' (105564959) panicked at src/cmds/cloud/curl_cmd.rs:193:9:
+assertion failed: result.content.contains("bytes total")
+
+---- cmds::cloud::curl_cmd::tests::test_filter_curl_exact_500_bytes stdout ----
+
+thread 'cmds::cloud::curl_cmd::tests::test_filter_curl_exact_500_bytes' (105564953) panicked at src/cmds/cloud/curl_cmd.rs:201:9:
+assertion failed: result.content.contains("bytes total")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- cmds::cloud::curl_cmd::tests::test_filter_curl_long_output_truncated stdout ----
+
+thread 'cmds::cloud::curl_cmd::tests::test_filter_curl_long_output_truncated' (105564958) panicked at src/cmds/cloud/curl_cmd.rs:183:9:
+assertion failed: result.content.contains("bytes total")
+
+
+test result: FAILED. 2503 passed; 3 failed; 8 ignored; 0 measured; 0 filtered out; finished in 0.97s

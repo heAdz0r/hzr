@@ -540,6 +540,7 @@ async fn semantic_canary(
     generation: Option<String>,
 ) -> DashboardSemanticCanary {
     const QUERY: &str = "repository architecture and main implementation";
+    const CANARY_TIMEOUT: Duration = Duration::from_secs(15);
     const READY_CACHE_TTL: Duration = Duration::from_secs(30);
     const RETRY_CACHE_TTL: Duration = Duration::from_secs(2);
 
@@ -558,7 +559,7 @@ async fn semantic_canary(
     let checked_at_ms = now_ms().ok();
     let started_at = Instant::now();
     let result = tokio::time::timeout(
-        Duration::from_secs(2),
+        CANARY_TIMEOUT,
         state.context.search_unaccounted(SearchRequest {
             workspace: registration.root.clone(),
             query: QUERY.into(),
@@ -626,7 +627,7 @@ async fn semantic_canary(
             strategy: None,
             backend: None,
             generation: generation.clone(),
-            detail: "Semantic canary exceeded its 2-second observability budget".into(),
+            detail: "Semantic canary exceeded its 15-second bounded observability budget".into(),
         },
     };
     *cache = Some(CachedSemanticCanary {

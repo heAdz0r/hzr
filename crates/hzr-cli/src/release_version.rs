@@ -399,7 +399,7 @@ mod tests {
     fn same_minor_release_keeps_the_stable_release_line() {
         let before = "hzr_release_line = \"0.3.x\"\n";
         assert_eq!(
-            synchronize_release_line(before, "0.3.0", "0.3.1").expect("release line"),
+            synchronize_release_line(before, "0.3.1", "0.3.1").expect("release line"),
             before
         );
     }
@@ -413,8 +413,8 @@ mod tests {
 
     #[test]
     fn version_validation_rejects_ambiguous_or_partial_versions() {
-        assert!(validate_version("0.3.0").is_ok());
-        for invalid in ["v0.3.0", "0.3", "0.03.0", "0.3.0-beta"] {
+        assert!(validate_version("0.3.1").is_ok());
+        for invalid in ["v0.3.1", "0.3", "0.03.0", "0.3.1-beta"] {
             assert!(validate_version(invalid).is_err(), "accepted {invalid}");
         }
     }

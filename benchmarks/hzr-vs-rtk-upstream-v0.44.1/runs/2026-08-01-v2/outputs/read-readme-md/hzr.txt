@@ -1,0 +1,28 @@
+Markdown digest (content omitted)
+  Source: 527 lines, 24184 bytes
+  Sections: 20/49 shown
+        What RTK Does
+        How Savings Work
+        Installation
+          Homebrew (recommended)
+          Quick Install (Linux/macOS)
+          Cargo
+          Pre-built Binaries
+          Verify Installation
+        Quick Start
+      1. Install for your AI tool
+      2. Restart your AI tool, then test
+        How It Works
+        Commands
+          Files
+          Git
+          GitHub CLI
+          Test Runners
+          Build & Lint
+          Package Managers
+          AWS
+  Lead preview: 3 prose blocks shown (bounded to 3)
+    High-performance CLI proxy that cuts up to 90% of the bash output your agent reads
+    rtk filters and compresses command outputs before they reach your LLM context. Single Rust binary, 100+ supported commands, <10ms overhead.
+    RTK intercepts shell commands and compresses their output before your agent reads it.
+  Next: rerun this read with `--level none` for exact content, or add `--from N --to M` for an exact range.

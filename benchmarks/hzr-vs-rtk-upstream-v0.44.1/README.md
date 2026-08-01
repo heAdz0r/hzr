@@ -66,7 +66,7 @@ self-describing Markdown digest contract:
 
 | Aggregate | RAW | Upstream RTK | HZR | HZR vs RAW | HZR vs upstream |
 |---|---:|---:|---:|---:|---:|
-| All cases | 287,152 | 58,108 | **44,307** | **−84.6%** | **−23.8%** |
+| All cases | 284,996 | 58,107 | **44,400** | **−84.4%** | **−23.6%** |
 
 HZR won 8 measured cases and tied upstream on 6; after remediation there were
 no measured HZR losses. See [`runs/2026-08-01-v2/RESULTS.md`](runs/2026-08-01-v2/RESULTS.md)

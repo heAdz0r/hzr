@@ -237,7 +237,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Hooks {
             command: HooksCommand::Status,
         } => bail!("hook status entered configured execution path"),
-        Command::Update => bail!("update is not implemented"),
+        Command::Update => bail!("update command entered configured execution path"),
         Command::Hooks {
             command: HooksCommand::Dispatch,
         } => {
@@ -1013,8 +1013,10 @@ async fn initialize_if_needed(
             )?;
         }
     }
-    if !json && let Some(notice) = update::startup_notice(&config.data_dir).await {
-        println!("{notice}");
+    if !json {
+        if let Some(notice) = update::startup_notice(&config.data_dir).await {
+            println!("{notice}");
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -1421,7 +1423,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.0-test");
+        let release = directory.path().join("versions/v0.3.1-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -1441,7 +1443,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.0-test");
+        let release = directory.path().join("versions/v0.3.1-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))

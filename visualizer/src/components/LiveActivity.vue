@@ -49,19 +49,26 @@ function operationTime(timestamp: string): string {
       <span class="raw-credit">RAW savings credit: 0</span>
     </div>
     <div v-if="operations.length" class="activity-stream">
-      <div v-for="(operation, index) in operations" :key="`${operation.timestamp}-${index}`" class="activity-row">
-        <time :datetime="operation.timestamp">{{ operationTime(operation.timestamp) }}</time>
-        <span class="route-badge" :class="`route-${operation.route}`">{{ operation.route }}</span>
-        <strong>{{ operation.operation }}</strong>
-        <div class="output-bars" :aria-label="`${operation.baseline_tokens_estimated} raw baseline tokens and ${operation.delivered_tokens_estimated} delivered tokens`">
-          <span class="baseline-bar" :style="{ width: width(operation.baseline_tokens_estimated) }"></span>
-          <span class="delivered-bar" :style="{ width: width(operation.delivered_tokens_estimated) }"></span>
+      <div v-for="(operation, index) in operations" :key="`${operation.timestamp}-${index}`" class="activity-entry">
+        <div class="activity-row">
+          <time :datetime="operation.timestamp">{{ operationTime(operation.timestamp) }}</time>
+          <span class="route-badge" :class="`route-${operation.route}`">{{ operation.route }}</span>
+          <strong>{{ operation.operation }}</strong>
+          <div class="output-bars" :aria-label="`${operation.baseline_tokens_estimated} raw baseline tokens and ${operation.delivered_tokens_estimated} delivered tokens`">
+            <span class="baseline-bar" :style="{ width: width(operation.baseline_tokens_estimated) }"></span>
+            <span class="delivered-bar" :style="{ width: width(operation.delivered_tokens_estimated) }"></span>
+          </div>
+          <span class="activity-volume">{{ formatCount(operation.baseline_tokens_estimated) }} → {{ formatCount(operation.delivered_tokens_estimated) }}</span>
+          <span class="activity-saving" :class="{ negative: operation.net_avoided_tokens_estimated < 0 }">
+            {{ formatSignedCount(operation.net_avoided_tokens_estimated) }}
+          </span>
+          <span class="activity-latency">{{ operation.execution_ms }}ms</span>
         </div>
-        <span class="activity-volume">{{ formatCount(operation.baseline_tokens_estimated) }} → {{ formatCount(operation.delivered_tokens_estimated) }}</span>
-        <span class="activity-saving" :class="{ negative: operation.net_avoided_tokens_estimated < 0 }">
-          {{ formatSignedCount(operation.net_avoided_tokens_estimated) }}
-        </span>
-        <span class="activity-latency">{{ operation.execution_ms }}ms</span>
+        <div v-if="operation.route === 'raw' && operation.replacement" class="activity-advice">
+          <span>First-class route</span>
+          <code>{{ operation.replacement }}</code>
+          <small>{{ operation.rationale }}</small>
+        </div>
       </div>
     </div>
     <div v-else class="activity-empty">No routed operations have been recorded for this project yet.</div>

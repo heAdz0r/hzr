@@ -737,6 +737,9 @@ fn markdown_lead_preview(content: &str, limit: usize, max_chars: usize) -> Vec<S
             }
             continue;
         }
+        if trimmed.starts_with('<') && (trimmed.contains("<a ") || trimmed.contains("<img ")) {
+            continue;
+        }
         let preview_line = if trimmed.starts_with('<') {
             strip_preview_html_tags(trimmed)
         } else {
@@ -1081,6 +1084,8 @@ The second explanatory paragraph.
         let content = r#"# Product
 
 <p><img src="hero.png" alt="decorative hero"></p>
+
+<p><a href="https://example.com">Website</a> &bull; <a href="/fr">Francais</a></p>
 
 <p><strong>Useful product purpose.</strong></p>
 

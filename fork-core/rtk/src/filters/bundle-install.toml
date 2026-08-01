@@ -20,7 +20,7 @@ input = """
 Using bundler 2.5.6
 Using rake 13.1.0
 Using ast 2.4.2
-Using base64 0.3.0
+Using base64 0.3.1
 Using minitest 5.22.2
 Bundle complete! 85 Gemfile dependencies, 200 gems now installed.
 Use `bundle info [gemname]` to see where a bundled gem is installed.

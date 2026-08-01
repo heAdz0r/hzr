@@ -13,7 +13,7 @@ body:
     attributes:
       label: HZR version
       description: Output of `hzr --version`.
-      placeholder: hzr 0.3.0
+      placeholder: hzr 0.3.1
     validations:
       required: true
   - type: dropdown

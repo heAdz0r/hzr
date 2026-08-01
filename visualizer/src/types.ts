@@ -111,6 +111,8 @@ export interface DashboardLocalOperation {
   delivered_tokens_estimated: number;
   net_avoided_tokens_estimated: number;
   execution_ms: number;
+  replacement: string | null;
+  rationale: string | null;
 }
 
 export interface DashboardProviderReceipts {

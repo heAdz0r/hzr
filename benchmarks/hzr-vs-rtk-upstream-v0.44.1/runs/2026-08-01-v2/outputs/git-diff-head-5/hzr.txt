@@ -1,0 +1,259 @@
+.claude/agents/code-reviewer.md                      |   13 +-
+ .claude/agents/debugger.md                           |   19 +-
+ .claude/agents/rust-rtk.md                           |   29 +-
+ .claude/agents/technical-writer.md                   |    9 +-
+ .claude/commands/tech/audit-codebase.md              |    4 +-
+ .claude/commands/tech/codereview.md                  |   22 +-
+ .claude/rules/cli-testing.md                         |  201 ++++++-----
+ .claude/rules/rust-patterns.md                       |   22 +-
+ .claude/rules/search-strategy.md                     |   23 +-
+ .claude/skills/code-simplifier/SKILL.md              |    6 +-
+ .claude/skills/performance/SKILL.md                  |   34 +-
+ .claude/skills/pr-triage/SKILL.md                    |    2 +-
+ .claude/skills/pr-triage/templates/review-comment.md |    2 +-
+ .claude/skills/tdd-rust/SKILL.md                     |    7 +-
+ .github/copilot-instructions.md                      |    4 +-
+ .github/workflows/next-release.yml                   |   16 +-
+ .release-please-manifest.json                        |    2 +-
+ CHANGELOG.md                                         |  193 +++++++++++
+ CLAUDE.md                                            |   10 +-
+ CONTRIBUTING.md                                      |   22 +-
+ Cargo.lock                                           |   14 +-
+ Cargo.toml                                           |    5 +-
+ INSTALL.md                                           |   45 +--
+ README.md                                            |  132 +++++---
+ README_es.md                                         |   40 ++-
+ README_fr.md                                         |   43 ++-
+ README_ja.md                                         |   40 ++-
+ README_ko.md                                         |   40 ++-
+ README_pt.md                                         |   40 ++-
+ README_zh.md                                         |   41 ++-
+ docs/TELEMETRY.md                                    |    2 +-
+ docs/contributing/CODING_PRACTICES.md                |    6 +-
+ docs/contributing/TECHNICAL.md                       |   27 +-
+ docs/guide/analytics/discover.md                     |    6 +-
+ docs/guide/analytics/gain.md                         |   28 +-
+ docs/guide/getting-started/configuration.md          |   22 +-
+ docs/guide/getting-started/installation.md           |    8 +-
+ docs/guide/getting-started/supported-agents.md       |   27 +-
+ docs/guide/index.md                                  |   15 +-
+ docs/guide/resources/savings-explained.md            |   87 +++++
+ docs/guide/resources/telemetry.md                    |   10 +-
+ docs/guide/resources/troubleshooting.md              |    6 +-
+ docs/guide/resources/what-rtk-covers.md              |   58 ++--
+ docs/usage/AUDIT_GUIDE.md                            |   10 +-
+ docs/usage/FEATURES.md                               |  108 ++----
+ docs/usage/TRACKING.md                               |   34 +-
+ hooks/README.md                                      |   13 +-
+ hooks/antigravity/rules.md                           |    2 +-
+ hooks/claude/rtk-awareness.md                        |    2 +-
+ hooks/cline/rules.md                                 |    2 +-
+ hooks/copilot/rtk-awareness.md                       |    2 +-
+ hooks/cursor/rtk-rewrite.sh                          |   23 +-
+ hooks/kilocode/rules.md                              |    2 +-
+ hooks/pi/README.md                                   |    2 +-
+ hooks/windsurf/rules.md                              |    2 +-
+ openclaw/README.md                                   |    4 +-
+ openclaw/index.ts                                    |   97 +++++-
+ openclaw/openclaw.plugin.json                        |    2 +-
+ openclaw/package.json                                |    2 +-
+ scripts/benchmark.sh                                 |    8 +-
+ scripts/benchmark/run.ts                             |    2 +-
+ scripts/test-all.sh                                  |    6 +-
+ src/analytics/README.md                              |    4 +-
+ src/analytics/ccusage.rs                             |   71 ++++
+ src/analytics/gain.rs                                |   40 ++-
+ src/analytics/session_cmd.rs                         |    2 +-
+ src/cmds/README.md                                   |    4 +-
+ src/cmds/cloud/aws_cmd.rs                            |    7 +-
+ src/cmds/cloud/psql_cmd.rs                           |   14 +-
+ src/cmds/dotnet/binlog.rs                            |  111 +++---
+ src/cmds/git/gh_cmd.rs                               |   21 +-
+ src/cmds/git/git.rs                                  |  377 ++++++++++++++++++++-
+ src/cmds/git/glab_cmd.rs                             |   35 +-
+ src/cmds/git/gt_cmd.rs                               |   23 +-
+ src/cmds/js/next_cmd.rs                              |   22 +-
+ src/cmds/js/playwright_cmd.rs                        |   20 +-
+ src/cmds/js/tsc_cmd.rs                               |    9 +-
+ src/cmds/js/vitest_cmd.rs                            |   16 +-
+ src/cmds/jvm/gradlew_cmd.rs                          |  121 +++----
+ src/cmds/jvm/mvn_cmd.rs                              |   86 ++---
+ src/cmds/mod.rs                                      |    2 +
+ src/cmds/php/README.md                               |   15 +
+ src/cmds/php/artisan_cmd.rs                          |   52 +++
+ src/cmds/php/ecs_cmd.rs                              |   81 +++++
+ src/cmds/php/mod.rs                                  |    1 +
+ src/cmds/php/paratest_cmd.rs                         |  108 ++++++
+ src/cmds/php/pest_cmd.rs                             |   45 +++
+ src/cmds/php/php_cmd.rs                              |  114 +++++++
+ src/cmds/php/phpstan_cmd.rs                          |  568 +++++++++++++++++++++++++++++++
+ src/cmds/php/phpunit_cmd.rs                          |  394 ++++++++++++++++++++++
+ src/cmds/php/pint_cmd.rs                             |  227 +++++++++++++
+ src/cmds/php/test_output.rs                          |   84 +++++
+ src/cmds/php/utils.rs                                |   61 ++++
+ src/cmds/python/README.md                            |    1 +
+ src/cmds/python/mypy_cmd.rs                          |   31 +-
+ src/cmds/python/pytest_cmd.rs                        |   20 +-
+ src/cmds/python/ruff_cmd.rs                          |   21 +-
+ src/cmds/python/uv_cmd.rs                            |  571 +++++++++++++++++++++++++++++++
+ src/cmds/ruby/rake_cmd.rs                            |    8 +-
+ src/cmds/ruby/rspec_cmd.rs                           |   24 +-
+ src/cmds/rust/cargo_cmd.rs                           |  716 +++++++++++++++++++++++++++++++++++----
+ src/cmds/rust/runner.rs                              |   10 +-
+ src/cmds/scala/mod.rs                                |    1 +
+ src/cmds/scala/sbt_cmd.rs                            |  839 +++++++++++++++++++++++++++++++++++++++++++++
+ src/cmds/system/log_cmd.rs                           |   26 +-
+ src/cmds/system/ls.rs                                |   16 +-
+ src/cmds/system/pipe_cmd.rs                          |   61 +++-
+ src/cmds/system/search.rs                            |  354 ++++++++++++++++---
+ src/core/README.md                                   |    8 +-
+ src/core/constants.rs                                |   25 ++
+ src/core/filter.rs                                   |   21 +-
+ src/core/telemetry.rs                                |    4 +-
+ src/core/telemetry_cmd.rs                            |   53 ++-
+ src/core/toml_filter.rs                              |  367 +++++++++++++++++---
+ src/core/utils.rs                                    |  103 +++++-
+ src/discover/README.md                               |    4 +-
+ src/discover/lexer.rs                                |   58 +++-
+ src/discover/registry.rs                             | 1065 +++++++++++++++++++++++++++++++++++++++++++++++++++-------
+ src/discover/rules.rs                                |  341 ++++++++++---------
+ src/filters/README.md                                |   20 ++
+ src/hooks/README.md                                  |    1 +
+ src/hooks/constants.rs                               |   19 ++
+ src/hooks/hook_check.rs                              |   30 +-
+ src/hooks/hook_cmd.rs                                |  556 ++++++++++++++++++++++++++++--
+ src/hooks/init.rs                                    |  974 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ src/hooks/integrity.rs                               |   41 ++-
+ src/hooks/mod.rs                                     |   32 ++
+ src/hooks/permissions.rs                             |  189 ++++++++++-
+ src/hooks/trust.rs                                   |  186 +++++++---
+ src/learn/README.md                                  |    2 +-
+ src/learn/detector.rs                                |   50 +--
+ src/main.rs                                          |  260 +++++++++++---
+ src/parser/mod.rs                                    |   40 ++-
+ tests/fixtures/phpstan_raw.json                      |  380 +++++++++++++++++++++
+ tests/fixtures/sbt/sbt_compile_error.txt             |   20 ++
+ tests/fixtures/sbt/sbt_it_test_pass.txt              |   21 ++
+ tests/fixtures/sbt/sbt_test_fail.txt                 |   47 +++
+ tests/fixtures/sbt/sbt_test_mockito_fail.txt         |   33 ++
+ tests/fixtures/sbt/sbt_test_munit_fail.txt           |   36 ++
+ tests/fixtures/sbt/sbt_test_munit_pass.txt           |   23 ++
+ tests/fixtures/sbt/sbt_test_pass.txt                 |   58 ++++
+ tests/fixtures/sbt/sbt_test_scalamock_fail.txt       |   31 ++
+ tests/fixtures/uv_run_pytest_failure.txt             |   28 ++
+ tests/grep_context_test.rs                           |   60 ++++
+ tests/grep_faithful_format_test.rs                   |  110 +++---
+ tests/guard_integration_test.rs                      |  124 ++++++-
+ tests/pipeline_stdin_test.rs                         |   44 +++
+ tests/search_compress_test.rs                        |    4 +-
+ tests/search_error_test.rs                           |    1 +
+ tests/search_faithful_test.rs                        |   66 +++-
+ 150 files changed, 11098 insertions(+), 1576 deletions(-)
+
+--- Changes ---
+
+📄 .claude/agents/code-reviewer.md
+  @@ -1,6 +1,6 @@
+  -description: Use this agent when you need comprehensive code quality assurance, security vulnerability detection, or performance optimization analysis. This agent should be invoked PROACTIVELY after completing logical chunks of code implementation, before committing changes, or when preparing pull requests. Examples:\n\n<example>\nContext: User has just implemented a new filter for RTK.\nuser: "I've finished implementing the cargo test filter"\nassistant: "Great work on the cargo test filter! Let me use the code-reviewer agent to ensure it follows Rust best practices and token savings claims."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has completed a performance optimization.\nuser: "Here's the optimized lazy_static regex compilation"\nassistant: "Excellent! Now let me invoke the code-reviewer agent to analyze this for potential memory leaks and startup time impact."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has written a new cross-platform shell escaping function.\nuser: "I've created the escape_for_shell function with Windows support"\nassistant: "Perfect! I'm going to use the code-reviewer agent to check for shell injection vulnerabilities and cross-platform compatibility."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has modified RTK hooks for Claude Code integration.\nuser: "Updated the rtk-rewrite.sh hook"\nassistant: "Important changes! Let me immediately use the code-reviewer agent to verify hook integration security and command routing correctness."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User mentions they're done with a filter implementation.\nuser: "The git log filter is complete"\nassistant: "Excellent progress! Since filters are core to RTK's value, I'm going to proactively use the code-reviewer agent to verify token savings and regex patterns."\n<uses code-reviewer agent via Task tool>\n</example>
+  +description: Use this agent when you need comprehensive code quality assurance, security vulnerability detection, or performance optimization analysis. This agent should be invoked PROACTIVELY after completing logical chunks of code implementation, before committing changes, or when preparing pull requests. Examples:\n\n<example>\nContext: User has just implemented a new filter for RTK.\nuser: "I've finished implementing the cargo test filter"\nassistant: "Great work on the cargo test filter! Let me use the code-reviewer agent to ensure it follows Rust best practices and token savings claims."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has completed a performance optimization.\nuser: "Here's the optimized LazyLock regex compilation"\nassistant: "Excellent! Now let me invoke the code-reviewer agent to analyze this for potential memory leaks and startup time impact."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has written a new cross-platform shell escaping function.\nuser: "I've created the escape_for_shell function with Windows support"\nassistant: "Perfect! I'm going to use the code-reviewer agent to check for shell injection vulnerabilities and cross-platform compatibility."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has modified RTK hooks for Claude Code integration.\nuser: "Updated the rtk-rewrite.sh hook"\nassistant: "Important changes! Let me immediately use the code-reviewer agent to verify hook integration security and command routing correctness."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User mentions they're done with a filter implementation.\nuser: "The git log filter is complete"\nassistant: "Excellent progress! Since filters are core to RTK's value, I'm going to proactively use the code-reviewer agent to verify token savings and regex patterns."\n<uses code-reviewer agent via Task tool>\n</example>
+   model: sonnet
+   color: red
+   ---
+  @@ -46,7 +46,7 @@
+  -| `Regex::new()` inside function | Recompiles every call, kills startup time | `lazy_static! { static ref RE: Regex = ... }` |
+  +| Fixed `Regex::new()` inside hot function | Recompiles every call, kills startup time | `static RE: LazyLock<Regex> = LazyLock::new(|| ...);` |
+   | `.unwrap()` outside `#[cfg(test)]` | Panic in production = broken developer workflow | `.context("description")?` |
+   | `tokio`, `async-std`, `futures` in Cargo.toml | +5-10ms startup overhead | Blocking I/O only |
+   | `?` without `.context()` | Error with no description = impossible to debug | `.context("what failed")?` |
+  @@ -61,7 +61,7 @@
+  -- `lazy_static!` regex pattern
+  +- `LazyLock<Regex>` for fixed patterns reused across calls
+   - Ownership: borrow over clone
+   - `unwrap()` policy: never in prod, `expect("reason")` in tests
+   - Silent failures: empty `catch`/`match _ => {}` patterns
+  @@ -122,9 +122,8 @@
+  -lazy_static! {
+  -    static ref ERROR_RE: Regex = Regex::new(r"^\s*error").unwrap();
+  -}
+  +static ERROR_RE: LazyLock<Regex> =
+  +    LazyLock::new(|| Regex::new(r"^\s*error").unwrap());
+   fn filter_line(line: &str) -> bool {
+       ERROR_RE.is_match(line)
+   }
+  @@ -198,7 +197,7 @@
+  -| 🔴 | file.rs | 45 | lazy_static! |
+  +| 🔴 | file.rs | 45 | LazyLock |
+   ```
+   
+   ## Call-Site Analysis (🔴 MANDATORY)
+  +6 -7
+
+📄 .claude/agents/debugger.md
+  @@ -1,6 +1,6 @@
+  -description: Use this agent when encountering errors, test failures, unexpected behavior, or when RTK doesn't work as expected. This agent should be used proactively whenever you encounter issues during development or testing.\n\nExamples:\n\n<example>\nContext: User encounters filter parsing error.\nuser: "The git log filter is crashing on certain commit messages"\nassistant: "I'm going to use the debugger agent to investigate this parsing error."\n<commentary>\nSince there's an error in filter logic, use the debugger agent to perform root cause analysis and provide a fix.\n</commentary>\n</example>\n\n<example>\nContext: Tests fail after filter modification.\nuser: "Token savings tests are failing after I updated the cargo test filter"\nassistant: "Let me use the debugger agent to analyze these test failures and identify the regression."\n<commentary>\nTest failures require systematic debugging to identify the root cause and fix the issue.\n</commentary>\n</example>\n\n<example>\nContext: Performance regression detected.\nuser: "RTK startup time increased to 25ms after adding lazy_static regex"\nassistant: "I'm going to use the debugger agent to profile the performance regression."\n<commentary>\nPerformance problems require systematic debugging with profiling tools (flamegraph, hyperfine).\n</commentary>\n</example>\n\n<example>\nContext: Shell escaping bug on Windows.\nuser: "Git commands work on macOS but fail on Windows with shell escaping errors"\nassistant: "Let me launch the debugger agent to investigate this cross-platform shell escaping issue."\n<commentary>\nCross-platform bugs require platform-specific debugging and testing.\n</commentary>\n</example>
+  +description: Use this agent when encountering errors, test failures, unexpected behavior, or when RTK doesn't work as expected. This agent should be used proactively whenever you encounter issues during development or testing.\n\nExamples:\n\n<example>\nContext: User encounters filter parsing error.\nuser: "The git log filter is crashing on certain commit messages"\nassistant: "I'm going to use the debugger agent to investigate this parsing error."\n<commentary>\nSince there's an error in filter logic, use the debugger agent to perform root cause analysis and provide a fix.\n</commentary>\n</example>\n\n<example>\nContext: Tests fail after filter modification.\nuser: "Token savings tests are failing after I updated the cargo test filter"\nassistant: "Let me use the debugger agent to analyze these test failures and identify the regression."\n<commentary>\nTest failures require systematic debugging to identify the root cause and fix the issue.\n</commentary>\n</example>\n\n<example>\nContext: Performance regression detected.\nuser: "RTK startup time increased to 25ms after adding LazyLock regex"\nassistant: "I'm going to use the debugger agent to profile the performance regression."\n<commentary>\nPerformance problems require systematic debugging with profiling tools (flamegraph, hyperfine).\n</commentary>\n</example>\n\n<example>\nContext: Shell escaping bug on Windows.\nuser: "Git commands work on macOS but fail on Windows with shell escaping errors"\nassistant: "Let me launch the debugger agent to investigate this cross-platform shell escaping issue."\n<commentary>\nCross-platform bugs require platform-specific debugging and testing.\n</commentary>\n</example>
+   model: sonnet
+   color: red
+   permissionMode: ask
+  @@ -156,7 +156,7 @@
+  -# - Regex::new() in hot path (should be in lazy_static init)
+  +# - Regex::new() in hot path (should be in LazyLock init)
+   # - Excessive allocations (String::from, Vec::new in loop)
+   # - File I/O on startup (should be zero)
+   # - Heavy dependency init (tokio, async-std - should not exist)
+  @@ -188,10 +188,9 @@
+  -// ✅ RIGHT: Lazy static compilation
+  -lazy_static! {
+  -    static ref PATTERN: Regex = Regex::new(r"pattern").unwrap();
+  -}
+  +// ✅ RIGHT: LazyLock compilation
+  +static PATTERN: LazyLock<Regex> =
+  +    LazyLock::new(|| Regex::new(r"pattern").unwrap());
+   
+   fn filter_line(line: &str) -> Option<&str> {
+       PATTERN.find(line).map(|m| m.as_str())
+  ... (truncated)
+  @@ -292,7 +291,7 @@
+  -# - Regex::new() in hot path → lazy_static missing
+  +# - Fixed Regex::new() in hot path → LazyLock missing
+   # - String::from() in loop → excessive allocations
+   # - std::fs::read() on startup → config file I/O
+   # - tokio::runtime::new() → async runtime (should not exist!)
+  @@ -379,7 +378,7 @@
+  -- **Root Cause Focus**: Fix underlying issue (e.g., lazy_static missing), not symptoms (add timeout)
+  +- **Root Cause Focus**: Fix underlying issue (e.g., a fixed regex is not cached), not symptoms (add timeout)
+   - **Systematic Approach**: Follow methodology step-by-step, don't jump to conclusions
+   - **Minimal Changes**: Keep fixes focused to reduce risk
+   - **Verification**: Always verify fix + run full quality checks
+  @@ -402,7 +401,7 @@
+  -| Startup time >15ms | Slow CLI launch | Regex recompiled at runtime | `lazy_static!` all regex |
+  +| Startup time >15ms | Slow CLI launch | Regex recompiled at runtime | `LazyLock<Regex>` for fixed, reused patterns |
+   | Memory >7MB | High resident set | Excessive allocations | Use `&str` not `String`, borrow not clone |
+   | Flamegraph shows file I/O | Slow startup | Config loaded on launch | Lazy config loading (on-demand) |
+   | Binary size >8MB | Large release binary | Full dependency features | Minimal features in `Cargo.toml` |
+  @@ -476,7 +475,7 @@
+  -5. Fix hotspot (usually lazy_static missing or allocation in loop)
+  +5. Fix hotspot (usually an uncached fixed regex or allocation in loop)
+   6. Verify fix:
+      ```bash
+      cargo build --release
+  +9 -10
+
+📄 .claude/agents/rust-rtk.md
+  @@ -13,7 +13,7 @@
+  -- **Performance optimization**: Zero-overhead design, lazy_static regex, minimal allocations
+  +- **Performance optimization**: Zero-overhead design, LazyLock regex, minimal allocations
+   - **Error handling**: anyhow for CLI binary, graceful fallback on filter failures
+   - **Cross-platform**: macOS/Linux/Windows shell compatibility (bash/zsh/PowerShell)
+   
+  @@ -48,16 +48,16 @@
+  -**✅ RIGHT**: Compile regex ONCE with `lazy_static!`, reuse forever:
+  +**✅ RIGHT**: Compile regex ONCE with `LazyLock`, reuse forever:
+   
+   ```rust
+  -use lazy_static::lazy_static;
+   use regex::Regex;
+  +use std::sync::LazyLock;
+
+... (more changes truncated)
+  +3 -3

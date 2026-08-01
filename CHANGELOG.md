@@ -55,10 +55,37 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   `cat`, `head` and `tail`; separates the literal and ranked search modes; and states the
   ledger cost of `raw`.
 
+## [0.3.1] - 2026-08-01
+
+### Added
+
+- Deterministic LLM utility evidence for self-describing bounded reads, byte-exact
+  recovery, four single-write operations, ordered batch writes, dry-run,
+  idempotency, and JSON schema v1 outcomes.
 - `hzr update` checks GitHub Releases, downloads the matching native bundle and
   `SHA256SUMS`, verifies the archive, and installs the newer version through the bundled
   versioned installer. The idempotent project-start initialization caches release checks
   for 24 hours and reports a newer version without making offline startup fail.
+- Interactive, privacy-safe current-project ICM topic graph with verified FTS5-only Ready
+  semantics and snapshot freshness evidence.
+- Typed grepai artifact, generation, watcher PID/uptime, and semantic-canary observability.
+- Live project-scoped output accounting with explicit optimized/RAW routes, zero RAW savings
+  credit, and first-class HZR replacement suggestions for avoidable bypasses.
+
+### Fixed
+
+- Same-minor release synchronization now keeps the stable `0.3.x` release line.
+- Semantic observability canaries no longer manufacture ledger activity.
+- Missing provider receipts render as unavailable evidence rather than numeric zero usage.
+
+### Changed
+
+- Markdown digests now state that content was omitted, include bounded semantic lead prose,
+  report source and section coverage, skip HTML navigation/media noise, and provide exact
+  full/range recovery hints. The read-cache schema was advanced so an upgraded binary cannot
+  replay an ambiguous legacy digest.
+- README positioning now treats LLM-useful output and safe WRITE/BATCH WRITE as the
+  primary product criterion; command-output size remains a separately qualified metric.
 
 ## [0.3.0] - 2026-08-01
 
@@ -134,6 +161,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.3.1]: https://github.com/heAdz0r/hzr/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/heAdz0r/hzr/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/heAdz0r/hzr/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/heAdz0r/hzr/releases/tag/v0.1.0
