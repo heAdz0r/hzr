@@ -9,6 +9,7 @@ HZR_LICENSE_OUTPUT="${HZR_OUTPUT_ROOT}/licenses"
 HZR_RUNTIME_OUTPUT="${HZR_OUTPUT_ROOT}/runtime"
 HZR_CAVEMAN_OUTPUT="${HZR_ENGINE_OUTPUT}/caveman-code"
 HZR_PROVENANCE_OUTPUT="${HZR_OUTPUT_ROOT}/share/hzr"
+HZR_VISUALIZER_OUTPUT="${HZR_PROVENANCE_OUTPUT}/visualizer"
 HZR_BUILD_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-build.XXXXXX")"
 
 cleanup_hzr_build() {
@@ -45,7 +46,7 @@ verify_sha256() {
   local artifact="$2"
   local actual
 
-  actual="$(shasum -a 256 "${artifact}" | awk '{print $1}')"
+  actual="$(sha256_file "${artifact}")"
   if [[ "${actual}" != "${expected}" ]]; then
     echo "source artifact digest mismatch: ${artifact}" >&2
     echo "expected: ${expected}" >&2
@@ -54,11 +55,42 @@ verify_sha256() {
   fi
 }
 
+sha256_file() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+
+download_cached() {
+  local url="$1"
+  local expected="$2"
+  local name="$3"
+  local destination="$4"
+  local cache_root="${HZR_DOWNLOAD_CACHE:-${HZR_REPOSITORY_ROOT}/target/hzr-download-cache}"
+  local cached="${cache_root}/${name}"
+
+  mkdir -p "${cache_root}"
+  if [[ -f "${cached}" && "$(sha256_file "${cached}")" == "${expected}" ]]; then
+    cp -- "${cached}" "${destination}"
+    return
+  fi
+
+  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+    --connect-timeout 20 --retry 3 --retry-all-errors \
+    "${url}" --output "${destination}"
+  verify_sha256 "${expected}" "${destination}"
+
+  local cache_stage
+  cache_stage="$(mktemp "${cache_root}/.${name}.XXXXXX")"
+  install -m 0644 "${destination}" "${cache_stage}"
+  mv -f -- "${cache_stage}" "${cached}"
+}
+
 require_command cargo
 require_command curl
 require_command git
 require_command go
 require_command awk
+require_command bun
+require_command cp
 require_command grep
 require_command install
 require_command kill
@@ -69,6 +101,12 @@ require_command shasum
 require_command sleep
 require_command tar
 
+HZR_BUN_VERSION="1.2.19"
+if [[ "$(bun --version)" != "${HZR_BUN_VERSION}" ]]; then
+  echo "unsupported Bun build runtime: expected ${HZR_BUN_VERSION}, got $(bun --version)" >&2
+  exit 1
+fi
+
 "${HZR_REPOSITORY_ROOT}/scripts/verify-fork-core.sh"
 
 mkdir -p \
@@ -77,6 +115,7 @@ mkdir -p \
   "${HZR_LICENSE_OUTPUT}" \
   "${HZR_RUNTIME_OUTPUT}" \
   "${HZR_PROVENANCE_OUTPUT}/fork-core" \
+  "${HZR_PROVENANCE_OUTPUT}/skills/hzr-tdd/references" \
   "${HZR_PROVENANCE_OUTPUT}/patches/grepai" \
   "${HZR_PROVENANCE_OUTPUT}/patches/icm"
 
@@ -108,9 +147,11 @@ case "$(uname -s)-$(uname -m)" in
 esac
 HZR_NODE_ARCHIVE="node-v${HZR_NODE_VERSION}-${HZR_NODE_PLATFORM}.tar.gz"
 HZR_NODE_DOWNLOAD="${HZR_BUILD_TEMP}/${HZR_NODE_ARCHIVE}"
-curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+download_cached \
   "https://nodejs.org/download/release/v${HZR_NODE_VERSION}/${HZR_NODE_ARCHIVE}" \
-  --output "${HZR_NODE_DOWNLOAD}"
+  "${HZR_NODE_SHA256}" \
+  "${HZR_NODE_ARCHIVE}" \
+  "${HZR_NODE_DOWNLOAD}"
 verify_sha256 "${HZR_NODE_SHA256}" "${HZR_NODE_DOWNLOAD}"
 HZR_NODE_ROOT="${HZR_RUNTIME_OUTPUT}/node"
 mkdir -p "${HZR_NODE_ROOT}"
@@ -185,6 +226,24 @@ if [[ -e "${HZR_CAVEMAN_OUTPUT}" ]]; then
 fi
 mv -- "${HZR_CAVEMAN_STAGE}" "${HZR_CAVEMAN_OUTPUT}"
 
+HZR_VISUALIZER_STAGE="${HZR_BUILD_TEMP}/visualizer"
+mkdir -p "${HZR_VISUALIZER_STAGE}"
+for artifact in bun.lock index.html package.json tsconfig.json vite.config.ts; do
+  cp -- \
+    "${HZR_REPOSITORY_ROOT}/visualizer/${artifact}" \
+    "${HZR_VISUALIZER_STAGE}/${artifact}"
+done
+cp -R -- "${HZR_REPOSITORY_ROOT}/visualizer/src" "${HZR_VISUALIZER_STAGE}/src"
+cp -R -- "${HZR_REPOSITORY_ROOT}/visualizer/public" "${HZR_VISUALIZER_STAGE}/public"
+(
+  cd "${HZR_VISUALIZER_STAGE}"
+  bun install --frozen-lockfile
+  bun test
+  bun run build
+)
+mkdir -p "${HZR_VISUALIZER_OUTPUT}"
+cp -R -- "${HZR_VISUALIZER_STAGE}/dist/." "${HZR_VISUALIZER_OUTPUT}/"
+
 cargo build \
   --manifest-path "${HZR_REPOSITORY_ROOT}/Cargo.toml" \
   --locked --release --workspace
@@ -226,6 +285,11 @@ done
 mkdir -p "${HZR_PROVENANCE_OUTPUT}/integrations/claude-code"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/HZR.md" \
   "${HZR_PROVENANCE_OUTPUT}/HZR.md"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/.claude/skills/hzr-tdd/SKILL.md" \
+  "${HZR_PROVENANCE_OUTPUT}/skills/hzr-tdd/SKILL.md"
+install -m 0644 \
+  "${HZR_REPOSITORY_ROOT}/.claude/skills/hzr-tdd/references/testing-patterns.md" \
+  "${HZR_PROVENANCE_OUTPUT}/skills/hzr-tdd/references/testing-patterns.md"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/claude-code/hzr-awareness.md" \
   "${HZR_PROVENANCE_OUTPUT}/integrations/claude-code/hzr-awareness.md"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/claude-code/hzr-awareness-codex.md" \
@@ -237,6 +301,7 @@ install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
 
+"${HZR_REPOSITORY_ROOT}/scripts/generate-bundle-manifest.sh" "${HZR_OUTPUT_ROOT}"
 "${HZR_REPOSITORY_ROOT}/scripts/smoke-bundle.sh" "${HZR_OUTPUT_ROOT}"
 
 echo "HZR bundle built at ${HZR_OUTPUT_ROOT}"

@@ -1,238 +1,231 @@
-# PRD: HZR benchmark vs upstream RTK
+# PRD: RAW vs upstream RTK v0.44.1 vs HZR
 
-**Status:** baseline + requirements for reproducible benchmark gate
+**Status:** measured, regressions fixed, reproducible evidence committed
 
-**Snapshot date:** 2026-08-01, Europe/Moscow
+**Benchmark date:** 2026-08-01, Europe/Moscow
 
-**HZR:** `0.2.0`, commit `7c9aa523d4bf27bdfb84e9911697a09671e6f552`
+**Fixture:** `rtk-ai/rtk` commit `36591fb00d650bf987b57483c0b3a395a35a8dc1`
 
-**Runtime fork-core:** `0.44.1-fork.1`
+**Compared binaries:** RAW native tools; upstream `rtk 0.44.1`; `hzr 0.3.0` routing to `rtk 0.44.1-fork.1`
 
-**Upstream reference:** RTK `v0.44.1`, commit `36591fb00d650bf987b57483c0b3a395a35a8dc1`
+**Token estimator:** `ceil(UTF-8 bytes / 4)`; approximate output metric, not a provider tokenizer or billing measurement
 
-**Historical paired baseline:** fork `0.42.0-fork.2` vs upstream RTK `v0.42.4`, 2026-06-13
+## 1. Decision summary
 
-## 1. Solution
+On 14 identical command cases, executed five times each with rotating order:
 
-HZR must be compared to upstream RTK in two independent layers:
+| Result | RAW | RTK upstream | HZR | HZR vs RAW | HZR vs upstream |
+|---|---:|---:|---:|---:|---:|
+| All 14 cases | 287,124 | 58,102 | **44,263** | **−84.6%** | **−23.8%** |
+| 13 successful cases | 238,988 | 57,850 | **44,095** | **−81.5%** | **−23.8%** |
 
-1. **Common command plane:** identical commands, fixture, exit code and correctness criterion; output tokens and latency are compared.
-2. **HZR-only platform plane:** single ledger, negative economy, singleton ownership, semantic retrieval, memory, context fusion, exactness and readiness of economic claims.
+After remediation, HZR has **8 wins, 6 exact token-count ties and 0 losses** against upstream on the measured shared-command cases. All three paths preserve the same exit-code vector; `cargo test` consistently returns `101` because the pinned upstream fixture has three failing curl-filter tests in this environment.
 
-The current isolated run of 14 common cases yielded `95,857 → 42,499` estimated output tokens, or **−55.7% against the raw baseline**. One case, `cargo test`, returned code `101` for both raw and HZR. Excluding it from the success-only aggregate leaves 13 successful cases at `62,926 → 42,459`, or **−32.5%**.
+The measured claim approved by this PRD is:
 
-This is not a measurement of the current advantage over upstream RTK `v0.44.1`: its stock binary was not launched because the HZR contract prohibits creating a second RTK control plane and independent tracking store. The latest saved strictly paired run used upstream `v0.42.4`: **76% reduction for the fork versus 64% for upstream**, meaning the fork delivered 33.2% fewer tokens than upstream on that fixture.
+> On the pinned RTK v0.44.1 fixture and the 14 documented command cases, HZR emitted 23.8% fewer estimated output tokens than upstream RTK and 84.6% fewer than RAW. This is a local command-output benchmark, not provider-billed cost or answer-fidelity evidence.
 
-Before passing the new paired gate, the product formulation should be as follows:
+The complete machine-readable run, canonical outputs, binary hashes and checksums live in [`benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01`](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01).
 
-> On the current general fixture, HZR reduces raw tool output by 55.7%; historical paired benchmark against RTK v0.42.4 showed 76% versus 64%. The advantage over RTK v0.44.1 has not yet been measured.
-
-This statement must not be replaced with the lifetime estimate from `hzr stats`, and estimated output reduction must not be presented as actual provider cost savings.
-
-## 2. What exactly is being compared
-
-### 2.1 Versions and provenance
-
-| Artifact | Pin | Role |
-|---|---|---|
-| HZR | `0.2.0` | single public control plane |
-| HZR fork-core | `0.44.1-fork.1` | runtime for `hzr rtk -- ...` |
-| upstream RTK | [`v0.44.1`](https://github.com/rtk-ai/rtk/releases/tag/v0.44.1), `36591fb...` | reference-only comparator |
-| Historical upstream | `v0.42.4` | only saved paired performance baseline |
-| Token estimate | `ceil(UTF-8 bytes / 4)` |approximate, non-provider-billed metric|
-
-Upstream `v0.44.1` contains 78 top-level commands and HZR fork-core contains 65. Their intersection is **57 commands**: 73.1% of the upstream surface and 87.7% of the fork-core surface.
-
-**Fork-only commands:** `build`, `bun`, `lsof`, `memory`, `ps`, `rgai`, `ssh`, `write`.
-
-**Upstream-only commands:** `dotnet`, `ecs`, `glab`, `gradlew`, `hook`, `jest`, `mvn`, `paratest`, `pest`, `php`, `phpstan`, `phpunit`, `pint`, `rake`, `rspec`, `rubocop`, `run`, `sbt`, `session`, `telemetry`, `uv`.
-
-The benchmark below covers 14 representative cases from the 57 shared commands. It does not prove parity across the entire intersection.
-
-### 2.2 Evidence Map
+## 2. Proof chain
 
 ```mermaid
 flowchart LR
-    A["Shared commands: 57"] --> B["Live HZR vs raw: 14 cases"]
-    A --> C["Paired fork vs RTK v0.42.4: 14 cases"]
-    A --> D["Paired HZR vs RTK v0.44.1"]
-    B --> E["Proven: current raw-output reduction"]
-    C --> F["Proven: historical relative advantage"]
-    D --> G["Not proven: current relative advantage"]
-    H["HZR-only platform plane"] --> I["Ledger + regressions + ownership + readiness"]
-    I --> J["The value proposition is measured separately from RTK filters"]
+    S["Pinned upstream source<br/>36591fb…"] --> B["Separate release binaries<br/>RAW / RTK / HZR"]
+    B --> E["Isolated HOME, XDG, DB<br/>same fixture + Cargo target"]
+    E --> R["14 cases × 5 runs<br/>rotating order"]
+    R --> J["summary.json + summary.csv"]
+    R --> O["canonical full outputs"]
+    B --> H["binary + source hashes"]
+    J --> C["checksums.sha256"]
+    O --> C
+    H --> C
 ```
 
-## 3. Live benchmark method
+Verification entry points:
 
-- Working directory: `fork-core/rtk`.
-- For each case, both the raw command and `hzr rtk -- ...` were executed.
-- `RTK_DB_PATH` pointed to a separate temporary directory; `RTK_TEE=0`, `RTK_TELEMETRY_DISABLED=1`, `NO_COLOR=1`, `CI=1`.
-- Each case ran three times; the table reports median output bytes and p50 wall time.
-- Output tokens are estimated as `ceil(bytes / 4)` separately for each case.
-- Exit code is part of the correctness contract. A case with mismatched exit codes is invalid regardless of apparent savings.
-- Empty or short error output does not count as a saving when the command was executed incorrectly.
-- The run was performed in a local macOS environment and does not replace a cross-platform CI matrix.
+- methodology and rerun command: [`benchmarks/hzr-vs-rtk-upstream-v0.44.1/README.md`](benchmarks/hzr-vs-rtk-upstream-v0.44.1/README.md);
+- executable harness: [`benchmark.py`](benchmarks/hzr-vs-rtk-upstream-v0.44.1/benchmark.py) and [`run.sh`](benchmarks/hzr-vs-rtk-upstream-v0.44.1/run.sh);
+- every repetition's latency, exit code, bytes, token estimate and output digest: [`summary.json`](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01/summary.json);
+- compact data table: [`summary.csv`](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01/summary.csv);
+- allowlisted environment and binary identity: [`environment.json`](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01/environment.json);
+- full captured output per case and participant: [`outputs/`](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01/outputs);
+- integrity manifest: [`checksums.sha256`](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01/checksums.sha256).
 
-## 4. Live results: current HZR vs raw
+## 3. Method
 
-| Case | Raw tok | HZR tok | Reduction | Raw p50 | HZR p50 | Exit raw/HZR |
-|---|---:|---:|---:|---:|---:|---:|
-| `read README.md` | 5,475 | 200 | 96.3% | 3.8 ms | 18.5 ms | 0/0 |
-| `read src/main.rs` | 29,075 | 28,294 | 2.7% | 4.1 ms | 19.9 ms | 0/0 |
-| `read src/filter.rs` | 3,408 | 2,743 | 19.5% | 3.8 ms | 18.7 ms | 0/0 |
-| `read Cargo.toml` | 508 | 508 | 0.0% | 3.7 ms | 19.0 ms | 0/0 |
-| `ls -la src` | 1,869 | 564 | 69.8% | 5.9 ms | 23.2 ms | 0/0 |
-| `grep -rn "fn run" src` | 3,934 | 3,934 | 0.0% | 21.0 ms | 38.3 ms | 0/0 |
-| `find ... '*.rs'` | 844 | 163 | 80.7% | 40.9 ms | 22.2 ms | 0/0 |
-| `git status` | 118 | 36 | 69.5% | 9.6 ms | 32.7 ms | 0/0 |
-| `git log -30` | 687 | 190 | 72.3% | 8.0 ms | 24.1 ms | 0/0 |
-| `git diff HEAD~5` | 9,673 | 2,477 | 74.4% | 9.3 ms | 32.1 ms | 0/0 |
-| `git show HEAD` | 3,189 | 2,040 | 36.0% | 7.2 ms | 38.3 ms | 0/0 |
-| `git branch -a` | 8 | 2 | 75.0% | 7.7 ms | 22.4 ms | 0/0 |
-| `cargo check` | 4,138 | 1,308 | 68.4% | 62.2 ms | 73.2 ms | 0/0 |
-| `cargo test` | 32,931 | 40 | 99.9% | 1,236.3 ms | 1,252.0 ms | 101/101 |
-| **All 14** | **95,857** | **42,499** | **55.7%** | — | — | 13 success, 1 failed |
-| **13 successful cases** | **62,926** | **42,459** | **32.5%** | — | — | 0/0 |
+1. Upstream was built from exact commit `36591fb…` in a disposable directory.
+2. HZR and its fork-core were built from the current project worktree; their binary SHA-256 values and the worktree diff SHA-256 are recorded.
+3. RAW, upstream and HZR ran in the same pinned upstream checkout.
+4. Each participant received a separate empty `HOME`, `XDG_CONFIG_HOME` and tracking DB. `RTK_TEE=0`, `RTK_TELEMETRY_DISABLED=1`, `NO_COLOR=1`, `CI=1`, `LC_ALL=C`, `COLUMNS=120`.
+5. Cargo cases shared one target directory to reduce order bias. Participant order rotated on every repetition.
+6. Each case ran five times. Tables report p50 bytes/tokens and p50 wall time.
+7. Stdout and stderr were captured, concatenated in that order and retained as evidence.
+8. Exit-code mismatch invalidates a case regardless of output size. No mismatch occurred.
+9. Full environment dumps are forbidden; `environment.json` contains a safe allowlist only.
 
-Median case p50 increased from `7.9 ms` to `23.7 ms`; median paired overhead for the HZR control path was **+15.8 ms**. This is startup and orchestration overhead, not LLM latency.
+## 4. Three-way results
 
-The exact `grep` path intentionally preserved all native output and produced 0% reduction. This matches the current exactness policy; historical aggressive grep compression cannot be preferred without a fidelity gate. `cargo test` preserved the failing exit code and compressed `1698 passed, 1 failed, 1 ignored` into a short failure summary, but the case is excluded from the success-only KPI.
+| Case | RAW tok | Upstream tok | HZR tok | HZR vs upstream | RAW p50 | Upstream p50 | HZR p50 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `read README.md` | 6,046 | 6,046 | **132** | **−97.8%** | 12.5 ms | 14.2 ms | 42.9 ms |
+| `read src/main.rs` | 30,457 | 30,457 | **29,280** | **−3.9%** | 7.3 ms | 13.3 ms | 42.9 ms |
+| `read src/core/filter.rs` | 4,471 | 4,471 | **3,298** | **−26.2%** | 4.8 ms | 9.2 ms | 31.7 ms |
+| `read Cargo.toml` | 426 | 426 | 426 | parity | 4.0 ms | 8.2 ms | 29.9 ms |
+| `ls src` | **16** | 20 | 20 | parity | 4.0 ms | 12.3 ms | 31.5 ms |
+| `grep -rn "fn run" src` | 5,175 | 4,435 | 4,435 | parity | 25.9 ms | 35.0 ms | 50.8 ms |
+| `find . -name "*.rs" -type f` | 847 | 184 | 184 | parity | 9.4 ms | 10.6 ms | 29.4 ms |
+| `git status` | 17 | 12 | **6** | **−50.0%** | 11.1 ms | 24.0 ms | 41.5 ms |
+| `git log -30` | 2,881 | 1,276 | **592** | **−53.6%** | 8.0 ms | 13.2 ms | 30.9 ms |
+| `git diff HEAD~5` | 185,931 | 10,325 | **5,540** | **−46.3%** | 25.7 ms | 53.2 ms | 73.0 ms |
+| `git show HEAD` | 76 | 76 | 76 | parity | 7.8 ms | 30.1 ms | 48.5 ms |
+| `git branch -a` | 1,557 | 96 | 96 | parity | 7.8 ms | 12.5 ms | 30.2 ms |
+| `cargo check` | 1,088 | 26 | **10** | **−61.5%** | 31.23 s | 31.19 s | 36.74 s |
+| `cargo test` | 48,136 | 252 | **168** | **−33.3%** | 35.96 s | 35.93 s | 34.36 s |
+| **Total** | **287,124** | **58,102** | **44,263** | **−23.8%** | — | — | — |
 
-### 4.1 Output-token reduction
+`ls src` is the only case where both filters exceed RAW: they add useful size/type metadata to an already tiny native listing. It is an absolute-output trade-off, not an HZR regression against upstream.
+
+For the 12 non-Cargo cases, median HZR control-path overhead is `+19.0 ms` versus upstream. Cargo timings are cold/local build timings and are reported, not promoted as a speed claim.
+
+### 4.1 HZR reduction relative to upstream
 
 ```mermaid
 xychart-beta
-    title "Current HZR: output-token reduction vs raw, %"
-    x-axis [read_md, read_main, read_filter, cargo_toml, ls, grep, find, status, log, diff, show, branch, check, test_fail]
+    title "HZR estimated output reduction vs upstream RTK, %"
+    x-axis [read_md, read_main, read_filter, cargo_toml, ls, grep, find, status, log, diff, show, branch, check, test]
     y-axis "Reduction, %" 0 --> 100
-    bar [96.3, 2.7, 19.5, 0, 69.8, 0, 80.7, 69.5, 72.3, 74.4, 36.0, 75.0, 68.4, 99.9]
+    bar [97.8, 3.9, 26.2, 0, 0, 0, 0, 50.0, 53.6, 46.3, 0, 0, 61.5, 33.3]
 ```
 
-## 5. Comparison with a saved upstream benchmark
+## 5. Upstream wins found and fixed
 
-The table below compares three measurements on similar commands. `Current HZR` ran on the current tree; the historical fork and upstream `v0.42.4` were strictly paired in the same environment. Differences between these columns cannot be interpreted as version-to-version regressions without an identical fixture.
+The first controlled run exposed three token/diagnostic regressions and one correctness-label defect. All were traced to exact code paths and fixed before the final run.
 
-|Case| Current HZR vs raw | Historical fork vs raw | Upstream v0.42.4 vs raw |
-|---|---:|---:|---:|
-| `read README.md` | 96.3% | 96% | 0% |
-| `read src/main.rs` | 2.7% | 3% | 0% |
-| `read src/filter.rs` | 19.5% | 20% | 0% |
-| `read Cargo.toml` | 0% | 0% | 0% |
-| `ls src` | 69.8% | 69% | 69% |
-| grep | 0% exact parity | 71% | 2% |
-| find Rust files | 80.7% | 70% | 71% |
-| `git status` | 69.5% | 80% | 20% |
-| `git log -30` | 72.3% | 88% | 66% |
-| `git diff HEAD~5` | 74.4% | 98% | 91% |
-| `git show HEAD` | 36.0% | 76% | 16% |
-| `git branch -a` | 75.0% on raw=8 tok | 6% | 93% |
-| `cargo check` | 68.4% | 71% | 2% |
-| `cargo test` | 99.9%, exit 101 | 100% | 100% |
-| **Aggregate** | **55.7%**, mixed outcome | **76%** | **64%** |
+| Command | Before | Root cause | Change | Final proof |
+|---|---|---|---|---|
+| `cargo test` | HZR emitted only a 22-token aggregate and hid failing test names/assertions; upstream emitted actionable details | fork default used an older buffered summary; tests explicitly asserted that failure names were absent | preserve up to 10 bounded failure blocks, remove duplicated test name from panic line, retain panic location/assertion and compact aggregate | HZR 168 vs upstream 252 tokens; both show the same 3 failures and exit `101` |
+| `cargo check` | HZR output said `cargo build` | non-JSON `run_check` reused the build-labelled filter | route through exit-aware filter with label `check` | canonical output is `✓ cargo check (136 crates compiled)` |
+| `find` | HZR was one estimated token larger than upstream | emoji prefix in the grouped header | use the upstream-compatible ASCII `NF ND:` header | exact 184/184 token parity |
+| `ls` | HZR 28 vs upstream 20 tokens in captured output | fork always appended an interactive summary; upstream suppresses it when stdout is not a TTY | make summary conditional on `stdout.is_terminal()` | exact 20/20 token parity |
 
-Historical paired total: raw `153,136`, fork `36,613`, and upstream `54,777` estimated tokens. The fork delivered `(54,777 − 36,613) / 54,777 = 33.2%` fewer output tokens than upstream `v0.42.4`.
+The final HZR failure evidence remains shorter without deleting the useful fact:
 
-## 6. HZR-only metrics for USP
+```text
+FAILURES (3):
+1. ---- ...test_filter_curl_long_output_truncated stdout ----
+panicked at src/cmds/cloud/curl_cmd.rs:183:9:
+assertion failed: result.content.contains("bytes total")
+...
+✗ cargo test: 2503 passed, 3 failed, 8 ignored (1 suite, 0.73s)
+```
 
-RTK primarily answers “how much shorter is one command's output?” HZR must also answer whether it created duplicate work, whether output grew, which subsystem produced the effect, whether provider evidence exists, and whether an economic claim is publishable.
+Regression coverage was added for failure detail retention/capping, captured `ls` summary suppression and the ASCII `find` header.
 
-### 6.1 Implemented metrics and current slice
+## 6. Command-surface comparison
 
-Source: `hzr stats --json`, `hzr doctor --json`, `hzr hooks status --json`, `hzr index status --json`, `hzr memory status --json`.
+The recorded `--help` outputs prove the current top-level surfaces. Excluding `help` itself:
 
-| HZR-only KPI | Formula/source | 2026-08-01 snapshot | Interpretation |
-|---|---|---:|---|
-| Net avoided tokens estimate | `gross_avoided − regression` | `189,035,985` | estimated as bytes/4, not billed tokens |
-| Negative-saving rate | `regression / baseline` | `231,397 / 211,604,092 = 0.109%` | exposes cases where HZR emitted more output than the baseline |
-| Savings attribution | `net by subsystem / total net` | search 77.81%; write 16.95%; execution 4.08%; read 1.16% | identifies where the estimated effect originates |
-| Provider evidence coverage | observed tasks / accepted tasks | `0 / 0` |cost claim has not yet been proven|
-| Economic claim readiness | `economic_claim_ready` | `false` |prohibits turning estimate into marketing fact|
-| Runtime accounting completeness | `degraded_rewrites == 0` | `false`; degraded rewrites `59` |lifetime accounting is incomplete|
-| Hook control-plane purity | HZR / all managed hook entries | `2 / 2 = 100%`; RTK `0`, external ICM `0` |no duplicate hook entry points|
-| Duplicate index count | `duplicate_index_dirs.len()` | `0` |one canonical grepai index|
-| Index provenance | generation + config fingerprint | generation present |the result can be associated with a specific index state|
-| Unmanaged engine processes | doctor foreign-process audit | `1` unmanaged ICM | current health does not support a zero-runtime-redundancy claim |
-| Memory ownership state | typed memory health | degraded, singleton FTS-only |memory works without embeddings; the state is not hidden|
+| Surface | Count |
+|---|---:|
+| Upstream RTK commands | 78 |
+| HZR fork-core commands | 65 |
+| Shared | 57 |
+| Upstream-only | 21 |
+| HZR-only | 8 |
 
-The lifetime snapshot includes 24,589 heterogeneous operations. It is useful for observability but is not a controlled HZR-vs-RTK experiment.
+**HZR-only:** `build`, `bun`, `lsof`, `memory`, `ps`, `rgai`, `ssh`, `write`.
 
-### 6.2 Sources of the lifetime estimate
+**Upstream-only:** `dotnet`, `ecs`, `glab`, `gradlew`, `hook`, `jest`, `mvn`, `paratest`, `pest`, `php`, `phpstan`, `phpunit`, `pint`, `rake`, `rspec`, `rubocop`, `run`, `sbt`, `session`, `telemetry`, `uv`.
+
+The 21 upstream-only commands are a coverage advantage and are not counted as HZR wins. The present benchmark evaluates 14 cases from the 57-command intersection; it is not a full semantic parity proof for all shared subcommands.
+
+## 7. HZR-only USP metrics
+
+RTK measures filtered command output. HZR additionally owns the index, memory, context plan, lifecycle, safety policy and usage ledger. These metrics expose value or risk that stock RTK does not model.
+
+### 7.1 Current observational snapshot
+
+| HZR-only KPI | 2026-08-01 snapshot | Why it matters |
+|---|---:|---|
+| Net avoided-token estimate | 189,035,985 | gross estimate minus measured negative-output regressions |
+| Negative-saving rate | 0.109% | makes output growth visible instead of hiding it |
+| Attribution by subsystem | search 77.81%; write 16.95%; execution 4.08%; read 1.16% | shows where the estimate originates |
+| Provider-observed / accepted tasks | 0 / 0 | prevents an unsupported cost claim |
+| `economic_claim_ready` | `false` | explicitly blocks estimate → billing marketing drift |
+| Degraded rewrites | 59 | lifetime accounting is incomplete and labelled as such |
+| Managed hook purity | HZR 2/2; direct RTK 0; external ICM 0 | one control-plane entry point |
+| Duplicate grepai index dirs | 0 | one canonical index owner |
+| Unmanaged engine processes | 1 ICM at snapshot time | prevents a false zero-redundancy health claim |
+
+This lifetime slice covers 24,589 heterogeneous operations. It is observational telemetry, not part of the controlled three-way token total.
+
+### 7.2 Required differentiating KPIs
+
+| Metric | Definition | Gate |
+|---|---|---:|
+| Zero-redundancy runtime rate | runs without unmanaged engines, duplicate indexes/stores or competing hooks | 100% |
+| Context dedupe rate | `1 − unique delivered content refs / candidate refs before fusion` | report-only until calibrated |
+| Evidence budget compliance | context packs within configured hard estimate | 100% |
+| Retrieval recall@20 | gold targets in top 20 / all gold targets | ≥95% |
+| Exactness pass rate | exit/checksum/required-fact invariants passed / exact-class cases | 100% |
+| Atomic write idempotency | repeated identical writes with unchanged content/timestamp / repeat fixtures | 100% |
+| Search-hop reduction | median calls to first gold hit vs exact-filter baseline | ≥25% after calibration |
+| Memory reuse yield | accepted tasks where durable recall removed repeated reads | report-only, then calibrated target |
+| Provider evidence coverage | accepted tasks with actual usage/cost / accepted tasks | 100% before economic claim |
 
 ```mermaid
-pie showData
-    title HZR net avoided tokens estimate by subsystem
-    "Search — 77.81%" : 147087394
-    "Write — 16.95%" : 32049835
-    "Execution — 4.08%" : 7708118
-    "Read — 1.16%" : 2190638
+flowchart TD
+    F["RTK output filters"] --> T["Output-token estimate"]
+    H["HZR control plane"] --> T
+    H --> Z["Zero duplicate owners"]
+    H --> D["Context dedupe + hard budget"]
+    H --> M["Cross-session memory reuse"]
+    H --> X["Exact write / exit / fallback gates"]
+    H --> P["Actual provider evidence kept separate"]
 ```
 
-### 6.3 Metrics that benchmark gate should add
+## 8. Product requirements from this benchmark
 
-| Metric | Definition | Product value | Acceptance threshold |
-|---|---|---|---|
-| Zero-redundancy runtime rate | share of runs without unmanaged engines, duplicate indexes/stores or competing hooks | RTK does not manage the complete retrieval, memory and agent system | 100% |
-| Context dedupe rate | `1 − unique delivered content refs / candidate refs before fusion` | measures elimination of repeated context across code, memory and retrieval | report-only until the first gold baseline |
-| Evidence budget compliance | share of context packs within the hard token estimate | demonstrates bounded orchestration, not only stdout filtering | 100% |
-| Retrieval recall@20 | gold targets found in top 20 / all gold targets | verifies that semantic compression does not trade search recall for brevity | ≥95% |
-| Exactness pass rate | parser/checksum/exit-code/fixture invariants passed / exact-class cases | protects code, JSON, commands, paths and errors | 100% |
-| Atomic write no-op rate | repeated identical writes that preserve inode and content timestamp / repeated writes | measures HZR `write` idempotency, which upstream lacks | 100% on the idempotency fixture |
-| Search-hop reduction | median tool calls to first gold hit: HZR context/search vs RTK exact filters | demonstrates the value of `rgai` plus the canonical index | at least −25% after gold calibration |
-| Memory reuse yield | accepted tasks where a durable remembered fact eliminated repeated reading / tasks with eligible memory | demonstrates cross-session value absent from stock RTK | report-only, then target from paired data |
-| Safety fallback correctness | fallback cases preserving exit/status/exact spans / all fallback cases | demonstrates graceful degradation without silent semantic drift | 100% |
-| Provider evidence coverage | accepted tasks with actual usage and cost / all accepted tasks | separates economic evidence from the bytes/4 estimate | 100% for an economic claim |
+1. Keep the pinned, reproducible three-way harness under `benchmarks/` and regenerate only when command behavior, fixture, model/tokenizer method or measurement logic changes.
+2. A common-command result is valid only when exit code and required diagnostic facts match.
+3. No HZR shared-command case may exceed upstream output by more than 1% without an explicit utility justification and regression issue.
+4. Failure compression must retain test identity, failure location and assertion/error text under a documented cap.
+5. `cargo build`, `cargo check` and `cargo test` labels must reflect the invoked command.
+6. Command-surface gaps remain separate from performance wins; absent upstream-only commands are never represented as parity.
+7. Approximate output tokens, total session tokens, actual provider tokens and billing/cost remain separate fields.
+8. A provider-cost claim requires paired accepted-task evidence; this command benchmark alone cannot set `economic_claim_ready=true`.
 
-These fields must appear in machine-readable results even when the denominator is unavailable; `null` plus a reason is more accurate than a fictitious zero.
+## 9. Limitations
 
-## 7. Requirements for paired HZR vs RTK v0.44.1 gate
+- The fixture is one large Rust repository, not a multi-language corpus.
+- Five repetitions support a local p50 comparison but not stable p95 confidence intervals.
+- `bytes/4` is approximate and language/tokenizer dependent.
+- Canonical output stores one representative sample; `summary.json` retains hashes and metrics for all five repetitions.
+- The working tree contained concurrent development changes; `environment.json` records HEAD, status and diff hash instead of pretending it was clean.
+- The benchmark measures tool output, not answer correctness after an agent consumes it.
+- The upstream-only 21-command surface remains unimplemented in HZR and requires separate demand/parity prioritization.
+- Provider-billed savings and accepted-task non-inferiority remain unmeasured.
 
-### 7.1 Harness
+## 10. Acceptance state
 
-1. Pin the comparator to upstream RTK `v0.44.1` / `36591fb...` and HZR to the release artifact plus its internal manifest.
-2. Stock upstream runs only in a disposable isolated runner, without access to HZR canonical ledger/index/memory and without installation in user `PATH`.
-3. The same immutable fixtures, environment variables, locale, terminal width, cache state and command arguments are used for both sides.
-4. Minimum 30 warm repetitions and 5 cold repetitions per case; raw samples, median, p90, p95 and bootstrap 95% CI are saved.
-5. First, exit code, required facts, stable identifiers and parser/checksum invariants are checked; performance sample with failed correctness is excluded and remains visible as failure.
-6. Output tokens are measured simultaneously by the target model’s tokenizer and bytes/4 estimate; fields do not mix.
-7. Mutating commands are executed only in the disposable fixture copy and are checked against the resulting tree hash.
-8. The result is saved as JSON/CSV + human PRD section with source commit, OS, CPU, versions, repetitions and timestamp.
+- [x] Exact upstream v0.44.1 pin and binary identity recorded.
+- [x] RAW / upstream / HZR run on the same fixture.
+- [x] Five repetitions with rotating order.
+- [x] Full command outputs, per-run hashes/metrics and aggregate CSV/JSON saved.
+- [x] Evidence integrity manifest verifies.
+- [x] Exit-code parity across all 14 cases.
+- [x] Upstream diagnostic/token regressions investigated and fixed.
+- [x] Final measured HZR losses against upstream: zero.
+- [x] HZR-only USP metrics defined separately.
+- [ ] Full correctness matrix for all 57 shared top-level commands.
+- [ ] Multi-language fixture suite and stable p95/CI run.
+- [ ] Paired provider-billed accepted-task benchmark.
 
-### 7.2 Required groups
+## 11. References
 
-- All 57 common top-level commands: at least smoke/correctness case.
-- Deep output benchmark: `read`, `ls`, `find`, `grep`, `rg`, `git`, `cargo`, `test`, `json`, `deps`, `env`, `log`, `summary`, `docker`, `kubectl`.
-- Upstream-only coverage gap: 21 commands are reported separately and are not counted as HZR wins.
-- HZR-only value plane: eight fork-only commands and HZR-native `doctor`, `index`, `search`, `context`, `memory`, `codec`, `agent`, `mcp`, `stats`.
-- Failure fixtures: malformed JSON, missing files, failing tests, stale index, daemon unavailable, duplicate index, unmanaged process, denied destructive command.
-
-### 7.3 Release criteria
-
-- 100% exit-code and required-fact parity for common exact-class cases.
-- Not a single silent empty-output success.
-- Median common-command output tokens are no more than 1% worse than upstream; regressions are published per command.
-- p95 warm HZR orchestration overhead without child-command and LLM latency ≤250 ms.
-- `runtime_accounting_complete=true` for benchmark run.
-- `economic_claim_ready=true` only after a paired provider benchmark with at least 200 accepted tasks, 100% actual-usage coverage, and a success non-inferiority margin no worse than 1 percentage point.
-- Main product target from `PRD.md`: median actual billed cost per accepted task at least 30% below baseline. Until then, the UI shows only a clearly labeled estimate.
-
-## 8. Risks and limitations of the current cut
-
-- Current HZR was not run alongside stock RTK `v0.44.1`; no current relative advantage has been proven.
-- Live fixture is `fork-core/rtk` itself, not a multi-language corpus.
-- Three repetitions are not enough for stable tail-latency output.
-- `cargo test` has one product/test failure and is not included in the success-only aggregate.
-- bytes/4 is an approximate token estimate; billed cost was not measured.
-- Lifetime ledger contains legacy/imported and heterogeneous commands; 59 degraded rewrites make accounting incomplete.
-- `hzr doctor` detected one unmanaged ICM process, so this snapshot does not support a zero-redundancy runtime claim.
-- The 21 upstream-only commands show that HZR currently has a narrower command surface. Its differentiated value must be demonstrated through platform metrics, not filter count.
-
-## 9. Sources
-
-- [Main HZR PRD](PRD.md), §4.2 and §8.
-- [Historical paired benchmark](fork-core/rtk/tasks/benchmark-fork-vs-upstream-0.42.4.md).
-- [Fork-core provenance](fork-core/README.md).
-- [HZR stats implementation](crates/hzr-cli/src/stats.rs).
-- [HZR ledger schema](crates/hzr-core/src/ledger.rs).
-- [Upstream RTK v0.44.1 release](https://github.com/rtk-ai/rtk/releases/tag/v0.44.1).
-- [Pinned upstream RTK command source](https://github.com/rtk-ai/rtk/blob/36591fb00d650bf987b57483c0b3a395a35a8dc1/src/main.rs).
+- [Benchmark documentation and reproduction](benchmarks/hzr-vs-rtk-upstream-v0.44.1/README.md)
+- [Recorded results](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01/summary.json)
+- [Fork parity ledger](FORK_PARITY.md)
+- [Historical v0.42.4 comparison](fork-core/rtk/tasks/benchmark-fork-vs-upstream-0.42.4.md)
+- [Main product PRD](PRD.md)

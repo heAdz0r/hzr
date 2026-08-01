@@ -144,6 +144,33 @@ pub struct MemoryRecallApiRequest {
     pub limit: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keyword: Option<String>,
+    /// Which namespaces the recall may reach. Defaults to project plus global so an
+    /// agent sees standing preferences alongside this repository's history.
+    #[serde(default)]
+    pub scope: MemoryScopeSelector,
+}
+
+/// Wire form of the memory namespace. Kept in the protocol rather than inferred, so a
+/// client's scope choice is explicit and auditable in the request.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryScopeSelector {
+    /// Only the current repository.
+    Project,
+    /// Only user-global records.
+    Global,
+    #[default]
+    ProjectAndGlobal,
+}
+
+/// A write targets exactly one namespace — `project_and_global` is meaningless for a
+/// store, and allowing it would duplicate the same fact into two namespaces.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryWriteScope {
+    #[default]
+    Project,
+    Global,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -162,6 +189,10 @@ pub struct MemoryStoreApiRequest {
     pub workspace: String,
     pub topic: String,
     pub content: String,
+    /// Where the record belongs. Project by default: a fact is repository-scoped unless
+    /// the caller deliberately states it is a user-wide preference or rule.
+    #[serde(default)]
+    pub scope: MemoryWriteScope,
     #[serde(default)]
     pub importance: MemoryImportance,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -237,6 +268,110 @@ pub struct UsageApiRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct UsageApiResponse {
     pub recorded: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardState {
+    Ready,
+    Degraded,
+    Rebuilding,
+    Standby,
+    Stopped,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardService {
+    pub id: String,
+    pub name: String,
+    pub version: Option<String>,
+    pub state: DashboardState,
+    pub detail: String,
+    pub command: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardProjectState {
+    Ready,
+    Warming,
+    Registered,
+    Unavailable,
+    Degraded,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardProjectArtifacts {
+    pub config_present: bool,
+    pub vectors_present: bool,
+    pub symbols_present: bool,
+    pub repository_graph_present: bool,
+    pub size_bytes: u64,
+    pub modified_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardProject {
+    pub name: String,
+    pub root: String,
+    pub repository_id: String,
+    pub worktree_id: String,
+    pub git_backed: bool,
+    pub linked_worktree: bool,
+    pub state: DashboardProjectState,
+    pub registered_at_ms: u64,
+    pub last_seen_at_ms: u64,
+    pub artifacts: DashboardProjectArtifacts,
+    pub command: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardObservedUsage {
+    pub tasks: u64,
+    pub accepted: u64,
+    pub actual_input_tokens: u64,
+    pub actual_output_tokens: u64,
+    pub estimated_input_tokens: u64,
+    pub cost_microusd: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DashboardEstimatedEfficiency {
+    pub operations: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub gross_avoided_tokens_estimated: u64,
+    pub regression_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub reduction_pct: f64,
+    pub total_execution_ms: u64,
+    pub measurement: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardHelpCommand {
+    pub label: String,
+    pub description: String,
+    pub command: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DashboardResponse {
+    pub protocol_version: u16,
+    pub hzr_version: String,
+    pub visualizer_version: String,
+    pub generated_at_ms: u64,
+    pub uptime_ms: u64,
+    pub daemon_endpoint: String,
+    pub overall_state: DashboardState,
+    pub services: Vec<DashboardService>,
+    pub projects: Vec<DashboardProject>,
+    pub registry_warnings: usize,
+    pub observed_usage: DashboardObservedUsage,
+    pub estimated_efficiency: DashboardEstimatedEfficiency,
+    pub help: Vec<DashboardHelpCommand>,
+    pub notes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

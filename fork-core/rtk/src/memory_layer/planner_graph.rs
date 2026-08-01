@@ -180,14 +180,24 @@ pub fn run_graph_first_pipeline(
     tier_a.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     // ── Tier B: 1-hop neighbors via import edges ────────────────────────────────
-    // Build import-reverse-index: file → files that import it
-    let mut importers_of: HashMap<String, Vec<String>> = HashMap::new();
+    // Build an import reverse index keyed by normalized module segment. Planner
+    // expansion then becomes O(import edges + seeds), not O(seeds * files).
+    let mut importers_by_stem: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut wildcard_importers = HashSet::new();
     for fa in &state.artifact.files {
         for imp in &fa.imports {
-            importers_of
-                .entry(imp.clone())
-                .or_default()
-                .push(fa.rel_path.clone());
+            if imp == "super::*" {
+                wildcard_importers.insert(fa.rel_path.clone());
+            }
+            for segment in imp
+                .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+                .filter(|segment| !segment.is_empty())
+            {
+                importers_by_stem
+                    .entry(segment.to_ascii_lowercase())
+                    .or_default()
+                    .insert(fa.rel_path.clone());
+            }
         }
     }
 
@@ -207,6 +217,10 @@ pub fn run_graph_first_pipeline(
         .iter()
         .map(|fa| (fa.rel_path.clone(), fa))
         .collect();
+    let caller_scores = cg.caller_scores(&query_tags);
+    let call_graph_active = seed_paths
+        .iter()
+        .any(|seed| caller_scores.get(seed).is_some_and(|score| *score > 0.1));
 
     for seed in &seed_paths {
         // Files that import this seed via module string matching
@@ -215,57 +229,55 @@ pub fn run_graph_first_pipeline(
         let seed_stem = std::path::Path::new(seed)
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or(seed.as_str());
-        for fa in &state.artifact.files {
-            if all_paths.contains(&fa.rel_path) {
+            .unwrap_or(seed.as_str())
+            .to_ascii_lowercase();
+        let importers = importers_by_stem
+            .get(&seed_stem)
+            .into_iter()
+            .flatten()
+            .chain(wildcard_importers.iter());
+        for importer in importers {
+            if all_paths.contains(importer) {
                 continue;
             }
-            let imports_seed = fa.imports.iter().any(|imp| {
-                let imp_lower = imp.to_ascii_lowercase();
-                imp_lower.contains(seed_stem) || imp == "super::*"
-            });
-            if imports_seed {
-                let has_symbols = !fa.pub_symbols.is_empty();
-                let has_imports = !fa.imports.is_empty();
-                if !is_noise(
-                    &fa.rel_path,
-                    fa.language.as_deref(),
-                    fa.line_count,
-                    has_symbols,
-                    has_imports,
-                    &query_tags,
-                    2,
-                ) {
-                    // CHANGED: accumulate max score per path (dedup-safe)
-                    let e = tier_b_map.entry(fa.rel_path.clone()).or_insert(0.0);
-                    *e = e.max(0.3); // import-neighbor base score
-                }
+            let Some(fa) = fa_map.get(importer) else {
+                continue;
+            };
+            let has_symbols = !fa.pub_symbols.is_empty();
+            let has_imports = !fa.imports.is_empty();
+            if !is_noise(
+                &fa.rel_path,
+                fa.language.as_deref(),
+                fa.line_count,
+                has_symbols,
+                has_imports,
+                &query_tags,
+                2,
+            ) {
+                let entry = tier_b_map.entry(fa.rel_path.clone()).or_insert(0.0);
+                *entry = entry.max(0.3);
             }
         }
-        // Call-graph neighbors (callers of seed symbols, query-tag aware)
-        let cg_score = cg.caller_score(seed, &query_tags);
-        if cg_score > 0.1 {
-            for fa in &state.artifact.files {
-                if all_paths.contains(&fa.rel_path) {
-                    continue;
-                }
-                let cs = cg.caller_score(&fa.rel_path, &query_tags);
-                if cs > 0.1 {
-                    let has_symbols = !fa.pub_symbols.is_empty();
-                    let has_imports = !fa.imports.is_empty();
-                    if !is_noise(
-                        &fa.rel_path,
-                        fa.language.as_deref(),
-                        fa.line_count,
-                        has_symbols,
-                        has_imports,
-                        &query_tags,
-                        2,
-                    ) {
-                        let e = tier_b_map.entry(fa.rel_path.clone()).or_insert(0.0);
-                        *e = e.max(0.2 + cs * 0.3); // call-graph score
-                    }
-                }
+    }
+    if call_graph_active {
+        for (path, score) in &caller_scores {
+            if *score <= 0.1 || all_paths.contains(path) {
+                continue;
+            }
+            let Some(fa) = fa_map.get(path) else {
+                continue;
+            };
+            if !is_noise(
+                &fa.rel_path,
+                fa.language.as_deref(),
+                fa.line_count,
+                !fa.pub_symbols.is_empty(),
+                !fa.imports.is_empty(),
+                &query_tags,
+                2,
+            ) {
+                let entry = tier_b_map.entry(path.clone()).or_insert(0.0);
+                *entry = entry.max(0.2 + score * 0.3);
             }
         }
     }
@@ -343,7 +355,7 @@ pub fn run_graph_first_pipeline(
             } else {
                 0.0
             };
-            c.features.f_call_graph_score = cg.caller_score(rel_path, &query_tags);
+            c.features.f_call_graph_score = caller_scores.get(rel_path).copied().unwrap_or(0.0);
             let raw_cost = budget::estimate_tokens_for_path(rel_path, fa.line_count);
             c.estimated_tokens = raw_cost.max(180); // CHANGED: floor only, no ceiling — budget assembler handles overflow + min-1 guarantee
             c.features.f_token_cost = (raw_cost as f32 / 1000.0).min(1.0);

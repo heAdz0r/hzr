@@ -1,9 +1,9 @@
-# PRD: HZR 0.2.0 - a single platform for the efficiency of LLM agents
+# PRD: HZR 0.3.0 - a single platform for the efficiency of LLM agents
 
 **Product:** HZR - **h**eAdz0r's **Z**ero-**R**edundancy engine (`Z` = both author's nickname and principle). The successor of RTK in meaning: RTK killed tokens, HZR killed redundancy - the second index, the second memory store, the second pre-read pack, the file re-submitted to the context, duplicating the compression layer of the agent
-**Release:** 0.2.0
+**Release:** 0.3.0
 **Date of decision:** 2026-07-31
-**Status:** HZR 0.2.0 release candidate; G1–G7, adoption/control-plane path and self-contained release packaging are implemented, economic KPI awaits paired provider benchmark
+**Status:** HZR 0.3.0 release candidate; G1–G7, adoption/control-plane path and self-contained release packaging are implemented, economic KPI awaits paired provider benchmark
 **Repository:** new standalone product and Git history; the actual worktree `heAdz0r/rtk` is imported entirely into `v0.1.0` as a provable baseline, after which the engine is developed only within HZR
 **Main criterion:** minimum total cost of a successfully solved problem while maintaining measurable quality
 
@@ -156,7 +156,7 @@ Sources: [caveman-code repository](https://github.com/JuliusBrussee/caveman-code
 
 Until a statistically sufficient benchmark appears, the UI has no right to show the forecast as proven savings. Values ​​are labeled `actual`, `tokenizer`, or `estimate`.
 
-Managed bridge 0.2.0 records only observed runtime outcomes `completed`, `invalid_response` and `failed`; it doesn't declare its own answer "accepted". The `accepted` and task success label are set by an external benchmark/harness or future explicit user-feedback workflow, so the current `hzr savings` does not produce `cost_per_accepted_task` without such data.
+Managed bridge 0.3.0 records only observed runtime outcomes `completed`, `invalid_response` and `failed`; it doesn't declare its own answer "accepted". The `accepted` and task success label are set by an external benchmark/harness or future explicit user-feedback workflow, so the current `hzr savings` does not produce `cost_per_accepted_task` without such data.
 
 ### 4.3 Non-goals
 
@@ -221,7 +221,7 @@ flowchart TD
 10. Exact JSON additionally undergoes parser validation, empty output is rejected, provider usage and terminal outcome are written to the ledger.
 11. ICM receives only explicitly saved durable facts/decisions/handoffs, and not every raw tool output.
 
-## 6. Components 0.2.0
+## 6. Components 0.3.0
 
 ### 6.1 `hzr-protocol`
 
@@ -281,6 +281,23 @@ Stock grepai 0.35.0 does not know how to select an arbitrary index path and its 
 
 ICM topics are global by upstream design. Therefore, HZR takes a workspace in each memory request, evaluates the canonical `repository_id`, adds it as a separate topic segment on store, and forces the same project filter on recall. The client cannot change the project scope. The memory of different repositories does not mix, although the lifecycle and physical DB remain the same.
 
+#### 6.5.1 Two namespaces: project and global
+
+One physical store, two reachable namespaces. Preferences and architectural rules are properties of the *user*, not of one repository — with a project-only namespace, a preference learned in one project was invisible in every other, which forced the same fact to be restated per repository.
+
+| Namespace | Topic form | Reached by |
+|---|---|---|
+| project | `<kind>-<repository_id>` | `--scope project`, and by default on store |
+| global | `<kind>-global` | `--scope global` |
+| both | — | `--scope project-and-global`, the default on recall |
+
+Invariants:
+
+- **The namespaces cannot collide.** `global` is a fixed literal, not a second hash: a repository identity is 64 lowercase hex characters and `global` is not hex, so no project can present itself as the global namespace or the reverse.
+- **Cross-repository isolation is unchanged.** The filter is positive — a record is kept only because it provably belongs to *this* repository or to the global namespace. Another repository's record is unreachable from either scope, and so is a bare un-namespaced topic written by a tool outside HZR.
+- **A write targets exactly one namespace.** `project_and_global` is meaningless for a store and is not accepted there; allowing it would duplicate one fact into two namespaces.
+- Recall defaults to `project_and_global` because an agent should see standing preferences alongside this project's history; store defaults to `project` because a fact is repository-scoped unless the caller deliberately states otherwise.
+
 ### 6.6 `hzr-codec`
 
 Profiles: `off`, `safe`, `adaptive`, `compact`, `shadow`. In 0.2 codec is not a universal paraphraser: it selects a short density contract and, like an explicit transform, removes only exact duplicate paragraphs. Protected spans cover code fences, inline code, paths, URLs, flags, hashes, versions, identifiers, enum-like values ​​and structured payloads; any violation returns raw byte-for-byte. `adaptive` checks economics before adding any contract. `shadow` returns the original content unchanged and writes counterfactual input/output/saved bytes and `would_change`. The ending newlines are saved.
@@ -296,7 +313,7 @@ Managed bridge to caveman-code:
 - one bounded unified-context prefetch is injected as untrusted evidence before generation;
 - text and strict JSON result modes are supported;
 - provider credentials remain in the upstream auth storage or environment and are never copied into HZR ledger;
-- daemon health must report protocol 1, HZR 0.2.0 and exactly one ready fork-core before launch;
+- daemon health must report protocol 1, HZR 0.3.0 and exactly one ready fork-core before launch;
 - provider usage is posted once from the bridge finalizer with `completed`, `invalid_response` or `failed`; accounting failure never masks the primary result;
 - managed launch fails closed on invariant mismatch; ordinary HZR tools continue to work.
 
@@ -332,6 +349,7 @@ hzr uninstall [--keep-data] [--dry-run] [--force]
 hzr hooks status
 hzr mcp serve
 hzr mcp config --client codex|claude-desktop
+hzr mcp status
 hzr doctor [--json]
 hzr daemon serve|status|engines|service install|start|stop|restart|status
 hzr engines status
@@ -339,14 +357,27 @@ hzr index status|init
 hzr exec rewrite|run|approve|deny
 hzr search <query>
 hzr rgai <query>
-hzr memory recall|store|status
+hzr memory recall [--scope project|global|project-and-global] <query>
+hzr memory store [--scope project|global] <topic> <content>
+hzr memory status
 hzr context plan <intent>
 hzr codec compile <text>
 hzr agent run [--json] <prompt>
-hzr savings
+hzr tdd
+hzr stats
+hzr release [--dry-run] [--force] [--skip-service] [--install-root DIR]
+hzr build <project build arguments>
 hzr migrate scan|apply|history|memory
 hzr rtk -- <fork arguments>
 ```
+
+**`release` and `build` are deliberately distinct verbs.** `hzr release` builds *this
+source tree* into a bundle, installs it version-scoped, switches `current` atomically,
+restarts the daemon and then verifies the reported version of all four engines — checking
+only `hzr --version` is what previously let a stale bundle look current (RB-04).
+`hzr build` forwards verbatim to the inherited fork `build`, which is a token-optimized
+wrapper for building *the user's project*; the fork already used that verb, so muscle
+memory carries over instead of the two meanings colliding under one name.
 
 The installed hook runtime uses the hidden `hzr hooks dispatch`: one handler for `PreToolUse:Bash|Agent|Task`. Managed rewrite has a hard timeout of 2 s and converts fork decisions into a typed Claude hook result with exit 0; when the daemon is unavailable, it invokes the same pinned `0.44.1-fork.1` adapter. `SessionStart` invokes `hzr init --if-needed --quiet`. The adoption command removes known RTK handlers individually, centralizes ICM ownership by default, preserves unknown handlers, creates a full-SHA backup, verifies compare-and-swap under a filesystem lock, and atomically replaces settings only after `--force`. Using the same transactional pattern, it installs one HZR-owned block in Claude `CLAUDE.md` and Codex `AGENTS.md`, references the canonical bundled `HZR.md`, and removes only machine-owned legacy `@RTK.md` imports.
 
@@ -361,12 +392,23 @@ Clients without a hook mechanism - Codex app-server and Claude desktop - can onl
 `hzr mcp serve` is a stdio JSON-RPC adapter, not a second control plane:
 
 - **there is no store.** Each call goes to a single `hzrd`, which owns one supervised ICM process and one canonical DB. Therefore N parallel adapters are safe: the singular must be a store, not a pipe;
+- **lifecycle is native to the client.** `hzr init` never starts MCP. The confirmed `hzr install --force` writes the native Codex/Claude Desktop registration; the client launches `hzr mcp serve` on connection and closes it through stdin EOF. `hzr mcp status` audits this state without mutation;
 - **orphan is not possible.** The process terminates at EOF on stdin, that is, at the moment of the death of the parent. Tested by SIGKILL parent: 0 leaks;
-- **fake liveness is prohibited.** If `hzrd` is not available, `isError: true` is returned with the text “nothing was read or written”, rather than a successful response. A dead backend cannot look like a successful post;
+- **fake liveness is prohibited.** If `hzrd` is not available, `isError: true` is returned rather than a successful response. HZR never routes to a fallback store. Validation and connection failures happen before dispatch; if a store response is lost after dispatch, the result explicitly reports unknown completion and tells the caller to recall before retrying;
 - **scope is not expandable by the client.** workspace is taken from the launch directory of the server; the client cannot change the repository;
 - **Direct engine control is not exposed.** The surface provides no `icm serve`, `grepai watch` or `rtk proxy` commands.
 
-Tools 0.2.0: `hzr_memory_recall`, `hzr_memory_store`, `hzr_search`. All names in namespace `hzr_`, all arguments are bounded (`limit` clamped to 50).
+Current tools: `hzr_context_plan`, `hzr_search`, `hzr_memory_recall`,
+`hzr_memory_store`. All names use the `hzr_` namespace. The gateway
+negotiates stable MCP `2025-11-25` or a compatible older revision, publishes
+JSON Schema 2020-12 input/output contracts, rejects unknown fields and invalid
+types/enums, validates limits at 1–50, and returns both `structuredContent` and
+backward-compatible text.
+
+The surface is intentionally model-oriented. Health, statistics, engine lifecycle
+and unrestricted execution remain operator CLI/API concerns. Adding them as tools
+would increase selection ambiguity or mutation authority without improving context
+retrieval.
 
 `hzr mcp config --client codex|claude-desktop` remains a read-only preview and prints a registration snippet. Confirmed `hzr install --force` transactionally replaces known direct ICM registrations in client configs with HZR MCP, using a filesystem lock, content-addressed backup, and compare-and-swap; unknown MCP servers are preserved. `doctor` continues to report remaining unmanaged `icm serve` processes as an `error` (§16.5.1).
 
@@ -419,7 +461,7 @@ Invariants:
 
 ## 8. Version and supply-chain policy
 
-Release lock for 0.2.0:
+Release lock for 0.3.0:
 
 | Engine |Version| Pin |
 |---|---:|---|
@@ -435,20 +477,20 @@ The executable caveman-code is fixed by npm version, tarball integrity, source `
 
 grepai is built only from pinned commit after applying [patches/grepai/0.35.0-disable-worktree-discovery.patch](patches/grepai/0.35.0-disable-worktree-discovery.patch); patch must pass `git apply --check`, Go tests and capability smoke. ICM source requires a separate minimal pinned patch that syncs only the legacy version of `icm-cli` in the upstream `Cargo.lock` with the source package 0.10.61 and preserves the build `--locked`. [scripts/build-bundle.sh](scripts/build-bundle.sh) builds native local-platform bundle HZR + **fork-core** + patched grepai + patched ICM + exact caveman-code production tree + official Node.js 22.17.1. Building stock RTK instead of fork-core or dependency of release runtime on external Node/RTK/grepai/ICM is a release-blocking error.
 
-`scripts/package-release.sh` adds internal `BUNDLE_MANIFEST.sha256` and creates `hzr-v0.2.0-<platform>.tar.gz`; `install.sh` separately checks release `SHA256SUMS`, internal manifest and mandatory bundle layout before atomically switching active version. Clean-install smoke runs HZR with `PATH`, which lacks external Node/RTK/grepai/ICM, and leaves only the system Git. Release build checks checksum/integrity, license, executable version and protocol smoke test. Engine auto-update/sync is missing; a future implementation should not update pins without explicit confirmation.
+`scripts/package-release.sh` adds internal `BUNDLE_MANIFEST.sha256` and creates `hzr-v0.3.0-<platform>.tar.gz`; `install.sh` separately checks release `SHA256SUMS`, internal manifest and mandatory bundle layout before atomically switching active version. Clean-install smoke runs HZR with `PATH`, which lacks external Node/RTK/grepai/ICM, and leaves only the system Git. Release build checks checksum/integrity, license, executable version and protocol smoke test. Engine auto-update/sync is missing; a future implementation should not update pins without explicit confirmation.
 
 Before switching `current` installer re-attests the already existing same-version root by
 byte-identical internal manifest, mandatory layout, modes, digests and allowed symlinks.
 Any discrepancy fail-closed before switching; smoke fixtures confirm rejection for
 tampered, missing and symlink-injected roots, and a clean re-install remains a no-op.
 
-Artifact tooling supports `darwin-arm64`, `darwin-x64`, `linux-arm64` and `linux-x64`; Each artifact must be built and smoke-test run natively. The current public CI assembled-bundle gate runs on Linux x86_64. Windows artifact is not included in 0.2.0, and the rest of the declared platform artifacts are not considered release-verified to native job/smoke.
+Artifact tooling supports `darwin-arm64`, `darwin-x64`, `linux-arm64` and `linux-x64`; Each artifact must be built and smoke-test run natively. The current public CI assembled-bundle gate runs on Linux x86_64. Windows artifact is not included in 0.3.0, and the rest of the declared platform artifacts are not considered release-verified to native job/smoke.
 
 ## 9. Security and privacy
 
 - loopback-only daemon by default;
 - bearer token for local API;
-- non-loopback bind is not supported in 0.2.0;
+- non-loopback bind is not supported in 0.3.0;
 - config, DB tokens and runtime secrets have private permissions;
 - provider API keys are not logged and not saved in the ledger;
 - managed fork path forces `RTK_TEE=0` and `RTK_TELEMETRY_DISABLED=1`;
@@ -479,7 +521,7 @@ Artifact tooling supports `darwin-arm64`, `darwin-x64`, `linux-arm64` and `linux
 
 `hzr migrate scan` read-only detects legacy/nested `.grepai`, external memory/config/wrapper/process markers and reports them without changing the data.
 
-`hzr migrate apply --workspace` in 0.2.0 is intentionally narrow and auditable: it centralizes exactly one legacy grepai store. Operation:
+`hzr migrate apply --workspace` in 0.3.0 is intentionally narrow and auditable: it centralizes exactly one legacy grepai store. Operation:
 
 1. canonicalizes repository/worktree identity and rejects duplicates/foreign entries;
 2. holds exclusive legacy HZR owner lock;
@@ -497,6 +539,13 @@ The old `/Users/andrew/Programming/rtk` remains the unchanged archived baseline 
 ## 12. Verification strategy
 
 ### 12.1 Rust quality gates
+
+`hzr tdd` exposes the canonical HZR Red-Green-Refactor contract in text and
+typed JSON. It is derived from upstream RTK's project skill, but makes evidence
+explicit: a relevant focused test must be observed failing before production
+changes, then the identical command must pass. Post-hoc passing tests remain
+regression coverage and are never reported as TDD. The release bundle ships the
+canonical skill under `share/hzr/skills/hzr-tdd/`.
 
 ```bash
 cargo fmt --all --check
@@ -525,7 +574,7 @@ cargo test --workspace --all-targets --all-features
 
 Each task runs baseline and HZR with the same model, temperature, repository revision and max turns. Provider usage, cache usage, turns, tool calls, latency, retries, task success and judge/harness outcome are collected. The report shows median, p90, confidence intervals and a list of regressions, not just total percentages.
 
-## 13. Release acceptance for 0.2.0
+## 13. Release acceptance for 0.3.0
 
 Release is allowed when:
 
@@ -545,11 +594,11 @@ Release is allowed when:
 - CLI/daemon smoke test works from a clean data root;
 - README contains installation, architectural invariants and recovery;
 - ICM contains the current handoff for the following LOOP agents;
-- the repository saves `v0.1.0` baseline, has a current-engine manifest and version `0.2.0`.
+- the repository saves `v0.1.0` baseline, has a current-engine manifest and version `0.3.0`.
 - `hzr install` idempotently replaces RTK hooks, saves other people's handlers and does not write to `--dry-run`;
 - `hzr init --if-needed` is filesystem no-op on an already registered workspace;
 - managed and degraded hook paths use the same typed decision contract, and degraded accounting is visible in `doctor`/`savings`.
-- one release installer checks artifact checksum and internal manifest, installs version-scoped `v0.2.0-<platform>` bundle and atomically switches `current`;
+- one release installer checks artifact checksum and internal manifest, installs version-scoped `v0.3.0-<platform>` bundle and atomically switches `current`;
 - existing same-version root re-certified by internal manifest or installer fail closed before switching `current`;
 - the installed artifact contains full fork-core, patched grepai, patched ICM, exact caveman-code production tree and bundled Node.js 22.17.1;
 - clean-install smoke works without separate Node.js, RTK, grepai and ICM; system Git remains prerequisite;
@@ -557,22 +606,22 @@ Release is allowed when:
 
 ### 13.1 Confirmed release blockers of global adoption
 
-Below is a read-only acceptance audit of a real machine on the cut 2026-08-01 00:09 MSK, source HEAD `c88d271`. Only 2 out of 10 adoption points were completely passed. These results take precedence over the previous `LGTM`/“implemented” in the status documents. `v0.2.0` cannot be published or declared globally adopted until each blocker is closed with code, regression test and live re-audit.
+Below is a read-only acceptance audit of a real machine on the cut 2026-08-01 00:09 MSK, source HEAD `c88d271`. Only 2 out of 10 adoption points were completely passed. These results take precedence over the previous `LGTM`/“implemented” in the status documents. `v0.3.0` cannot be published or declared globally adopted until each blocker is closed with code, regression test and live re-audit.
 
 | ID | Severity |Confirmed defect| Evidence |Mandatory acceptance|
 |---|---|---|---|---|
 | **RB-01** | **P0** |Global instructions do not have a single HZR ownership|`~/.claude/CLAUDE.md` simultaneously contains a legacy block that requires direct `rtk`/ICM, and an added HZR block. `~/.codex/config.toml` still runs `icm serve` directly; HZR block in `AGENTS.md` is just added to the old contract|`hzr install --force` transactionally deletes only machine-owned legacy RTK/direct-ICM directives, leaves exactly one HZR block for Claude and Codex, re-install byte-for-byte no-op; fixture and live check do not find `@RTK.md`, direct `rtk` mandate or direct ICM MCP command|
 | **RB-02** | **P0** |Centralized memory ownership is actually broken|Four external `icm` servers and two Claude wrapper processes were detected in the live process table; scanner reports six foreign owners. Legacy `dev.icm.icm/memories.db` and canonical `dev.headz0r.hzr/memory/icm/memories.db` exist at the same time|After explicit adoption, exactly one HZR-owned memory lifecycle is active; Claude/Codex do not run ICM directly; `doctor --json` distinguishes between process and wrapper, shows zero foreign active owners; legacy DB is not deleted, and migration/backup is performed as a separate idempotent operation with the manifest being checked|
 | **RB-03** | **P0** |`hzr install` does not provide the declared self-contained global bundle|CLI installer copies only `hzr`/`hzrd`, does not install bundled engines/runtime, daemon service and full instruction artifact. In clean HOME a reference to the missing `~/.local/share/hzr/HZR.md` is written|Installing from the release archive with one command places the version-scoped full bundle, canonical `HZR.md`, engines and private runtime; public binaries point only to stable `current`; clean-HOME gate checks the existence and SHA of each referenced artifact, then runs CLI, hook, daemon, search, memory and managed bridge without external engine installations|
-| **RB-04** | **P0** |The installed global binary diverges from the source/release candidate|The global `hzr 0.2.0` is available in PATH, but overrides `hzr stats` and `hzr mcp`; source `target/debug/hzr` already contains both commands. There is no public release artifact yet|Installer never marks the dev/stale binary as a current release. After deployment SHA/version/provenance global `hzr` and `hzrd` match verified artifact and `current`; `hzr stats --json`, `hzr mcp --help`, hook dispatcher and doctor are passed from a clean shell|
+| **RB-04** | **P0** |The installed global binary diverges from the source/release candidate|The global `hzr 0.3.0` is available in PATH, but overrides `hzr stats` and `hzr mcp`; source `target/debug/hzr` already contains both commands. There is no public release artifact yet|Installer never marks the dev/stale binary as a current release. After deployment SHA/version/provenance global `hzr` and `hzrd` match verified artifact and `current`; `hzr stats --json`, `hzr mcp --help`, hook dispatcher and doctor are passed from a clean shell|
 | **RB-05** | **P0** |`hzr stats` crashes on an empty canonical ledger|`target/debug/hzr stats --json` returns SQLite `Invalid column type Null` for aggregate `SUM(CASE WHEN outcome='accepted'...)`; aggregate columns are read without `COALESCE`|Empty, partial and populated DB return schema-valid JSON/TTY with zero totals and no panic/error; all nullable SQL aggregates use explicit semantics; added regression test with new empty DB|
 | **RB-06** | **P0** |Global proven cumulative history is not imported|Live legacy `rtk gain`: 22,859 commands and approximately 188.9M estimated saved tokens; DB `~/Library/Application Support/rtk/history.db` about 20.5 MB. The current migration only looks for `<HZR data>/fork/history.db` about 122 KB, so `hzr stats` only saw 107 operations and zero savings|Migration detects platform legacy RTK DB locations, first makes a read-only snapshot/identity, then idempotently imports each row exactly once into the canonical ledger. Counts/gross/regressions/signed net are checked against the source snapshot; source is not mutated; restarting does not add anything; legacy and canonical sources are not re-summed|
 | **RB-07** | **P0** |There is no single production daemon/service ownership|The worker `target/debug/hzrd` is an unmanaged dev process; release installer does not install service. Previously, different token/data-roots gave 401, the current debug pair responds, but this is not a durable global contract|Installer creates and launches a platform service/supervisor with a single canonical binary, token and data root; start/stop/upgrade/restart idempotent; one `hzrd` is allowed at a time; CLI, hooks and MCP use its endpoint/auth; test plays reboot/restart and excludes dev binary path|
 | **RB-08** | **P1** |Codec does not cover global request/response path Claude and Codex|Caveman codec applies in managed `hzr agent run`, but not proven for all global client requests/responses|For each supported client, a real interception point is described and tested. Request/response pass HZR policy/codec or are explicitly marked `unintercepted`; HZR does not accrue saving without a delivered counterfactual. The target single path is HZR MCP gateway from §14.1|
-| **RB-09** | **P1** |Documentation and release status overestimate readiness|Previously, status called adoption, centralized ICM and installer implemented, although the live audit proved RB-01—RB-08|`PRD_STATUS_0.2.0.md`, README guarantees and release notes reflect the actual gate status. Any `ready/LGTM` is generated only after the saved report clean-HOME + live adoption + upgrade + process/store uniqueness|
+| **RB-09** | **P1** |Documentation and release status overestimate readiness|Previously, status called adoption, centralized ICM and installer implemented, although the live audit proved RB-01—RB-08|`PRD_STATUS_0.3.0.md`, README guarantees and release notes reflect the actual gate status. Any `ready/LGTM` is generated only after the saved report clean-HOME + live adoption + upgrade + process/store uniqueness|
 | **RB-10** | **P0** |`hzr doctor` produces false PASS for conflicting instructions|`claude_instructions=pass` and `codex_instructions=pass`, because diagnostics only checks for the presence of BEGIN marker. At the same time, Claude contains active legacy RTK/ICM mandates, Codex runs direct ICM, and referenced `HZR.md` may be missing|Doctor checks readable canonical contract asset, absence of known legacy imperative blocks, absence of direct client ICM registration, global binary/bundle provenance and uniqueness of owners. The presence of HZR marker next to the conflict is always `fail`, and not `pass`|
 | **RB-11** | **P0** |Global runtime does not use pinned self-contained engines|Live installation uses external Node 25.2.1 and ICM 0.10.57 instead of pinned ICM 0.10.61/private Node 22.17.1; system RTK/grepai runtime dependencies remain available, Caveman bridge is missing|After artifact install `doctor --json` proves the paths, versions and digests of all engines/runtimes inside the immutable active bundle; PATH poisoning fixture with foreign Node/RTK/grepai/ICM does not change the selected binaries; managed Caveman smoke passes private Node|
-| **RB-12** | **P0 release** |Re-installing the same version does not re-attest the existing version root|`install.sh` can reuse an existing `versions/v0.2.0-<platform>` without re-checking the internal manifest before switching `current`|Same-version install completely checks the manifest, mandatory layout, modes and digests of the existing root or fail closed. Tampered/missing/symlink-injected fixture never becomes `current`; clean root remains idempotent|
+| **RB-12** | **P0 release** |Re-installing the same version does not re-attest the existing version root|`install.sh` can reuse an existing `versions/v0.3.0-<platform>` without re-checking the internal manifest before switching `current`|Same-version install completely checks the manifest, mandatory layout, modes and digests of the existing root or fail closed. Tampered/missing/symlink-injected fixture never becomes `current`; clean root remains idempotent|
 
 Already confirmed properties that do not need to be repaired again: `hzr` is present in global PATH; Claude hooks are reduced to one HZR dispatcher plus `SessionStart` (`RTK=0`, direct ICM hooks `=0`); the current pair source CLI/debug daemon passes auth without the previous HTTP 401. These PASS do not cancel the conflict of text instructions, direct Codex MCP and the lack of production service.
 
@@ -611,21 +660,22 @@ The source tree has no open P0 blocking the initial push. Live adoption on Darwi
 
 ## 14. Delivery status and next stage
 
-The source tree 0.2.0 implements fixes RB-01—RB-12: transactional instruction/client migration, separate process/wrapper audit, idempotent ICM and RTK-history imports, self-contained bundle, production service, bundle attestation and same-version re-attestation. Clean-HOME artifact smoke completed on `darwin-arm64`. RB-08 is closed by a fair border: global response paths Claude/Codex are explicitly marked with `unintercepted`, and HZR does not assign codec savings to them. Platform-wide release status remains limited to the native artifact matrix and paired KPI benchmark, and the live process uniqueness requires restarting already open clients after migrating their configs.
+The source tree 0.3.0 implements fixes RB-01—RB-12: transactional instruction/client migration, separate process/wrapper audit, idempotent ICM and RTK-history imports, self-contained bundle, production service, bundle attestation and same-version re-attestation. Clean-HOME artifact smoke completed on `darwin-arm64`. RB-08 is closed by a fair border: global response paths Claude/Codex are explicitly marked with `unintercepted`, and HZR does not assign codec savings to them. Platform-wide release status remains limited to the native artifact matrix and paired KPI benchmark, and the live process uniqueness requires restarting already open clients after migrating their configs.
 
 The former background daemon/service lifecycle exception was found to be incompatible with the global-by-default requirement and is now RB-07. Automatic engine sync and destructive cleanup legacy data remain non-goals. Hook installation - explicit preview/confirmation operation; it doesn't run on build/test and doesn't silently restore RTK on uninstall. The full fork surface remains available through the compatibility passthrough.
 
-After functional release 0.2.0 the next measurable stage is:
+After functional release 0.3.0 the next measurable stage is:
 
 1. paired baseline-vs-HZR benchmark on the same model/repository revision/task/max-turn settings;
 2. provider-billed input/output/cache, turns, retries, latency and harness success in one report;
 3. regression corpus for fork filters, context recall and accepted task quality;
 4. only after the data - adaptive policy tuning, crash-safe usage outbox and extension of the basic production service supervisor;
-5. development of the implemented HZR-owned MCP gateway: versioned schema negotiation, additional typed tools and end-to-end accounting.
+5. completion of MCP cancellation/backpressure and end-to-end trace accounting after
+   stable schema negotiation and the typed context-planning surface.
 
 ### 14.1 Implemented MCP layer and further development
 
-The MCP layer is implemented in 0.2.0 through `hzr mcp serve`, a stateless stdio JSON-RPC gateway for Codex, Claude Desktop and other MCP clients. It exposes HZR-owned memory recall/store and search tools through the existing HZR Core, policy and daemon API. The gateway does not expose internal engine lifecycle operations, has no database of its own, and terminates when the parent client closes stdin.
+The MCP layer is implemented through `hzr mcp serve`, a stateless stdio JSON-RPC gateway for Codex, Claude Desktop and other MCP clients. It exposes HZR-owned context planning, search and memory recall/store through the existing HZR Core, policy and daemon API. The gateway does not expose internal engine lifecycle operations, has no database of its own, and terminates when the parent client closes stdin.
 
 Non-negotiable invariants:
 
@@ -639,7 +689,19 @@ Non-negotiable invariants:
 - lifecycle, singleton lock, version pinning, health and upgrade are controlled by HZR installer/supervisor, and not by individual client configuration;
 - external MCP server can only be connected as an explicitly registered adapter; it does not gain ownership over canonical HZR data.
 
-In 0.2.0 confirmed installer, direct ICM registrations Codex and Claude Desktop are transactionally migrated to HZR MCP, and production `hzrd` receives platform user service to stable `current/bin/hzrd`. `hzr mcp config` remains read-only preview/snippet surface. The next MCP increment should define an extended version negotiationed schema/capability, backpressure/cancellation, approval flow for new mutation tools and an end-to-end trace up to `hzr stats`. Acceptance includes Claude/Codex contract tests and proof of the absence of duplicate processes/stores.
+The current gateway negotiates the stable `2025-11-25` revision with compatible
+older clients, exposes strict JSON Schema 2020-12 contracts, returns typed
+`structuredContent`, and includes graph-first `hzr_context_plan`. The 2026-07-28
+revision remains a release candidate and is not advertised as production support.
+Confirmed installer behavior transactionally migrates direct ICM registrations in
+Codex and Claude Desktop to HZR MCP, and production `hzrd` receives a platform user
+service at stable `current/bin/hzrd`. `hzr mcp config` remains a read-only
+preview/snippet surface.
+
+The next MCP increment is bounded to cancellation/backpressure, an approval flow
+before any future mutation tool beyond additive memory store, and a common trace
+through `hzr stats`. Acceptance includes Claude/Codex contract tests and proof of
+the absence of duplicate processes/stores.
 
 ## 15. Decision log
 

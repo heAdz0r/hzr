@@ -8,10 +8,13 @@ mod api;
 
 pub use api::{
     CodecApiRequest, CommandTermination, ContextPlanApiRequest, ContextPlanApiResponse,
-    ContextWarning, ContextWarningCode, ExecApiRequest, ExecApprovalApiRequest,
+    ContextWarning, ContextWarningCode, DashboardEstimatedEfficiency, DashboardHelpCommand,
+    DashboardObservedUsage, DashboardProject, DashboardProjectArtifacts, DashboardProjectState,
+    DashboardResponse, DashboardService, DashboardState, ExecApiRequest, ExecApprovalApiRequest,
     ForkPlannerMetadata, ForkRunApiRequest, ForkRunApiResponse, MemoryImportance,
-    MemoryRecallApiRequest, MemoryStoreApiRequest, SearchApiRequest, SearchApiResponse, SearchHit,
-    SearchLine, SearchMode, SearchSnippet, SearchStrategy, UsageApiRequest, UsageApiResponse,
+    MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest, MemoryWriteScope,
+    SearchApiRequest, SearchApiResponse, SearchHit, SearchLine, SearchMode, SearchSnippet,
+    SearchStrategy, UsageApiRequest, UsageApiResponse,
 };
 
 pub const PROTOCOL_VERSION: u16 = 1;

@@ -10,6 +10,10 @@ For direct operations follow the root `HZR.md` contract. In particular, the
 current exact read/write compatibility surface is `hzr rtk -- ...`; standalone
 `rtk` and undocumented `hzr read`/`hzr write` aliases are not valid entrypoints.
 
+For Rust implementation, fixes, behavior changes, and refactoring, run `hzr tdd`
+before production changes. Preserve the focused RED and GREEN command evidence;
+post-hoc passing tests are regression coverage, not TDD.
+
 ## MCP tools
 
 The Claude desktop app reaches memory only through MCP. Register HZR rather than
@@ -17,11 +21,20 @@ The Claude desktop app reaches memory only through MCP. Register HZR rather than
 
 ```bash
 hzr mcp config --client claude-desktop   # prints the mcpServers block
+hzr mcp status                           # audits native registration and lifecycle
 ```
 
-Tools: `hzr_memory_recall`, `hzr_memory_store`, `hzr_search`. Recall before
-re-reading files you already analysed; store decisions and resolved errors, not
-ephemeral session state. `isError: true` means nothing was read or written.
+`hzr init` does not start MCP. Claude Desktop launches the registered
+`hzr mcp serve` child on connection and closes it through stdin EOF; the
+persistent HZR process is the single `hzrd` service.
+
+Tools: `hzr_context_plan`, `hzr_search`, `hzr_memory_recall`,
+`hzr_memory_store`. Plan first for unfamiliar or cross-cutting work, recall
+before re-reading files you already analysed, and store decisions and resolved
+errors rather than ephemeral session state. Inputs are strictly bounded and
+successful calls include typed `structuredContent`. `isError: true` means no
+success was confirmed and no fallback engine or store was used; recall before
+retrying an ambiguously completed store.
 
 Claude Code itself does not need this: its hooks and the `CLAUDE.md` contract
 already route through `hzr`. The MCP server exists for clients that have no hook

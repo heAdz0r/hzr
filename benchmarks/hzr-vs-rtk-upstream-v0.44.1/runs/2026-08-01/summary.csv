@@ -1,0 +1,15 @@
+case,raw_tokens_est_p50,upstream_tokens_est_p50,hzr_tokens_est_p50,upstream_reduction_vs_raw_pct,hzr_reduction_vs_raw_pct,hzr_reduction_vs_upstream_pct,raw_latency_p50_ms,upstream_latency_p50_ms,hzr_latency_p50_ms,exit_codes_equal
+read README.md,6046,6046,132,0.0,97.8,97.8,12.5,14.2,42.9,True
+read src/main.rs,30457,30457,29280,0.0,3.9,3.9,7.3,13.3,42.9,True
+read src/core/filter.rs,4471,4471,3298,0.0,26.2,26.2,4.8,9.2,31.7,True
+read Cargo.toml,426,426,426,0.0,0.0,0.0,4.0,8.2,29.9,True
+ls src,16,20,20,-25.0,-25.0,0.0,4.0,12.3,31.5,True
+"grep -rn ""fn run"" src",5175,4435,4435,14.3,14.3,0.0,25.9,35.0,50.8,True
+"find . -name ""*.rs"" -type f",847,184,184,78.3,78.3,0.0,9.4,10.6,29.4,True
+git status,17,12,6,29.4,64.7,50.0,11.1,24.0,41.5,True
+git log -30,2881,1276,592,55.7,79.5,53.6,8.0,13.2,30.9,True
+git diff HEAD~5,185931,10325,5540,94.4,97.0,46.3,25.7,53.2,73.0,True
+git show HEAD,76,76,76,0.0,0.0,0.0,7.8,30.1,48.5,True
+git branch -a,1557,96,96,93.8,93.8,0.0,7.8,12.5,30.2,True
+cargo check,1088,26,10,97.6,99.1,61.5,31228.7,31185.3,36743.2,True
+cargo test,48136,252,168,99.5,99.7,33.3,35959.9,35930.2,34359.8,True

@@ -108,6 +108,25 @@ impl PriceTable {
 }
 
 impl Ledger {
+    /// Read dashboard totals without creating or migrating the ledger.
+    ///
+    /// The visualizer endpoint is GET-only, so a fresh installation with no ledger file
+    /// returns zero totals instead of turning a read into an implicit database write.
+    pub fn summaries_read_only(
+        path: &Path,
+    ) -> Result<(LedgerSummary, EfficiencySummary), LedgerError> {
+        if !path.is_file() {
+            return Ok((LedgerSummary::default(), EfficiencySummary::default()));
+        }
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(LedgerError::Database)?;
+        connection
+            .busy_timeout(std::time::Duration::from_millis(250))
+            .map_err(LedgerError::Database)?;
+        let ledger = Self { connection };
+        Ok((ledger.summary()?, ledger.efficiency_summary()?))
+    }
+
     pub fn open(path: &Path) -> Result<Self, LedgerError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| LedgerError::Directory {
@@ -817,6 +836,21 @@ mod tests {
     }
 
     #[test]
+    fn test_read_only_dashboard_summary_does_not_create_a_fresh_ledger() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("absent.sqlite");
+        let (usage, efficiency) =
+            Ledger::summaries_read_only(&path).expect("absent ledger has zero dashboard totals");
+
+        assert_eq!(usage.tasks, 0);
+        assert_eq!(efficiency.operations, 0);
+        assert!(
+            !path.exists(),
+            "a GET-style summary must not create the ledger"
+        );
+    }
+
+    #[test]
     fn test_legacy_named_database_is_not_migrated_into_itself() {
         let directory = tempdir().expect("temp directory");
         let ledger_directory = directory.path().join("ledger");
@@ -921,7 +955,7 @@ mod tests {
             retries: 0,
             latency_ms: 10,
             outcome: "accepted".into(),
-            policy_version: "0.2.0".into(),
+            policy_version: "0.3.0".into(),
             cost_microusd: Some(50),
         };
 

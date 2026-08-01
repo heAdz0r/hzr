@@ -291,6 +291,19 @@ fn run_display(
         return Ok(());
     }
 
+    let body = format_grouped_results(files, max_results);
+    let shown = crate::guard::never_worse(&raw_output, &body);
+    print!("{}", shown);
+    timer.track(
+        &format!("find {} -name '{}'", path, pattern),
+        "rtk find",
+        &raw_output,
+        shown,
+    );
+    Ok(())
+}
+
+fn format_grouped_results(files: &[String], max_results: usize) -> String {
     let mut by_dir: std::collections::HashMap<String, Vec<String>> =
         std::collections::HashMap::new();
     for file in files {
@@ -312,7 +325,7 @@ fn run_display(
     let dirs_count = dirs.len();
     let total_files = files.len();
 
-    let mut body = format!("📁 {}F {}D:\n\n", total_files, dirs_count);
+    let mut body = format!("{}F {}D:\n\n", total_files, dirs_count);
 
     let mut displayed = 0;
     for dir in &dirs {
@@ -345,15 +358,7 @@ fn run_display(
         body.push_str(&format!("+{} more\n", total_files - displayed));
     }
 
-    let shown = crate::guard::never_worse(&raw_output, &body);
-    print!("{}", shown);
-    timer.track(
-        &format!("find {} -name '{}'", path, pattern),
-        "rtk find",
-        &raw_output,
-        shown,
-    );
-    Ok(())
+    body
 }
 
 pub fn run(
@@ -442,6 +447,14 @@ mod tests {
         // With max=2, should not error
         let result = run("*.rs", "src", 2, "f", 0);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn grouped_output_uses_token_efficient_header() {
+        let files = vec!["src/main.rs".to_string(), "tests/cli.rs".to_string()];
+        let output = format_grouped_results(&files, 50);
+        assert!(output.starts_with("2F 2D:\n\n"), "got: {output}");
+        assert!(!output.contains('📁'), "got: {output}");
     }
 
     #[test]

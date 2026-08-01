@@ -401,6 +401,9 @@ enum Commands {
         /// Restrict search to specific files (comma-separated paths)
         #[arg(long)]
         files: Option<String>, // ADDED: --files flag for two-stage memory pipeline
+        /// Project root that owns the grepai index; --path remains a search filter
+        #[arg(long, hide = true)]
+        project_root: Option<String>,
     },
 
     /// Initialize rtk instructions for assistant CLI usage
@@ -2518,21 +2521,25 @@ fn main() -> Result<()> {
             compact,
             builtin, // --builtin flag: skip grepai delegation
             files,   // ADDED: --files flag
+            project_root,
         } => {
             // Backward-compat: rtk rgai "query words" ./src -> path="./src"
             let (query, path) = normalize_rgai_args(query, path);
             rgai_cmd::run(
                 &query,
-                &path,
-                max,
-                context,
-                file_type.as_deref(),
-                max_file_kb,
-                json,
-                compact,
-                builtin,          // pass --builtin flag
-                files.as_deref(), // ADDED: pass --files list
-                cli.verbose,
+                rgai_cmd::RgaiOptions {
+                    path: &path,
+                    project_root: project_root.as_deref(),
+                    max_results: max,
+                    context_lines: context,
+                    file_type: file_type.as_deref(),
+                    max_file_kb,
+                    json_output: json,
+                    compact,
+                    builtin,
+                    files: files.as_deref(),
+                    verbose: cli.verbose,
+                },
             )?;
         }
 

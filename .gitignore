@@ -3,6 +3,8 @@
 /fork-core/rtk/.grepai/
 /.build/
 /dist/
+/visualizer/dist/
+/visualizer/node_modules/
 /.hzr/
 *.profraw
 *.tmp

@@ -14,6 +14,7 @@ HZR_NODE_ROOT="${HZR_BUNDLE_ROOT}/runtime/node"
 HZR_NODE_BINARY="${HZR_NODE_ROOT}/bin/node"
 HZR_NPM_BINARY="${HZR_NODE_ROOT}/bin/npm"
 HZR_PROVENANCE_ROOT="${HZR_BUNDLE_ROOT}/share/hzr"
+HZR_VISUALIZER_ROOT="${HZR_PROVENANCE_ROOT}/visualizer"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -66,7 +67,10 @@ if [[ ! -d "${HZR_CAVEMAN_ROOT}/node_modules" ]]; then
 fi
 
 for HZR_PROVENANCE_FILE in \
+  BUNDLE_MANIFEST.sha256 \
   HZR.md \
+  skills/hzr-tdd/SKILL.md \
+  skills/hzr-tdd/references/testing-patterns.md \
   integrations/claude-code/hzr-awareness.md \
   integrations/claude-code/hzr-awareness-codex.md \
   fork-core/CURRENT_ENGINE.toml \
@@ -78,6 +82,29 @@ for HZR_PROVENANCE_FILE in \
     exit 1
   fi
 done
+
+(
+  cd "${HZR_BUNDLE_ROOT}"
+  shasum -a 256 -c share/hzr/BUNDLE_MANIFEST.sha256 >/dev/null
+)
+
+for HZR_VISUALIZER_FILE in index.html assets/app.css assets/app.js hzr-hero.png; do
+  if [[ ! -f "${HZR_VISUALIZER_ROOT}/${HZR_VISUALIZER_FILE}" ]]; then
+    echo "visualizer asset is missing: ${HZR_VISUALIZER_FILE}" >&2
+    exit 1
+  fi
+done
+
+"${HZR_BINARY_ROOT}/hzr" tdd --json \
+  | "${HZR_NODE_BINARY}" -e '
+      const fs = require("node:fs");
+      const contract = JSON.parse(fs.readFileSync(0, "utf8"));
+      if (contract.name !== "hzr-tdd" ||
+          contract.workflow !== "red_green_refactor" ||
+          contract.strict !== true) {
+        process.exit(1);
+      }
+    '
 
 verify_sha256() {
   local HZR_EXPECTED_SHA256="$1"
@@ -94,13 +121,13 @@ verify_sha256() {
 }
 
 verify_sha256 \
-  "c88afca93a5b15fca075a39787be6e5b6a908f905401bd14be9718ae0eb86f10" \
+  "4a96bb91a79138ac9e095ae531464f5275c82427bd0bb3f980512e70f23e2525" \
   "${HZR_CAVEMAN_ROOT}/bridge.mjs"
 verify_sha256 \
-  "031656150e26f153999795abc196da367a192b95053b11526de333047a82fcdd" \
+  "cd9e62742fac436446c6f8917dcc6dcbbcba044f2464fc16d771f47f4689ca99" \
   "${HZR_CAVEMAN_ROOT}/package.json"
 verify_sha256 \
-  "f93a031167eb08e3bbbd07b531deb65eebb5e59b9e38df32726db90e4ba86aa8" \
+  "3d238666ca39dcaf318bd13c76cefb4c95e4aefc72761d5df8802e13f571e68b" \
   "${HZR_CAVEMAN_ROOT}/package-lock.json"
 verify_sha256 \
   "d66e2e2cebac811bbc23896645b3a3e25b635cb7358b1a0e36599008e10cd5ec" \
@@ -154,7 +181,7 @@ verify_sha256 \
 PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ls \
   --omit=dev --all --prefix "${HZR_CAVEMAN_ROOT}" >/dev/null
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.2.0" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.3.0" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
@@ -300,7 +327,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-  if (report.protocol_version !== 1 || report.hzr_version !== "0.2.0") {
+  if (report.protocol_version !== 1 || report.hzr_version !== "0.3.0") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -327,6 +354,29 @@ fi
     process.exit(1);
   });
 ' "http://127.0.0.1:${HZR_SMOKE_PORT}/v1/health"
+
+"${HZR_NODE_BINARY}" -e '
+  const endpoint = process.argv[1];
+  Promise.all([
+    fetch(`${endpoint}/`).then(async (response) => {
+      const body = await response.text();
+      if (response.status !== 200 || !body.includes("HZR · Local control plane")) {
+        throw new Error(`visualizer index failed: ${response.status}`);
+      }
+    }),
+    fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
+      const report = await response.json();
+      const ids = new Set(report.services.map((service) => service.id));
+      if (response.status !== 200 || report.hzr_version !== "0.3.0" ||
+          !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
+        throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
+      }
+    }),
+  ]).catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+' "http://127.0.0.1:${HZR_SMOKE_PORT}"
 
 HZR_SECOND_DAEMON_LOG="${HZR_SMOKE_TEMP}/hzrd-second.log"
 "${HZR_BINARY_ROOT}/hzr" --config "${HZR_SMOKE_CONFIG}" daemon serve \

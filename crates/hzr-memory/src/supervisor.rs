@@ -53,6 +53,7 @@ pub struct IcmSupervisor {
     config: IcmConfig,
     layout: IcmLayout,
     client: IcmClient,
+    lifecycle: Mutex<()>,
     process: Mutex<ManagedProcess>,
 }
 
@@ -77,6 +78,7 @@ impl IcmSupervisor {
             config,
             layout,
             client,
+            lifecycle: Mutex::new(()),
             process: Mutex::new(ManagedProcess::Stopped),
         })
     }
@@ -90,6 +92,11 @@ impl IcmSupervisor {
     }
 
     pub async fn start(&self) -> Result<StartOutcome> {
+        let _lifecycle = self.lifecycle.lock().await;
+        self.start_locked().await
+    }
+
+    async fn start_locked(&self) -> Result<StartOutcome> {
         let mut process = self.process.lock().await;
         match &mut *process {
             ManagedProcess::Owned { child, pid, .. } => {
@@ -162,6 +169,11 @@ impl IcmSupervisor {
     }
 
     pub async fn stop(&self) -> Result<StopOutcome> {
+        let _lifecycle = self.lifecycle.lock().await;
+        self.stop_locked().await
+    }
+
+    async fn stop_locked(&self) -> Result<StopOutcome> {
         let managed = {
             let mut process = self.process.lock().await;
             std::mem::replace(&mut *process, ManagedProcess::Stopped)
@@ -189,11 +201,12 @@ impl IcmSupervisor {
     }
 
     pub async fn restart(&self) -> Result<StartOutcome> {
+        let _lifecycle = self.lifecycle.lock().await;
         if matches!(&*self.process.lock().await, ManagedProcess::Attached { .. }) {
             return Err(MemoryError::NotProcessOwner);
         }
-        self.stop().await?;
-        self.start().await
+        self.stop_locked().await?;
+        self.start_locked().await
     }
 
     pub async fn status(&self) -> ServiceStatus {

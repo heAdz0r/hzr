@@ -1,8 +1,8 @@
 # PRD addendum §16 - HZR as default entry point (replacing RTK hooks)
 
-**Status:** release candidate 0.2.0; hook/control-plane, durable PATH placement, Claude/Codex instructions, MCP migration and production user service are implemented; live deployment is recorded in a separate audit record
+**Status:** release candidate 0.3.0; hook/control-plane, durable PATH placement, Claude/Codex instructions, MCP migration and production user service are implemented; live deployment is recorded in a separate audit record
 **Parent:** [PRD.md](PRD.md) · closes adoption, client MCP ownership and background service lifecycle
-**Target version:** 0.2.0 (extends CLI surface §6.8 and mutation surface §14 - outside the scope of 0.1.0)
+**Target version:** 0.3.0 (extends CLI surface §6.8 and mutation surface §14 - outside the scope of 0.1.0)
 **Solutions accepted:** hybrid daemon→fork fallback · `HZR` = heAdz0r's Zero-Redundancy engine
 
 ---
@@ -56,6 +56,24 @@ Rules:
 |`.grepai` - real directory|**Does not touch.** `migration_required`, awaits explicit `hzr migrate apply` (§11)|
 |`.grepai` - someone else's symlink|`error`, without mutation|
 |Already initialized| `already_initialized`, exit 0 |
+|**Not a git repository**|`initialized_without_git` — identity derives from the canonical directory path|
+|**Became a repository after `git init`**|`relocated_to_git_identity` — HZR moves its own store to the git-derived identity and re-points the symlink|
+
+### 16.4.1 Projects that start before `git init`
+
+"HZR in every new project" must include the interval before a directory becomes a
+repository — that is when most projects are created. Workspace identity therefore has two
+bases: the git common dir when one exists, and the canonical directory path otherwise.
+
+The cost is explicit: a path-derived identity changes when the directory is renamed, moved,
+or becomes a repository. So `git init` is treated as a migration rather than an error.
+`adopt_relocated_index()` moves the existing store to the new identity and re-points the
+symlink, preserving whatever index was already built.
+
+That relocation is deliberately narrow. It acts only when the current symlink target lives
+inside *this* managed `workspaces/` subtree — i.e. HZR created it. A symlink into another
+data root or an arbitrary path stays foreign and is still refused, so the convenience of
+the git transition never becomes a way to adopt someone else's store.
 
 The automation trigger is `SessionStart` hook, which calls `hzr init --if-needed --quiet`. This is cheaper and safer than auto-initialization inside the rewrite path: rewrite remains a hot path without file mutations.
 
@@ -192,6 +210,6 @@ no lossy rewrite and no second pass.
 5. ✅ Contract tests §16.7 and `doctor` - ownership/conflicts check.
 6. ✅ Direct ICM registrations in Codex/Claude Desktop are transactionally replaced with `hzr mcp serve` from backup/CAS.
 7. ✅ Production user service is installed on stable `current/bin/hzrd`; lifecycle is available through `hzr daemon service`.
-8. ✅ Parent PRD and release documentation are synchronized with 0.2.0.
+8. ✅ Parent PRD and release documentation are synchronized with 0.3.0.
 
 Standalone adoption still starts with `hzr install --dry-run` and requires an explicit `--force`. The repository-level release installer performs this confirmed stage by default; `HZR_INSTALL_HOOKS=0` installs the bundle without changing hooks/instructions.

@@ -1,0 +1,204 @@
+235 matches in 76 files:
+
+src/analytics/cc_economics.rs:182:pub fn run(
+src/analytics/gain.rs:15:pub fn run(
+src/analytics/session_cmd.rs:59:pub fn run(_verbose: u8) -> Result<()> {
+src/cmds/README.md:103:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/README.md:129:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/README.md:195:pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/README.md:203:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/README.md:291:- Write `pub fn run(...) -> Result<i32>` using `runner::run_filtered()` — build ...
+src/cmds/cloud/aws_cmd.rs:48:pub fn run(subcommand: &str, args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/cloud/aws_cmd.rs:220:fn run_generic(subcommand: &str, args: &[String], verbose: u8, full_sub: &str) -...
+src/cmds/cloud/aws_cmd.rs:283:fn run_aws_json(
+src/cmds/cloud/aws_cmd.rs:331:fn run_aws_filtered(
+src/cmds/cloud/aws_cmd.rs:377:fn run_s3_ls(extra_args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/cloud/aws_cmd.rs:422:fn run_s3_transfer(operation: &str, extra_args: &[String], verbose: u8) -> Resul...
+src/cmds/cloud/container.rs:25:pub fn run(cmd: ContainerCmd, args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/cloud/container.rs:37:fn run_k8s_json<F>(cmd: Command, tool: &str, label: &str, filter_fn: F) -> Resul...
+src/cmds/cloud/container.rs:670:pub fn run_docker_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/cloud/container.rs:675:pub fn run_compose_ps(all: bool, verbose: u8) -> Result<i32> {
+src/cmds/cloud/container.rs:718:pub fn run_compose_logs(service: Option<&str>, tail: u32, verbose: u8) -> Result...
+src/cmds/cloud/container.rs:741:pub fn run_compose_build(service: Option<&str>, verbose: u8) -> Result<i32> {
+src/cmds/cloud/container.rs:763:pub fn run_compose_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/cloud/container.rs:769:pub fn run_kubectl_get(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/cloud/container.rs:773:fn run_k8s_get(tool: &str, args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/cloud/container.rs:810:pub fn run_kubectl_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/cloud/container.rs:814:pub fn run_oc_get(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/cloud/container.rs:818:pub fn run_oc_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/cloud/curl_cmd.rs:23:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/cloud/psql_cmd.rs:27:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/cloud/wget_cmd.rs:8:pub fn run(url: &str, args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/cloud/wget_cmd.rs:55:pub fn run_stdout(url: &str, args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/dotnet/dotnet_cmd.rs:24:pub fn run_build(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/dotnet/dotnet_cmd.rs:28:pub fn run_test(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/dotnet/dotnet_cmd.rs:32:pub fn run_restore(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/dotnet/dotnet_cmd.rs:36:pub fn run_format(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/dotnet/dotnet_cmd.rs:77:pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/dotnet/dotnet_cmd.rs:114:fn run_dotnet_with_binlog(subcommand: &str, args: &[String], verbose: u8) -> Res...
+src/cmds/git/diff_cmd.rs:11:pub fn run(file1: &Path, file2: &Path, verbose: u8) -> Result<i32> {
+src/cmds/git/diff_cmd.rs:57:pub fn run_stdin(_verbose: u8) -> Result<()> {
+src/cmds/git/gh_cmd.rs:174:fn run_gh_json<F>(cmd: Command, label: &str, filter_fn: F) -> Result<i32>
+src/cmds/git/gh_cmd.rs:192:pub fn run(subcommand: &str, args: &[String], verbose: u8, ultra_compact: bool) ...
+src/cmds/git/gh_cmd.rs:211:fn run_pr(args: &[String], verbose: u8, ultra_compact: bool) -> Result<i32> {
+src/cmds/git/gh_cmd.rs:583:fn run_issue(args: &[String], verbose: u8, ultra_compact: bool) -> Result<i32> {
+src/cmds/git/gh_cmd.rs:706:fn run_workflow(args: &[String], verbose: u8, ultra_compact: bool) -> Result<i32...
+src/cmds/git/gh_cmd.rs:841:fn run_repo(args: &[String], _verbose: u8, _ultra_compact: bool) -> Result<i32> ...
+src/cmds/git/gh_cmd.rs:981:fn run_api(args: &[String], _verbose: u8) -> Result<i32> {
+src/cmds/git/gh_cmd.rs:989:fn run_passthrough_with_extra(cmd: &str, base_args: &[&str], extra_args: &[Strin...
+src/cmds/git/gh_cmd.rs:996:fn run_passthrough(cmd: &str, subcommand: &str, args: &[String]) -> Result<i32> ...
+src/cmds/git/git.rs:86:pub fn run(
+src/cmds/git/git.rs:112:fn run_diff(
+src/cmds/git/git.rs:218:fn run_show(
+src/cmds/git/git.rs:428:fn run_log(
+src/cmds/git/git.rs:824:fn run_status(args: &[String], verbose: u8, global_args: &[String]) -> Result<i3...
+src/cmds/git/git.rs:931:fn run_add(args: &[String], verbose: u8, global_args: &[String]) -> Result<i32> ...
+src/cmds/git/git.rs:1026:fn run_commit(args: &[String], verbose: u8, global_args: &[String]) -> Result<i3...
+src/cmds/git/git.rs:1086:fn run_checkout(args: &[String], verbose: u8, global_args: &[String]) -> Result<...
+src/cmds/git/git.rs:1319:fn run_push(args: &[String], verbose: u8, global_args: &[String]) -> Result<i32>...
+src/cmds/git/git.rs:1351:fn run_pull(args: &[String], verbose: u8, global_args: &[String]) -> Result<i32>...
+src/cmds/git/git.rs:1436:fn run_branch(args: &[String], verbose: u8, global_args: &[String]) -> Result<i3...
+src/cmds/git/git.rs:1648:fn run_fetch(args: &[String], verbose: u8, global_args: &[String]) -> Result<i32...
+src/cmds/git/git.rs:1711:fn run_stash(
+src/cmds/git/git.rs:1948:fn run_worktree(args: &[String], verbose: u8, global_args: &[String]) -> Result<...
+src/cmds/git/git.rs:2049:pub fn run_passthrough(args: &[OsString], global_args: &[String], verbose: u8) -...
+src/cmds/git/git.rs:3207:fn run_push_filter(input: &str, exit_code: i32) -> String {
+src/cmds/git/glab_cmd.rs:243:fn run_glab_json<F>(cmd: Command, label: &str, filter_fn: F) -> Result<i32>
+src/cmds/git/glab_cmd.rs:262:pub fn run(subcommand: &str, args: &[String], verbose: u8, ultra_compact: bool) ...
+src/cmds/git/glab_cmd.rs:280:fn run_mr(args: &[String], verbose: u8, ultra_compact: bool) -> Result<i32> {
+src/cmds/git/glab_cmd.rs:522:fn run_issue(args: &[String], verbose: u8, ultra_compact: bool) -> Result<i32> {
+src/cmds/git/glab_cmd.rs:654:fn run_ci(args: &[String], verbose: u8, ultra_compact: bool) -> Result<i32> {
+src/cmds/git/glab_cmd.rs:841:fn run_release(args: &[String], _verbose: u8, _ultra_compact: bool) -> Result<i3...
+src/cmds/git/glab_cmd.rs:986:fn run_api(args: &[String], _verbose: u8) -> Result<i32> {
+src/cmds/git/glab_cmd.rs:995:fn run_passthrough(cmd: &str, subcommand: &str, args: &[String]) -> Result<i32> ...
+src/cmds/git/glab_cmd.rs:1001:fn run_passthrough_with_extra(cmd: &str, base_args: &[&str], extra_args: &[Strin...
+src/cmds/git/gt_cmd.rs:25:fn run_gt_filtered(
+src/cmds/git/gt_cmd.rs:85:pub fn run_log(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/git/gt_cmd.rs:105:pub fn run_submit(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/git/gt_cmd.rs:109:pub fn run_sync(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/git/gt_cmd.rs:113:pub fn run_restack(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/git/gt_cmd.rs:117:pub fn run_create(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/git/gt_cmd.rs:121:pub fn run_branch(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/git/gt_cmd.rs:125:pub fn run_other(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/go/go_cmd.rs:47:pub fn run_test(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/go/go_cmd.rs:84:pub fn run_build(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/go/go_cmd.rs:105:pub fn run_vet(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/go/go_cmd.rs:126:pub fn run_other(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/go/go_cmd.rs:236:fn run_go_tool_golangci_lint(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/go/golangci_cmd.rs:120:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/go/golangci_cmd.rs:127:fn run_filtered(original_args: &[String], invocation: &RunInvocation, verbose: u...
+src/cmds/go/golangci_cmd.rs:163:fn run_passthrough(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/lint_cmd.rs:90:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/next_cmd.rs:10:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/npm_cmd.rs:76:pub fn run(args: &[String], verbose: u8, skip_env: bool) -> Result<i32> {
+src/cmds/js/npm_cmd.rs:111:fn run_filtered(name: &str, args: &[String], verbose: u8, skip_env: bool) -> Res...
+src/cmds/js/playwright_cmd.rs:238:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/pnpm_cmd.rs:357:pub fn run(cmd: PnpmCommand, args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/pnpm_cmd.rs:365:fn run_list(depth: usize, args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/pnpm_cmd.rs:422:fn run_outdated(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/pnpm_cmd.rs:473:fn run_install(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/pnpm_cmd.rs:544:pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/js/prettier_cmd.rs:8:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/prisma_cmd.rs:24:pub fn run(cmd: PrismaCommand, args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/prisma_cmd.rs:43:fn run_generate(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/prisma_cmd.rs:81:fn run_migrate(subcommand: MigrateSubcommand, args: &[String], verbose: u8) -> R...
+src/cmds/js/prisma_cmd.rs:141:fn run_db_push(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/tsc_cmd.rs:15:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/js/vitest_cmd.rs:202:pub fn run_test(command: &Commands, args: &[String], verbose: u8) -> Result<i32>...
+src/cmds/jvm/gradlew_cmd.rs:120:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/jvm/mvn_cmd.rs:912:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/php/ecs_cmd.rs:7:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/php/paratest_cmd.rs:8:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/php/pest_cmd.rs:8:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/php/php_cmd.rs:9:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/php/phpstan_cmd.rs:50:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/php/phpunit_cmd.rs:22:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/php/pint_cmd.rs:36:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/python/mypy_cmd.rs:10:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/python/pip_cmd.rs:19:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/python/pip_cmd.rs:60:fn run_list(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, Str...
+src/cmds/python/pip_cmd.rs:88:fn run_outdated(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String,...
+src/cmds/python/pip_cmd.rs:116:fn run_passthrough(base_cmd: &str, args: &[String], verbose: u8) -> Result<(Stri...
+src/cmds/python/pytest_cmd.rs:20:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/python/ruff_cmd.rs:34:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/python/uv_cmd.rs:50:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/ruby/rake_cmd.rs:53:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/ruby/rspec_cmd.rs:71:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/ruby/rubocop_cmd.rs:53:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/rust/cargo_cmd.rs:25:pub fn run(cmd: CargoCommand, args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/rust/cargo_cmd.rs:258:fn run_cargo_filtered<F>(
+src/cmds/rust/cargo_cmd.rs:290:fn run_cargo_filtered_with_exit<F>(
+src/cmds/rust/cargo_cmd.rs:320:fn run_cargo_streamed(
+src/cmds/rust/cargo_cmd.rs:362:fn run_build(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/rust/cargo_cmd.rs:376:fn run_test(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/rust/cargo_cmd.rs:389:fn run_clippy(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/rust/cargo_cmd.rs:396:fn run_check(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/rust/cargo_cmd.rs:410:fn run_install(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/rust/cargo_cmd.rs:414:fn run_nextest(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/rust/cargo_cmd.rs:1434:pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/rust/cargo_cmd.rs:1814:16| pub fn run(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, g: i32, h: i32) {...
+src/cmds/rust/runner.rs:118:pub fn run_err(command: &str, verbose: u8) -> Result<i32> {
+src/cmds/rust/runner.rs:133:pub fn run_test(command: &str, verbose: u8) -> Result<i32> {
+src/cmds/scala/sbt_cmd.rs:77:fn run_task(
+src/cmds/scala/sbt_cmd.rs:114:pub fn run_test(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/scala/sbt_cmd.rs:118:pub fn run_compile(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/scala/sbt_cmd.rs:122:pub fn run_run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/scala/sbt_cmd.rs:126:pub fn run_other(args: &[OsString], verbose: u8) -> Result<i32> {
+src/cmds/system/deps.rs:16:pub fn run(path: &Path, verbose: u8) -> Result<()> {
+src/cmds/system/env_cmd.rs:11:pub fn run(filter: Option<&str>, verbose: u8) -> Result<()> {
+src/cmds/system/find_cmd.rs:181:pub fn run_from_args(args: &[String], verbose: u8) -> Result<()> {
+src/cmds/system/find_cmd.rs:194:pub fn run(
+src/cmds/system/find_cmd.rs:547:fn run_from_args_native_find_syntax() {
+src/cmds/system/find_cmd.rs:554:fn run_from_args_rtk_syntax() {
+src/cmds/system/find_cmd.rs:561:fn run_from_args_iname_case_insensitive() {
+src/cmds/system/format_cmd.rs:58:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/system/json_cmd.rs:40:pub fn run(file: &Path, max_depth: usize, schema_only: bool, verbose: u8) -> Res...
+src/cmds/system/json_cmd.rs:68:pub fn run_stdin(max_depth: usize, schema_only: bool, verbose: u8) -> Result<()>...
+src/cmds/system/local_llm.rs:11:pub fn run(file: &Path, _model: &str, _force_download: bool, verbose: u8) -> Res...
+src/cmds/system/log_cmd.rs:26:pub fn run_file(file: &Path, verbose: u8) -> Result<()> {
+src/cmds/system/log_cmd.rs:47:pub fn run_stdin(_verbose: u8) -> Result<()> {
+src/cmds/system/log_cmd.rs:67:pub fn run_stdin_str(content: &str) -> String {
+src/cmds/system/ls.rs:22:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/system/pipe_cmd.rs:246:pub fn run(filter_name: Option<&str>, passthrough: bool) -> Result<()> {
+src/cmds/system/read.rs:10:pub fn run(
+src/cmds/system/read.rs:88:pub fn run_stdin(
+src/cmds/system/search.rs:407:fn run_streaming_search(
+src/cmds/system/search.rs:495:pub fn run(
+src/cmds/system/search.rs:1114:let (patterns, paths, flags) = extract_pattern_path(&["-e", "fn run", "src"]);
+src/cmds/system/search.rs:1115:assert_eq!(patterns, vec!["fn run"]);
+src/cmds/system/search.rs:1251:...(patterns, paths, flags) = extract_pattern_path(&["--regexp", "fn run", "src"]);
+src/cmds/system/search.rs:1252:assert_eq!(patterns, vec!["fn run"]);
+src/cmds/system/summary.rs:16:pub fn run(command: &str, verbose: u8) -> Result<i32> {
+src/cmds/system/tree.rs:14:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/cmds/system/wc_cmd.rs:13:pub fn run(args: &[String], verbose: u8) -> Result<i32> {
+src/core/runner.rs:91:fn run_captured_filter<F>(
+src/core/runner.rs:159:pub fn run(
+src/core/runner.rs:218:pub fn run_filtered<F>(
+src/core/runner.rs:237:pub fn run_filtered_with_exit<F>(
+src/core/runner.rs:256:pub fn run_passthrough(tool: &str, args: &[std::ffi::OsString], verbose: u8) -> ...
+src/core/runner.rs:272:pub fn run_streamed(
+src/core/stream.rs:247:pub fn run_streaming(
+src/core/stream.rs:855:pub fn run_block_filter(filter: &mut dyn StreamFilter, input: &str, exit_code: i...
+src/core/stream.rs:1064:fn run_line_filter(filter: &mut dyn StreamFilter, input: &str, exit_code: i32) -...
+src/core/telemetry_cmd.rs:15:pub fn run(command: &TelemetrySubcommand) -> Result<()> {
+src/core/telemetry_cmd.rs:35:fn run_status() -> Result<()> {
+src/core/telemetry_cmd.rs:77:fn run_enable() -> Result<()> {
+src/core/telemetry_cmd.rs:117:fn run_disable() -> Result<()> {
+src/core/telemetry_cmd.rs:123:fn run_forget() -> Result<()> {
+src/core/toml_filter.rs:657:pub fn run_filter_tests(filter_name_opt: Option<&str>) -> VerifyResults {
+src/discover/lexer.rs:1035:let tokens = tokenize("find . -name '*.rs' | xargs grep 'fn run'");
+src/discover/mod.rs:43:pub fn run(
+src/discover/registry.rs:1950:rewrite_command_no_prefixes("find . -name '*.rs' | xargs grep 'fn run'", &[]),
+src/hooks/hook_audit_cmd.rs:71:pub fn run(since_days: u64, verbose: u8) -> Result<()> {
+src/hooks/hook_cmd.rs:47:pub fn run_copilot() -> Result<()> {
+src/hooks/hook_cmd.rs:276:pub fn run_gemini() -> Result<()> {
+src/hooks/hook_cmd.rs:446:pub fn run_claude() -> Result<()> {
+src/hooks/hook_cmd.rs:481:fn run_claude_inner(input: &str) -> Option<String> {
+src/hooks/hook_cmd.rs:504:pub fn run_cursor() -> Result<()> {
+src/hooks/hook_cmd.rs:572:fn run_cursor_inner(input: &str) -> String {
+src/hooks/hook_cmd.rs:577:fn run_cursor_inner_with_rules(
+src/hooks/hook_cmd.rs:670:pub fn run_droid() -> Result<()> {
+src/hooks/hook_cmd.rs:693:fn run_droid_inner(input: &str) -> Option<String> {
+src/hooks/hook_cmd.rs:699:fn run_droid_inner_with_rules(
+  +1 more in src/hooks/hook_cmd.rs
++7 more files

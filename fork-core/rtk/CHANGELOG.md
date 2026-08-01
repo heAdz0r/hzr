@@ -5,6 +5,19 @@ All notable changes to rtk (Rust Token Killer) will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- `cargo test` keeps bounded failing-test names, panic locations and assertion
+  text in default compact output instead of returning only aggregate counts.
+- Captured `ls` output suppresses the interactive summary, matching upstream
+  token density while retaining it for terminals.
+- `find` uses the token-efficient ASCII count header.
+
+### Fixed
+- Non-JSON `cargo check` output is labelled `cargo check` and uses the child
+  exit code instead of the generic build label.
+
 ## [0.44.1-fork.1] - 2026-07-31
 
 Selective P0/P1 sync on the current stable upstream v0.44.1 base, plus the

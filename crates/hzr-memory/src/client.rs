@@ -146,26 +146,29 @@ impl IcmClient {
         if self.config.transport == IcmTransport::StdioMcp {
             return self.recall_cli(request).await;
         }
-        if let Err(error) = self.circuit.before_request().await {
-            return if self.config.cli_fallback {
-                self.recall_cli(request).await
-            } else {
-                Err(error)
-            };
-        }
+        let permit = match self.circuit.before_request().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                return if self.config.cli_fallback {
+                    self.recall_cli(request).await
+                } else {
+                    Err(error)
+                };
+            }
+        };
 
         match self
             .post_json::<RecallPayload, _>("/recall?format=json", request)
             .await
         {
             Ok(payload) => {
-                self.circuit.record_success().await;
+                self.circuit.record_success(permit).await;
                 Ok(payload.into_records())
             }
             Err(error) => {
                 let fallback = error.safe_recall_fallback();
                 if error.affects_availability() {
-                    self.circuit.record_failure().await;
+                    self.circuit.record_failure(permit).await;
                 }
                 if fallback && self.config.cli_fallback {
                     self.recall_cli(request).await
@@ -181,20 +184,23 @@ impl IcmClient {
         if self.config.transport == IcmTransport::StdioMcp {
             return self.store_mcp(request).await;
         }
-        if let Err(error) = self.circuit.before_request().await {
-            return if self.config.cli_fallback {
-                self.store_cli(request).await
-            } else {
-                Err(error)
-            };
-        }
+        let permit = match self.circuit.before_request().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                return if self.config.cli_fallback {
+                    self.store_cli(request).await
+                } else {
+                    Err(error)
+                };
+            }
+        };
 
         match self
             .post_json::<Vec<MemoryRecord>, _>("/store?format=json", request)
             .await
         {
             Ok(mut records) => {
-                self.circuit.record_success().await;
+                self.circuit.record_success(permit).await;
                 if records.len() != 1 {
                     return Err(MemoryError::UnexpectedResponse {
                         operation: "store",
@@ -209,7 +215,7 @@ impl IcmClient {
             Err(error) => {
                 let fallback = error.safe_store_fallback();
                 if error.affects_availability() {
-                    self.circuit.record_failure().await;
+                    self.circuit.record_failure(permit).await;
                 }
                 if fallback && self.config.cli_fallback {
                     self.store_cli(request).await
@@ -229,16 +235,19 @@ impl IcmClient {
     }
 
     async fn store_mcp(&self, request: &StoreRequest) -> Result<StoreReceipt> {
-        if let Err(error) = self.circuit.before_request().await {
-            return if self.config.cli_fallback {
-                self.store_cli(request).await
-            } else {
-                Err(error)
-            };
-        }
+        let permit = match self.circuit.before_request().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                return if self.config.cli_fallback {
+                    self.store_cli(request).await
+                } else {
+                    Err(error)
+                };
+            }
+        };
         match mcp::store(&self.mcp, request, self.config.request_timeout).await {
             Ok(()) => {
-                self.circuit.record_success().await;
+                self.circuit.record_success(permit).await;
                 Ok(StoreReceipt {
                     transport: MemoryTransport::StdioMcp,
                     memory: None,
@@ -247,7 +256,7 @@ impl IcmClient {
             Err(error) => {
                 let unavailable = matches!(&error, MemoryError::McpUnavailable);
                 if mcp_availability_failure(&error) {
-                    self.circuit.record_failure().await;
+                    self.circuit.record_failure(permit).await;
                 }
                 if unavailable && self.config.cli_fallback {
                     self.store_cli(request).await

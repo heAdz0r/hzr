@@ -53,6 +53,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: 1.24.2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.19
       - name: Build self-contained bundle
         run: scripts/build-bundle.sh "$RUNNER_TEMP/hzr-dist"
       - name: Package native release archive

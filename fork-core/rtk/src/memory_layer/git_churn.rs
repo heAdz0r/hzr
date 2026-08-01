@@ -204,18 +204,36 @@ mod tests {
     }
 
     #[test]
-    fn test_load_churn_real_repo() {
-        // Integration test: actual git repo (the rtk repo itself).
-        // Only tests that load_churn doesn't error and returns a non-empty map.
-        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let cache = load_churn(repo).expect("load_churn should succeed on a real repo");
-        assert!(
-            !cache.freq_map.is_empty(),
-            "rtk repo should have non-empty churn map"
-        );
-        assert_ne!(cache.head_sha, "unknown", "should have a real HEAD sha");
-        // src/main.rs changes a lot in this repo
-        let main_score = cache.score("src/main.rs");
-        assert!(main_score > 0.0, "src/main.rs should have non-zero churn");
+    fn test_load_churn_uses_hermetic_repository() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let repo = directory.path();
+        let git = |arguments: &[&str]| {
+            let status = Command::new("git")
+                .args(arguments)
+                .current_dir(repo)
+                .status()
+                .expect("git command");
+            assert!(status.success(), "git {arguments:?} failed with {status}");
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.name", "HZR Test"]);
+        git(&["config", "user.email", "hzr-test@example.invalid"]);
+        std::fs::create_dir(repo.join("src")).expect("source directory");
+        std::fs::write(repo.join("src/main.rs"), "fn main() {}\n").expect("first revision");
+        git(&["add", "src/main.rs"]);
+        git(&["commit", "--quiet", "-m", "first"]);
+        std::fs::write(
+            repo.join("src/main.rs"),
+            "fn main() { println!(\"ok\"); }\n",
+        )
+        .expect("second revision");
+        git(&["add", "src/main.rs"]);
+        git(&["commit", "--quiet", "-m", "second"]);
+
+        let cache = load_churn(repo).expect("load hermetic churn");
+
+        assert_ne!(cache.head_sha, "unknown");
+        assert_eq!(cache.freq_map.get("src/main.rs"), Some(&2));
+        assert_eq!(cache.score("src/main.rs"), 1.0);
     }
 }

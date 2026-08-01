@@ -39,6 +39,9 @@ async fn test_search_and_context_use_managed_fork_core_commands() {
     let adapter = PinnedRtkAdapter::detect(ForkCoreConfig {
         binary: rtk,
         runtime_paths: Some(ForkRuntimePaths::from_data_root(&config.data_dir)),
+        // Full-workspace tests can saturate CI executors; this fixture asserts the
+        // command contract, not a five-second scheduling deadline.
+        probe_timeout_ms: 20_000,
         ..ForkCoreConfig::default()
     })
     .await;
@@ -71,7 +74,7 @@ async fn test_search_and_context_use_managed_fork_core_commands() {
         .plan(PlanRequest {
             workspace,
             intent: "find managed fork hit".into(),
-            path: None,
+            path: Some(PathBuf::from("src")),
             topic: Some("hzr-test".into()),
             search_limit: 5,
             memory_limit: 5,
@@ -141,6 +144,9 @@ case "$1" in
   memory)
     if [ "$2" != "plan" ]; then
       exit 66
+    fi
+    if [ "$4" != "src" ]; then
+      exit 68
     fi
     printf '%s\n' '{"selected":[{"rel_path":"src/lib.rs","features":{},"score":0.9,"sources":["tier_a","call_graph"],"estimated_tokens":200}],"dropped":[],"budget_report":{"token_budget":12000,"estimated_used":200,"candidates_total":1,"candidates_selected":1,"efficiency_score":0.0167},"decision_trace":[],"pipeline_version":"graph_first_v1","semantic_backend_used":"rg-files","graph_candidate_count":1,"semantic_hit_count":1}'
     ;;

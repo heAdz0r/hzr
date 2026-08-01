@@ -3,6 +3,7 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use hzr_agent::{
@@ -15,8 +16,14 @@ const BUNDLED_BRIDGE: &[u8] = include_bytes!("../../../integrations/caveman-code
 const BUNDLED_PACKAGE_LOCK: &[u8] =
     include_bytes!("../../../integrations/caveman-code/package-lock.json");
 
+fn process_fixture_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 #[tokio::test]
 async fn test_managed_agent_runs_pinned_local_bridge_and_captures_jsonl() {
+    let _fixture = process_fixture_lock().lock().await;
     let temp = TempDir::new().expect("temporary directory");
     let (integration, workspace) = prepare_integration(&temp);
     let fake_node = write_fake_node(
@@ -44,6 +51,7 @@ printf '{"seq":1,"request_id":"%s","kind":"result","data":{"text":"ok"}}\n' "$re
 
 #[tokio::test]
 async fn test_managed_agent_timeout_covers_stdin_and_terminates_descendants() {
+    let _fixture = process_fixture_lock().lock().await;
     let temp = TempDir::new().expect("temporary directory");
     let (integration, workspace) = prepare_integration(&temp);
     let fake_node = write_fake_node(
@@ -82,6 +90,7 @@ sleep 30
 
 #[tokio::test]
 async fn test_dropping_managed_agent_future_terminates_descendant_processes() {
+    let _fixture = process_fixture_lock().lock().await;
     let temp = TempDir::new().expect("temporary directory");
     let (integration, workspace) = prepare_integration(&temp);
     let fake_node = write_fake_node(

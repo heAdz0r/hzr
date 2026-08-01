@@ -4,20 +4,54 @@
 
 ![HZR control-plane banner](docs/assets/hzr-hero.png)
 
-[![Version](https://img.shields.io/badge/version-0.2.0-e64a19)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.0-e64a19)](Cargo.toml)
 [![CI](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg)](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/heAdz0r/hzr?include_prereleases&color=ef6c00)](https://github.com/heAdz0r/hzr/releases)
 [![License](https://img.shields.io/badge/control_plane-Apache--2.0-37474f)](LICENSE)
 
 HZR is an independent product from heAdz0r that turns disparate layers of agent optimization into one controlled execution path. A single control plane handles search, memory, context budget, execution, response density, and usage accounting—without rework or competing loops.
 
-**The core invariant of the 0.2.0 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
+**The core invariant of the 0.3.0 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
 
 > HZR does not claim unverified percentage savings. Functional and supply-chain gates are defined and repeatedly tested before release; the end-to-end economic effect must still be measured through paired, provider-billed benchmarks on identical tasks.
 
 ## Why HZR
 
 Independently installed optimization tools often repeat the same work: scan the repository, build parallel indexes, remember the same context, compress it several times and write incompatible telemetry estimates. HZR assigns one owner to each concern.
+
+## Measured command-output benchmark
+
+The reproducible 2026-08-01 development run compares identical commands through
+RAW tools, upstream RTK `v0.44.1` and HZR with fork-core `0.44.1-fork.1` on the
+same pinned upstream checkout. Each of 14 cases ran five times with rotating
+order and isolated participant state.
+
+| Case | RAW | RTK upstream | HZR | HZR vs upstream |
+|---|---:|---:|---:|---:|
+| `read README.md` | 6,046 | 6,046 | **132** | **−97.8%** |
+| `git diff HEAD~5` | 185,931 | 10,325 | **5,540** | **−46.3%** |
+| `cargo check` | 1,088 | 26 | **10** | **−61.5%** |
+| `cargo test` (same exit `101`) | 48,136 | 252 | **168** | **−33.3%** |
+| **All 14 cases** | **287,124** | **58,102** | **44,263** | **−23.8%** |
+
+HZR won 8 measured cases and tied upstream on 6, with no remaining measured
+losses after fixing `cargo test` diagnostics, the `cargo check` label, and
+captured `find`/`ls` output. HZR also emitted 84.6% fewer estimated output tokens
+than RAW across the matrix.
+
+```mermaid
+xychart-beta
+    title "Estimated output tokens — lower is better"
+    x-axis [RAW, RTK_upstream, HZR]
+    y-axis "tokens" 0 --> 300000
+    bar [287124, 58102, 44263]
+```
+
+Tokens use `ceil(UTF-8 bytes / 4)`: this is a command-output estimate, not a
+provider tokenizer, total-session measurement, answer-fidelity result or billing
+claim. Read the [full PRD](PRD_BENCHMARK_HZR_VS_UPSTREAM_RTK.md), inspect the
+[recorded result](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01/RESULTS.md),
+or rerun the [benchmark harness](benchmarks/hzr-vs-rtk-upstream-v0.44.1/README.md).
 
 ## Architecture: one owner per concern
 
@@ -59,13 +93,13 @@ Published artifacts:
 | macOS | Apple Silicon | Available | native release workflow + clean-install smoke |
 | macOS | Intel | Available | native release workflow + clean-install smoke |
 
-No Windows artifact is provided in 0.2.0. Release scripts build native artifacts rather than cross-compiling them.
+No Windows artifact is provided in 0.3.0. Release scripts build native artifacts rather than cross-compiling them.
 
 Download and inspect the installer before running it:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.2.0/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.3.0/install.sh \
   -o /tmp/hzr-install.sh
 less /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
@@ -75,7 +109,7 @@ The installer downloads the platform artifact and `SHA256SUMS` from GitHub Relea
 
 ```text
 ~/.local/share/hzr/
-  versions/v0.2.0-<platform>/   # version-scoped self-contained bundle
+  versions/v0.3.0-<platform>/   # version-scoped self-contained bundle
   current -> versions/...
 
 ~/.local/bin/
@@ -84,7 +118,11 @@ The installer downloads the platform artifact and `SHA256SUMS` from GitHub Relea
   rtk -> hzr                    # compatibility alias, not a second RTK
 ```
 
-By default, the installer also runs `hzr init` and applies the confirmed adoption configuration: one Claude `PreToolUse` dispatcher, an idempotent `SessionStart`, and HZR-managed blocks in `CLAUDE.md` and `AGENTS.md`. Content-addressed backups are created before existing files are modified.
+By default, the installer also runs `hzr init`, registers the current workspace, starts the
+single `hzrd` user service and its bundled visualizer, and applies the confirmed adoption
+configuration: one Claude `PreToolUse` dispatcher, an idempotent `SessionStart`, and
+HZR-managed blocks in `CLAUDE.md` and `AGENTS.md`. Content-addressed backups are created
+before existing files are modified.
 
 To install only the files first, without hooks or agent instructions:
 
@@ -100,12 +138,13 @@ Available installer overrides: `HZR_INSTALL_ROOT`, `HZR_BIN_DIR`, `HZR_INSTALL_H
 
 | Component | Pin | Distribution role |
 |---|---:|---|
-| HZR | 0.2.0 | public CLI + daemon |
+| HZR | 0.3.0 | public CLI + daemon |
 | HZR fork-core RTK | 0.44.1-fork.1 | private native engine; complete inherited surface |
 | grepai | 0.35.0 + ownership patch | private native engine |
 | ICM | 0.10.61 + lockfile patch | private native engine |
 | caveman-code | 0.65.2 + exact production lock | managed JS runtime |
 | Node.js | 22.17.1 | bundled official runtime |
+| Vue visualizer | Vue 3.5.40 | Bun-built static operator UI served by `hzrd` |
 | Caveman | 1.9.1 | design/reference, not a separate runtime |
 
 The exact commits, archive checksums, npm integrity values, and patch digests are recorded in [`engines.lock.toml`](engines.lock.toml). The bundle preserves source provenance, applied patches, and applicable license texts.
@@ -123,6 +162,33 @@ hzr daemon status
 Release installer creates a user service (`launchd` on macOS, `systemd --user` on Linux)
 and binds it to stable `current/bin/hzrd`. For source-only foreground development
 the mode remains available as `hzr daemon serve`. Daemon only listens to loopback.
+
+Open the local visualizer after installation:
+
+```text
+http://127.0.0.1:47391/
+```
+
+The visualizer is a Bun-built Vue application shipped as static bundle assets and served
+by the existing `hzrd`; it is not a second service or control plane. It shows registered
+projects, HZR/RTK fork-core/ICM/grepai state, versions, provider-observed usage, separately
+labeled direct-efficiency estimates, and copyable diagnostic commands. `hzr init` refreshes
+the current project's private `workspace.json` registration and ensures the production
+service is running when invoked from an installed bundle. Source builds never install a
+user service implicitly; use `hzr daemon serve`. `HZR_INSTALL_SERVICE=0` remains the explicit
+opt-out for release installation.
+
+![HZR visualizer overview with live service topology](docs/screenshots/hzr-visualizer-overview.png)
+
+<p align="center">
+  <img src="docs/screenshots/hzr-visualizer-projects.png" width="68%" alt="HZR visualizer project registry with ready, warming, and registered projects">
+  <img src="docs/screenshots/hzr-visualizer-mobile.png" width="24%" alt="HZR visualizer responsive mobile view">
+</p>
+
+The screenshots use an isolated three-project registry and a real local daemon snapshot;
+no private working-copy paths or production usage records are included. The complete
+product, interaction, state, accessibility, security, lifecycle, and acceptance contract
+is in the [visualizer PRD](docs/PRD_HZR_VISUALIZER.md).
 
 ```bash
 hzr index status --workspace .
@@ -153,6 +219,28 @@ Both commands reach private `engines/rtk`; alias `rtk` does not create a second 
 
 Native memory, repo-map, RTK, hooks, compression, skills, and tools in caveman-code are disabled before the first model session and verified by a runtime test. This preserves caveman-code as an agent loop without turning it into a second control plane.
 
+## Every project, including before `git init`
+
+The installed `SessionStart` hook runs `hzr init --if-needed --quiet`, so a project becomes
+HZR-backed on first use with no manual step. Workspace identity has two bases:
+
+| Project state | Identity basis | `init` outcome |
+|---|---|---|
+| Git repository | git common dir | `initialized` |
+| Plain directory | canonical directory path | `initialized_without_git` |
+| Directory that later gets `git init` | migrates to the git basis | `relocated_to_git_identity` |
+
+Supporting plain directories matters because that is how most projects start. The trade-off
+is explicit: a path-derived identity changes if the directory is renamed or moved. So
+`git init` is handled as a migration — HZR moves its own store to the git-derived identity
+and re-points the symlink, keeping any index already built. That relocation only ever
+touches a store inside HZR's own `workspaces/` subtree; a symlink pointing anywhere else
+stays foreign and is still refused.
+
+Note that `init` registers the workspace and creates the symlink but does **not** build the
+index. The first semantic query starts the watcher, and while that first scan runs, search
+degrades to exact mode with a visible `fallback_reason` rather than blocking.
+
 ## One index and one memory
 
 ```text
@@ -160,6 +248,7 @@ Native memory, repo-map, RTK, hooks, compression, skills, and tools in caveman-c
   runtime/                              # daemon token + singleton locks
   fork/                                 # derived fork caches, not an embeddings DB
   workspaces/<repo>/<worktree>/index/grepai/
+  workspaces/<repo>/<worktree>/workspace.json       # private visualizer registration
   memory/icm/                           # one DB/process
   ledger/hzr.sqlite                    # unified usage + efficiency ledger
   migrations/<repo>/<worktree>/
@@ -187,11 +276,12 @@ imports each source row once, and saves the content-addressed snapshot with a JS
 ## Basic commands
 
 ```text
-hzr init
-hzr install|uninstall                 adoption, hooks, and agent instructions
+hzr init                              workspace registry + data layout + visualizer service
+hzr install|uninstall                 adoption, hooks, instructions, and service startup
 hzr hooks status
 hzr mcp serve                         stdio MCP for clients without hooks
 hzr mcp config --client codex|claude-desktop
+hzr mcp status                        native registration and lifecycle status
 hzr doctor
 hzr daemon serve|status|engines
 hzr daemon service install|start|stop|restart|status
@@ -199,22 +289,60 @@ hzr engines status
 hzr index status|init
 hzr search|rgai
 hzr context plan
-hzr memory recall|store|status
+hzr memory recall|store|status         --scope project|global|project-and-global
 hzr exec rewrite|run|approve|deny
 hzr codec compile
 hzr agent run
+hzr tdd                                strict RED → GREEN → REFACTOR contract
 hzr stats                              global cumulative efficiency ledger
+hzr build <args>                       build YOUR project (token-optimized output)
+hzr release --force                    rebuild and reinstall HZR itself
 hzr migrate scan|apply|history|memory
 hzr rtk -- <fork arguments>
 ```
+
+`hzr tdd` is HZR's native, executable form of the upstream RTK project skill.
+Run it before production changes. It requires an observed relevant RED, the
+identical focused command passing at GREEN, refactoring while green, and the full
+HZR workspace/all-features gate. Release bundles also ship the canonical
+`share/hzr/skills/hzr-tdd/SKILL.md` asset for agent integrations.
+
+`build` and `release` are separate verbs deliberately. `hzr build` forwards to the
+inherited fork wrapper that builds **your project** — the same verb RTK used, so existing
+habits keep working. `hzr release` rebuilds **HZR itself**: it assembles the bundle,
+installs it version-scoped, switches `current` atomically, restarts the daemon and then
+verifies the reported version of all four engines, because checking `hzr --version` alone
+previously allowed a stale bundle to look current.
+
+## Memory: one store, two scopes
+
+Memory lives in one supervised database, reachable through two namespaces:
+
+```bash
+hzr memory store --scope global preferences "always prefer exact output for parsers"
+hzr memory recall "budget planning"                # project + global (default)
+hzr memory recall --scope global "preferences"     # only user-wide facts
+```
+
+Use `project` (the store default) for facts about this repository, and `global` for facts
+about **you** — a preference or standing rule that should apply everywhere instead of being
+restated in every project. Recall defaults to project + global so standing preferences
+arrive alongside this project's history.
+
+Another repository's memory is never reachable from any scope. The filter is positive: a
+record is returned only because it provably belongs to this repository or to the global
+namespace, so one physical database cannot leak between projects.
 
 It is important to distinguish between two levels of installation:
 
 - repository-level `install.sh` installs the entire versioned self-contained release bundle,
   re-attests the same-version root, and starts the production user service;
 - the `hzr install` CLI command configures a durable PATH entry, hooks, agent instructions,
-  and HZR-owned MCP registrations. It supports `--dry-run`, requires `--force`
-  for changes, and does not run during build/test.
+  HZR-owned MCP registrations, and ensures the installed daemon/visualizer service is running.
+  It supports `--dry-run`, requires `--force` for changes, and accepts `--skip-service` for
+  controlled installation/test environments. That opt-out is also written into the managed
+  `SessionStart` hook, so a later project initialization cannot silently install the service;
+  rerun confirmed `hzr install` without `--skip-service` to re-enable automatic startup.
 
 ## MCP for clients without hooks
 
@@ -228,13 +356,44 @@ hzr mcp config --client claude-desktop  # prints the mcpServers block
 `hzr install --dry-run` shows the transactional replacement of direct ICM registrations,
 and the confirmed `hzr install --force` applies it with full-SHA backup/CAS. The
 `hzr mcp config` command remains a read-only way to obtain a snippet for manual integration.
+`hzr mcp status` reports the native registration for each supported client.
 
-Tools: `hzr_memory_recall`, `hzr_memory_store`, and `hzr_search` — backed by the same single database and index as the CLI. The full agent contract is in [HZR.md](HZR.md).
+`hzr init` does not start an MCP process. It initializes configuration and the
+current workspace, refreshes its visualizer registration, and is intentionally safe to run from every Claude
+`SessionStart`. Codex or Claude Desktop natively launches `hzr mcp serve` on
+connection from the registration written by `hzr install --force`, then closes
+the child through stdio EOF. Starting a persistent MCP process from `init` would
+create one wrapper per session and defeat HZR's ownership model. The only persistent
+service is `hzrd`; installed-bundle `init` and `install` ensure that same service is running.
 
-The MCP layer in 0.2.0 is a stateless stdio gateway: it stores no data of its own
+The model-facing surface is deliberately small:
+
+| Tool | Purpose |
+|---|---|
+| `hzr_context_plan` | Graph-first evidence planning across code structure, canonical search and durable memory. |
+| `hzr_search` | Targeted semantic or exact repository search, with optional path and bounded snippets. |
+| `hzr_memory_recall` | Recall project and explicitly global durable context. |
+| `hzr_memory_store` | Add one durable decision, preference, resolved error or completed handoff. |
+
+Daemon health, statistics, engine lifecycle and unrestricted command execution are
+not model tools. They remain CLI/operator surfaces, avoiding unnecessary tool-choice
+ambiguity and mutation authority. The gateway negotiates stable MCP `2025-11-25`
+with compatible older clients, validates JSON Schema 2020-12 inputs, and returns
+typed `structuredContent` plus text for backward compatibility. The full agent
+contract is in [HZR.md](HZR.md).
+
+Standards baseline: [MCP 2025-11-25 lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
+and [tool contracts](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
+
+The MCP layer in 0.3.0 is a stateless stdio gateway: it stores no data of its own
 and does not spawn internal engines. Each client process terminates at EOF,
 while durable ownership remains with production `hzrd`; the installer migrates direct ICM
 registrations, and `hzr doctor` verifies the service lifecycle.
+
+An `isError: true` result confirms that no fallback engine or store was used,
+not that a dispatched network write was rolled back. Validation and daemon
+connection failures happen before dispatch. If a store response is lost after
+dispatch, recall before retrying because completion is unknown.
 
 Legacy durable memory is transferred separately and without deleting the original DB:
 
@@ -264,7 +423,7 @@ Contributors need Rust 1.85+, Go (CI pin 1.24.2), Git, Bash, curl and standard U
 scripts/build-bundle.sh "$PWD/dist"
 scripts/package-release.sh "$PWD/dist" "$PWD/dist-release"
 HZR_RELEASE_ARCHIVE="$(find "$PWD/dist-release" -maxdepth 1 \
-  -name 'hzr-v0.2.0-*.tar.gz' -print -quit)"
+  -name 'hzr-v0.3.0-*.tar.gz' -print -quit)"
 scripts/smoke-install.sh "$HZR_RELEASE_ARCHIVE" "$PWD/dist-release/SHA256SUMS"
 ```
 
@@ -290,7 +449,7 @@ Do not run `cargo test` directly inside `fork-core/rtk`: the official gate creat
 
 ## Verifiable guarantees and fair boundaries
 
-|Guarantee|Status 0.2.0|
+|Guarantee|Status 0.3.0|
 |---|---|
 |Full fork baseline and current engine have verifiable identity|implemented|
 |Stock RTK is missing from the production path|implemented|
@@ -309,14 +468,18 @@ Additional boundaries:
 
 ## Further development
 
-After stabilization of 0.2.0, development of MCP surface will focus on versioned schema negotiation, additional secure HZR tools and end-to-end trace from client request to `hzr stats`. The invariant remains the same: MCP is a protocol facade over HZR Core, and not a new index, memory store or control plane.
+After stable schema negotiation and typed context planning, MCP development focuses
+on cancellation/backpressure and end-to-end trace from client request to
+`hzr stats`. The invariant remains the same: MCP is a client-launched protocol
+facade over HZR Core, and not a new service, index, memory store or control plane.
 
 ## Documentation
 
 - [`CHANGELOG.md`](CHANGELOG.md) — history of public releases.
-- [`PRD.md`](PRD.md) — architecture, requirements, and acceptance criteria for 0.2.0.
-- [`PRD_STATUS_0.2.0.md`](PRD_STATUS_0.2.0.md) — current release status and open dimensions.
+- [`PRD.md`](PRD.md) — architecture, requirements, and acceptance criteria for 0.3.0.
+- [`PRD_STATUS_0.3.0.md`](PRD_STATUS_0.3.0.md) — current release status and open dimensions.
 - [`PRD_ADOPTION.md`](PRD_ADOPTION.md) — hooks, degraded path, and safe adoption model.
+- [`PRD_BENCHMARK_HZR_VS_UPSTREAM_RTK.md`](PRD_BENCHMARK_HZR_VS_UPSTREAM_RTK.md) — reproducible RAW / upstream RTK / HZR comparison and HZR-only USP metrics.
 - [`FORK_PARITY.md`](FORK_PARITY.md) — provenance of complete fork and regression contract.
 - [`HZR.md`](HZR.md) — short tool contract for coding agents.
 - [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — pins, patches and licenses.

@@ -1,0 +1,303 @@
+commit 36591fb00d650bf987b57483c0b3a395a35a8dc1
+Merge: a7fad1f 062468c
+Author: aesoft <43991222+aeppling@users.noreply.github.com>
+Date:   Tue Jul 28 15:50:46 2026 +0200
+
+    Merge pull request #3281 from rtk-ai/release-please--branches--master--components--rtk
+    
+    chore(master): release 0.44.1
+
+commit 062468cd18c698e9656100b656276d4ddcccb167
+Author: rtk-release-bot[bot] <280461666+rtk-release-bot[bot]@users.noreply.github.com>
+Date:   Tue Jul 28 13:21:12 2026 +0000
+
+    chore(master): release 0.44.1
+
+commit a7fad1f4f5487acb98484c8593ab6913a9bb263d
+Merge: 3fc4070 a8b9eb3
+Author: aesoft <43991222+aeppling@users.noreply.github.com>
+Date:   Tue Jul 28 15:19:48 2026 +0200
+
+    Merge pull request #3252 from rtk-ai/develop
+    
+    Next Release
+
+commit a8b9eb39011cd64aa715861c2d11820ee55fb221
+Merge: 1c5f164 ca63868
+Author: aesoft <43991222+aeppling@users.noreply.github.com>
+Date:   Tue Jul 28 13:22:02 2026 +0200
+
+    Merge pull request #3182 from rtk-ai/fix/grep-transparency
+    
+    fix(search): display nb line only if requested
+
+commit ca63868d6b9e878af0a114706d8205e86ff53225
+Author: Adrien Eppling <adrien.eppling@supinfo.com>
+Date:   Tue Jul 28 11:53:17 2026 +0200
+
+    test(search): check every grep scenario with and without -n
+    
+    Swapping the grep_n helper for grep_plain moved every scenario from the
+    -n path to the plain path, leaving exactly one assertion covering line
+    numbers. Both directions matter now that -n decides whether they appear,
+    so assert_eq_grep_with_and_without_n runs each case twice and the piped
+    stdin test loops over both forms.
+    
+    Mutation-checked: reverting show_line to the old always-on form fails 10
+    of the 11 tests in this file.
+
+commit 643a03975da994c188850504713bc75598537088
+Author: Adrien Eppling <adrien.eppling@supinfo.com>
+Date:   Tue Jul 28 11:46:06 2026 +0200
+
+    refactor(search): narrow the grep transparency fix to show_line
+    
+    Strip the explanatory comments the branch accumulated and restore
+    match_block byte-for-byte to develop, so the diff is only what the
+    transparency fix needs: show_line() flips from opt-out to opt-in, plus
+    tests. Compression, capping and tee recovery are untouched.
+    
+    Also drops a comment in run() that the flip made false.
+
+commit 31093ebb625364b919f8e11c3825e0a32c065fda
+Author: Adrien Eppling <adrien.eppling@supinfo.com>
+Date:   Tue Jul 28 11:33:35 2026 +0200
+
+    Revert "fix(search): make tee-recovery blocks respect show_file/show_line"
+    
+    This reverts commit 792f43276e568131782b62b0e8cc04afdfa888bd.
+    
+    The tee block is recovery state, not command output. Mirroring the
+    display's show_file/show_line meant a plain `rtk grep pat file` that
+    capped at 25 of 100 matches wrote the 75 dropped ones to the tee as bare
+    content lines: no path, no line number, nothing to open. Nobody diffs the
+    tee against grep, so faithfulness buys nothing there and costs the one
+    property the tee exists for.
+    
+    The display stays faithful, which was the point of 608e574: no -n means
+    no line numbers, -n means line numbers, byte-identical to grep both ways.
+    Only the recovery block goes back to being fully qualified.
+    
+    Also:
+    - lock both halves with tests (match_block had none): show_line off by
+      default / on for -n, --line-number and short clusters / off for -N,
+      and match_block staying path:line:content when the display drops both
+    - fix the now-false module doc in grep_faithful_format_test.rs, which
+      still claimed byte-identity with `grep -n` and "line number always",
+      and drop the stale _grep_n suffixes from its test names
+    - drop a comment duplicating the show_file/show_line block above it
+
+commit 1c5f164089d58d21bbc83f95e565495f7924d896
+Merge: 1c5ffad 3694a20
+Author: Takayuki Maeda <takoyaki0316@gmail.com>
+Date:   Tue Jul 28 04:22:17 2026 +0900
+
+    Merge pull request #3254 from TaKO8Ki/refactor/simplify-cargo-regex-initialization
+    
+    refactor: simplify regex initialization
+
+commit 3694a20b5bdf7193ef959da08eda7bb68c09b003
+Author: Takayuki Maeda <takoyaki0316@gmail.com>
+Date:   Tue Jul 28 03:01:23 2026 +0900
+
+    refactor(cargo): simplify regex initialization
+
+commit 1c5ffad6e81afd821818809bfe84c716a85d289e
+Merge: 48d45d3 ae07b4b
+Author: Takayuki Maeda <takoyaki0316@gmail.com>
+Date:   Tue Jul 28 02:25:58 2026 +0900
+
+    Merge pull request #3244 from TaKO8Ki/refactor/replace-lazy-static
+    
+    refactor: replace `lazy_static` with `LazyLock`
+
+commit 48d45d366627d405397d974808392f7294266e84
+Merge: 61790e4 cdfb14c
+Author: aesoft <43991222+aeppling@users.noreply.github.com>
+Date:   Mon Jul 27 19:23:49 2026 +0200
+
+    Merge pull request #3250 from rtk-ai/fix/cicd/next-release-app-token
+    
+    fix(cicd): git app token for next release
+
+commit ae07b4ba85655cbb7beaa1d0685cc3811ace3b62
+Author: Takayuki Maeda <takoyaki0316@gmail.com>
+Date:   Tue Jul 28 02:17:57 2026 +0900
+
+    docs: update LazyLock guidance
+
+commit 5269df7d50ce1692efd77b9f1e9df2237695de71
+Author: Takayuki Maeda <takoyaki0316@gmail.com>
+Date:   Tue Jul 28 02:17:04 2026 +0900
+
+    refactor: replace lazy_static with LazyLock
+
+commit cdfb14c0f036bc5c6d36a9dc794e536b4f8eca5f
+Author: Adrien Eppling <adrien.eppling@supinfo.com>
+Date:   Mon Jul 27 18:55:32 2026 +0200
+
+    fix(cicd): git app token for next release
+
+commit 61790e4e2f768653bcd79182ff3394c80aad0e95
+Merge: 7da2674 7fc753d
+Author: Takayuki Maeda <takoyaki0316@gmail.com>
+Date:   Tue Jul 28 01:35:19 2026 +0900
+
+    Merge pull request #3249 from TaKO8Ki/deps/update-colored
+    
+    chore(deps): update colored to 3.1.1
+
+commit 7fc753d37f2ec79d5ff8b6975acbf82884e21b7c
+Author: Takayuki Maeda <takoyaki0316@gmail.com>
+Date:   Tue Jul 28 01:16:32 2026 +0900
+
+    chore(deps): update colored to 3.1.1
+
+commit 7da2674073394194754a228d346189a74869e6ba
+Merge: 1d6798d 10ca886
+Author: Nicolas Le Cam <niko.lecam@gmail.com>
+Date:   Mon Jul 27 13:48:52 2026 +0200
+
+    Merge pull request #3179 from romain-cureau/fix/hooks-copilot-windows-powershell-tool
+    
+    fix(hook): detect Copilot CLI shell tool on Windows
+
+commit 10ca886c92f8423f60c3fcbfd7a75e26f396845f
+Author: Romain Cureau <romain.cureau@dedalus.com>
+Date:   Thu Jul 23 15:46:48 2026 +0200
+
+    fix(hook): detect Copilot CLI shell tool on Windows
+    
+    Copilot CLI names its shell tool "powershell" on Windows, so detect_format
+    only ever matched "bash" and fell through to PassThrough. The native
+    CopilotCli branch — the one returning modifiedArgs without a permissionDecision
+    — was therefore unreachable on Windows, leaving only the Claude-compat
+    PreToolUse entry to answer, which emits "ask" and prompts on every command.
+    
+    Verified against a live Copilot CLI 1.0.73 session on Windows 11: the payload
+    delivered is {"toolName":"powershell","toolArgs":"{\"command\":\"...\"}"} —
+    toolArgs is already the JSON-encoded string RTK expects, only toolName differed.
+    
+    Refs #3178
+    
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+commit 3fc407027589acef9579df5b2ad10b0f3042e030
+Merge: 63bcebd 5083091
+Author: aesoft <43991222+aeppling@users.noreply.github.com>
+Date:   Sun Jul 26 14:38:26 2026 +0200
+
+    Merge pull request #3217 from rtk-ai/release-please--branches--master--components--rtk
+    
+    chore(master): release 0.44.0
+
+commit 50830919f5d31707b31c81fd4f1ec1c7b5af8883
+Author: rtk-release-bot[bot] <280461666+rtk-release-bot[bot]@users.noreply.github.com>
+Date:   Sun Jul 26 11:15:29 2026 +0000
+
+    chore(master): release 0.44.0
+
+commit 63bcebd44b399b6e7c430cf8ca210b3b01c9aa2c
+Merge: 5a7880d 1d6798d
+Author: aesoft <43991222+aeppling@users.noreply.github.com>
+Date:   Sun Jul 26 13:13:34 2026 +0200
+
+    Merge pull request #2774 from rtk-ai/develop
+    
+    Next Release
+
+commit 1d6798de8aee0940b490719153e7554845f8f43c
+Merge: 3483786 b434fd2
+Author: Nicolas Le Cam <niko.lecam@gmail.com>
+Date:   Sun Jul 26 12:42:25 2026 +0200
+
+    Merge pull request #3093 from lntutor/fix/2443-copilot-ide-terminal
+    
+    fix(copilot): support IDE terminal hooks
+
+commit 348378602e97a93a4a39449c13cb00882bba44dc
+Merge: 23d1e89 f6b9290
+Author: aesoft <43991222+aeppling@users.noreply.github.com>
+Date:   Sun Jul 26 12:20:29 2026 +0200
+
+    Merge pull request #3211 from rtk-ai/fix/permission-whitespace-normalization
+    
+    fix(permissions): stop extra whitespace from evading deny rules
+
+commit b434fd268fcbb7e31e2a520180933ca08e7e35b5
+Merge: d0f004f 23d1e89
+Author: Loi Nguyen <vanloi999@gmail.com>
+Date:   Sun Jul 26 16:57:51 2026 +0700
+
+    Merge branch 'develop' into fix/2443-copilot-ide-terminal
+    
+    Resolve a semantic (non-textual) merge conflict: develop's 0df6929
+    changed HookDecision::AskRewrite from a tuple variant AskRewrite(String)
+    to a struct variant AskRewrite { rewritten, explicit }. The auto-merge
+    left two copilot-IDE usages in the old tuple form, breaking the build:
+    
+    - copilot_ide_response_from_decision match arm: bind `rewritten` from
+      the struct variant via `AskRewrite { rewritten, .. }`.
+    - test_copilot_ide_rewrite_returns_deny_with_suggestion: construct the
+      struct variant with `explicit: false` (a default, non-user-configured
+      rewrite; the IDE path ignores the field).
+    
+    Gate green: cargo fmt --all --check, cargo clippy --all-targets
+    --all-features -D warnings, cargo test --all-features (2497 passed).
+    
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01G8b9dEaJtpvydzz4ttM7JH
+
+commit d0f004f61da16eaba12f69c4542ac6d50754d63d
+Author: Loi Nguyen <vanloi999@gmail.com>
+Date:   Sun Jul 26 11:58:24 2026 +0700
+
+    fix(copilot): support IDE terminal hooks
+
+commit f6b92900603adf00ecd30d2119d63a322a471583
+Author: Adrien Eppling <adrien.eppling@supinfo.com>
+Date:   Sun Jul 26 00:20:37 2026 +0200
+
+    fix(permissions): stop extra whitespace from evading deny rules
+    
+    Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01BwRRhncpyLA9AybUU8KvVh
+
+commit 23d1e899ce89bef54dfa7f3b6f66374c24f311e7
+Merge: bee2178 0df6929
+Author: Nicolas Le Cam <niko.lecam@gmail.com>
+Date:   Sat Jul 25 15:32:55 2026 +0200
+
+    Merge pull request #3149 from guyoron1/fix/copilot-permission-decision
+    
+    fix(hooks): emit permissionDecision allow for simple Copilot CLI rewrites
+
+commit 0df69293ac352f56e507ab9e72d7396abbccc078
+Author: guyoron1 <guyoron1@users.noreply.github.com>
+Date:   Sat Jul 25 14:19:55 2026 +0300
+
+    fix(hooks): distinguish explicit ask from default in AskRewrite
+    
+    Change AskRewrite(String) to AskRewrite { rewritten, explicit } so the
+    Copilot path only auto-allows when the user didn't explicitly configure
+    "ask" for a command. Addresses KuSh's review feedback on #3149.
+    
+    Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+
+commit bee2178ad2308d3d697f6c5e759af6374a921528
+Merge: 8dd4aac 523c803
+Author: Takayuki Maeda <takoyaki0316@gmail.com>
+Date:   Sat Jul 25 03:13:49 2026 +0900
+
+    Merge pull request #3181 from rtk-ai/rtk-rule-defaults
+    
+    chore: declare RtkRule default to avoid repeating unecessary attributes
+
+commit 8dd4aacd6d917245c6a3fa2e350dab4309498079
+Merge: ca41893 aba7643
+Author: aesoft <43991222+aeppling@users.noreply.github.com>
+Date:   Fri Jul 24 11:48:46 2026 +0200
+
+    Merge pull request #3061 from rtk-ai/fix/uv-run-preserve-stdout
+    
+    fix(uv): preserve program stdout and restore inner-command filtering

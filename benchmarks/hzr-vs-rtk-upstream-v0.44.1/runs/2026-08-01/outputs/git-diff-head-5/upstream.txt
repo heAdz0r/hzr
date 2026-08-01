@@ -1,0 +1,664 @@
+.claude/agents/code-reviewer.md                      |   13 +-
+ .claude/agents/debugger.md                           |   19 +-
+ .claude/agents/rust-rtk.md                           |   29 +-
+ .claude/agents/technical-writer.md                   |    9 +-
+ .claude/commands/tech/audit-codebase.md              |    4 +-
+ .claude/commands/tech/codereview.md                  |   22 +-
+ .claude/rules/cli-testing.md                         |  201 ++++++-----
+ .claude/rules/rust-patterns.md                       |   22 +-
+ .claude/rules/search-strategy.md                     |   23 +-
+ .claude/skills/code-simplifier/SKILL.md              |    6 +-
+ .claude/skills/performance/SKILL.md                  |   34 +-
+ .claude/skills/pr-triage/SKILL.md                    |    2 +-
+ .claude/skills/pr-triage/templates/review-comment.md |    2 +-
+ .claude/skills/tdd-rust/SKILL.md                     |    7 +-
+ .github/copilot-instructions.md                      |    4 +-
+ .github/workflows/next-release.yml                   |   16 +-
+ .release-please-manifest.json                        |    2 +-
+ CHANGELOG.md                                         |  193 +++++++++++
+ CLAUDE.md                                            |   10 +-
+ CONTRIBUTING.md                                      |   22 +-
+ Cargo.lock                                           |   14 +-
+ Cargo.toml                                           |    5 +-
+ INSTALL.md                                           |   45 +--
+ README.md                                            |  132 +++++---
+ README_es.md                                         |   40 ++-
+ README_fr.md                                         |   43 ++-
+ README_ja.md                                         |   40 ++-
+ README_ko.md                                         |   40 ++-
+ README_pt.md                                         |   40 ++-
+ README_zh.md                                         |   41 ++-
+ docs/TELEMETRY.md                                    |    2 +-
+ docs/contributing/CODING_PRACTICES.md                |    6 +-
+ docs/contributing/TECHNICAL.md                       |   27 +-
+ docs/guide/analytics/discover.md                     |    6 +-
+ docs/guide/analytics/gain.md                         |   28 +-
+ docs/guide/getting-started/configuration.md          |   22 +-
+ docs/guide/getting-started/installation.md           |    8 +-
+ docs/guide/getting-started/supported-agents.md       |   27 +-
+ docs/guide/index.md                                  |   15 +-
+ docs/guide/resources/savings-explained.md            |   87 +++++
+ docs/guide/resources/telemetry.md                    |   10 +-
+ docs/guide/resources/troubleshooting.md              |    6 +-
+ docs/guide/resources/what-rtk-covers.md              |   58 ++--
+ docs/usage/AUDIT_GUIDE.md                            |   10 +-
+ docs/usage/FEATURES.md                               |  108 ++----
+ docs/usage/TRACKING.md                               |   34 +-
+ hooks/README.md                                      |   13 +-
+ hooks/antigravity/rules.md                           |    2 +-
+ hooks/claude/rtk-awareness.md                        |    2 +-
+ hooks/cline/rules.md                                 |    2 +-
+ hooks/copilot/rtk-awareness.md                       |    2 +-
+ hooks/cursor/rtk-rewrite.sh                          |   23 +-
+ hooks/kilocode/rules.md                              |    2 +-
+ hooks/pi/README.md                                   |    2 +-
+ hooks/windsurf/rules.md                              |    2 +-
+ openclaw/README.md                                   |    4 +-
+ openclaw/index.ts                                    |   97 +++++-
+ openclaw/openclaw.plugin.json                        |    2 +-
+ openclaw/package.json                                |    2 +-
+ scripts/benchmark.sh                                 |    8 +-
+ scripts/benchmark/run.ts                             |    2 +-
+ scripts/test-all.sh                                  |    6 +-
+ src/analytics/README.md                              |    4 +-
+ src/analytics/ccusage.rs                             |   71 ++++
+ src/analytics/gain.rs                                |   40 ++-
+ src/analytics/session_cmd.rs                         |    2 +-
+ src/cmds/README.md                                   |    4 +-
+ src/cmds/cloud/aws_cmd.rs                            |    7 +-
+ src/cmds/cloud/psql_cmd.rs                           |   14 +-
+ src/cmds/dotnet/binlog.rs                            |  111 +++---
+ src/cmds/git/gh_cmd.rs                               |   21 +-
+ src/cmds/git/git.rs                                  |  377 ++++++++++++++++++++-
+ src/cmds/git/glab_cmd.rs                             |   35 +-
+ src/cmds/git/gt_cmd.rs                               |   23 +-
+ src/cmds/js/next_cmd.rs                              |   22 +-
+ src/cmds/js/playwright_cmd.rs                        |   20 +-
+ src/cmds/js/tsc_cmd.rs                               |    9 +-
+ src/cmds/js/vitest_cmd.rs                            |   16 +-
+ src/cmds/jvm/gradlew_cmd.rs                          |  121 +++----
+ src/cmds/jvm/mvn_cmd.rs                              |   86 ++---
+ src/cmds/mod.rs                                      |    2 +
+ src/cmds/php/README.md                               |   15 +
+ src/cmds/php/artisan_cmd.rs                          |   52 +++
+ src/cmds/php/ecs_cmd.rs                              |   81 +++++
+ src/cmds/php/mod.rs                                  |    1 +
+ src/cmds/php/paratest_cmd.rs                         |  108 ++++++
+ src/cmds/php/pest_cmd.rs                             |   45 +++
+ src/cmds/php/php_cmd.rs                              |  114 +++++++
+ src/cmds/php/phpstan_cmd.rs                          |  568 +++++++++++++++++++++++++++++++
+ src/cmds/php/phpunit_cmd.rs                          |  394 ++++++++++++++++++++++
+ src/cmds/php/pint_cmd.rs                             |  227 +++++++++++++
+ src/cmds/php/test_output.rs                          |   84 +++++
+ src/cmds/php/utils.rs                                |   61 ++++
+ src/cmds/python/README.md                            |    1 +
+ src/cmds/python/mypy_cmd.rs                          |   31 +-
+ src/cmds/python/pytest_cmd.rs                        |   20 +-
+ src/cmds/python/ruff_cmd.rs                          |   21 +-
+ src/cmds/python/uv_cmd.rs                            |  571 +++++++++++++++++++++++++++++++
+ src/cmds/ruby/rake_cmd.rs                            |    8 +-
+ src/cmds/ruby/rspec_cmd.rs                           |   24 +-
+ src/cmds/rust/cargo_cmd.rs                           |  716 +++++++++++++++++++++++++++++++++++----
+ src/cmds/rust/runner.rs                              |   10 +-
+ src/cmds/scala/mod.rs                                |    1 +
+ src/cmds/scala/sbt_cmd.rs                            |  839 +++++++++++++++++++++++++++++++++++++++++++++
+ src/cmds/system/log_cmd.rs                           |   26 +-
+ src/cmds/system/ls.rs                                |   16 +-
+ src/cmds/system/pipe_cmd.rs                          |   61 +++-
+ src/cmds/system/search.rs                            |  354 ++++++++++++++++---
+ src/core/README.md                                   |    8 +-
+ src/core/constants.rs                                |   25 ++
+ src/core/filter.rs                                   |   21 +-
+ src/core/telemetry.rs                                |    4 +-
+ src/core/telemetry_cmd.rs                            |   53 ++-
+ src/core/toml_filter.rs                              |  367 +++++++++++++++++---
+ src/core/utils.rs                                    |  103 +++++-
+ src/discover/README.md                               |    4 +-
+ src/discover/lexer.rs                                |   58 +++-
+ src/discover/registry.rs                             | 1065 +++++++++++++++++++++++++++++++++++++++++++++++++++-------
+ src/discover/rules.rs                                |  341 ++++++++++---------
+ src/filters/README.md                                |   20 ++
+ src/hooks/README.md                                  |    1 +
+ src/hooks/constants.rs                               |   19 ++
+ src/hooks/hook_check.rs                              |   30 +-
+ src/hooks/hook_cmd.rs                                |  556 ++++++++++++++++++++++++++++--
+ src/hooks/init.rs                                    |  974 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
+ src/hooks/integrity.rs                               |   41 ++-
+ src/hooks/mod.rs                                     |   32 ++
+ src/hooks/permissions.rs                             |  189 ++++++++++-
+ src/hooks/trust.rs                                   |  186 +++++++---
+ src/learn/README.md                                  |    2 +-
+ src/learn/detector.rs                                |   50 +--
+ src/main.rs                                          |  260 +++++++++++---
+ src/parser/mod.rs                                    |   40 ++-
+ tests/fixtures/phpstan_raw.json                      |  380 +++++++++++++++++++++
+ tests/fixtures/sbt/sbt_compile_error.txt             |   20 ++
+ tests/fixtures/sbt/sbt_it_test_pass.txt              |   21 ++
+ tests/fixtures/sbt/sbt_test_fail.txt                 |   47 +++
+ tests/fixtures/sbt/sbt_test_mockito_fail.txt         |   33 ++
+ tests/fixtures/sbt/sbt_test_munit_fail.txt           |   36 ++
+ tests/fixtures/sbt/sbt_test_munit_pass.txt           |   23 ++
+ tests/fixtures/sbt/sbt_test_pass.txt                 |   58 ++++
+ tests/fixtures/sbt/sbt_test_scalamock_fail.txt       |   31 ++
+ tests/fixtures/uv_run_pytest_failure.txt             |   28 ++
+ tests/grep_context_test.rs                           |   60 ++++
+ tests/grep_faithful_format_test.rs                   |  110 +++---
+ tests/guard_integration_test.rs                      |  124 ++++++-
+ tests/pipeline_stdin_test.rs                         |   44 +++
+ tests/search_compress_test.rs                        |    4 +-
+ tests/search_error_test.rs                           |    1 +
+ tests/search_faithful_test.rs                        |   66 +++-
+ 150 files changed, 11098 insertions(+), 1576 deletions(-)
+
+Changes:
+
+.claude/agents/code-reviewer.md
+  @@ -1,6 +1,6 @@
+  -description: Use this agent when you need comprehensive code quality assurance, security vulnerability detection, or performance optimization analysis. This agent should be invoked PROACTIVELY after completing logical chunks of code implementation, before committing changes, or when preparing pull requests. Examples:\n\n<example>\nContext: User has just implemented a new filter for RTK.\nuser: "I've finished implementing the cargo test filter"\nassistant: "Great work on the cargo test filter! Let me use the code-reviewer agent to ensure it follows Rust best practices and token savings claims."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has completed a performance optimization.\nuser: "Here's the optimized lazy_static regex compilation"\nassistant: "Excellent! Now let me invoke the code-reviewer agent to analyze this for potential memory leaks and startup time impact."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has written a new cross-platform shell escaping function.\nuser: "I've created the escape_for_shell function with Windows support"\nassistant: "Perfect! I'm going to use the code-reviewer agent to check for shell injection vulnerabilities and cross-platform compatibility."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has modified RTK hooks for Claude Code integration.\nuser: "Updated the rtk-rewrite.sh hook"\nassistant: "Important changes! Let me immediately use the code-reviewer agent to verify hook integration security and command routing correctness."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User mentions they're done with a filter implementation.\nuser: "The git log filter is complete"\nassistant: "Excellent progress! Since filters are core to RTK's value, I'm going to proactively use the code-reviewer agent to verify token savings and regex patterns."\n<uses code-reviewer agent via Task tool>\n</example>
+  +description: Use this agent when you need comprehensive code quality assurance, security vulnerability detection, or performance optimization analysis. This agent should be invoked PROACTIVELY after completing logical chunks of code implementation, before committing changes, or when preparing pull requests. Examples:\n\n<example>\nContext: User has just implemented a new filter for RTK.\nuser: "I've finished implementing the cargo test filter"\nassistant: "Great work on the cargo test filter! Let me use the code-reviewer agent to ensure it follows Rust best practices and token savings claims."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has completed a performance optimization.\nuser: "Here's the optimized LazyLock regex compilation"\nassistant: "Excellent! Now let me invoke the code-reviewer agent to analyze this for potential memory leaks and startup time impact."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has written a new cross-platform shell escaping function.\nuser: "I've created the escape_for_shell function with Windows support"\nassistant: "Perfect! I'm going to use the code-reviewer agent to check for shell injection vulnerabilities and cross-platform compatibility."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User has modified RTK hooks for Claude Code integration.\nuser: "Updated the rtk-rewrite.sh hook"\nassistant: "Important changes! Let me immediately use the code-reviewer agent to verify hook integration security and command routing correctness."\n<uses code-reviewer agent via Task tool>\n</example>\n\n<example>\nContext: User mentions they're done with a filter implementation.\nuser: "The git log filter is complete"\nassistant: "Excellent progress! Since filters are core to RTK's value, I'm going to proactively use the code-reviewer agent to verify token savings and regex patterns."\n<uses code-reviewer agent via Task tool>\n</example>
+   model: sonnet
+   color: red
+   ---
+  @@ -46,7 +46,7 @@ Raise alarms immediately when you see:
+  -| `Regex::new()` inside function | Recompiles every call, kills startup time | `lazy_static! { static ref RE: Regex = ... }` |
+  +| Fixed `Regex::new()` inside hot function | Recompiles every call, kills startup time | `static RE: LazyLock<Regex> = LazyLock::new(|| ...);` |
+   | `.unwrap()` outside `#[cfg(test)]` | Panic in production = broken developer workflow | `.context("description")?` |
+   | `tokio`, `async-std`, `futures` in Cargo.toml | +5-10ms startup overhead | Blocking I/O only |
+   | `?` without `.context()` | Error with no description = impossible to debug | `.context("what failed")?` |
+  @@ -61,7 +61,7 @@ Raise alarms immediately when you see:
+  -- `lazy_static!` regex pattern
+  +- `LazyLock<Regex>` for fixed patterns reused across calls
+   - Ownership: borrow over clone
+   - `unwrap()` policy: never in prod, `expect("reason")` in tests
+   - Silent failures: empty `catch`/`match _ => {}` patterns
+  @@ -122,9 +122,8 @@ fn filter_line(line: &str) -> bool {
+  -lazy_static! {
+  -    static ref ERROR_RE: Regex = Regex::new(r"^\s*error").unwrap();
+  -}
+  +static ERROR_RE: LazyLock<Regex> =
+  +    LazyLock::new(|| Regex::new(r"^\s*error").unwrap());
+   fn filter_line(line: &str) -> bool {
+       ERROR_RE.is_match(line)
+   }
+  @@ -198,7 +197,7 @@ fix_here
+  -| 🔴 | file.rs | 45 | lazy_static! |
+  +| 🔴 | file.rs | 45 | LazyLock |
+   ```
+   
+   ## Call-Site Analysis (🔴 MANDATORY)
+  +6 -7
+
+.claude/agents/debugger.md
+  @@ -1,6 +1,6 @@
+  -description: Use this agent when encountering errors, test failures, unexpected behavior, or when RTK doesn't work as expected. This agent should be used proactively whenever you encounter issues during development or testing.\n\nExamples:\n\n<example>\nContext: User encounters filter parsing error.\nuser: "The git log filter is crashing on certain commit messages"\nassistant: "I'm going to use the debugger agent to investigate this parsing error."\n<commentary>\nSince there's an error in filter logic, use the debugger agent to perform root cause analysis and provide a fix.\n</commentary>\n</example>\n\n<example>\nContext: Tests fail after filter modification.\nuser: "Token savings tests are failing after I updated the cargo test filter"\nassistant: "Let me use the debugger agent to analyze these test failures and identify the regression."\n<commentary>\nTest failures require systematic debugging to identify the root cause and fix the issue.\n</commentary>\n</example>\n\n<example>\nContext: Performance regression detected.\nuser: "RTK startup time increased to 25ms after adding lazy_static regex"\nassistant: "I'm going to use the debugger agent to profile the performance regression."\n<commentary>\nPerformance problems require systematic debugging with profiling tools (flamegraph, hyperfine).\n</commentary>\n</example>\n\n<example>\nContext: Shell escaping bug on Windows.\nuser: "Git commands work on macOS but fail on Windows with shell escaping errors"\nassistant: "Let me launch the debugger agent to investigate this cross-platform shell escaping issue."\n<commentary>\nCross-platform bugs require platform-specific debugging and testing.\n</commentary>\n</example>
+  +description: Use this agent when encountering errors, test failures, unexpected behavior, or when RTK doesn't work as expected. This agent should be used proactively whenever you encounter issues during development or testing.\n\nExamples:\n\n<example>\nContext: User encounters filter parsing error.\nuser: "The git log filter is crashing on certain commit messages"\nassistant: "I'm going to use the debugger agent to investigate this parsing error."\n<commentary>\nSince there's an error in filter logic, use the debugger agent to perform root cause analysis and provide a fix.\n</commentary>\n</example>\n\n<example>\nContext: Tests fail after filter modification.\nuser: "Token savings tests are failing after I updated the cargo test filter"\nassistant: "Let me use the debugger agent to analyze these test failures and identify the regression."\n<commentary>\nTest failures require systematic debugging to identify the root cause and fix the issue.\n</commentary>\n</example>\n\n<example>\nContext: Performance regression detected.\nuser: "RTK startup time increased to 25ms after adding LazyLock regex"\nassistant: "I'm going to use the debugger agent to profile the performance regression."\n<commentary>\nPerformance problems require systematic debugging with profiling tools (flamegraph, hyperfine).\n</commentary>\n</example>\n\n<example>\nContext: Shell escaping bug on Windows.\nuser: "Git commands work on macOS but fail on Windows with shell escaping errors"\nassistant: "Let me launch the debugger agent to investigate this cross-platform shell escaping issue."\n<commentary>\nCross-platform bugs require platform-specific debugging and testing.\n</commentary>\n</example>
+   model: sonnet
+   color: red
+   permissionMode: ask
+  @@ -156,7 +156,7 @@ fn filter_cmd(input: &str) -> String {
+  -# - Regex::new() in hot path (should be in lazy_static init)
+  +# - Regex::new() in hot path (should be in LazyLock init)
+   # - Excessive allocations (String::from, Vec::new in loop)
+   # - File I/O on startup (should be zero)
+   # - Heavy dependency init (tokio, async-std - should not exist)
+  @@ -188,10 +188,9 @@ fn filter_line(line: &str) -> Option<&str> {
+  -// ✅ RIGHT: Lazy static compilation
+  -lazy_static! {
+  -    static ref PATTERN: Regex = Regex::new(r"pattern").unwrap();
+  -}
+  +// ✅ RIGHT: LazyLock compilation
+  +static PATTERN: LazyLock<Regex> =
+  +    LazyLock::new(|| Regex::new(r"pattern").unwrap());
+   
+   fn filter_line(line: &str) -> Option<&str> {
+       PATTERN.find(line).map(|m| m.as_str())
+  @@ -292,7 +291,7 @@ diff /tmp/before.txt /tmp/after.txt
+  -# - Regex::new() in hot path → lazy_static missing
+  +# - Fixed Regex::new() in hot path → LazyLock missing
+   # - String::from() in loop → excessive allocations
+   # - std::fs::read() on startup → config file I/O
+   # - tokio::runtime::new() → async runtime (should not exist!)
+  @@ -379,7 +378,7 @@ For each debugging session, provide:
+  -- **Root Cause Focus**: Fix underlying issue (e.g., lazy_static missing), not symptoms (add timeout)
+  +- **Root Cause Focus**: Fix underlying issue (e.g., a fixed regex is not cached), not symptoms (add timeout)
+   - **Systematic Approach**: Follow methodology step-by-step, don't jump to conclusions
+   - **Minimal Changes**: Keep fixes focused to reduce risk
+   - **Verification**: Always verify fix + run full quality checks
+  @@ -402,7 +401,7 @@ For each debugging session, provide:
+  -| Startup time >15ms | Slow CLI launch | Regex recompiled at runtime | `lazy_static!` all regex |
+  +| Startup time >15ms | Slow CLI launch | Regex recompiled at runtime | `LazyLock<Regex>` for fixed, reused patterns |
+   | Memory >7MB | High resident set | Excessive allocations | Use `&str` not `String`, borrow not clone |
+   | Flamegraph shows file I/O | Slow startup | Config loaded on launch | Lazy config loading (on-demand) |
+   | Binary size >8MB | Large release binary | Full dependency features | Minimal features in `Cargo.toml` |
+  @@ -476,7 +475,7 @@ For each debugging session, provide:
+  -5. Fix hotspot (usually lazy_static missing or allocation in loop)
+  +5. Fix hotspot (usually an uncached fixed regex or allocation in loop)
+   6. Verify fix:
+      ```bash
+      cargo build --release
+  +9 -10
+
+.claude/agents/rust-rtk.md
+  @@ -13,7 +13,7 @@ You are an expert Rust developer specializing in the RTK codebase architecture.
+  -- **Performance optimization**: Zero-overhead design, lazy_static regex, minimal allocations
+  +- **Performance optimization**: Zero-overhead design, LazyLock regex, minimal allocations
+   - **Error handling**: anyhow for CLI binary, graceful fallback on filter failures
+   - **Cross-platform**: macOS/Linux/Windows shell compatibility (bash/zsh/PowerShell)
+   
+  @@ -48,16 +48,16 @@ pub fn execute_with_filter(cmd: &str, args: &[&str]) -> anyhow::Result<Output> {
+  -**✅ RIGHT**: Compile regex ONCE with `lazy_static!`, reuse forever:
+  +**✅ RIGHT**: Compile regex ONCE with `LazyLock`, reuse forever:
+   
+   ```rust
+  -use lazy_static::lazy_static;
+   use regex::Regex;
+  +use std::sync::LazyLock;
+   
+  -lazy_static! {
+  -    static ref COMMIT_HASH: Regex = Regex::new(r"[0-9a-f]{7,40}").unwrap();
+  -    static ref AUTHOR_LINE: Regex = Regex::new(r"^Author: (.+) <(.+)>$").unwrap();
+  -}
+  +static COMMIT_HASH: LazyLock<Regex> =
+  +    LazyLock::new(|| Regex::new(r"[0-9a-f]{7,40}").unwrap());
+  +static AUTHOR_LINE: LazyLock<Regex> =
+  +    LazyLock::new(|| Regex::new(r"^Author: (.+) <(.+)>$").unwrap());
+   
+   pub fn filter_git_log(input: &str) -> String {
+       input.lines()
+  @@ -85,7 +85,7 @@ pub fn filter_git_log(input: &str) -> String {
+  -**Why**: Regex compilation is expensive (~1-5ms per pattern). RTK targets <10ms total startup time. `lazy_static!` compiles patterns once at binary startup, then reuses them forever. This is **mandatory** for all regex in RTK.
+  +**Why**: Regex compilation is expensive (~1-5ms per pattern). RTK targets <10ms total startup time. `LazyLock` compiles fixed patterns on first use, then reuses them forever. Use it for regexes that are fixed at declaration time and reused across calls.
+   
+   ### Token Count Validation (Testing Critical)
+   
+  @@ -373,9 +373,9 @@ docker run --rm -v $(pwd):/rtk -w /rtk rust:latest cargo test  # Linux via Docke
+  -❌ **DON'T** recompile regex at runtime → Use `lazy_static!`
+  +❌ **DON'T** repeatedly compile fixed regex patterns → Use `LazyLock<Regex>`
+   - Regex compilation is expensive (~1-5ms per pattern)
+  -- Use `lazy_static! { static ref RE: Regex = ... }` for all patterns
+  +- Use `LazyLock<Regex>` for fixed patterns reused across calls
+   
+   ❌ **DON'T** panic on filter failure → Fallback to raw command
+   - User workflow must never break
+  @@ -394,7 +394,7 @@ docker run --rm -v $(pwd):/rtk -w /rtk rust:latest cargo test  # Linux via Docke
+  -✅ **DO** compile regex once with `lazy_static!`
+  +✅ **DO** compile fixed, reused regexes once with `LazyLock<Regex>`
+   ✅ **DO** verify token savings claims in tests (≥60%)
+   ✅ **DO** test on macOS + Linux + Windows (via CI or manual)
+   ✅ **DO** run `cargo fmt && cargo clippy --all-targets && cargo test` before commit
+  @@ -414,12 +414,11 @@ touch src/cmds/<ecosystem>/newcmd_cmd.rs
+  -use lazy_static::lazy_static;
+   use regex::Regex;
+  +use std::sync::LazyLock;
+   
+  -lazy_static! {
+  -    static ref PATTERN: Regex = Regex::new(r"pattern").unwrap();
+  -}
+  +static PATTERN: LazyLock<Regex> =
+  +    LazyLock::new(|| Regex::new(r"pattern").unwrap());
+   
+   pub fn filter_newcmd(input: &str) -> Result<String> {
+       // Implement filtering logic
+  +14 -15
+
+.claude/agents/technical-writer.md
+  @@ -233,12 +233,11 @@ touch src/cmds/<ecosystem>/newcmd_cmd.rs
+  -use lazy_static::lazy_static;
+   use regex::Regex;
+  +use std::sync::LazyLock;
+   
+  -lazy_static! {
+  -    static ref PATTERN: Regex = Regex::new(r"pattern").unwrap();
+  -}
+  +static PATTERN: LazyLock<Regex> =
+  +    LazyLock::new(|| Regex::new(r"pattern").unwrap());
+   
+   pub fn filter_newcmd(input: &str) -> Result<String> {
+       // Filter logic
+  @@ -300,7 +299,7 @@ cargo fmt --all && cargo clippy --all-targets && cargo test --all
+  -- **Lazy regex**: All patterns in `lazy_static!`
+  +- **Lazy regex**: Fixed, reused patterns use `LazyLock<Regex>`
+   - **Error handling**: Fallback to raw command on failure
+   - **Cross-platform**: Tested on macOS + Linux
+   ```
+  +4 -5
+
+.claude/commands/tech/audit-codebase.md
+  @@ -122,7 +122,7 @@ ls -lh target/release/rtk 2>/dev/null || echo "Build needed"
+  -# Compter celles hors lazy_static!
+  +# Compter les patterns fixes et réutilisés hors LazyLock
+   
+   # Modules sans fallback vers commande brute
+   Grep "execute_raw\|passthrough\|raw_cmd" src/ --glob "*.rs"
+  @@ -140,7 +140,7 @@ Grep "mod " src/main.rs
+  -| Regex dans fonction (pas lazy_static)  | -2 par occurrence   |
+  +| Regex fixe recompilée dans une fonction      | -2 par occurrence   |
+   | Module sans fallback brute             | -1.5 par module     |
+   | Module sans #[cfg(test)]               | -1 par module       |
+   
+  +2 -2
+
+.claude/commands/tech/codereview.md
+  @@ -77,7 +77,7 @@ git diff "$BASE_BRANCH"...HEAD --stat
+  -- JAMAIS `Regex::new()` dans une fonction → `lazy_static!` obligatoire
+  +- Pattern regex fixe et réutilisé → `LazyLock<Regex>`
+   - JAMAIS dépendance async (tokio, async-std) → single-threaded by design
+   - Startup time cible: <10ms
+   
+  @@ -88,7 +88,7 @@ git diff "$BASE_BRANCH"...HEAD --stat
+  -- `lazy_static!` pour regex (compile once, reuse forever)
+  +- `LazyLock<Regex>` pour les patterns fixes et réutilisés
+   - `exit_code` propagé (0 = success, non-zero = failure)
+   - `strip_ansi()` depuis `utils.rs` — pas re-implémenté
+   
+  @@ -102,7 +102,7 @@ git diff "$BASE_BRANCH"...HEAD --stat
+  -- `Regex::new()` dans une fonction (pas de lazy_static)
+  +- Pattern regex fixe recompilé dans une fonction
+   - `?` sans `.context()` — erreur sans description
+   - Dépendance async ajoutée (tokio, async-std, futures)
+   - Token savings <60% pour un nouveau filtre
+  @@ -118,7 +118,7 @@ git diff "$BASE_BRANCH"...HEAD --stat
+  -- Regex non-lazy dans code existant migré vers lazy_static
+  +- Pattern regex fixe et réutilisé migré vers `LazyLock<Regex>`
+   - Fonction >50 lignes (split recommandé)
+   - Nesting >3 niveaux (early returns)
+   - `clone()` inutile (borrow possible)
+  @@ -163,13 +163,13 @@ let hash = extract_hash(line).unwrap();
+  -• `grep_cmd.rs:12` - `Regex::new()` dans la fonction → `lazy_static!`
+  +• `grep_cmd.rs:12` - pattern fixe recompilé dans la fonction → `LazyLock<Regex>`
+   
+   \```rust
+   // ❌ Avant (recompile à chaque appel)
+   let re = Regex::new(r"pattern").unwrap();
+   // ✅ Après
+  -lazy_static! { static ref RE: Regex = Regex::new(r"pattern").unwrap(); }
+  +static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"pattern").unwrap());
+   \```
+   
+   ### 🟡 Important
+  @@ -181,7 +181,7 @@ lazy_static! { static ref RE: Regex = Regex::new(r"pattern").unwrap(); }
+  -| 🔴   | grep_cmd.rs | 12 | lazy_static!       |
+  +| 🔴   | grep_cmd.rs | 12 | LazyLock          |
+   | 🟡   | filter.rs   | 78 | split function    |
+   ```
+   
+  @@ -196,8 +196,8 @@ lazy_static! { static ref RE: Regex = Regex::new(r"pattern").unwrap(); }
+  -# Vérifier si lazy_static est déjà utilisé dans le module
+  -Grep "lazy_static" src/<module>.rs
+  +# Vérifier si LazyLock est déjà utilisé dans le module
+  +Grep "LazyLock" src/<module>.rs
+   
+   # Compter unwrap() (si pattern établi dans tests = ok)
+   Grep "unwrap()" src/ --output_mode count
+  @@ -208,7 +208,7 @@ Glob tests/fixtures/<cmd>_raw.txt
+  -- `lazy_static!` avec `unwrap()` pour initialisation → pattern établi RTK
+  +- `LazyLock<Regex>` avec `unwrap()` dans l'initialiseur → pattern établi RTK
+   - Variables `_unused` → peut être intentionnel (warn suppression)
+   
+   ## Mode Auto (--auto)
+  @@ -245,7 +245,7 @@ Glob tests/fixtures/<cmd>_raw.txt
+  -- Commit atomique par passage : `autofix(codereview): fix unwrap + lazy_static`
+  +- Commit atomique par passage : `autofix(codereview): fix unwrap + lazy lock`
+   
+   ## Workflow recommandé
+   
+  +11 -11
+
+.claude/rules/cli-testing.md
+  @@ -2,69 +2,72 @@
+  -## Snapshot Testing (🔴 Critical)
+  +## Unit Testing (🔴 Critical)
+   
+   **Priority**: 🔴 **Triggers**: All filter changes, output format modifications
+   
+  -Use `insta` crate for output validation. This is the **primary testing strategy** for RTK filters.
+  +Use plain `#[cfg(test)] mod tests` block colocated in the same file as the filter,
+  +using `assert_eq!`/`assert!` directly against expected output.
+   
+  -### Basic Snapshot Test
+  +### Basic Unit Test
+   
+   ```rust
+  -use insta::assert_snapshot;
+  -
+  -#[test]
+  -fn test_git_log_output() {
+  -    let input = include_str!("../tests/fixtures/git_log_raw.txt");
+  -    let output = filter_git_log(input);
+  +#[cfg(test)]
+  +mod tests {
+  +    use super::*;
+   
+  -    // Snapshot test - will fail if output changes
+  -    assert_snapshot!(output);
+  +    #[test]
+  +    fn test_git_log_output() {
+  +        let input = "abc1234 fix: handle empty commit\ndef5678 feat: add filter\n";
+  +        let output = filter_git_log(input);
+  +        assert_eq!(output, "abc1234 fix: handle empty commit\ndef5678 feat: add filter");
+  +    }
+   }
+   ```
+   
+  -### Workflow
+  +### Fixture strategy
+  +
+  +Two patterns coexist, pick based on what the filter needs:
+   
+  -1. **Write test**: Add `assert_snapshot!(output);` in test
+  -2. **Run tests**: `cargo test` (creates new snapshots on first run)
+  -3. **Review snapshots**: `cargo insta review` (interactive review)
+  -4. **Accept changes**: `cargo insta accept` (if output is correct)
+  +1. **Inline literal strings** (most common for `src/cmds/**` unit tests) — build a small
+  +   representative string directly in the test body. Used throughout `src/cmds/git/git.rs`,
+  +   `src/cmds/git/gh_cmd.rs`, etc. Good for quick coverage of a specific format/edge case.
+  +2. **Real captured fixtures via `include_str!`** — used when the raw output is large or
+  +   format-sensitive enough that inline strings would be unreadable or drift from reality.
+  +   `src/cmds/jvm/mvn_cmd.rs` is the reference example (23+ `include_str!` fixtures). Fixtures
+  +   for these live in `tests/fixtures/` (e.g. `tests/fixtures/mvn_test_pass_slice_raw.txt`,
+  +   `tests/fixtures/gradlew_build_raw.txt`, `tests/fixtures/glab_mr_list_raw.json`).
+   
+   ### When to Use
+   
+  -- **Every new filter**: All filters must have snapshot test
+  -- **Output format changes**: When modifying filter logic
+  -- **Regression detection**: Catch unintended changes
+  +- **Every new filter**: cover the common case and at least one edge case (empty input, error output).
+  +- **Output format changes**: update the relevant `assert_eq!` expectations when filter logic changes.
+  +- **Regression detection**: prefer a real fixture (`include_str!`) over an inline string once
+  +  output size/format makes hand-written strings brittle or unrepresentative.
+   
+   ### Example Workflow
+   
+   ```bash
+  -# 1. Create fixture from real command
+  -git log -20 > tests/fixtures/git_log_raw.txt
+  +# 1. Capture real output for a fixture-backed test (only needed for the include_str! pattern)
+  +mvn test > tests/fixtures/mvn_test_example_raw.txt
+   
+  -# 2. Write test with assert_snapshot!
+  -cat > src/cmds/git/git.rs <<'EOF'
+  +# 2. Write the test in the module under test
+  +cat >> src/cmds/jvm/mvn_cmd.rs <<'EOF'
+   #[cfg(test)]
+   mod tests {
+  -    use insta::assert_snapshot;
+  +    use super::*;
+   
+       #[test]
+  -    fn test_git_log_format() {
+  -        let input = include_str!("../tests/fixtures/git_log_raw.txt");
+  -        let output = filter_git_log(input);
+  -        assert_snapshot!(output);
+  +    fn test_mvn_test_example() {
+  +        let input = include_str!("../../../tests/fixtures/mvn_test_example_raw.txt");
+  +        let output = filter_mvn_test(input);
+  +        assert!(output.contains("FAILED") || output.contains("PASSED"));
+       }
+   }
+   EOF
+   
+  -# 3. Run test (creates snapshot)
+  -cargo test test_git_log_format
+  -
+  -# 4. Review snapshot
+  -cargo insta review
+  -# Press 'a' to accept, 'r' to reject
+  -
+  -# 5. Snapshot saved in src/cmds/git/snapshots/git__tests__*.snap
+  ... (2 lines truncated)
+  @@ -84,7 +87,7 @@ mod tests {
+  -        let input = include_str!("../tests/fixtures/git_log_raw.txt");
+  +        let input = "..."; // inline string or include_str! fixture
+           let output = filter_git_log(input);
+   
+           let input_tokens = count_tokens(input);
+  @@ -116,15 +119,13 @@ pnpm list > tests/fixtures/pnpm_list_raw.txt
+  -### Savings Targets by Filter
+  +### Savings Target
+   
+  -| Filter | Expected Savings | Rationale |
+  -|--------|------------------|-----------|
+  -| `git log` | 80%+ | Condense commits to hash + message |
+  -| `cargo test` | 90%+ | Show failures only |
+  -| `gh pr view` | 87%+ | Remove ASCII art, verbose metadata |
+  -| `pnpm list` | 70%+ | Compact dependency tree |
+  -| `docker ps` | 60%+ | Essential fields only |
+  +There is a single enforced floor, not a per-filter table: **≥60% savings is the release
+  +blocker** (see CLAUDE.md's "Pre-commit Gate" / performance targets). Individual filters often
+  +exceed this by a wide margin, but don't assert specific per-command percentages (e.g. "87% for
+  +`gh pr view`") unless you've verified the actual number against that filter's own fixtures —
+  +asserted thresholds vary per filter and doc tables listing invented numbers rot immediately.
+   
+   **Release blocker**: If savings drop below 60% for any filter, investigate and fix before merge.
+   
+  @@ -161,18 +162,13 @@ fn test_shell_escaping() {
+  -**macOS (primary)**:
+  +**Linux/macOS (primary)**:
+   ```bash
+   cargo test  # Local testing
+   ```
+   
+  -**Linux (via Docker)**:
+  -```bash
+  -docker run --rm -v $(pwd):/rtk -w /rtk rust:latest cargo test
+  -```
+  -
+   **Windows (via CI)**:
+  -Trust GitHub Actions CI/CD pipeline or test manually if Windows machine available.
+  +Trust GitHub Actions CI/CD pipeline or test manually if a Windows machine is available.
+   
+   ### Shell Differences
+   
+  @@ -186,7 +182,13 @@ Trust GitHub Actions CI/CD pipeline or test manually if Windows machine availabl
+  -Integration tests execute real commands via RTK to verify end-to-end behavior.
+  +Integration tests live as top-level files in `tests/` (not colocated with `src/`), e.g.
+  +`tests/grep_context_test.rs`, `tests/grep_faithful_format_test.rs`,
+  +`tests/guard_integration_test.rs`, `tests/search_compress_test.rs`,
+  +`tests/search_error_test.rs`, `tests/search_faithful_test.rs`. These exercise cross-cutting
+  +behavior (search/grep compression, guard rails, faithful formatting) rather than a single
+  +filter module, and several of them draw on `tests/fixtures/` (real captured aws/glab/gradlew/
+  +mvn/phpstan/dotnet output) alongside their own inline cases.
+   
+   ### Real Command Execution
+   
+  @@ -218,18 +220,21 @@ fn test_real_git_log() {
+  -# 2. Run integration tests
+  +# 2. Run all tests, including top-level tests/*.rs integration tests
+  +cargo test --all
+  +
+  +# 3. Run ignored (real-process) integration tests
+   cargo test --ignored
+   
+  -# 3. Run specific test
+  +# 4. Run specific test
+   cargo test --ignored test_real_git_log
+   ```
+   
+   ### When to Run
+   
+  -- **Before release**: Always run integration tests
+  -- **After filter changes**: Verify filter works with real command
+  -- **After hook changes**: Verify Claude Code integration works
+  +- **Before release**: Always run integration tests.
+  +- **After filter changes**: Verify the filter works with real command output.
+  +- **After hook changes**: Verify Claude Code integration works.
+   
+   ## Performance Testing (🟡 Important)
+   
+  @@ -303,71 +308,72 @@ rtk/
+  -│   │   │   └── snapshots/          # Insta snapshots for git module
+  -│   │   ├── js/                     # JS/TS ecosystem filters
+  -│   │   ├── python/                 # Python ecosystem filters
+  +│   │   ├── jvm/                    # gradlew, mvn — reference example for include_str! fixtures
+  +│   │   ├── php/                    # php, artisan, phpunit, phpstan, pest, paratest, ecs, pint
+   │   │   └── ...
+   │   ├── core/                       # Shared infrastructure
+   │   ├── hooks/                      # Hook system
+   │   └── analytics/                  # Token savings analytics
+   ├── tests/
+  -│   ├── common/
+  -│   │   └── mod.rs                  # Shared test utilities (count_tokens)
+  -│   ├── fixtures/                   # Real command output
+  -│   │   ├── git_log_raw.txt
+  -│   │   ├── cargo_test_raw.txt
+  -│   │   ├── gh_pr_view_raw.txt
+  -│   │   └── dotnet/                 # Dotnet-specific fixtures
+  -│   └── integration_test.rs         # Integration tests (#[ignore])
+  +│   ├── fixtures/                   # Real captured command output
+  +│   │   ├── mvn_test_pass_slice_raw.txt
+  +│   │   ├── gradlew_build_raw.txt
+  +│   │   ├── glab_mr_list_raw.json
+  +│   │   └── ...
+  +│   ├── grep_context_test.rs        # Top-level integration tests
+  +│   ├── grep_faithful_format_test.rs
+  +│   ├── guard_integration_test.rs
+  +│   ├── search_compress_test.rs
+  +│   ├── search_error_test.rs
+  +│   └── search_faithful_test.rs
+   ```
+   
+   **Best practices**:
+  -- **Unit tests**: Embedded in module (`#[cfg(test)] mod tests`)
+  -- **Fixtures**: Real command output in `tests/fixtures/`
+  -- **Snapshots**: Auto-generated in `src/cmds/<ecosystem>/snapshots/` (by insta)
+  -- **Shared utils**: `tests/common/mod.rs` (count_tokens, helpers)
+  -- **Integration**: `tests/` with `#[ignore]` attribute
+  +- **Unit tests**: Embedded in module (`#[cfg(test)] mod tests`), colocated with the filter.
+  +- **Fixtures**: Prefer inline strings for small/quick cases; use `include_str!` from
+  +  `tests/fixtures/` (real command output) once a case gets large or format-sensitive — see
+  +  `src/cmds/jvm/mvn_cmd.rs` for the pattern.
+  +- **`count_tokens` helper**: currently duplicated per test module — don't assume a shared
+  +  `tests/common/mod.rs` exists.
+  +- **Integration**: top-level `tests/*.rs` files, some with `#[ignore]`-tagged real-process tests.
+   
+   ## Testing Checklist
+   
+   When adding/modifying a filter:
+   
+   ### Implementation Phase
+  -- [ ] Create fixture from real command output
+  -- [ ] Add snapshot test with `assert_snapshot!()`
+  -- [ ] Add token accuracy test (verify ≥60% savings)
+  +- [ ] Write a unit test in the filter's own `#[cfg(test)] mod tests` block (inline string, or
+  +      `include_str!` fixture for larger/real output)
+  +- [ ] Add a token accuracy test (verify ≥60% savings) using a locally-defined `count_tokens`
+   - [ ] Test cross-platform shell escaping (if applicable)
+   
+   ### Quality Checks
+   - [ ] Run `cargo test --all` (all tests pass)
+  -- [ ] Run `cargo insta review` (review snapshots)
+   - [ ] Run `cargo test --ignored` (integration tests pass)
+   - [ ] Benchmark startup time with `hyperfine` (<10ms)
+   
+   ### Before Merge
+   - [ ] All tests passing (`cargo test --all`)
+  -- [ ] Snapshots reviewed and accepted (`cargo insta accept`)
+   - [ ] Token savings ≥60% verified
+  -- [ ] Cross-platform tests passed (macOS + Linux)
+  +- [ ] Cross-platform tests passed (Linux + macOS)
+   - [ ] Performance benchmarks passed (<10ms startup)
+
+... (more changes truncated)
+  +87 -80
+[full diff: rtk git diff --no-compact]

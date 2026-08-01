@@ -488,7 +488,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
 }
 
 fn attest_active_bundle(config: &Config) -> Vec<DoctorCheck> {
-    const ARTIFACTS: [(&str, &str); 8] = [
+    const ARTIFACTS: [(&str, &str); 10] = [
         ("hzr", "bin/hzr"),
         ("hzrd", "bin/hzrd"),
         ("rtk", "engines/rtk"),
@@ -497,6 +497,11 @@ fn attest_active_bundle(config: &Config) -> Vec<DoctorCheck> {
         ("node", "runtime/node/bin/node"),
         ("caveman_bridge", "engines/caveman-code/bridge.mjs"),
         ("contract", "share/hzr/HZR.md"),
+        ("hzr_tdd_skill", "share/hzr/skills/hzr-tdd/SKILL.md"),
+        (
+            "hzr_tdd_patterns",
+            "share/hzr/skills/hzr-tdd/references/testing-patterns.md",
+        ),
     ];
     let Some(engine_directory) = &config.engines.directory else {
         return vec![check(
@@ -809,6 +814,8 @@ mod tests {
             "runtime/node/bin/node",
             "engines/caveman-code/bridge.mjs",
             "share/hzr/HZR.md",
+            "share/hzr/skills/hzr-tdd/SKILL.md",
+            "share/hzr/skills/hzr-tdd/references/testing-patterns.md",
         ];
         let mut manifest = String::new();
         for relative in artifacts {
@@ -823,10 +830,17 @@ mod tests {
         let mut config = Config::default();
         config.engines.directory = Some(root.join("engines"));
 
+        let checks = attest_active_bundle(&config);
+        assert!(checks.iter().all(|check| check.status == CheckStatus::Pass));
         assert!(
-            attest_active_bundle(&config)
+            checks
                 .iter()
-                .all(|check| check.status == CheckStatus::Pass)
+                .any(|check| check.name == "bundle_hzr_tdd_skill")
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.name == "bundle_hzr_tdd_patterns")
         );
 
         fs::write(root.join("engines/icm"), b"tampered").expect("tamper fixture");

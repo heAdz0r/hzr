@@ -8,6 +8,19 @@ use hzr_exec::{
 };
 use tempfile::TempDir;
 
+#[cfg(unix)]
+fn process_exists(pid: i32) -> bool {
+    use nix::errno::Errno;
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+
+    match kill(Pid::from_raw(pid), None) {
+        Ok(()) | Err(Errno::EPERM) => true,
+        Err(Errno::ESRCH) => false,
+        Err(_) => true,
+    }
+}
+
 fn completed(outcome: ExecutionOutcome) -> Result<ExecutionResult> {
     match outcome {
         ExecutionOutcome::Completed { result } => Ok(*result),
@@ -123,6 +136,42 @@ async fn test_pipeline_cancellation_is_typed() -> Result<()> {
 
     assert_eq!(result.termination.cause, TerminationCause::Cancelled);
     assert!(result.duration_ms < 2_000);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_dropping_handle_terminates_process_group() -> Result<()> {
+    let directory = TempDir::new()?;
+    let pid_path = directory.path().join("descendant.pid");
+    let command = format!(
+        "sleep 30 & child=$!; printf '%s' \"$child\" > '{}'; wait",
+        pid_path.display()
+    );
+    let envelope = ExecutionEnvelope::allow_raw(CanonicalCommand::shell(command));
+    let handle = ExecutionPipeline.start(envelope)?;
+
+    let pid = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if let Ok(text) = fs::read_to_string(&pid_path)
+                && let Ok(pid) = text.parse::<i32>()
+            {
+                break pid;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(process_exists(pid));
+
+    drop(handle);
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while process_exists(pid) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
     Ok(())
 }
 

@@ -1,0 +1,13 @@
+FAILURES (3):
+1. ---- cmds::cloud::curl_cmd::tests::test_filter_curl_exact_500_bytes stdout ----
+panicked at src/cmds/cloud/curl_cmd.rs:201:9:
+assertion failed: result.content.contains("bytes total")
+2. ---- cmds::cloud::curl_cmd::tests::test_filter_curl_long_output_truncated stdout ----
+panicked at src/cmds/cloud/curl_cmd.rs:183:9:
+assertion failed: result.content.contains("bytes total")
+3. ---- cmds::cloud::curl_cmd::tests::test_filter_curl_multibyte_boundary stdout ----
+panicked at src/cmds/cloud/curl_cmd.rs:193:9:
+assertion failed: result.content.contains("bytes total")
+✗ cargo test: 2503 passed, 3 failed, 8 ignored (1 suite, 0.68s)
+warnings: 0
+errors: 2

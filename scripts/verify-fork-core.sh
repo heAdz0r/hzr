@@ -258,6 +258,7 @@ if [[ -n "${HZR_RUN_TESTS}" && "${HZR_RUN_TESTS}" != "--test" ]]; then
 fi
 
 if [[ "${HZR_RUN_TESTS}" == "--test" ]]; then
+  python3 "${HZR_REPOSITORY_ROOT}/scripts/verify-fork-clippy.py"
   HZR_TEST_ROOT="${HZR_VERIFY_TEMP}/rtk"
   mkdir -p "${HZR_TEST_ROOT}"
   while IFS= read -r HZR_RELATIVE_PATH; do

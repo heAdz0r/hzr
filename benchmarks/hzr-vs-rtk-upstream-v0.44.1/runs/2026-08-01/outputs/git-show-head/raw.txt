@@ -1,0 +1,9 @@
+commit 36591fb00d650bf987b57483c0b3a395a35a8dc1
+Merge: a7fad1f 062468c
+Author: aesoft <43991222+aeppling@users.noreply.github.com>
+Date:   Tue Jul 28 15:50:46 2026 +0200
+
+    Merge pull request #3281 from rtk-ai/release-please--branches--master--components--rtk
+    
+    chore(master): release 0.44.1
+

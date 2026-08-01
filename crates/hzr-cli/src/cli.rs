@@ -3,7 +3,10 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use hzr_agent::ResponseFormat;
-use hzr_protocol::{CodecProfile, FidelityClass, MemoryImportance, RiskClass, SearchMode};
+use hzr_protocol::{
+    CodecProfile, FidelityClass, MemoryImportance, MemoryScopeSelector, MemoryWriteScope,
+    RiskClass, SearchMode,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "hzr", version, about = "Unified agent efficiency platform")]
@@ -18,7 +21,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    #[command(about = "Create private configuration and canonical data layout")]
+    #[command(
+        about = "Initialize the workspace registry, private data layout, and visualizer service"
+    )]
     Init {
         #[arg(long)]
         force: bool,
@@ -28,9 +33,12 @@ pub enum Command {
         if_needed: bool,
         #[arg(long, requires = "if_needed")]
         quiet: bool,
+        /// Register the workspace without installing or starting the production daemon.
+        #[arg(long)]
+        skip_service: bool,
     },
     #[command(
-        about = "Adopt HZR as the default entry point: PATH binaries, one hook dispatcher, and agent instructions"
+        about = "Adopt HZR: PATH binaries, one hook dispatcher, agent instructions, and visualizer service"
     )]
     Install {
         #[arg(long)]
@@ -52,6 +60,9 @@ pub enum Command {
         /// Skip `CLAUDE.md`/`AGENTS.md` instruction wiring and install hooks only.
         #[arg(long)]
         skip_instructions: bool,
+        /// Skip service startup and keep the installed SessionStart hook from starting it.
+        #[arg(long)]
+        skip_service: bool,
     },
     #[command(about = "Remove HZR adoption hooks without restoring RTK implicitly")]
     Uninstall {
@@ -123,6 +134,34 @@ pub enum Command {
         #[command(subcommand)]
         command: McpCommand,
     },
+    #[command(
+        about = "Build this source tree into a bundle, install it globally, switch `current`, and verify every engine"
+    )]
+    Release {
+        /// Synchronize every current version surface before building the release.
+        #[arg(value_name = "VERSION")]
+        version: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        force: bool,
+        /// Keep the running daemon on the previous bundle instead of restarting it.
+        #[arg(long)]
+        skip_service: bool,
+        #[arg(long, value_name = "DIR")]
+        install_root: Option<PathBuf>,
+    },
+    #[command(about = "Print the strict HZR Red-Green-Refactor contract before implementation")]
+    Tdd,
+    /// Build *your* project through the inherited token-optimized wrapper.
+    ///
+    /// Deliberately kept as `build` rather than folded into `hzr rtk -- build`: the
+    /// inherited fork already used this verb for project builds, so muscle memory from
+    /// RTK keeps working. Building the HZR distribution itself is `hzr release`.
+    #[command(
+        about = "Build your project through the inherited fork-core build wrapper (token-optimized output)"
+    )]
+    Build(ForkForwardArgs),
     #[command(about = "Show global cumulative zero-redundancy gains and observed model usage")]
     Stats,
     #[command(hide = true)]
@@ -150,6 +189,8 @@ pub enum McpCommand {
         #[arg(long, value_enum, default_value_t = McpClientArg::Codex)]
         client: McpClientArg,
     },
+    #[command(about = "Report native client registrations and the client-managed stdio lifecycle")]
+    Status,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -236,6 +277,17 @@ pub struct ContextPlanArgs {
     pub memory_limit: usize,
 }
 
+/// Trailing arguments forwarded verbatim to one inherited fork-core subcommand.
+#[derive(Clone, Debug, Args)]
+pub struct ForkForwardArgs {
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        value_name = "ARG"
+    )]
+    pub args: Vec<OsString>,
+}
+
 #[derive(Clone, Debug, Args)]
 pub struct RtkArgs {
     #[arg(last = true, value_name = "ARG", num_args = 0.., allow_hyphen_values = true)]
@@ -257,6 +309,41 @@ pub struct SearchArgs {
     pub include_content: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum RecallScopeArg {
+    /// Only this repository.
+    Project,
+    /// Only your user-global memory.
+    Global,
+    /// This repository plus your user-global memory.
+    ProjectAndGlobal,
+}
+
+impl From<RecallScopeArg> for MemoryScopeSelector {
+    fn from(value: RecallScopeArg) -> Self {
+        match value {
+            RecallScopeArg::Project => Self::Project,
+            RecallScopeArg::Global => Self::Global,
+            RecallScopeArg::ProjectAndGlobal => Self::ProjectAndGlobal,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum StoreScopeArg {
+    Project,
+    Global,
+}
+
+impl From<StoreScopeArg> for MemoryWriteScope {
+    fn from(value: StoreScopeArg) -> Self {
+        match value {
+            StoreScopeArg::Project => Self::Project,
+            StoreScopeArg::Global => Self::Global,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum MemoryCommand {
     #[command(about = "Recall relevant memories with full ICM semantics")]
@@ -270,6 +357,9 @@ pub enum MemoryCommand {
         keyword: Option<String>,
         #[arg(long, default_value_t = 10, value_parser = parse_limit)]
         limit: usize,
+        /// Which namespaces to reach. Defaults to this project plus your global memory.
+        #[arg(long, value_enum, default_value_t = RecallScopeArg::ProjectAndGlobal)]
+        scope: RecallScopeArg,
     },
     #[command(about = "Store or update a centralized ICM memory")]
     Store {
@@ -286,6 +376,10 @@ pub enum MemoryCommand {
         keywords: Vec<String>,
         #[arg(long)]
         raw: Option<String>,
+        /// `global` for a user-wide preference or rule; `project` (default) for a fact
+        /// about this repository only.
+        #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
+        scope: StoreScopeArg,
     },
     #[command(about = "Show ICM state reported by hzrd")]
     Status,
@@ -511,7 +605,7 @@ mod tests {
 
     use super::{
         Cli, Command, ContextCommand, DaemonCommand, ExecCommand, HooksCommand, IndexCommand,
-        MigrateCommand, ServiceCommand,
+        McpCommand, MigrateCommand, ServiceCommand,
     };
 
     #[test]
@@ -559,6 +653,28 @@ mod tests {
                 command: DaemonCommand::Status
             }
         ));
+    }
+
+    #[test]
+    fn test_cli_parses_native_mcp_status() {
+        let cli =
+            Cli::try_parse_from(["hzr", "mcp", "status", "--json"]).expect("native MCP status");
+
+        assert!(cli.json);
+        assert!(matches!(
+            cli.command,
+            Command::Mcp {
+                command: McpCommand::Status
+            }
+        ));
+    }
+
+    #[test]
+    fn test_cli_parses_native_tdd_contract() {
+        let cli = Cli::try_parse_from(["hzr", "tdd", "--json"]).expect("native TDD contract");
+
+        assert!(cli.json);
+        assert!(matches!(cli.command, Command::Tdd));
     }
 
     #[test]

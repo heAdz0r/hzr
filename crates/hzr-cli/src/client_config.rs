@@ -36,6 +36,41 @@ pub struct ClientConfigReport {
     pub after_sha256: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ClientMcpStatus {
+    pub client: Client,
+    pub path: PathBuf,
+    pub config_exists: bool,
+    pub registered: bool,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub direct_icm_registrations: usize,
+    pub lifecycle: &'static str,
+    pub started_by_init: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Registration {
+    command: String,
+    args: Vec<String>,
+}
+
+impl Registration {
+    fn is_native_hzr(&self) -> bool {
+        Path::new(&self.command)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "hzr")
+            && self.args == ["mcp", "serve"]
+    }
+
+    fn matches(&self, binary: &Path) -> bool {
+        self.command == binary.to_string_lossy() && self.args == ["mcp", "serve"]
+    }
+}
+
+pub const MCP_LIFECYCLE: &str = "client_managed_stdio";
+
 pub fn default_paths() -> Result<Vec<(Client, PathBuf)>> {
     let base = BaseDirs::new().context("cannot determine the user home directory")?;
     let home = base.home_dir();
@@ -64,6 +99,65 @@ pub fn install_all(
         .into_iter()
         .map(|(client, path)| install(client, &path, binary, dry_run, confirmed))
         .collect()
+}
+
+pub fn status_all() -> Result<Vec<ClientMcpStatus>> {
+    default_paths()?
+        .into_iter()
+        .map(|(client, path)| status(client, &path))
+        .collect()
+}
+
+pub fn status(client: Client, path: &Path) -> Result<ClientMcpStatus> {
+    let config_exists = path.is_file();
+    let bytes = read_optional(path)?;
+    let (registration, direct_icm_registrations) = match client {
+        Client::Codex => {
+            let text = if bytes.is_empty() {
+                ""
+            } else {
+                std::str::from_utf8(&bytes)
+                    .with_context(|| format!("{} is not UTF-8", path.display()))?
+            };
+            let document = text
+                .parse::<DocumentMut>()
+                .with_context(|| format!("failed to parse {}", path.display()))?;
+            (
+                codex_hzr_registration(&document),
+                codex_direct_icm_count(&document),
+            )
+        }
+        Client::ClaudeDesktop => {
+            let document = if bytes.is_empty() {
+                json!({})
+            } else {
+                serde_json::from_slice(&bytes)
+                    .with_context(|| format!("failed to parse {}", path.display()))?
+            };
+            (
+                json_hzr_registration(&document),
+                json_direct_icm_count(&document),
+            )
+        }
+    };
+    let registered = registration
+        .as_ref()
+        .is_some_and(Registration::is_native_hzr);
+    let (command, args) = registration
+        .map(|registration| (Some(registration.command), registration.args))
+        .unwrap_or_default();
+
+    Ok(ClientMcpStatus {
+        client,
+        path: path.to_path_buf(),
+        config_exists,
+        registered,
+        command,
+        args,
+        direct_icm_registrations,
+        lifecycle: MCP_LIFECYCLE,
+        started_by_init: false,
+    })
 }
 
 pub fn direct_icm_registrations() -> Result<Vec<String>> {
@@ -165,6 +259,26 @@ fn codex_direct_icm_count(document: &DocumentMut) -> usize {
         .unwrap_or(0)
 }
 
+fn codex_hzr_registration(document: &DocumentMut) -> Option<Registration> {
+    let hzr = document
+        .get("mcp_servers")
+        .and_then(Item::as_table)
+        .and_then(|servers| servers.get("hzr"))
+        .and_then(Item::as_table)?;
+    Some(Registration {
+        command: hzr.get("command")?.as_str()?.to_owned(),
+        args: hzr
+            .get("args")
+            .and_then(Item::as_array)
+            .and_then(|args| {
+                args.iter()
+                    .map(|value| value.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
 fn migrate_codex(path: &Path, before: &[u8], binary: &Path) -> Result<(String, usize, bool)> {
     let text = if before.is_empty() {
         String::new()
@@ -177,22 +291,9 @@ fn migrate_codex(path: &Path, before: &[u8], binary: &Path) -> Result<(String, u
         .parse::<DocumentMut>()
         .with_context(|| format!("failed to parse {}", path.display()))?;
     let direct_before = codex_direct_icm_count(&document);
-    let hzr_matches = document
-        .get("mcp_servers")
-        .and_then(Item::as_table)
-        .and_then(|servers| servers.get("hzr"))
-        .and_then(Item::as_table)
-        .is_some_and(|hzr| {
-            hzr.get("command").and_then(Item::as_str) == Some(binary.to_string_lossy().as_ref())
-                && hzr
-                    .get("args")
-                    .and_then(Item::as_array)
-                    .is_some_and(|args| {
-                        args.iter()
-                            .filter_map(|value| value.as_str())
-                            .eq(["mcp", "serve"])
-                    })
-        });
+    let hzr_matches = codex_hzr_registration(&document)
+        .as_ref()
+        .is_some_and(|registration| registration.matches(binary));
     if direct_before == 0 && hzr_matches {
         return Ok((text, 0, true));
     }
@@ -251,6 +352,22 @@ fn json_direct_icm_count(document: &Value) -> usize {
         .unwrap_or(0)
 }
 
+fn json_hzr_registration(document: &Value) -> Option<Registration> {
+    let hzr = json_servers(document)?.get("hzr")?;
+    Some(Registration {
+        command: hzr.get("command")?.as_str()?.to_owned(),
+        args: hzr
+            .get("args")
+            .and_then(Value::as_array)
+            .and_then(|args| {
+                args.iter()
+                    .map(|value| value.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    })
+}
+
 fn migrate_claude_desktop(
     path: &Path,
     before: &[u8],
@@ -263,15 +380,9 @@ fn migrate_claude_desktop(
             .with_context(|| format!("failed to parse {}", path.display()))?
     };
     let direct_before = json_direct_icm_count(&document);
-    let hzr_matches = json_servers(&document)
-        .and_then(|servers| servers.get("hzr"))
-        .is_some_and(|hzr| {
-            hzr.get("command").and_then(Value::as_str) == Some(binary.to_string_lossy().as_ref())
-                && hzr
-                    .get("args")
-                    .and_then(Value::as_array)
-                    .is_some_and(|args| args.iter().filter_map(Value::as_str).eq(["mcp", "serve"]))
-        });
+    let hzr_matches = json_hzr_registration(&document)
+        .as_ref()
+        .is_some_and(|registration| registration.matches(binary));
     if direct_before == 0 && hzr_matches {
         let text = std::str::from_utf8(before)
             .with_context(|| format!("{} is not UTF-8", path.display()))?
@@ -323,7 +434,7 @@ mod tests {
     use tempfile::tempdir;
     use toml_edit::DocumentMut;
 
-    use super::{Client, install};
+    use super::{Client, MCP_LIFECYCLE, install, status};
 
     fn binary() -> &'static Path {
         Path::new("/opt/hzr/current/bin/hzr")
@@ -357,6 +468,13 @@ mod tests {
                 .expect("idempotent reinstall")
                 .changed
         );
+        let status = status(Client::Codex, &path).expect("native MCP status");
+        assert!(status.registered);
+        assert_eq!(status.lifecycle, MCP_LIFECYCLE);
+        assert!(!status.started_by_init);
+        assert_eq!(status.direct_icm_registrations, 0);
+        assert_eq!(status.command.as_deref(), Some("/opt/hzr/current/bin/hzr"));
+        assert_eq!(status.args, ["mcp", "serve"]);
     }
 
     #[test]
@@ -383,5 +501,38 @@ mod tests {
             Value::String("/opt/hzr/current/bin/hzr".to_owned())
         );
         assert!(servers.contains_key("other"));
+        let status = status(Client::ClaudeDesktop, &path).expect("native MCP status");
+        assert!(status.registered);
+        assert!(!status.started_by_init);
+        assert_eq!(status.direct_icm_registrations, 0);
+    }
+
+    #[test]
+    fn test_missing_client_config_reports_client_managed_not_started() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("missing.toml");
+
+        let status = status(Client::Codex, &path).expect("missing config status");
+
+        assert!(!status.config_exists);
+        assert!(!status.registered);
+        assert!(!status.started_by_init);
+        assert_eq!(status.lifecycle, "client_managed_stdio");
+    }
+
+    #[test]
+    fn test_status_rejects_non_string_native_arguments() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            "[mcp_servers.hzr]\ncommand = '/opt/hzr/current/bin/hzr'\nargs = ['mcp', 1, 'serve']\n",
+        )
+        .expect("fixture");
+
+        let status = status(Client::Codex, &path).expect("MCP status");
+
+        assert!(!status.registered);
+        assert!(status.args.is_empty());
     }
 }

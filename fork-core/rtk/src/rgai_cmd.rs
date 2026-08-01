@@ -75,19 +75,34 @@ struct SearchOutcome {
     raw_output: String,
 }
 
-pub fn run(
-    query: &str,
-    path: &str,
-    max_results: usize,
-    context_lines: usize,
-    file_type: Option<&str>,
-    max_file_kb: usize,
-    json_output: bool,
-    compact: bool,
-    builtin: bool,       // --builtin flag: skip grepai delegation
-    files: Option<&str>, // ADDED: --files flag — restrict search to listed paths
-    verbose: u8,
-) -> Result<()> {
+pub struct RgaiOptions<'a> {
+    pub path: &'a str,
+    pub project_root: Option<&'a str>,
+    pub max_results: usize,
+    pub context_lines: usize,
+    pub file_type: Option<&'a str>,
+    pub max_file_kb: usize,
+    pub json_output: bool,
+    pub compact: bool,
+    pub builtin: bool,
+    pub files: Option<&'a str>,
+    pub verbose: u8,
+}
+
+pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
+    let RgaiOptions {
+        path,
+        project_root,
+        max_results,
+        context_lines,
+        file_type,
+        max_file_kb,
+        json_output,
+        compact,
+        builtin,
+        files,
+        verbose,
+    } = options;
     let timer = tracking::TimedExecution::start();
 
     let query = query.trim();
@@ -99,6 +114,10 @@ pub fn run(
     if !root.exists() {
         bail!("path does not exist: {}", path);
     }
+    let project_dir = project_root.map(Path::new).unwrap_or(root);
+    if !project_dir.is_dir() {
+        bail!("project root is not a directory: {}", project_dir.display());
+    }
 
     // Try grepai delegation first (unless --builtin flag is set or --files is provided)
     // CHANGED: unpack (raw, filtered) for correct savings tracking
@@ -107,7 +126,7 @@ pub fn run(
         if let Some((raw, filtered)) = try_grepai_delegation(
             query,
             path,
-            root,
+            project_dir,
             max_results,
             json_output,
             compact,

@@ -17,7 +17,7 @@ async fn test_workspace_uses_git_root_and_reports_nested_indexes() {
     let repo = git_repo();
     let nested = repo.path().join("src/deep");
     fs::create_dir_all(&nested).expect("nested source directory must be created");
-    let duplicate = repo.path().join("vendor/package/.grepai");
+    let duplicate = repo.path().join("packages/package/.grepai");
     fs::create_dir_all(&duplicate).expect("duplicate index directory must be created");
 
     let workspace = discover(&nested).await;

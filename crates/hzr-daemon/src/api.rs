@@ -1,4 +1,6 @@
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::extract::State;
@@ -9,17 +11,21 @@ use hzr_exec::{
     ExecutionOutcome, ForkCoreInvocation, NotStarted, PINNED_RTK_VERSION, RewriteDecision,
     RewriteSource, StdinSpec, TerminationCause,
 };
-use hzr_index::{Deadlines, Workspace};
+use hzr_index::{Deadlines, Workspace, WorkspaceRegistration, registered_workspaces};
 use hzr_memory::{
-    Importance, RecallRequest, ServiceStatus, StoreRequest, isolate_project_memories,
-    namespaced_topic, recall_candidate_limit,
+    GLOBAL_SCOPE_TOKEN, Importance, MemoryNamespace, RecallRequest, ServiceStatus, StoreRequest,
+    global_topic, isolate_memories, merge_memories, namespaced_topic, recall_candidate_limit,
+    validate_memory_kind,
 };
 use hzr_protocol::{
     CodecApiRequest, CommandTermination, ContextPlanApiRequest, ContextPlanApiResponse,
-    EngineHealth, EngineState, ExecApiRequest, ExecApprovalApiRequest, ForkRunApiRequest,
-    ForkRunApiResponse, HealthResponse, MemoryImportance, MemoryRecallApiRequest,
-    MemoryStoreApiRequest, PROTOCOL_VERSION, SearchApiRequest, SearchApiResponse, TraceId,
-    UsageApiRequest, UsageApiResponse,
+    DashboardEstimatedEfficiency, DashboardHelpCommand, DashboardObservedUsage, DashboardProject,
+    DashboardProjectArtifacts, DashboardProjectState, DashboardResponse, DashboardService,
+    DashboardState, EngineHealth, EngineState, ExecApiRequest, ExecApprovalApiRequest,
+    ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryImportance,
+    MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest, MemoryWriteScope,
+    PROTOCOL_VERSION, SearchApiRequest, SearchApiResponse, TraceId, UsageApiRequest,
+    UsageApiResponse,
 };
 
 use crate::approval::PendingApproval;
@@ -83,6 +89,288 @@ pub async fn health(State(state): State<AppState>) -> Result<Json<HealthResponse
     }))
 }
 
+pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardResponse>, ApiError> {
+    let health = health(State(state.clone())).await?.0;
+    let registry = registered_workspaces(&state.config.data_dir);
+    let registry_warnings = registry.warnings.len();
+    let projects = registry
+        .registrations
+        .iter()
+        .map(dashboard_project)
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let ledger_path = state.config.data_dir.join("ledger/hzr.sqlite");
+    let ledger = tokio::task::spawn_blocking(move || Ledger::summaries_read_only(&ledger_path))
+        .await
+        .map_err(|error| ApiError::internal(format!("dashboard ledger task failed: {error}")))?;
+    let (observed, estimated, ledger_error) = match ledger {
+        Ok((observed, estimated)) => (observed, estimated, None),
+        Err(error) => (
+            hzr_core::LedgerSummary::default(),
+            hzr_core::EfficiencySummary::default(),
+            Some(error.to_string()),
+        ),
+    };
+
+    let mut services = Vec::with_capacity(4);
+    services.push(DashboardService {
+        id: "hzrd".into(),
+        name: "HZR daemon".into(),
+        version: Some(env!("CARGO_PKG_VERSION").into()),
+        state: if ledger_error.is_some() || registry_warnings > 0 {
+            DashboardState::Degraded
+        } else {
+            DashboardState::Ready
+        },
+        detail: match (&ledger_error, registry_warnings) {
+            (Some(_), 0) => "Control plane is ready; the usage ledger is unavailable".into(),
+            (None, warnings) if warnings > 0 => {
+                format!("Control plane is ready; {warnings} workspace registry warning(s)")
+            }
+            (Some(_), warnings) => format!(
+                "Control plane is ready; usage ledger unavailable and {warnings} registry warning(s)"
+            ),
+            (None, _) => "Loopback control plane and visualizer are ready".into(),
+        },
+        command: Some("hzr doctor --workspace .".into()),
+    });
+    for engine in ["rtk", "icm", "grepai"] {
+        if let Some(engine_health) = health.engines.iter().find(|item| item.name == engine) {
+            services.push(dashboard_service(engine_health));
+        }
+    }
+    let overall_state = dashboard_overall_state(&services);
+    let reduction_pct = signed_percentage(
+        estimated.net_avoided_tokens_estimated,
+        estimated.baseline_tokens_estimated,
+    );
+    let mut notes = vec![
+        "Provider-observed usage and UTF-8-byte estimates are displayed separately.".into(),
+        "grepai standby is expected: each workspace watcher starts on demand.".into(),
+        "The visualizer is local-only and exposes no engine lifecycle mutations.".into(),
+    ];
+    if ledger_error.is_some() {
+        notes.push(
+            "Usage ledger totals are unavailable in this snapshot; no fallback totals were used."
+                .into(),
+        );
+    }
+
+    Ok(Json(DashboardResponse {
+        protocol_version: PROTOCOL_VERSION,
+        hzr_version: env!("CARGO_PKG_VERSION").into(),
+        visualizer_version: env!("CARGO_PKG_VERSION").into(),
+        generated_at_ms: now_ms()?,
+        uptime_ms: u64::try_from(state.started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+        daemon_endpoint: format!("http://{}", state.config.daemon.bind),
+        overall_state,
+        services,
+        projects,
+        registry_warnings,
+        observed_usage: DashboardObservedUsage {
+            tasks: observed.tasks,
+            accepted: observed.accepted,
+            actual_input_tokens: observed.actual_input_tokens,
+            actual_output_tokens: observed.actual_output_tokens,
+            estimated_input_tokens: observed.estimated_input_tokens,
+            cost_microusd: observed.cost_microusd,
+        },
+        estimated_efficiency: DashboardEstimatedEfficiency {
+            operations: estimated.operations,
+            baseline_tokens_estimated: estimated.baseline_tokens_estimated,
+            delivered_tokens_estimated: estimated.delivered_tokens_estimated,
+            gross_avoided_tokens_estimated: estimated.gross_avoided_tokens_estimated,
+            regression_tokens_estimated: estimated.regression_tokens_estimated,
+            net_avoided_tokens_estimated: estimated.net_avoided_tokens_estimated,
+            reduction_pct,
+            total_execution_ms: estimated.total_execution_ms,
+            measurement: "estimated_utf8_bytes_div_4_v1".into(),
+        },
+        help: dashboard_help(),
+        notes,
+    }))
+}
+
+fn dashboard_service(health: &EngineHealth) -> DashboardService {
+    let (name, command) = match health.name.as_str() {
+        "rtk" => ("RTK fork-core", "hzr rtk -- --version"),
+        "icm" => ("ICM memory", "hzr memory status"),
+        "grepai" => ("grepai index", "hzr index status --workspace ."),
+        other => (other, "hzr engines status"),
+    };
+    DashboardService {
+        id: health.name.clone(),
+        name: name.into(),
+        version: health.version.clone(),
+        state: match health.state {
+            EngineState::Ready => DashboardState::Ready,
+            EngineState::Degraded => DashboardState::Degraded,
+            EngineState::Rebuilding => DashboardState::Rebuilding,
+            EngineState::Stopped if health.name == "grepai" => DashboardState::Standby,
+            EngineState::Stopped => DashboardState::Stopped,
+        },
+        detail: health.detail.clone().unwrap_or_else(|| "No detail".into()),
+        command: Some(command.into()),
+    }
+}
+
+fn dashboard_overall_state(services: &[DashboardService]) -> DashboardState {
+    if services.iter().any(|service| {
+        matches!(
+            service.state,
+            DashboardState::Degraded | DashboardState::Stopped | DashboardState::Unknown
+        )
+    }) {
+        DashboardState::Degraded
+    } else if services
+        .iter()
+        .any(|service| service.state == DashboardState::Rebuilding)
+    {
+        DashboardState::Rebuilding
+    } else {
+        DashboardState::Ready
+    }
+}
+
+fn dashboard_project(registration: &WorkspaceRegistration) -> Result<DashboardProject, ApiError> {
+    let root = registration.root.to_str().ok_or_else(|| {
+        ApiError::internal("registered workspace path is not valid UTF-8".to_owned())
+    })?;
+    let root_available = fs::symlink_metadata(&registration.root)
+        .map(|metadata| metadata.file_type().is_dir())
+        .unwrap_or(false);
+    let index_directory_is_real = fs::symlink_metadata(&registration.index_directory)
+        .map(|metadata| metadata.file_type().is_dir())
+        .unwrap_or(false);
+    let artifacts = dashboard_artifacts(&registration.index_directory);
+    let state = if !root_available {
+        DashboardProjectState::Unavailable
+    } else if !index_directory_is_real {
+        DashboardProjectState::Degraded
+    } else if artifacts.config_present && artifacts.vectors_present && artifacts.symbols_present {
+        DashboardProjectState::Ready
+    } else if artifacts.config_present {
+        DashboardProjectState::Warming
+    } else {
+        DashboardProjectState::Registered
+    };
+    let name = registration
+        .root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(root)
+        .to_owned();
+    Ok(DashboardProject {
+        name,
+        root: root.to_owned(),
+        repository_id: registration.repository_id.clone(),
+        worktree_id: registration.worktree_id.clone(),
+        git_backed: registration.git_backed,
+        linked_worktree: registration.linked_worktree,
+        state,
+        registered_at_ms: registration.registered_at_ms,
+        last_seen_at_ms: registration.last_seen_at_ms,
+        artifacts,
+        command: format!("hzr index status --workspace {}", shell_quote(root)),
+    })
+}
+
+fn dashboard_artifacts(directory: &Path) -> DashboardProjectArtifacts {
+    let config = artifact_metadata(&directory.join("config.yaml"));
+    let vectors = artifact_metadata(&directory.join("index.gob"));
+    let symbols = artifact_metadata(&directory.join("symbols.gob"));
+    let graph = artifact_metadata(&directory.join("rpg.gob"));
+    let entries = [&config, &vectors, &symbols, &graph];
+    DashboardProjectArtifacts {
+        config_present: config.is_some(),
+        vectors_present: vectors.is_some(),
+        symbols_present: symbols.is_some(),
+        repository_graph_present: graph.is_some(),
+        size_bytes: entries
+            .iter()
+            .filter_map(|entry| entry.as_ref().map(fs::Metadata::len))
+            .fold(0_u64, u64::saturating_add),
+        modified_at_ms: entries
+            .iter()
+            .filter_map(|entry| entry.as_ref().and_then(metadata_modified_ms))
+            .max(),
+    }
+}
+
+fn artifact_metadata(path: &Path) -> Option<fs::Metadata> {
+    fs::symlink_metadata(path)
+        .ok()
+        .filter(|metadata| metadata.file_type().is_file())
+}
+
+fn metadata_modified_ms(metadata: &fs::Metadata) -> Option<u64> {
+    let millis = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_millis();
+    u64::try_from(millis).ok()
+}
+
+fn dashboard_help() -> Vec<DashboardHelpCommand> {
+    [
+        (
+            "Run doctor",
+            "Audit lifecycle, ownership, engines, and the current workspace.",
+            "hzr doctor --workspace .",
+        ),
+        (
+            "Service status",
+            "Check the production user service without changing it.",
+            "hzr daemon service status",
+        ),
+        (
+            "Engine pins",
+            "Inspect the exact managed engine versions.",
+            "hzr engines status",
+        ),
+        (
+            "Usage stats",
+            "Print observed usage and estimated efficiency separately.",
+            "hzr stats",
+        ),
+        (
+            "Command help",
+            "Open the complete CLI command reference.",
+            "hzr --help",
+        ),
+    ]
+    .into_iter()
+    .map(|(label, description, command)| DashboardHelpCommand {
+        label: label.into(),
+        description: description.into(),
+        command: command.into(),
+    })
+    .collect()
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn signed_percentage(part: i64, total: u64) -> f64 {
+    if total == 0 {
+        0.0
+    } else {
+        part as f64 * 100.0 / total as f64
+    }
+}
+
+fn now_ms() -> Result<u64, ApiError> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| ApiError::internal(format!("system clock precedes UNIX epoch: {error}")))?
+        .as_millis();
+    u64::try_from(millis)
+        .map_err(|error| ApiError::internal(format!("system clock is out of range: {error}")))
+}
+
 pub async fn engines() -> Result<Json<hzr_core::EngineManifest>, ApiError> {
     locked_engines()
         .map(Json)
@@ -139,29 +427,76 @@ pub async fn memory_recall(
     }
     validate_limit(request.limit)?;
     let project = memory_project(&state, &request.workspace).await?;
-    let exact_topic = request
+    if let Some(kind) = request.topic.as_deref() {
+        validate_memory_kind(kind).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    }
+    let project_topic = request
         .topic
         .as_deref()
         .map(|kind| namespaced_topic(kind, &project))
         .transpose()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let mut recall = RecallRequest::new(request.query);
-    recall.topic.clone_from(&exact_topic);
-    recall.limit = recall_candidate_limit(request.limit);
-    recall.keyword = request.keyword;
-    recall.project = Some(project.clone());
-    let records = state
-        .memory
-        .client()
-        .recall(&recall)
-        .await
-        .map_err(|error| ApiError::service("memory_unavailable", error.to_string(), true))?;
-    Ok(Json(isolate_project_memories(
-        records,
-        &project,
-        exact_topic.as_deref(),
-        request.limit,
-    )))
+    let global_topic = request
+        .topic
+        .as_deref()
+        .map(global_topic)
+        .transpose()
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let candidate_limit = recall_candidate_limit(request.limit);
+    let mut base = RecallRequest::new(request.query);
+    base.limit = candidate_limit;
+    base.keyword = request.keyword;
+
+    let mut project_recall = base.clone();
+    project_recall.project = Some(project.clone());
+    project_recall.topic.clone_from(&project_topic);
+    let mut global_recall = base;
+    global_recall.project = Some(GLOBAL_SCOPE_TOKEN.into());
+    global_recall.topic.clone_from(&global_topic);
+    let client = state.memory.client();
+    let unavailable = |error: hzr_memory::MemoryError| {
+        ApiError::service("memory_unavailable", error.to_string(), true)
+    };
+
+    let records = match request.scope {
+        MemoryScopeSelector::Project => isolate_memories(
+            client.recall(&project_recall).await.map_err(unavailable)?,
+            &project,
+            MemoryNamespace::Project,
+            project_topic.as_deref(),
+            request.limit,
+        ),
+        MemoryScopeSelector::Global => isolate_memories(
+            client.recall(&global_recall).await.map_err(unavailable)?,
+            &project,
+            MemoryNamespace::Global,
+            global_topic.as_deref(),
+            request.limit,
+        ),
+        MemoryScopeSelector::ProjectAndGlobal => {
+            let (project_records, global_records) = tokio::try_join!(
+                client.recall(&project_recall),
+                client.recall(&global_recall)
+            )
+            .map_err(unavailable)?;
+            let project_records = isolate_memories(
+                project_records,
+                &project,
+                MemoryNamespace::Project,
+                project_topic.as_deref(),
+                candidate_limit,
+            );
+            let global_records = isolate_memories(
+                global_records,
+                &project,
+                MemoryNamespace::Global,
+                global_topic.as_deref(),
+                candidate_limit,
+            );
+            merge_memories(project_records, global_records, request.limit)
+        }
+    };
+    Ok(Json(records))
 }
 
 pub async fn memory_store(
@@ -180,8 +515,13 @@ pub async fn memory_store(
         ));
     }
     let project = memory_project(&state, &request.workspace).await?;
-    let topic = namespaced_topic(&request.topic, &project)
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    // One write targets exactly one namespace, so a global preference is stored once and
+    // is reachable from every repository instead of being duplicated per project.
+    let topic = match request.scope {
+        MemoryWriteScope::Project => namespaced_topic(&request.topic, &project),
+        MemoryWriteScope::Global => global_topic(&request.topic),
+    }
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let mut store = StoreRequest::new(topic, request.content);
     store.importance = match request.importance {
         MemoryImportance::Critical => Importance::Critical,
@@ -208,11 +548,12 @@ pub async fn exec_run(
         return Err(ApiError::bad_request("command must not be empty"));
     }
     validate_exec_timeout(request.timeout_ms)?;
+    let budget = ManagedExecutionBudget::new(&state, request.timeout_ms)?;
     let cwd = canonical_workspace(&request.cwd)?;
-    let timeout_ms = Some(managed_timeout_ms(&state, request.timeout_ms)?);
     let command = CanonicalCommand::shell(request.command);
     let decision = match state.rtk.decide_in(&command, Some(&cwd)).await {
         RewriteDecision::Ask { proposed, reason } => {
+            let timeout_ms = Some(budget.limit_ms());
             let decision_id = if let Some(proposed_command) = proposed.clone() {
                 Some(
                     state
@@ -242,7 +583,7 @@ pub async fn exec_run(
     let mut envelope = ExecutionEnvelope::allow_raw(command);
     envelope.decision = decision;
     envelope.cwd = Some(cwd);
-    envelope.timeout_ms = timeout_ms;
+    envelope.timeout_ms = Some(budget.remaining_ms()?);
     state
         .executor
         .execute(envelope)
@@ -294,6 +635,7 @@ pub async fn fork_run(
     Json(request): Json<ForkRunApiRequest>,
 ) -> Result<Json<ForkRunApiResponse>, ApiError> {
     validate_fork_run(&request)?;
+    let budget = ManagedExecutionBudget::new(&state, request.timeout_ms)?;
     let cwd = canonical_workspace(&request.cwd)?;
     validate_managed_fork_tool(&request.args, &cwd)?;
     let runner = state
@@ -302,7 +644,7 @@ pub async fn fork_run(
         .map_err(|error| ApiError::service("fork_core_unavailable", error.to_string(), true))?;
     let mut invocation = ForkCoreInvocation::new(request.args);
     invocation.cwd = Some(cwd);
-    invocation.timeout_ms = Some(managed_timeout_ms(&state, request.timeout_ms)?);
+    invocation.timeout_ms = Some(budget.remaining_ms()?);
     invocation.stdin = request
         .stdin
         .map_or(StdinSpec::Null, |stdin| StdinSpec::Bytes {
@@ -352,7 +694,6 @@ pub async fn usage(
     Json(request): Json<UsageApiRequest>,
 ) -> Result<Json<UsageApiResponse>, ApiError> {
     validate_usage(&request)?;
-    let ledger_path = state.config.data_dir.join("ledger/hzr.sqlite");
     let record = LedgerRecord {
         trace_id: TraceId::from_string(request.trace_id),
         provider: request.provider,
@@ -365,12 +706,11 @@ pub async fn usage(
         policy_version: env!("CARGO_PKG_VERSION").into(),
         cost_microusd: request.cost_microusd,
     };
-    tokio::task::spawn_blocking(move || -> Result<(), hzr_core::LedgerError> {
-        Ledger::open(&ledger_path)?.record(&record)
-    })
-    .await
-    .map_err(|error| ApiError::internal(format!("usage ledger task failed: {error}")))?
-    .map_err(|error| ApiError::internal(format!("usage ledger write failed: {error}")))?;
+    state
+        .ledger
+        .record(record)
+        .await
+        .map_err(|error| ApiError::internal(format!("usage ledger write failed: {error}")))?;
     Ok(Json(UsageApiResponse { recorded: true }))
 }
 
@@ -419,6 +759,38 @@ fn validate_exec_timeout(timeout_ms: Option<u64>) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+struct ManagedExecutionBudget {
+    started: Instant,
+    limit: Duration,
+}
+
+impl ManagedExecutionBudget {
+    fn new(state: &AppState, requested: Option<u64>) -> Result<Self, ApiError> {
+        let limit_ms = managed_timeout_ms(state, requested)?;
+        Ok(Self {
+            started: Instant::now(),
+            limit: Duration::from_millis(limit_ms),
+        })
+    }
+
+    fn limit_ms(&self) -> u64 {
+        self.limit.as_millis().min(u128::from(u64::MAX)) as u64
+    }
+
+    fn remaining_ms(&self) -> Result<u64, ApiError> {
+        let remaining = self.limit.saturating_sub(self.started.elapsed());
+        let remaining_ms = remaining.as_millis().min(u128::from(u64::MAX)) as u64;
+        if remaining_ms == 0 {
+            return Err(ApiError::service(
+                "execution_timed_out",
+                "execution deadline elapsed before the child process started",
+                true,
+            ));
+        }
+        Ok(remaining_ms)
+    }
 }
 
 fn managed_timeout_ms(state: &AppState, requested: Option<u64>) -> Result<u64, ApiError> {
@@ -664,7 +1036,7 @@ fn canonical_workspace(value: &str) -> Result<PathBuf, ApiError> {
 
 async fn memory_project(state: &AppState, value: &str) -> Result<String, ApiError> {
     let root = canonical_workspace(value)?;
-    let workspace = Workspace::discover_managed(
+    let workspace = Workspace::discover_managed_fast(
         &root,
         &state.config.engines.binary("git"),
         &state.config.data_dir,
@@ -742,8 +1114,19 @@ async fn memory_engine_health(state: &AppState) -> EngineHealth {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::time::{Duration, Instant};
 
-    use super::validate_managed_fork_tool;
+    use super::{ManagedExecutionBudget, validate_managed_fork_tool};
+
+    #[test]
+    fn managed_execution_budget_is_absolute_across_pre_spawn_work() {
+        let budget = ManagedExecutionBudget {
+            started: Instant::now() - Duration::from_millis(20),
+            limit: Duration::from_millis(10),
+        };
+
+        assert!(budget.remaining_ms().is_err());
+    }
 
     #[test]
     fn test_managed_fork_api_confines_read_and_write_paths() {

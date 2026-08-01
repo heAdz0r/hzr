@@ -20,6 +20,8 @@ pub enum DaemonError {
     Memory(hzr_memory::MemoryError),
     #[error("failed to stop context services: {0}")]
     Context(hzr_context::ContextError),
+    #[error("failed to initialize usage ledger: {0}")]
+    Ledger(String),
     #[error("daemon I/O error: {0}")]
     Io(io::Error),
 }

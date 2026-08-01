@@ -1,4 +1,5 @@
 mod adoption;
+mod build;
 mod cli;
 mod client;
 mod client_config;
@@ -14,9 +15,11 @@ mod memory_migration;
 mod migration;
 mod output;
 mod prefix;
+mod release_version;
 mod service;
 mod stats;
 mod stats_output;
+mod tdd;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -29,7 +32,10 @@ use hzr_agent::{BearerToken, HzrApi, ManagedAgent, ManagedAgentConfig};
 use hzr_core::{
     Config, ConfigPaths, Ledger, discover_legacy_rtk_history, inspect_legacy_efficiency,
 };
-use hzr_index::{Deadlines, GrepAi, IndexPlacement, InitOptions, Workspace, migrate_legacy_index};
+use hzr_index::{
+    Deadlines, GrepAi, IndexPlacement, InitOptions, Workspace, WorkspaceRegistration,
+    migrate_legacy_index,
+};
 use hzr_protocol::{
     CodecApiRequest, ContextPlanApiRequest, ExecApiRequest, ExecApprovalApiRequest,
     MemoryRecallApiRequest, MemoryStoreApiRequest, PROTOCOL_VERSION, SearchApiRequest, SearchMode,
@@ -90,6 +96,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             allow_dev_path,
             keep_external_icm,
             skip_instructions,
+            skip_service,
         } => {
             return run_install(
                 InstallOptions {
@@ -100,6 +107,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     allow_dev_path: *allow_dev_path,
                     adopt_icm: !*keep_external_icm,
                     wire_instructions: !*skip_instructions,
+                    start_service: !*skip_service,
                 },
                 cli.json,
             );
@@ -121,7 +129,15 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 instruction_reports
                     .push(instructions::uninstall(surface, &target, *dry_run, *force)?);
             }
-            return print_adoption_bundle(&report, None, &instruction_reports, &[], None, cli.json);
+            return print_adoption_bundle(
+                &report,
+                None,
+                &instruction_reports,
+                &[],
+                None,
+                None,
+                cli.json,
+            );
         }
         Command::Hooks {
             command: HooksCommand::Status,
@@ -183,12 +199,27 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         data_dir,
         if_needed,
         quiet,
+        skip_service,
     } = &cli.command
     {
         if *if_needed {
-            return initialize_if_needed(&config_path, data_dir.as_deref(), *quiet, cli.json).await;
+            return initialize_if_needed(
+                &config_path,
+                data_dir.as_deref(),
+                *quiet,
+                *skip_service,
+                cli.json,
+            )
+            .await;
         }
-        return initialize(&config_path, *force, data_dir.as_deref(), cli.json);
+        return initialize(
+            &config_path,
+            *force,
+            data_dir.as_deref(),
+            *skip_service,
+            cli.json,
+        )
+        .await;
     }
 
     let config = Config::load_or_default(&config_path)
@@ -265,10 +296,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             command: EnginesCommand::Status,
         } => show_engines(&config, cli.json).await,
         Command::Index { command } => execute_index(&config, command, cli.json).await,
-        Command::Search(arguments) => {
-            execute_search(&config, arguments, SearchMode::Auto, cli.json).await
-        }
-        Command::Rgai(arguments) => {
+        Command::Search(arguments) | Command::Rgai(arguments) => {
             execute_search(&config, arguments, SearchMode::Auto, cli.json).await
         }
         Command::Context {
@@ -292,7 +320,94 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 print!("{}", mcp::registration_snippet(client, &binary));
                 Ok(ExitCode::SUCCESS)
             }
+            McpCommand::Status => {
+                let clients = client_config::status_all()?;
+                if cli.json {
+                    print_json(&serde_json::json!({
+                        "lifecycle": mcp::lifecycle_metadata(),
+                        "clients": clients,
+                    }))?;
+                } else {
+                    println!(
+                        "lifecycle={} started-by-init=false launch='MCP client connection'",
+                        client_config::MCP_LIFECYCLE
+                    );
+                    for client in clients {
+                        println!(
+                            "{} {} exists={} registered={} direct-icm={} command={}",
+                            client.client.as_str(),
+                            client.path.display(),
+                            client.config_exists,
+                            client.registered,
+                            client.direct_icm_registrations,
+                            client.command.as_deref().unwrap_or("-")
+                        );
+                    }
+                }
+                Ok(ExitCode::SUCCESS)
+            }
         },
+        Command::Build(arguments) => {
+            // One inherited subcommand, forwarded verbatim: `hzr build --release` must
+            // reach the fork exactly as `rtk build --release` did.
+            let mut args = vec![std::ffi::OsString::from("build")];
+            args.extend(arguments.args.iter().cloned());
+            fork::passthrough(&config, &args).await
+        }
+        Command::Release {
+            version,
+            dry_run,
+            force,
+            skip_service,
+            install_root,
+        } => {
+            let report = build::run(build::BuildOptions {
+                target_version: version,
+                dry_run,
+                force,
+                skip_service,
+                install_root,
+            })?;
+            if cli.json {
+                print_json(&report)?;
+            } else {
+                println!(
+                    "build v{}-{} current={} switched={} dry_run={}",
+                    report.version,
+                    report.platform,
+                    report.current.display(),
+                    report.switched,
+                    report.dry_run
+                );
+                for engine in &report.engines {
+                    println!(
+                        "  {} {} expected={} {}",
+                        if engine.ok { "ok  " } else { "FAIL" },
+                        engine.name,
+                        engine.expected,
+                        engine.reported
+                    );
+                }
+                if !report.dry_run {
+                    println!("service restarted: {}", report.service_restarted);
+                }
+            }
+            // A stale engine must fail the command, not just print a line.
+            Ok(if report.dry_run || report.healthy() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
+        }
+        Command::Tdd => {
+            let contract = tdd::contract();
+            if cli.json {
+                print_json(&contract)?;
+            } else {
+                print!("{}", tdd::render_text(&contract));
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Stats | Command::Savings => show_stats(&config, cli.json).await,
         Command::Migrate { command } => match command {
             MigrateCommand::Scan { workspace } => {
@@ -445,6 +560,7 @@ struct InstallOptions {
     allow_dev_path: bool,
     adopt_icm: bool,
     wire_instructions: bool,
+    start_service: bool,
 }
 
 /// Full adoption in one confirmed operation: durable binaries on PATH, one hook
@@ -484,6 +600,7 @@ fn run_install(options: InstallOptions, json: bool) -> Result<ExitCode> {
         &settings_path,
         &hook_binary,
         options.adopt_icm,
+        options.start_service,
         options.dry_run,
         options.force,
     )?;
@@ -506,6 +623,11 @@ fn run_install(options: InstallOptions, json: bool) -> Result<ExitCode> {
     let client_reports = client_config::install_all(&hook_binary, options.dry_run, options.force)?;
 
     let foreign_report = foreign::scan(&ConfigPaths::discover().data_dir).ok();
+    let service_report = if options.start_service && !options.dry_run {
+        service::ensure_running_if_installed()?
+    } else {
+        None
+    };
 
     print_adoption_bundle(
         &hooks,
@@ -513,6 +635,7 @@ fn run_install(options: InstallOptions, json: bool) -> Result<ExitCode> {
         &instruction_reports,
         &client_reports,
         foreign_report.as_ref(),
+        service_report.as_ref(),
         json,
     )
 }
@@ -570,6 +693,7 @@ fn print_adoption_bundle(
     instruction_reports: &[instructions::InstructionReport],
     client_reports: &[client_config::ClientConfigReport],
     foreign_report: Option<&foreign::ForeignReport>,
+    service_report: Option<&service::ServiceReport>,
     json: bool,
 ) -> Result<ExitCode> {
     if json {
@@ -579,6 +703,7 @@ fn print_adoption_bundle(
             "instructions": instruction_reports,
             "client_mcp": client_reports,
             "foreign": foreign_report,
+            "daemon_service": service_report,
         }))?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -617,6 +742,14 @@ fn print_adoption_bundle(
             report.changed,
             report.direct_icm_removed,
             report.hzr_registered
+        );
+    }
+    if let Some(report) = service_report {
+        println!(
+            "visualizer {} active={} definition={}",
+            report.action,
+            report.active,
+            report.definition.display()
         );
     }
     if let Some(report) = foreign_report {
@@ -720,7 +853,13 @@ async fn execute_index(config: &Config, command: IndexCommand, json: bool) -> Re
     Ok(ExitCode::SUCCESS)
 }
 
-fn initialize(path: &Path, force: bool, data_dir: Option<&Path>, json: bool) -> Result<ExitCode> {
+async fn initialize(
+    path: &Path,
+    force: bool,
+    data_dir: Option<&Path>,
+    skip_service: bool,
+    json: bool,
+) -> Result<ExitCode> {
     if path.exists() && !force {
         bail!(
             "configuration {} already exists; pass --force to replace it",
@@ -733,17 +872,54 @@ fn initialize(path: &Path, force: bool, data_dir: Option<&Path>, json: bool) -> 
     }
     config.ensure_layout()?;
     config.write(path)?;
+    let (workspace, outcome, changed, git_backed, registration) =
+        initialize_workspace(&config).await?;
+    let dashboard = format!("http://{}", config.daemon.bind);
+    let service_report = if skip_service {
+        None
+    } else {
+        service::ensure_running_if_installed()?
+    };
     if json {
         print_json(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
             "config": path,
             "data_dir": config.data_dir,
+            "outcome": outcome,
+            "changed": changed,
+            "workspace": workspace.identity.root,
+            "git_backed": git_backed,
+            "repository_id": workspace.identity.repository_id,
+            "worktree_id": workspace.identity.worktree_id,
+            "index": workspace.index.directory,
+            "registration": registration,
+            "dashboard": dashboard,
+            "daemon_service": service_report,
+            "mcp": mcp::lifecycle_metadata(),
         }))?;
     } else {
         let stdout = io::stdout();
         let mut output = stdout.lock();
         writeln!(output, "initialized {}", path.display())?;
         writeln!(output, "data root {}", config.data_dir.display())?;
+        writeln!(output, "{outcome} {}", workspace.identity.root.display())?;
+        writeln!(output, "visualizer {dashboard} (served by hzrd)")?;
+        if let Some(report) = &service_report {
+            writeln!(
+                output,
+                "visualizer service {} active={}",
+                report.action, report.active
+            )?;
+        } else if !skip_service {
+            writeln!(
+                output,
+                "visualizer service source-only; run `hzr daemon serve`"
+            )?;
+        }
+        writeln!(
+            output,
+            "mcp client-managed stdio; register once with `hzr install --force`"
+        )?;
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -752,6 +928,7 @@ async fn initialize_if_needed(
     config_path: &Path,
     data_dir: Option<&Path>,
     quiet: bool,
+    skip_service: bool,
     json: bool,
 ) -> Result<ExitCode> {
     let (config, config_created) = if config_path.exists() {
@@ -777,27 +954,13 @@ async fn initialize_if_needed(
         (config, true)
     };
 
-    let workspace_path = canonical_directory(None)?;
-    let workspace = Workspace::discover_managed(
-        &workspace_path,
-        Path::new("git"),
-        &config.data_dir,
-        Deadlines::default().version,
-    )
-    .await?;
-    let (outcome, changed) = if workspace.identity.git_common_dir.is_none() {
-        ("not_a_repository", false)
+    let (workspace, outcome, changed, git_backed, registration) =
+        initialize_workspace(&config).await?;
+    let dashboard = format!("http://{}", config.daemon.bind);
+    let service_report = if skip_service {
+        None
     } else {
-        workspace.require_single_index()?;
-        match workspace.placement()? {
-            IndexPlacement::ManagedSymlink { .. } => ("already_initialized", false),
-            IndexPlacement::Missing { .. } => {
-                workspace.ensure_managed_location()?;
-                ("initialized", true)
-            }
-            IndexPlacement::LegacyProject { .. } => ("migration_required", false),
-            placement => bail!("unsupported grepai placement: {placement:?}"),
-        }
+        service::ensure_running_if_installed()?
     };
 
     if json {
@@ -806,14 +969,36 @@ async fn initialize_if_needed(
             "changed": changed,
             "config_created": config_created,
             "workspace": workspace.identity.root,
+            "git_backed": git_backed,
             "repository_id": workspace.identity.repository_id,
             "worktree_id": workspace.identity.worktree_id,
             "index": workspace.index.directory,
+            "registration": registration,
+            "dashboard": dashboard,
+            "daemon_service": service_report,
+            "mcp": mcp::lifecycle_metadata(),
         }))?;
     } else if !quiet {
         let stdout = io::stdout();
         let mut output = stdout.lock();
         writeln!(output, "{outcome} {}", workspace.identity.root.display())?;
+        writeln!(output, "visualizer {dashboard} (served by hzrd)")?;
+        if let Some(report) = &service_report {
+            writeln!(
+                output,
+                "visualizer service {} active={}",
+                report.action, report.active
+            )?;
+        } else if !skip_service {
+            writeln!(
+                output,
+                "visualizer service source-only; run `hzr daemon serve`"
+            )?;
+        }
+        writeln!(
+            output,
+            "mcp client-managed stdio; register once with `hzr install --force`"
+        )?;
         if outcome == "migration_required" {
             writeln!(
                 output,
@@ -823,6 +1008,41 @@ async fn initialize_if_needed(
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+async fn initialize_workspace(
+    config: &Config,
+) -> Result<(Workspace, &'static str, bool, bool, WorkspaceRegistration)> {
+    let workspace_path = canonical_directory(None)?;
+    let workspace = Workspace::discover_managed(
+        &workspace_path,
+        Path::new("git"),
+        &config.data_dir,
+        Deadlines::default().version,
+    )
+    .await?;
+    // A non-Git directory has a path-derived identity. If `git init` happens later,
+    // `adopt_relocated_index` moves only HZR-owned index state to the repository-derived
+    // identity before the fresh registration is written.
+    let git_backed = workspace.identity.git_common_dir.is_some();
+    let relocated = workspace.adopt_relocated_index()?;
+    workspace.require_single_index()?;
+    let (outcome, changed) = match workspace.placement()? {
+        IndexPlacement::ManagedSymlink { .. } if relocated => ("relocated_to_git_identity", true),
+        IndexPlacement::ManagedSymlink { .. } => ("already_initialized", false),
+        IndexPlacement::Missing { .. } => {
+            workspace.ensure_managed_location()?;
+            if git_backed {
+                ("initialized", true)
+            } else {
+                ("initialized_without_git", true)
+            }
+        }
+        IndexPlacement::LegacyProject { .. } => ("migration_required", false),
+        placement => bail!("unsupported grepai placement: {placement:?}"),
+    };
+    let registration = workspace.register()?;
+    Ok((workspace, outcome, changed, git_backed, registration))
 }
 
 async fn show_engines(config: &Config, json: bool) -> Result<ExitCode> {
@@ -899,6 +1119,7 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             topic,
             keyword,
             limit,
+            scope,
         } => {
             let workspace = canonical_directory(workspace.as_deref())?;
             let response = client
@@ -908,6 +1129,7 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
                     topic,
                     limit,
                     keyword,
+                    scope: scope.into(),
                 })
                 .await?;
             if json {
@@ -924,6 +1146,7 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             importance,
             keywords,
             raw,
+            scope,
         } => {
             let workspace = canonical_directory(workspace.as_deref())?;
             let content = read_text(
@@ -939,6 +1162,7 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
                     importance: importance.into(),
                     keywords,
                     raw,
+                    scope: scope.into(),
                 })
                 .await?;
             print_json(&response)?;
@@ -1139,7 +1363,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.2.0-test");
+        let release = directory.path().join("versions/v0.3.0-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -1159,7 +1383,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.2.0-test");
+        let release = directory.path().join("versions/v0.3.0-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))

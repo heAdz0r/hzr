@@ -100,8 +100,8 @@ impl ExecutionPipeline {
 
         Ok(ExecutionHandle {
             events: event_rx,
-            completion: completion_rx,
-            task: completion,
+            completion: Some(completion_rx),
+            task: Some(completion),
             cancellation,
         })
     }
@@ -109,8 +109,8 @@ impl ExecutionPipeline {
 
 pub struct ExecutionHandle {
     events: mpsc::Receiver<ExecutionEvent>,
-    completion: oneshot::Receiver<Result<ExecutionOutcome, ExecError>>,
-    task: JoinHandle<()>,
+    completion: Option<oneshot::Receiver<Result<ExecutionOutcome, ExecError>>>,
+    task: Option<JoinHandle<()>>,
     cancellation: Cancellation,
 }
 
@@ -123,8 +123,8 @@ impl ExecutionHandle {
         });
         Self {
             events: event_rx,
-            completion: completion_rx,
-            task,
+            completion: Some(completion_rx),
+            task: Some(task),
             cancellation: Cancellation::default(),
         }
     }
@@ -137,16 +137,21 @@ impl ExecutionHandle {
         self.cancellation.cancel();
     }
 
-    pub async fn wait(self) -> Result<ExecutionOutcome, ExecError> {
-        let outcome = self
-            .completion
-            .await
-            .map_err(|_| ExecError::CompletionClosed)?;
-        self.task.await.map_err(|source| ExecError::Join {
+    pub async fn wait(mut self) -> Result<ExecutionOutcome, ExecError> {
+        let completion = self.completion.take().ok_or(ExecError::CompletionClosed)?;
+        let task = self.task.take().ok_or(ExecError::CompletionClosed)?;
+        let outcome = completion.await.map_err(|_| ExecError::CompletionClosed)?;
+        task.await.map_err(|source| ExecError::Join {
             task: "execution",
             source,
         })?;
         outcome
+    }
+}
+
+impl Drop for ExecutionHandle {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
     }
 }
 
@@ -245,6 +250,7 @@ async fn run_process(
 ) -> Result<ExecutionOutcome, ExecError> {
     let started = Instant::now();
     let pid = child.id();
+    let mut process_group = ProcessGroupGuard::new(pid);
     let _ = event_tx.try_send(ExecutionEvent::Started {
         pid,
         command: executed.clone(),
@@ -280,6 +286,7 @@ async fn run_process(
         executed.program(),
     )
     .await?;
+    process_group.disarm();
     if let Some(stdin_task) = stdin_task {
         stdin_task.await.map_err(|source| ExecError::Join {
             task: "stdin",
@@ -307,6 +314,48 @@ async fn run_process(
             duration_ms,
         }),
     })
+}
+
+#[cfg(unix)]
+struct ProcessGroupGuard {
+    pid: Option<i32>,
+}
+
+#[cfg(unix)]
+impl ProcessGroupGuard {
+    fn new(pid: Option<u32>) -> Self {
+        Self {
+            pid: pid.and_then(|pid| i32::try_from(pid).ok()),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.pid = None;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        use nix::sys::signal::{Signal, killpg};
+        use nix::unistd::Pid;
+
+        if let Some(pid) = self.pid {
+            let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+struct ProcessGroupGuard;
+
+#[cfg(not(unix))]
+impl ProcessGroupGuard {
+    fn new(_pid: Option<u32>) -> Self {
+        Self
+    }
+
+    fn disarm(&mut self) {}
 }
 
 fn start_stdin_writer(

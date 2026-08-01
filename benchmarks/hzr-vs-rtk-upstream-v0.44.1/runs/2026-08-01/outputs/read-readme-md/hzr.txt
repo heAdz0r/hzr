@@ -1,0 +1,23 @@
+Markdown digest
+  Lines: 527
+  Sections:
+        What RTK Does
+        How Savings Work
+        Installation
+          Homebrew (recommended)
+          Quick Install (Linux/macOS)
+          Cargo
+          Pre-built Binaries
+          Verify Installation
+        Quick Start
+      1. Install for your AI tool
+      2. Restart your AI tool, then test
+        How It Works
+        Commands
+          Files
+          Git
+          GitHub CLI
+          Test Runners
+          Build & Lint
+          Package Managers
+          AWS

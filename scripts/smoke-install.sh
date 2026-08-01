@@ -97,12 +97,18 @@ run_hzr() {
   PATH="${HZR_INSTALLED_BIN}:${HZR_SMOKE_TEMP}/tools:/usr/bin:/bin" \
     "${HZR_INSTALLED_BIN}/hzr" "$@"
 }
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.2.0" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.3.0" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/node" --version | grep -Fx "v22.17.1" >/dev/null
+for HZR_VISUALIZER_FILE in index.html assets/app.css assets/app.js hzr-hero.png; do
+  if [[ ! -f "${HZR_INSTALLED_ROOT}/share/hzr/visualizer/${HZR_VISUALIZER_FILE}" ]]; then
+    echo "installed visualizer asset is missing: ${HZR_VISUALIZER_FILE}" >&2
+    exit 1
+  fi
+done
 if [[ ! -L "${HZR_SMOKE_TEMP}/workspace/.grepai" ]]; then
   echo "clean installer did not initialize the workspace" >&2
   exit 1
@@ -176,6 +182,30 @@ for _ in {1..100}; do
   sleep 0.1
 done
 run_hzr daemon status --json >/dev/null
+"${HZR_INSTALLED_ROOT}/engines/node" -e '
+  const fs = require("node:fs");
+  const endpoint = process.argv[1];
+  const workspace = fs.realpathSync(process.argv[2]);
+  Promise.all([
+    fetch(`${endpoint}/`).then(async (response) => {
+      const body = await response.text();
+      if (response.status !== 200 || !body.includes("HZR · Local control plane")) {
+        throw new Error(`installed visualizer index failed: ${response.status}`);
+      }
+    }),
+    fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
+      const report = await response.json();
+      if (response.status !== 200 ||
+          !report.projects.some((project) => project.root === workspace) ||
+          !report.services.some((service) => service.id === "rtk")) {
+        throw new Error(`installed dashboard contract failed: ${JSON.stringify(report)}`);
+      }
+    }),
+  ]).catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+' "http://127.0.0.1:${HZR_SMOKE_PORT}" "${HZR_SMOKE_TEMP}/workspace"
 run_hzr daemon service restart --json >/dev/null
 run_hzr daemon service status --json >/dev/null
 HZR_MEMORY_READY=0
@@ -324,7 +354,7 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) HZR_SMOKE_PLATFORM="linux-x64" ;;
   *) echo "unsupported upgrade-smoke platform" >&2; exit 1 ;;
 esac
-HZR_UPGRADE_VERSION="0.2.0-upgrade-smoke"
+HZR_UPGRADE_VERSION="0.3.0-upgrade-smoke"
 HZR_UPGRADE_ARTIFACT="hzr-v${HZR_UPGRADE_VERSION}-${HZR_SMOKE_PLATFORM}.tar.gz"
 HZR_UPGRADE_CHECKSUMS="${HZR_SMOKE_TEMP}/SHA256SUMS.upgrade"
 awk -v artifact="${HZR_UPGRADE_ARTIFACT}" \
@@ -357,7 +387,7 @@ if [[ "${HZR_RESOLVED_ENGINES}" != "${HZR_EXPECTED_ENGINES}" ]]; then
   exit 1
 fi
 
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.2.0" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.3.0" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_CURRENT_LINK}/engines/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null

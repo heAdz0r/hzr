@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 const HZR_DISPATCH_SUFFIX: &str = " hooks dispatch";
 const HZR_INIT_SUFFIX: &str = " init --if-needed --quiet";
+const HZR_INIT_SKIP_SERVICE_SUFFIX: &str = " init --if-needed --quiet --skip-service";
 
 /// What "settings.json is absent" means, so a first install is not mistaken for a
 /// concurrent modification during compare-and-swap.
@@ -62,6 +63,7 @@ pub fn install(
     path: &Path,
     binary: &Path,
     adopt_icm: bool,
+    start_service: bool,
     dry_run: bool,
     confirmed: bool,
 ) -> Result<AdoptionReport> {
@@ -76,7 +78,7 @@ pub fn install(
         // duplicate in place, so callers opt out explicitly instead.
         remove_owned_hooks(&mut document, HookOwner::Icm);
     }
-    add_hzr_hooks(&mut document, &managed_commands(binary)?)?;
+    add_hzr_hooks(&mut document, &managed_commands(binary, start_service)?)?;
     let after = render_settings(&document)?;
     let changed = before != after.as_bytes();
     let backup_path = changed.then(|| backup_path(path, &before));
@@ -220,6 +222,7 @@ enum HookOwner {
 fn owner(command: &str) -> HookOwner {
     if command.trim_end().ends_with(HZR_DISPATCH_SUFFIX)
         || command.trim_end().ends_with(HZR_INIT_SUFFIX)
+        || command.trim_end().ends_with(HZR_INIT_SKIP_SERVICE_SUFFIX)
     {
         HookOwner::Hzr
     } else if command.contains("rtk-rewrite.sh")
@@ -354,11 +357,16 @@ pub fn resolve_hook_binary(
     Ok(durable)
 }
 
-fn managed_commands(binary: &Path) -> Result<ManagedCommands> {
+fn managed_commands(binary: &Path, start_service: bool) -> Result<ManagedCommands> {
     let executable = shell_word(binary)?;
+    let init_suffix = if start_service {
+        HZR_INIT_SUFFIX
+    } else {
+        HZR_INIT_SKIP_SERVICE_SUFFIX
+    };
     Ok(ManagedCommands {
         dispatch: format!("{executable}{HZR_DISPATCH_SUFFIX}"),
-        init: format!("{executable}{HZR_INIT_SUFFIX}"),
+        init: format!("{executable}{init_suffix}"),
     })
 }
 
@@ -579,8 +587,8 @@ mod tests {
         )
         .expect("settings write");
 
-        let first = install(&path, binary(), true, false, true).expect("first install");
-        let second = install(&path, binary(), true, false, true).expect("idempotent install");
+        let first = install(&path, binary(), true, true, false, true).expect("first install");
+        let second = install(&path, binary(), true, true, false, true).expect("idempotent install");
         let current = status(&path).expect("hook status");
 
         assert!(first.changed);
@@ -614,11 +622,11 @@ mod tests {
         let path = directory.path().join("settings.json");
         fs::write(&path, b"{}\n").expect("settings write");
 
-        let preview = install(&path, binary(), true, true, false).expect("dry-run install");
+        let preview = install(&path, binary(), true, true, true, false).expect("dry-run install");
         assert!(preview.changed);
         assert_eq!(fs::read(&path).expect("unchanged settings"), b"{}\n");
 
-        install(&path, binary(), true, false, true).expect("confirmed install");
+        install(&path, binary(), true, true, false, true).expect("confirmed install");
         let removed = uninstall(&path, false, true).expect("confirmed uninstall");
         assert!(removed.changed);
         assert_eq!(status(&path).expect("hook status").hzr_entries, 0);
@@ -641,12 +649,30 @@ mod tests {
         )
         .expect("settings write");
 
-        install(&path, binary(), false, false, true).expect("install keeping external ICM");
+        install(&path, binary(), false, true, false, true).expect("install keeping external ICM");
         assert_eq!(
             status(&path).expect("hook status").external_icm_entries,
             1,
             "opting out must preserve the external ICM hook verbatim"
         );
+    }
+
+    #[test]
+    fn service_opt_out_persists_in_the_session_start_hook() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("settings.json");
+        fs::write(&path, b"{}\n").expect("settings write");
+
+        install(&path, binary(), true, false, false, true).expect("install with service opt-out");
+        let opted_out = fs::read_to_string(&path).expect("opted-out settings");
+        assert!(opted_out.contains("init --if-needed --quiet --skip-service"));
+        assert!(status(&path).expect("opted-out hook status").installed);
+
+        install(&path, binary(), true, true, false, true)
+            .expect("restore automatic service startup");
+        let automatic = fs::read_to_string(&path).expect("automatic settings");
+        assert!(automatic.contains("init --if-needed --quiet"));
+        assert!(!automatic.contains("--skip-service"));
     }
 
     #[test]
@@ -681,7 +707,7 @@ mod tests {
     #[test]
     fn hook_binary_validates_but_preserves_a_durable_symlink() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.2.0/bin");
+        let release = directory.path().join("versions/v0.3.0/bin");
         let prefix = directory.path().join("bin");
         fs::create_dir_all(&release).expect("release directory");
         fs::create_dir_all(&prefix).expect("prefix directory");

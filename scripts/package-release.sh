@@ -33,15 +33,8 @@ cleanup_hzr_package() {
 trap cleanup_hzr_package EXIT
 
 cp -R "${HZR_BUNDLE_ROOT}" "${HZR_PACKAGE_TEMP}/hzr"
-HZR_MANIFEST="${HZR_PACKAGE_TEMP}/hzr/share/hzr/BUNDLE_MANIFEST.sha256"
-(
-  cd "${HZR_PACKAGE_TEMP}/hzr"
-  find . -type f ! -path './share/hzr/BUNDLE_MANIFEST.sha256' -print \
-    | LC_ALL=C sort \
-    | while IFS= read -r HZR_FILE; do
-        shasum -a 256 "${HZR_FILE}"
-      done
-) >"${HZR_MANIFEST}"
+"${HZR_REPOSITORY_ROOT}/scripts/generate-bundle-manifest.sh" \
+  "${HZR_PACKAGE_TEMP}/hzr"
 
 HZR_ARTIFACT="hzr-v${HZR_VERSION}-${HZR_PLATFORM}.tar.gz"
 tar -czf "${HZR_OUTPUT_ROOT}/${HZR_ARTIFACT}" -C "${HZR_PACKAGE_TEMP}" hzr

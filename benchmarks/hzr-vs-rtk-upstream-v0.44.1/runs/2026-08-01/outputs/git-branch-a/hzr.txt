@@ -1,0 +1,14 @@
+* (no branch)
+  develop
+  remote-only (137):
+    chore/docs/contributing
+    chore/docs/savings-infos
+    chore/skills-frontmatter
+    ci/check-security-patterns
+    ci/check-test-presence
+    cicd/integration-tests
+    dependabot/cargo/colored-3.1.1
+    dependabot/cargo/develop/quick-xml-0.39.3
+    dependabot/cargo/tempfile-3.27.0
+    dependabot/cargo/ureq-3.3.0
+    ... +127 more

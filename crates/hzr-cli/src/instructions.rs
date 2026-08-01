@@ -103,16 +103,30 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          | `Edit`/`Write` | `hzr rtk -- write patch\\|replace\\|set ...` |\n\
          | memory | `hzr memory recall\\|store` |\n\
          | context | `hzr context plan \"<intent>\"` |\n\
-         | exact/raw output | `hzr rtk -- raw <command...>` |\n\n\
+         | exact/raw output | `hzr rtk -- raw <command...>` |\n\
+         | test-first development | `hzr tdd` before production changes |\n\
+         | build this project | `hzr build <args>` (not `hzr release`, which rebuilds HZR) |\n\n\
+         ## Memory scopes\n\n\
+         One store, two namespaces. `--scope project` (the store default) is for facts about\n\
+         *this repository*. `--scope global` is for facts about the **user** — a preference or\n\
+         a standing rule that should apply in every repository, so it does not have to be\n\
+         restated per project. Recall defaults to project + global; another repository's\n\
+         memory is never reachable from any scope.\n\n\
          ## MCP tools\n\n\
          If the `hzr` MCP server is registered, prefer its tools over the CLI — same\n\
          single store and index, and the calls are accounted:\n\n\
          | Tool | Use it for |\n\
          |---|---|\n\
+         | `hzr_context_plan` | Build bounded graph-first evidence for unfamiliar or cross-cutting work. |\n\
+         | `hzr_search` | Find code by intent (`mode: semantic`) or exactly (`mode: exact`). |\n\
          | `hzr_memory_recall` | Recall decisions, resolved errors and prior context before re-reading files. |\n\
-         | `hzr_memory_store` | Persist a decision, resolved error or finished work. Not ephemeral state. |\n\
-         | `hzr_search` | Find code by intent (`mode: semantic`) or exactly (`mode: exact`). |\n\n\
-         `isError: true` means nothing was read or written — never a partial success.\n\
+         | `hzr_memory_store` | Persist a decision, resolved error or finished work. Not ephemeral state. |\n\n\
+         MCP inputs are strictly validated and results include typed `structuredContent`.\n\
+         `isError: true` means no success was confirmed and no fallback engine or store\n\
+         was used. If a store transport fails after dispatch, recall before retrying because\n\
+         completion may be unknown.\n\
+         MCP is client-managed stdio: `hzr init` never starts it. Run `hzr install --force`\n\
+         once to register it, and `hzr mcp status` to audit native client launch state.\n\
          Register the server with `hzr mcp config --client codex\\|claude-desktop`. Never\n\
          register `icm`, `grepai` or `rtk` as your own MCP server: each direct launch adds\n\
          another writer to the store HZR supervises and leaks orphans when the session dies.\n\n\

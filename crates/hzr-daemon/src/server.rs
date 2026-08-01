@@ -2,23 +2,27 @@ use std::future::Future;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware;
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use hzr_core::Config;
 use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 
 use crate::api;
 use crate::auth::{AuthToken, authorize, load_or_create_token};
 use crate::lock::DaemonLock;
+use crate::visualizer;
 use crate::{AppState, DaemonError};
 
 pub fn router(state: AppState, token: AuthToken) -> Router {
     let timeout = std::time::Duration::from_millis(state.config.daemon.request_timeout_ms);
     let limit = state.config.daemon.request_limit_bytes;
 
-    Router::new()
+    let authenticated = Router::new()
         .route("/v1/health", get(api::health))
         .route("/v1/engines", get(api::engines))
         .route("/v1/search", post(api::search))
@@ -31,14 +35,54 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         .route("/v1/fork/run", post(api::fork_run))
         .route("/v1/codec/compile", post(api::codec_compile))
         .route("/v1/usage", post(api::usage))
+        .route_layer(middleware::from_fn_with_state(token, authorize));
+    let public = Router::new().route("/v1/dashboard", get(api::dashboard));
+    let router = public.merge(authenticated);
+    let router = if let Some(directory) = visualizer::assets_directory() {
+        router.fallback_service(ServeDir::new(directory).append_index_html_on_directories(true))
+    } else {
+        router.route("/", get(visualizer_unavailable))
+    };
+
+    router
         .layer(DefaultBodyLimit::max(limit))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             timeout,
         ))
         .layer(CatchPanicLayer::new())
-        .route_layer(middleware::from_fn_with_state(token, authorize))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(
+                "default-src 'self'; connect-src 'self'; img-src 'self' data:; \
+                 style-src 'self'; script-src 'self'; font-src 'self'; object-src 'none'; \
+                 base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            ),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        ))
         .with_state(state)
+}
+
+async fn visualizer_unavailable() -> impl IntoResponse {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        "HZR visualizer assets are unavailable; build them with `bun run build` in `visualizer/`",
+    )
 }
 
 pub async fn serve<F>(config: Config, shutdown: F) -> Result<(), DaemonError>
@@ -112,6 +156,50 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_snapshot_is_public_but_read_only() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let response = test_router(&directory)
+            .await
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/dashboard")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::X_CONTENT_TYPE_OPTIONS),
+            Some(&axum::http::HeaderValue::from_static("nosniff"))
+        );
+        let bytes = to_bytes(response.into_body(), 1_048_576)
+            .await
+            .expect("response body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("valid JSON response");
+        assert_eq!(
+            payload.get("protocol_version").and_then(Value::as_u64),
+            Some(1)
+        );
+        let services = payload
+            .get("services")
+            .and_then(Value::as_array)
+            .expect("dashboard services");
+        for required in ["hzrd", "rtk", "icm", "grepai"] {
+            assert!(
+                services
+                    .iter()
+                    .any(|service| service.get("id").and_then(Value::as_str) == Some(required)),
+                "missing dashboard service {required}"
+            );
+        }
+        assert!(payload.get("observed_usage").is_some());
+        assert!(payload.get("estimated_efficiency").is_some());
+        assert!(payload.get("token").is_none());
     }
 
     #[tokio::test]

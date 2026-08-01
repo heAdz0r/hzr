@@ -1,0 +1,440 @@
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{Context, Result, bail};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+
+const ROOT_VERSION_SURFACES: &[&str] = &[
+    "AGENTS.md",
+    "Cargo.toml",
+    "FORK_PARITY.md",
+    "HZR.md",
+    "PRD.md",
+    "PRD_ADOPTION.md",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md",
+    "install.sh",
+];
+
+const RUNTIME_DIGEST_SURFACES: &[(&str, &str)] = &[
+    (
+        "integrations/caveman-code/bridge.mjs",
+        "${HZR_CAVEMAN_ROOT}/bridge.mjs",
+    ),
+    (
+        "integrations/caveman-code/package.json",
+        "${HZR_CAVEMAN_ROOT}/package.json",
+    ),
+    (
+        "integrations/caveman-code/package-lock.json",
+        "${HZR_CAVEMAN_ROOT}/package-lock.json",
+    ),
+];
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct VersionReport {
+    pub previous: String,
+    pub target: String,
+    pub changed_files: Vec<PathBuf>,
+    pub dry_run: bool,
+}
+
+pub fn current_version(repository: &Path) -> Result<String> {
+    let cargo_text =
+        fs::read_to_string(repository.join("Cargo.toml")).context("failed to read Cargo.toml")?;
+    let document = cargo_text
+        .parse::<toml_edit::DocumentMut>()
+        .context("failed to parse Cargo.toml")?;
+    let version = document["workspace"]["package"]["version"]
+        .as_str()
+        .context("Cargo.toml is missing workspace.package.version")?
+        .to_owned();
+    validate_version(&version)?;
+    Ok(version)
+}
+
+pub fn synchronize(repository: &Path, target: &str, dry_run: bool) -> Result<VersionReport> {
+    validate_version(target)?;
+    let cargo_path = repository.join("Cargo.toml");
+    let previous = current_version(repository)?;
+
+    let mut changed_files = Vec::new();
+    if previous != target {
+        for relative in tracked_version_surfaces(repository)? {
+            let path = repository.join(&relative);
+            let Ok(before) = fs::read_to_string(&path) else {
+                continue;
+            };
+            if !before.contains(&previous) {
+                continue;
+            }
+            let after = before.replace(&previous, target);
+            if !dry_run {
+                atomic_replace(&path, after.as_bytes())?;
+            }
+            changed_files.push(relative);
+        }
+        let release_line_path = repository.join("scripts/refresh-current-engine.sh");
+        let before = fs::read_to_string(&release_line_path)
+            .context("failed to read scripts/refresh-current-engine.sh")?;
+        let previous_line = release_line(&previous)?;
+        let target_line = release_line(target)?;
+        let after = before.replace(
+            &format!("hzr_release_line = \"{previous_line}\""),
+            &format!("hzr_release_line = \"{target_line}\""),
+        );
+        if before == after {
+            bail!("scripts/refresh-current-engine.sh did not contain release line {previous_line}");
+        }
+        if !dry_run {
+            atomic_replace(&release_line_path, after.as_bytes())?;
+        }
+        changed_files.push(PathBuf::from("scripts/refresh-current-engine.sh"));
+        let changelog = repository.join("CHANGELOG.md");
+        let before = fs::read_to_string(&changelog).context("failed to read CHANGELOG.md")?;
+        let after = release_changelog(&before, &previous, target, release_date()?)?;
+        if before != after {
+            if !dry_run {
+                atomic_replace(&changelog, after.as_bytes())?;
+            }
+            changed_files.push(PathBuf::from("CHANGELOG.md"));
+        }
+    }
+    synchronize_runtime_digests(repository, &previous, target, dry_run, &mut changed_files)?;
+    changed_files.sort();
+    changed_files.dedup();
+    if !dry_run && previous != target {
+        let cargo_after = fs::read_to_string(&cargo_path).context("failed to reread Cargo.toml")?;
+        let expected = format!("version = \"{target}\"");
+        if !cargo_after.contains(&expected) {
+            bail!("version synchronization did not update workspace.package.version");
+        }
+    }
+
+    Ok(VersionReport {
+        previous,
+        target: target.to_owned(),
+        changed_files,
+        dry_run,
+    })
+}
+
+fn synchronize_runtime_digests(
+    repository: &Path,
+    previous: &str,
+    target: &str,
+    dry_run: bool,
+    changed_files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let smoke_relative = PathBuf::from("scripts/smoke-bundle.sh");
+    let smoke_path = repository.join(&smoke_relative);
+    let smoke_before = fs::read_to_string(&smoke_path)
+        .context("failed to read scripts/smoke-bundle.sh for runtime digest synchronization")?;
+    let mut smoke_after = if dry_run && previous != target {
+        smoke_before.replace(previous, target)
+    } else {
+        smoke_before.clone()
+    };
+
+    let mut package_lock_digest = None;
+    for (source_relative, bundle_artifact) in RUNTIME_DIGEST_SURFACES {
+        let source_path = repository.join(source_relative);
+        let source_before = fs::read_to_string(&source_path).with_context(|| {
+            format!("failed to read {source_relative} for digest synchronization")
+        })?;
+        let source_after = if dry_run && previous != target {
+            source_before.replace(previous, target)
+        } else {
+            source_before
+        };
+        let digest = format!("{:x}", Sha256::digest(source_after.as_bytes()));
+        smoke_after = replace_digest_for_artifact(&smoke_after, bundle_artifact, &digest)?;
+        if *source_relative == "integrations/caveman-code/package-lock.json" {
+            package_lock_digest = Some(digest);
+        }
+    }
+
+    if smoke_after != smoke_before {
+        if !dry_run {
+            atomic_replace(&smoke_path, smoke_after.as_bytes())?;
+        }
+        changed_files.push(smoke_relative);
+    }
+
+    let package_lock_digest = package_lock_digest.context("package-lock digest surface missing")?;
+    let preflight_relative = PathBuf::from("crates/hzr-agent/src/preflight.rs");
+    let preflight_path = repository.join(&preflight_relative);
+    let preflight_before = fs::read_to_string(&preflight_path)
+        .context("failed to read Caveman preflight digest pin")?;
+    let (preflight_after, previous_digest) = replace_digest_after_marker(
+        &preflight_before,
+        "pub const PACKAGE_LOCK_SHA256",
+        &package_lock_digest,
+    )?;
+    if preflight_after != preflight_before {
+        if !dry_run {
+            atomic_replace(&preflight_path, preflight_after.as_bytes())?;
+        }
+        changed_files.push(preflight_relative);
+    }
+
+    let readme_relative = PathBuf::from("integrations/caveman-code/README.md");
+    let readme_path = repository.join(&readme_relative);
+    let readme_before = fs::read_to_string(&readme_path)
+        .context("failed to read Caveman bridge digest documentation")?;
+    let readme_after = readme_before.replace(&previous_digest, &package_lock_digest);
+    if readme_after != readme_before {
+        if !dry_run {
+            atomic_replace(&readme_path, readme_after.as_bytes())?;
+        }
+        changed_files.push(readme_relative);
+    } else if !readme_before.contains(&package_lock_digest) {
+        bail!("Caveman bridge README is missing its package-lock digest pin");
+    }
+    Ok(())
+}
+
+fn replace_digest_for_artifact(before: &str, artifact: &str, digest: &str) -> Result<String> {
+    let artifact_marker = format!("  \"{artifact}\"");
+    let artifact_position = before
+        .find(&artifact_marker)
+        .with_context(|| format!("smoke bundle is missing digest target {artifact}"))?;
+    let prefix = &before[..artifact_position];
+    let digest_end = prefix
+        .rfind('"')
+        .context("smoke bundle digest is missing a closing quote")?;
+    let digest_start = prefix[..digest_end]
+        .rfind('"')
+        .context("smoke bundle digest is missing an opening quote")?
+        + 1;
+    let existing = &before[digest_start..digest_end];
+    if existing.len() != 64 || !existing.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("invalid pinned SHA-256 for {artifact}: {existing:?}");
+    }
+    let mut after = before.to_owned();
+    after.replace_range(digest_start..digest_end, digest);
+    Ok(after)
+}
+
+fn replace_digest_after_marker(
+    before: &str,
+    marker: &str,
+    digest: &str,
+) -> Result<(String, String)> {
+    let marker_position = before
+        .find(marker)
+        .with_context(|| format!("digest source is missing marker {marker:?}"))?;
+    let relative_start = before[marker_position..]
+        .find('"')
+        .with_context(|| format!("digest marker {marker:?} has no opening quote"))?;
+    let digest_start = marker_position + relative_start + 1;
+    let relative_end = before[digest_start..]
+        .find('"')
+        .with_context(|| format!("digest marker {marker:?} has no closing quote"))?;
+    let digest_end = digest_start + relative_end;
+    let existing = &before[digest_start..digest_end];
+    if existing.len() != 64 || !existing.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("invalid SHA-256 after {marker:?}: {existing:?}");
+    }
+    let mut after = before.to_owned();
+    after.replace_range(digest_start..digest_end, digest);
+    Ok((after, existing.to_owned()))
+}
+
+fn tracked_version_surfaces(repository: &Path) -> Result<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ])
+        .current_dir(repository)
+        .output()
+        .context("failed to enumerate repository files for version synchronization")?;
+    if !output.status.success() {
+        bail!("git ls-files failed with {}", output.status);
+    }
+    let mut paths = Vec::new();
+    for bytes in output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+    {
+        let relative = PathBuf::from(
+            std::str::from_utf8(bytes).context("repository contains a non-UTF-8 tracked path")?,
+        );
+        if is_version_surface(&relative) {
+            paths.push(relative);
+        }
+    }
+    for surface in ROOT_VERSION_SURFACES {
+        let relative = PathBuf::from(surface);
+        if repository.join(&relative).is_file() && !paths.contains(&relative) {
+            paths.push(relative);
+        }
+    }
+    Ok(paths)
+}
+
+fn is_version_surface(path: &Path) -> bool {
+    if ROOT_VERSION_SURFACES
+        .iter()
+        .any(|surface| path == Path::new(surface))
+    {
+        return true;
+    }
+    path.starts_with(".github/workflows")
+        || path.starts_with("scripts")
+        || path.starts_with("crates")
+        || path.starts_with("integrations/caveman-code")
+        || path.starts_with("fork-core/rtk/src")
+}
+
+fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!(
+            "refusing to replace non-regular version surface {}",
+            path.display()
+        );
+    }
+    let parent = path
+        .parent()
+        .with_context(|| format!("version surface has no parent: {}", path.display()))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("failed to stage {}", path.display()))?;
+    temporary.write_all(bytes)?;
+    temporary
+        .as_file()
+        .set_permissions(metadata.permissions())?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("failed to replace {}", path.display()))?;
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+fn validate_version(version: &str) -> Result<()> {
+    let parts = version.split('.').collect::<Vec<_>>();
+    if parts.len() != 3
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || !part.bytes().all(|byte| byte.is_ascii_digit())
+                || (part.len() > 1 && part.starts_with('0'))
+        })
+    {
+        bail!("release version must be canonical MAJOR.MINOR.PATCH, got {version:?}");
+    }
+    Ok(())
+}
+
+fn release_line(version: &str) -> Result<String> {
+    validate_version(version)?;
+    let mut parts = version.split('.');
+    let major = parts.next().context("validated version has no major")?;
+    let minor = parts.next().context("validated version has no minor")?;
+    Ok(format!("{major}.{minor}.x"))
+}
+
+fn release_date() -> Result<String> {
+    let output = Command::new("date")
+        .arg("+%Y-%m-%d")
+        .output()
+        .context("failed to determine release date")?;
+    if !output.status.success() {
+        bail!("date failed with {}", output.status);
+    }
+    Ok(String::from_utf8(output.stdout)
+        .context("release date was not UTF-8")?
+        .trim()
+        .to_owned())
+}
+
+fn release_changelog(before: &str, previous: &str, target: &str, date: String) -> Result<String> {
+    if before.contains(&format!("## [{target}]")) {
+        return Ok(before.to_owned());
+    }
+    let marker = "## [Unreleased]\n\n";
+    if !before.contains(marker) {
+        bail!("CHANGELOG.md is missing the Unreleased section");
+    }
+    let mut after = before.replacen(marker, &format!("{marker}## [{target}] - {date}\n\n"), 1);
+    let link =
+        format!("[{target}]: https://github.com/heAdz0r/hzr/compare/v{previous}...v{target}\n");
+    let first_link = format!("[{previous}]:");
+    if let Some(position) = after.find(&first_link) {
+        after.insert_str(position, &link);
+    } else {
+        after.push_str(&link);
+    }
+    Ok(after)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        release_changelog, replace_digest_after_marker, replace_digest_for_artifact,
+        validate_version,
+    };
+
+    #[test]
+    fn version_validation_rejects_ambiguous_or_partial_versions() {
+        assert!(validate_version("0.3.0").is_ok());
+        for invalid in ["v0.3.0", "0.3", "0.03.0", "0.3.0-beta"] {
+            assert!(validate_version(invalid).is_err(), "accepted {invalid}");
+        }
+    }
+
+    #[test]
+    fn changelog_moves_unreleased_entries_under_target_once() {
+        let before = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- fix\n\n[1.2.3]: old\n";
+        let after =
+            release_changelog(before, "1.2.3", "1.3.0", "2026-08-01".into()).expect("changelog");
+        assert!(after.contains("## [1.3.0] - 2026-08-01\n\n### Added"));
+        assert_eq!(after.matches("## [1.3.0]").count(), 1);
+        assert!(after.contains("[1.3.0]: https://github.com/heAdz0r/hzr/compare/v1.2.3...v1.3.0"));
+    }
+
+    #[test]
+    fn runtime_digest_pin_is_replaced_for_the_exact_artifact() {
+        let before = concat!(
+            "verify_sha256 \\\n",
+            "  \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" \\\n",
+            "  \"${HZR_CAVEMAN_ROOT}/bridge.mjs\"\n",
+        );
+        let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let after = replace_digest_for_artifact(before, "${HZR_CAVEMAN_ROOT}/bridge.mjs", digest)
+            .expect("digest replacement");
+
+        assert!(after.contains(digest));
+        assert!(
+            !after.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+    }
+
+    #[test]
+    fn compiled_digest_pin_is_replaced_after_its_named_marker() {
+        let before = concat!(
+            "pub const PACKAGE_LOCK_SHA256: &str =\n",
+            "    \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\";\n",
+        );
+        let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let (after, previous) =
+            replace_digest_after_marker(before, "pub const PACKAGE_LOCK_SHA256", digest)
+                .expect("compiled digest replacement");
+
+        assert_eq!(
+            previous,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert!(after.contains(digest));
+    }
+}

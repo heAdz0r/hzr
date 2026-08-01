@@ -513,4 +513,5 @@ tasks/prd-upstream-pr-backports.md
 tasks/requirements-memory-llm-optimization.md
 tests/git_cli_parity.rs
 tests/read_cli.rs
+tests/rgai_project_root.rs
 tests/write_cli.rs

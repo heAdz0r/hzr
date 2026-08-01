@@ -1,0 +1,14 @@
+129F 22D:
+
+./ build.rs
+src/ main.rs
+src/analytics/ ccusage.rs cc_economics.rs gain.rs mod.rs session_cmd.rs
+src/cmds/ mod.rs
+src/cmds/cloud/ aws_cmd.rs wget_cmd.rs curl_cmd.rs psql_cmd.rs mod.rs container.rs
+src/cmds/dotnet/ binlog.rs mod.rs dotnet_cmd.rs dotnet_format_report.rs dotnet_trx.rs
+src/cmds/git/ glab_cmd.rs git.rs mod.rs gt_cmd.rs diff_cmd.rs gh_cmd.rs
+src/cmds/go/ go_cmd.rs golangci_cmd.rs mod.rs
+src/cmds/js/ npm_cmd.rs lint_cmd.rs prisma_cmd.rs pnpm_cmd.rs mod.rs tsc_cmd.rs vitest_cmd.rs prettier_cmd.rs next_cmd.rs playwright_cmd.rs
+src/cmds/jvm/ gradlew_cmd.rs mod.rs mvn_cmd.rs
+src/cmds/php/ phpstan_cmd.rs test_output.rs php_cmd.rs paratest_cmd.rs mod.rs pest_cmd.rs ecs_cmd.rs phpunit_cmd.rs utils.rs
++79 more

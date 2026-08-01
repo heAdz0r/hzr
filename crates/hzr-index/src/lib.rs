@@ -6,6 +6,7 @@ mod migration;
 mod owner;
 mod paths;
 mod process;
+mod registry;
 mod watch;
 mod workspace;
 
@@ -19,6 +20,10 @@ pub use grepai::{
 pub use migration::{
     INDEX_MIGRATION_SCHEMA_VERSION, IndexEntryKind, IndexMigrationEntry, IndexMigrationManifest,
     IndexMigrationOutcome, IndexMigrationState, ManifestPath, migrate_legacy_index,
+};
+pub use registry::{
+    WORKSPACE_REGISTRATION_SCHEMA_VERSION, WorkspaceRegistration, WorkspaceRegistrySnapshot,
+    WorkspaceRegistryWarning, registered_workspaces,
 };
 pub use watch::WatchHandle;
 pub use workspace::{

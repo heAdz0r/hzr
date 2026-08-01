@@ -243,6 +243,38 @@ async fn test_supervisor_owns_one_process_and_second_instance_attaches() -> anyh
 
 #[cfg(unix)]
 #[tokio::test]
+async fn test_concurrent_supervisor_starts_create_exactly_one_owner() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let executable = fake_icm_script(&temp, "0.10.61")?;
+    let (listener, address) = bind_loopback().await?;
+    let supervisor = Arc::new(IcmSupervisor::new(config(
+        &temp,
+        executable
+            .to_str()
+            .context("non-UTF-8 fake executable path")?,
+        address,
+    ))?);
+    let server = spawn_fake_server(listener, read_token(temp.path())?);
+    let mut tasks = Vec::new();
+    for _ in 0..16 {
+        let supervisor = Arc::clone(&supervisor);
+        tasks.push(tokio::spawn(async move { supervisor.start().await }));
+    }
+    let mut started = 0;
+    for task in tasks {
+        if matches!(task.await??, StartOutcome::Started { .. }) {
+            started += 1;
+        }
+    }
+
+    assert_eq!(started, 1);
+    assert_eq!(supervisor.stop().await?, StopOutcome::Stopped);
+    drop(server);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn test_supervisor_recovers_orphan_without_spawning_duplicate() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let executable = fake_icm_script(&temp, "0.10.61")?;

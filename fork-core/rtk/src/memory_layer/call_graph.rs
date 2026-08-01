@@ -16,8 +16,9 @@ use std::path::Path;
 
 /// Inverted call graph: symbol_name → files that call it.
 pub struct CallGraph {
-    /// symbol → set of rel_paths that contain a call site for that symbol.
-    caller_index: HashMap<String, Vec<String>>,
+    /// rel_path → symbols called by that file. This avoids scanning every edge for
+    /// every score lookup during planning.
+    file_index: HashMap<String, Vec<String>>,
 }
 
 impl CallGraph {
@@ -55,7 +56,7 @@ impl CallGraph {
 
         if all_known.is_empty() || content_map.is_empty() {
             return Self {
-                caller_index: HashMap::new(),
+                file_index: HashMap::new(),
             };
         }
 
@@ -74,12 +75,12 @@ impl CallGraph {
             Err(_) => {
                 // Fallback: empty graph if AC build fails (shouldn't happen)
                 return Self {
-                    caller_index: HashMap::new(),
+                    file_index: HashMap::new(),
                 };
             }
         };
 
-        let mut caller_index: HashMap<String, Vec<String>> = HashMap::new();
+        let mut file_index: HashMap<String, Vec<String>> = HashMap::new();
 
         for (caller_path, content) in content_map {
             // M2: Single-pass scan — collect which symbols have matches in this file
@@ -92,23 +93,25 @@ impl CallGraph {
             for sym_idx in matched_symbols {
                 let symbol = &all_known[sym_idx];
                 if !is_only_definition(content, symbol) {
-                    caller_index
-                        .entry(symbol.clone())
+                    file_index
+                        .entry(caller_path.clone())
                         .or_default()
-                        .push(caller_path.clone());
+                        .push(symbol.clone());
                 }
             }
         }
 
-        Self { caller_index }
+        Self { file_index }
     }
 
     /// Return files that call the given symbol.
-    pub fn callers_of(&self, symbol: &str) -> &[String] {
-        self.caller_index
-            .get(symbol)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
+    #[cfg(test)]
+    pub fn callers_of(&self, symbol: &str) -> Vec<String> {
+        self.file_index
+            .iter()
+            .filter(|(_, symbols)| symbols.iter().any(|candidate| candidate == symbol))
+            .map(|(path, _)| path.clone())
+            .collect()
     }
 
     /// Score a file by how many of the query tags map to symbols it calls.
@@ -117,28 +120,39 @@ impl CallGraph {
         if query_tags.is_empty() {
             return 0.0;
         }
-        // Count query tags for which this file has at least one call site
+        let Some(symbols) = self.file_index.get(rel_path) else {
+            return 0.0;
+        };
+        // Count query tags for which this file has at least one call site.
         let hits = query_tags
             .iter()
             .filter(|tag| {
-                // Fuzzy: tag matches if any known symbol contains the tag as substring
-                self.caller_index.iter().any(|(sym, callers)| {
-                    (sym.contains(tag.as_str()) || tag.contains(sym.as_str()))
-                        && callers.iter().any(|p| p == rel_path)
-                })
+                symbols
+                    .iter()
+                    .any(|symbol| symbol.contains(tag.as_str()) || tag.contains(symbol.as_str()))
             })
             .count();
         (hits as f32 / query_tags.len() as f32).min(1.0)
     }
 
     /// True if the graph has any entries.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
-        self.caller_index.is_empty()
+        self.file_index.is_empty()
+    }
+
+    /// Score every caller file once for a query.
+    pub fn caller_scores(&self, query_tags: &[String]) -> HashMap<String, f32> {
+        self.file_index
+            .keys()
+            .map(|path| (path.clone(), self.caller_score(path, query_tags)))
+            .collect()
     }
 
     /// Total number of (symbol, caller_file) edges.
+    #[cfg(test)]
     pub fn edge_count(&self) -> usize {
-        self.caller_index.values().map(|v| v.len()).sum()
+        self.file_index.values().map(Vec::len).sum()
     }
 }
 
@@ -153,6 +167,7 @@ impl CallGraph {
 ///
 /// Filters out: definition sites (`fn symbol`, `pub fn symbol`, `def symbol`, etc.)
 /// to avoid self-scoring (a file doesn't "call" its own definitions).
+#[cfg(test)]
 pub fn has_call_site(content: &str, symbol: &str) -> bool {
     if symbol.len() < 3 {
         return false; // skip very short names (too many false positives)

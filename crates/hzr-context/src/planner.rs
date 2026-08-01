@@ -360,6 +360,12 @@ impl ContextPlanner {
         workspace: &Workspace,
         request: &PlanRequest,
     ) -> Result<ForkPlanOutput> {
+        let filter = workspace.normalize_filter(request.path.as_deref())?;
+        let path = filter.as_deref().unwrap_or_else(|| Path::new("."));
+        let path_text = path.to_str().ok_or_else(|| ContextError::InvalidRequest {
+            field: "path",
+            reason: "path must be valid UTF-8".into(),
+        })?;
         let token_budget = self
             .hard_token_limit
             .saturating_mul(3)
@@ -370,7 +376,7 @@ impl ContextPlanner {
                 "memory".into(),
                 "plan".into(),
                 request.intent.clone(),
-                ".".into(),
+                path_text.into(),
                 "--token-budget".into(),
                 token_budget.to_string(),
                 "--format".into(),
@@ -411,6 +417,18 @@ impl ContextPlanner {
             SearchStrategy::ForkRgaiBuiltin
         } else {
             self.ensure_managed_fork_search_config(workspace).await?;
+            args.push("--project-root".into());
+            args.push(
+                workspace
+                    .identity
+                    .root
+                    .to_str()
+                    .ok_or_else(|| ContextError::InvalidRequest {
+                        field: "workspace",
+                        reason: "workspace root must be valid UTF-8".into(),
+                    })?
+                    .into(),
+            );
             SearchStrategy::ForkRgaiAdaptive
         };
         if !request.include_content {

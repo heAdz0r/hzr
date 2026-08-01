@@ -77,6 +77,7 @@ impl Workspace {
             git_binary,
             deadline,
             IndexPlacementPolicy::ProjectLocal,
+            true,
         )
         .await
     }
@@ -93,6 +94,26 @@ impl Workspace {
             git_binary,
             deadline,
             IndexPlacementPolicy::Managed { data_root },
+            true,
+        )
+        .await
+    }
+
+    /// Discover identity and canonical placement without recursively auditing the tree.
+    /// Callers that use the index must cache an audited `discover_managed` result first.
+    pub async fn discover_managed_fast(
+        start: &Path,
+        git_binary: &Path,
+        data_root: &Path,
+        deadline: Duration,
+    ) -> Result<Self> {
+        let data_root = normalize_future_path(data_root)?;
+        Self::discover_with_policy(
+            start,
+            git_binary,
+            deadline,
+            IndexPlacementPolicy::Managed { data_root },
+            false,
         )
         .await
     }
@@ -102,6 +123,7 @@ impl Workspace {
         git_binary: &Path,
         deadline: Duration,
         placement_policy: IndexPlacementPolicy,
+        audit_duplicates: bool,
     ) -> Result<Self> {
         let start = canonical_directory(start)?;
         let git = discover_git(&start, git_binary, deadline).await?;
@@ -139,7 +161,11 @@ impl Workspace {
             owner_lock: directory.join("hzr-owner.lock"),
             directory,
         };
-        let duplicate_index_dirs = find_duplicate_indexes(&root, &project_entry)?;
+        let duplicate_index_dirs = if audit_duplicates {
+            find_duplicate_indexes(&root, &project_entry)?
+        } else {
+            Vec::new()
+        };
 
         Ok(Self {
             identity: WorkspaceIdentity {
@@ -216,6 +242,50 @@ impl Workspace {
     pub fn ensure_managed_location(&self) -> Result<()> {
         self.require_managed_index()?;
         self.prepare_index_location()
+    }
+
+    /// Re-point a project symlink that HZR itself created under a previous identity.
+    ///
+    /// Workspace identity is derived from the git common dir when there is one, and from
+    /// the canonical directory path otherwise. So a project initialized before `git init`
+    /// legitimately changes identity the moment it becomes a repository, and its existing
+    /// symlink then looks foreign. Failing there would leave the most common real
+    /// sequence — create a directory, work in it, then `git init` — permanently broken.
+    ///
+    /// This is deliberately narrow. It only acts when the current target lives inside
+    /// *this* managed `workspaces/` subtree, i.e. HZR created it; a symlink into another
+    /// data root, another user's directory or an arbitrary path is still foreign and is
+    /// refused. The built index is moved rather than discarded, so relocation costs no
+    /// re-scan, and it is skipped when the new location already holds a store.
+    pub fn adopt_relocated_index(&self) -> Result<bool> {
+        let IndexPlacementPolicy::Managed { data_root } = &self.placement_policy else {
+            return Ok(false);
+        };
+        let IndexPlacement::ForeignSymlink { link, target, .. } = self.placement()? else {
+            return Ok(false);
+        };
+        let managed_root = data_root.join("workspaces");
+        if !target.starts_with(&managed_root) {
+            // Not ours: leave it foreign so the operator decides.
+            return Ok(false);
+        }
+        if self.index.directory.exists() {
+            // The new identity already has a store; only the stale link needs replacing.
+            remove_file(&link)?;
+            create_directory_symlink(&self.index.directory, &link)?;
+            return Ok(true);
+        }
+        if let Some(parent) = self.index.directory.parent() {
+            create_directory(parent)?;
+        }
+        std::fs::rename(&target, &self.index.directory).map_err(|source| IndexError::Io {
+            operation: "relocate managed index to the new workspace identity",
+            path: self.index.directory.clone(),
+            source,
+        })?;
+        remove_file(&link)?;
+        create_directory_symlink(&self.index.directory, &link)?;
+        Ok(true)
     }
 
     pub(crate) fn prepare_index_location(&self) -> Result<()> {
@@ -358,6 +428,15 @@ fn require_supported_placement(placement: IndexPlacement) -> Result<()> {
         }),
         IndexPlacement::ForeignEntry { path } => Err(IndexError::IndexEntryConflict { path }),
     }
+}
+
+/// Remove a symlink (not its target). Used only when replacing an HZR-owned link.
+fn remove_file(path: &Path) -> Result<()> {
+    std::fs::remove_file(path).map_err(|source| IndexError::Io {
+        operation: "remove the stale managed index symlink",
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 fn create_directory(path: &Path) -> Result<()> {
@@ -536,7 +615,9 @@ fn find_duplicate_indexes(root: &Path, canonical: &Path) -> Result<Vec<PathBuf>>
                 .unwrap_or_else(|| std::io::Error::other("directory traversal failed")),
         })?;
         let name = entry.file_name().to_string_lossy();
-        if entry.file_type().is_dir() && name == ".git" {
+        if entry.file_type().is_dir()
+            && matches!(name.as_ref(), ".git" | "target" | "node_modules" | ".venv")
+        {
             entries.skip_current_dir();
             continue;
         }

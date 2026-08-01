@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{Deadlines, GrepAi, IndexGeneration, InitOptions, Result, WatchHandle, Workspace};
 
@@ -20,6 +20,9 @@ pub struct IndexCoordinator {
     deadlines: Deadlines,
     auto_index: bool,
     watchers: Arc<Mutex<HashMap<String, WatchHandle>>>,
+    watcher_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    watcher_lifecycle: Arc<RwLock<()>>,
+    workspaces: Arc<Mutex<HashMap<PathBuf, Workspace>>>,
 }
 
 impl IndexCoordinator {
@@ -38,18 +41,42 @@ impl IndexCoordinator {
             deadlines,
             auto_index,
             watchers: Arc::new(Mutex::new(HashMap::new())),
+            watcher_locks: Arc::new(Mutex::new(HashMap::new())),
+            watcher_lifecycle: Arc::new(RwLock::new(())),
+            workspaces: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     pub async fn workspace(&self, start: &Path) -> Result<Workspace> {
-        let workspace = Workspace::discover_managed(
+        let discovered = Workspace::discover_managed_fast(
             start,
             &self.git_binary,
             &self.data_root,
             self.deadlines.version,
         )
         .await?;
+        if let Some(workspace) = self
+            .workspaces
+            .lock()
+            .await
+            .get(&discovered.identity.root)
+            .cloned()
+        {
+            workspace.require_managed_index()?;
+            return Ok(workspace);
+        }
+        let workspace = Workspace::discover_managed(
+            &discovered.identity.root,
+            &self.git_binary,
+            &self.data_root,
+            self.deadlines.version,
+        )
+        .await?;
         workspace.require_managed_index()?;
+        self.workspaces
+            .lock()
+            .await
+            .insert(workspace.identity.root.clone(), workspace.clone());
         Ok(workspace)
     }
 
@@ -85,6 +112,7 @@ impl IndexCoordinator {
     }
 
     pub async fn shutdown(&self) -> Result<()> {
+        let _lifecycle = self.watcher_lifecycle.write().await;
         let handles = {
             let mut watchers = self.watchers.lock().await;
             std::mem::take(&mut *watchers)
@@ -98,16 +126,28 @@ impl IndexCoordinator {
     }
 
     async fn ensure_watcher(&self, grepai: &GrepAi) -> Result<()> {
+        let _lifecycle = self.watcher_lifecycle.read().await;
         let key = grepai.workspace().identity.worktree_id.clone();
-        let mut watchers = self.watchers.lock().await;
-        if let Some(handle) = watchers.get_mut(&key) {
-            if handle.is_running()? {
-                return Ok(());
+        let watcher_lock = {
+            let mut locks = self.watcher_locks.lock().await;
+            Arc::clone(
+                locks
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(()))),
+            )
+        };
+        let _watcher = watcher_lock.lock().await;
+        {
+            let mut watchers = self.watchers.lock().await;
+            if let Some(handle) = watchers.get_mut(&key) {
+                if handle.is_running()? {
+                    return Ok(());
+                }
+                watchers.remove(&key);
             }
-            watchers.remove(&key);
         }
         let handle = grepai.start_watch().await?;
-        watchers.insert(key, handle);
+        self.watchers.lock().await.insert(key, handle);
         Ok(())
     }
 }

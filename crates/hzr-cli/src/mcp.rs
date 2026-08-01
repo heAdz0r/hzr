@@ -18,27 +18,60 @@
 //!   result with remediation instead of pretending to have stored something, so a dead
 //!   backend can never look like a successful write.
 
+mod arguments;
+#[cfg(test)]
+mod tests;
+mod tools;
+
 use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 use hzr_core::Config;
 use hzr_protocol::{
-    MemoryImportance, MemoryRecallApiRequest, MemoryStoreApiRequest, SearchApiRequest, SearchMode,
+    ContextPlanApiRequest, MemoryImportance, MemoryRecallApiRequest, MemoryScopeSelector,
+    MemoryStoreApiRequest, MemoryWriteScope, SearchApiRequest, SearchMode,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::cli::McpClientArg;
 use crate::client::DaemonClient;
+use arguments::{
+    bounded_usize, optional_bool, optional_enum, optional_string, parse_importance, parse_mode,
+    parse_recall_scope, parse_write_scope, reject_unknown, required_string, string_array,
+};
+use tools::tool_definitions;
 
-/// MCP revision this adapter implements. Clients that ask for a different revision still
-/// receive this one, which the specification allows them to accept or reject.
-const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+/// Latest stable MCP revision implemented by the gateway. The 2026-07-28 revision is
+/// still a release candidate, so production clients negotiate against this stable line.
+const LATEST_MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+const SUPPORTED_MCP_PROTOCOL_VERSIONS: [&str; 4] = [
+    "2024-11-05",
+    "2025-03-26",
+    "2025-06-18",
+    LATEST_MCP_PROTOCOL_VERSION,
+];
 
 /// JSON-RPC error codes used here (the standard subset).
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
+const INVALID_REQUEST: i64 = -32600;
 const PARSE_ERROR: i64 = -32700;
+
+pub fn lifecycle_metadata() -> Value {
+    json!({
+        "mode": crate::client_config::MCP_LIFECYCLE,
+        "started_by_init": false,
+        "registered_by": "hzr install --force",
+        "launched_by": "MCP client on connection",
+        "shutdown": "client closes stdio",
+    })
+}
+
+#[derive(Default)]
+struct SessionState {
+    initialized: bool,
+}
 
 pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
     // A terminal stdin means a human ran this by hand; an MCP server would then hang
@@ -54,6 +87,7 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
     let mut stdout = tokio::io::stdout();
+    let mut session = SessionState::default();
 
     // Reading until EOF is the whole anti-orphan mechanism: when the parent agent exits,
     // the pipe closes, `next_line()` returns None, and this process ends with it.
@@ -66,7 +100,7 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
         if line.is_empty() {
             continue;
         }
-        let Some(response) = handle_line(config, &workspace, line).await else {
+        let Some(response) = handle_line(config, &workspace, &mut session, line).await else {
             // Notifications have no response by definition; staying silent is correct.
             continue;
         };
@@ -79,7 +113,12 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
 }
 
 /// Returns `None` for notifications, which must never be answered.
-async fn handle_line(config: &Config, workspace: &str, line: &str) -> Option<Value> {
+async fn handle_line(
+    config: &Config,
+    workspace: &str,
+    session: &mut SessionState,
+    line: &str,
+) -> Option<Value> {
     let request: Value = match serde_json::from_str(line) {
         Ok(request) => request,
         Err(error) => {
@@ -90,17 +129,53 @@ async fn handle_line(config: &Config, workspace: &str, line: &str) -> Option<Val
             ));
         }
     };
-    let method = request.get("method").and_then(Value::as_str).unwrap_or("");
     let id = request.get("id").cloned();
+    if !request.is_object()
+        || request.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || request.get("method").and_then(Value::as_str).is_none()
+    {
+        return Some(error_response(
+            id.unwrap_or(Value::Null),
+            INVALID_REQUEST,
+            "request must be a JSON-RPC 2.0 object with a method",
+        ));
+    }
+    let Some(method) = request.get("method").and_then(Value::as_str) else {
+        return Some(error_response(
+            id.unwrap_or(Value::Null),
+            INVALID_REQUEST,
+            "request method must be a string",
+        ));
+    };
 
     // Absent id => notification. `notifications/initialized` is the common one.
     let id = id?;
 
     match method {
-        "initialize" => Some(success(id, initialize_result())),
+        "initialize" if session.initialized => Some(error_response(
+            id,
+            INVALID_REQUEST,
+            "MCP session is already initialized",
+        )),
+        "initialize" => match initialize_result(&request) {
+            Ok(result) => {
+                session.initialized = true;
+                Some(success(id, result))
+            }
+            Err(error) => Some(error_response(id, INVALID_PARAMS, &error.to_string())),
+        },
         "ping" => Some(success(id, json!({}))),
-        "tools/list" => Some(success(id, json!({"tools": tool_definitions()}))),
-        "tools/call" => Some(call_tool(config, workspace, id, &request).await),
+        "tools/list" if session.initialized => {
+            Some(success(id, json!({"tools": tool_definitions()})))
+        }
+        "tools/call" if session.initialized => {
+            Some(call_tool(config, workspace, id, &request).await)
+        }
+        "tools/list" | "tools/call" => Some(error_response(
+            id,
+            INVALID_REQUEST,
+            "initialize the MCP session before using tools",
+        )),
         _ => Some(error_response(
             id,
             METHOD_NOT_FOUND,
@@ -109,81 +184,59 @@ async fn handle_line(config: &Config, workspace: &str, line: &str) -> Option<Val
     }
 }
 
-fn initialize_result() -> Value {
-    json!({
-        "protocolVersion": MCP_PROTOCOL_VERSION,
-        "capabilities": {"tools": {}},
+fn initialize_result(request: &Value) -> Result<Value> {
+    let requested = request
+        .pointer("/params/protocolVersion")
+        .and_then(Value::as_str)
+        .context("initialize requires params.protocolVersion")?;
+    // An unknown revision negotiates down to our latest rather than failing, so a newer
+    // client still gets a working session instead of no session at all.
+    let negotiated = if SUPPORTED_MCP_PROTOCOL_VERSIONS.contains(&requested) {
+        requested
+    } else {
+        LATEST_MCP_PROTOCOL_VERSION
+    };
+
+    Ok(json!({
+        "protocolVersion": negotiated,
+        "capabilities": {"tools": {"listChanged": false}},
         "serverInfo": {
             "name": "hzr",
+            "title": "HZR Zero-Redundancy Gateway",
             "version": env!("CARGO_PKG_VERSION"),
+            "description": "Local stdio gateway to the single HZR context, index and memory owners.",
         },
-        "instructions": "HZR owns one centralized memory store and one semantic index. \
-    Use these tools instead of calling icm, grepai or rtk directly: a direct call creates a \
-    second store and unaccounted usage.",
-    })
-}
-
-fn tool_definitions() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "hzr_memory_recall",
-            "description": "Recall durable facts, decisions and past context from the single \
-        HZR-owned memory store, scoped to this repository.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "What to recall."},
-                    "topic": {"type": "string", "description": "Optional topic filter."},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
-                },
-                "required": ["query"],
-            },
-        }),
-        json!({
-            "name": "hzr_memory_store",
-            "description": "Store a durable fact, decision or resolved error in the single \
-        HZR-owned memory store. Not for ephemeral session state.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string"},
-                    "content": {"type": "string"},
-                    "importance": {
-                        "type": "string",
-                        "enum": ["critical", "high", "medium", "low"],
-                    },
-                    "keywords": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["topic", "content"],
-            },
-        }),
-        json!({
-            "name": "hzr_search",
-            "description": "Search this repository through the one canonical HZR index \
-        (semantic by default, exact on request).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "mode": {"type": "string", "enum": ["auto", "semantic", "exact"]},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
-                },
-                "required": ["query"],
-            },
-        }),
-    ]
+        "instructions": "Use hzr_context_plan first for unfamiliar or cross-cutting work, \
+    hzr_search for targeted code discovery, hzr_memory_recall before re-reading prior work, \
+    hzr_memory_store only for durable decisions or resolved errors, and `hzr tdd` before \
+    production changes. HZR owns the single \
+    context planner, semantic index and memory store; never launch icm, grepai or rtk directly.",
+    }))
 }
 
 async fn call_tool(config: &Config, workspace: &str, id: Value, request: &Value) -> Value {
-    let params = request.get("params");
-    let name = params
-        .and_then(|params| params.get("name"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let Some(params) = request.get("params").and_then(Value::as_object) else {
+        return error_response(id, INVALID_PARAMS, "tools/call requires object params");
+    };
+    let Some(name) = params.get("name").and_then(Value::as_str) else {
+        return error_response(id, INVALID_PARAMS, "tools/call requires a string name");
+    };
+    if !matches!(
+        name,
+        "hzr_memory_recall" | "hzr_memory_store" | "hzr_search" | "hzr_context_plan"
+    ) {
+        return error_response(id, INVALID_PARAMS, &format!("unknown tool: {name}"));
+    }
     let arguments = params
-        .and_then(|params| params.get("arguments"))
+        .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    if !arguments.is_object() {
+        return success(
+            id,
+            tool_error("Tool arguments must be an object. No operation was attempted."),
+        );
+    }
 
     let client = match DaemonClient::from_config(config) {
         Ok(client) => client,
@@ -204,122 +257,121 @@ async fn call_tool(config: &Config, workspace: &str, id: Value, request: &Value)
         "hzr_memory_recall" => recall(&client, workspace, &arguments).await,
         "hzr_memory_store" => store(&client, workspace, &arguments).await,
         "hzr_search" => search(&client, workspace, &arguments).await,
-        other => {
-            return error_response(id, INVALID_PARAMS, &format!("unknown tool: {other}"));
+        "hzr_context_plan" => context_plan(&client, workspace, &arguments).await,
+        _ => {
+            return error_response(id, INVALID_PARAMS, &format!("unknown tool: {name}"));
         }
     };
 
     match outcome {
-        Ok(text) => success(id, tool_text(&text)),
-        // A failed write must state that nothing landed. Without that, an agent can read
-        // "error" and still assume a partial store happened, then skip retrying.
+        Ok(value) => success(id, tool_success(&value)),
+        Err(error) if name == "hzr_memory_store" => success(
+            id,
+            tool_error(&format!(
+                "{error:#}. The store did not report success and HZR did not use a fallback \
+                 store. If transport failed after dispatch, completion is unknown; recall the \
+                 fact before retrying. If the daemon is down, start it with `hzr daemon serve`."
+            )),
+        ),
         Err(error) => success(
             id,
             tool_error(&format!(
-                "{error:#}. Nothing was read or written. If the daemon is down, start it \
-                 with `hzr daemon serve`; HZR never falls back to a second store."
+                "{error:#}. No fallback engine or store was used. If the daemon is down, start \
+                 it with `hzr daemon serve`."
             )),
         ),
     }
 }
 
-async fn recall(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<String> {
+async fn recall(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    reject_unknown(arguments, &["query", "topic", "keyword", "limit", "scope"])?;
     let query = required_string(arguments, "query")?;
     let request = MemoryRecallApiRequest {
         workspace: workspace.to_owned(),
         query,
-        topic: arguments
-            .get("topic")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        limit: arguments
-            .get("limit")
-            .and_then(Value::as_u64)
-            .unwrap_or(10)
-            .clamp(1, 50) as usize,
-        keyword: None,
+        topic: optional_string(arguments, "topic")?,
+        limit: bounded_usize(arguments, "limit", 10, 50)?,
+        keyword: optional_string(arguments, "keyword")?,
+        scope: optional_enum(
+            arguments,
+            "scope",
+            MemoryScopeSelector::default(),
+            parse_recall_scope,
+            "project, global, project_and_global",
+        )?,
     };
     let records = client.memory_recall(&request).await?;
-    if records.is_empty() {
-        return Ok("No stored memory matched.".to_owned());
-    }
-    Ok(serde_json::to_string_pretty(&records)?)
+    Ok(json!({"count": records.len(), "memories": records}))
 }
 
-async fn store(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<String> {
+async fn store(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    reject_unknown(
+        arguments,
+        &["topic", "content", "importance", "keywords", "scope"],
+    )?;
     let request = MemoryStoreApiRequest {
         workspace: workspace.to_owned(),
         topic: required_string(arguments, "topic")?,
         content: required_string(arguments, "content")?,
-        importance: arguments
-            .get("importance")
-            .and_then(Value::as_str)
-            .and_then(parse_importance)
-            .unwrap_or_default(),
-        keywords: arguments
-            .get("keywords")
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        importance: optional_enum(
+            arguments,
+            "importance",
+            MemoryImportance::default(),
+            parse_importance,
+            "critical, high, medium, low",
+        )?,
+        keywords: string_array(arguments, "keywords", 32)?,
         raw: None,
+        scope: optional_enum(
+            arguments,
+            "scope",
+            MemoryWriteScope::default(),
+            parse_write_scope,
+            "project, global",
+        )?,
     };
     let response = client.memory_store(&request).await?;
-    Ok(serde_json::to_string_pretty(&response)?)
+    Ok(serde_json::to_value(response)?)
 }
 
-async fn search(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<String> {
+async fn search(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    reject_unknown(
+        arguments,
+        &["query", "path", "mode", "limit", "include_content"],
+    )?;
     let request = SearchApiRequest {
         workspace: workspace.to_owned(),
         query: required_string(arguments, "query")?,
-        path: None,
-        mode: arguments
-            .get("mode")
-            .and_then(Value::as_str)
-            .and_then(parse_mode)
-            .unwrap_or(SearchMode::Auto),
-        limit: arguments
-            .get("limit")
-            .and_then(Value::as_u64)
-            .unwrap_or(10)
-            .clamp(1, 50) as usize,
-        include_content: false,
+        path: optional_string(arguments, "path")?,
+        mode: optional_enum(
+            arguments,
+            "mode",
+            SearchMode::Auto,
+            parse_mode,
+            "auto, semantic, exact",
+        )?,
+        limit: bounded_usize(arguments, "limit", 10, 50)?,
+        include_content: optional_bool(arguments, "include_content", false)?,
     };
     let response = client.search(&request).await?;
-    Ok(serde_json::to_string_pretty(&response)?)
+    Ok(serde_json::to_value(response)?)
 }
 
-fn parse_importance(value: &str) -> Option<MemoryImportance> {
-    match value {
-        "critical" => Some(MemoryImportance::Critical),
-        "high" => Some(MemoryImportance::High),
-        "medium" => Some(MemoryImportance::Medium),
-        "low" => Some(MemoryImportance::Low),
-        _ => None,
-    }
-}
-
-fn parse_mode(value: &str) -> Option<SearchMode> {
-    match value {
-        "auto" => Some(SearchMode::Auto),
-        "semantic" => Some(SearchMode::Semantic),
-        "exact" => Some(SearchMode::Exact),
-        _ => None,
-    }
-}
-
-fn required_string(arguments: &Value, key: &str) -> Result<String> {
-    arguments
-        .get(key)
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_owned)
-        .with_context(|| format!("missing required argument `{key}`"))
+async fn context_plan(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    reject_unknown(
+        arguments,
+        &["intent", "path", "topic", "search_limit", "memory_limit"],
+    )?;
+    let request = ContextPlanApiRequest {
+        workspace: workspace.to_owned(),
+        intent: required_string(arguments, "intent")?,
+        path: optional_string(arguments, "path")?,
+        topic: optional_string(arguments, "topic")?,
+        search_limit: bounded_usize(arguments, "search_limit", 10, 50)?,
+        memory_limit: bounded_usize(arguments, "memory_limit", 5, 50)?,
+    };
+    let response = client.context_plan(&request).await?;
+    Ok(serde_json::to_value(response)?)
 }
 
 fn success(id: Value, result: Value) -> Value {
@@ -352,109 +404,16 @@ pub fn registration_snippet(client: McpClientArg, binary: &std::path::Path) -> S
     }
 }
 
-fn tool_text(text: &str) -> Value {
-    json!({"content": [{"type": "text", "text": text}], "isError": false})
+fn tool_success(value: &Value) -> Value {
+    json!({
+        "content": [{"type": "text", "text": value.to_string()}],
+        "structuredContent": value,
+        "isError": false,
+    })
 }
 
 /// Tool-level failure. Reported through `isError` rather than a JSON-RPC error so the
 /// agent can read the remediation text and continue.
 fn tool_error(message: &str) -> Value {
     json!({"content": [{"type": "text", "text": message}], "isError": true})
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::{Value, json};
-
-    use super::{
-        MCP_PROTOCOL_VERSION, METHOD_NOT_FOUND, PARSE_ERROR, initialize_result, tool_definitions,
-        tool_error, tool_text,
-    };
-
-    /// Mirror of the notification rule in `handle_line`, which cannot be exercised
-    /// directly without a daemon: a request without `id` gets no response.
-    fn is_notification(request: &Value) -> bool {
-        request.get("id").is_none()
-    }
-
-    #[test]
-    fn test_initialize_advertises_tools_and_version() {
-        let result = initialize_result();
-        assert_eq!(result["protocolVersion"], MCP_PROTOCOL_VERSION);
-        assert!(result["capabilities"]["tools"].is_object());
-        assert_eq!(result["serverInfo"]["name"], "hzr");
-        assert!(
-            result["instructions"]
-                .as_str()
-                .expect("instructions")
-                .contains("second store"),
-            "clients must be told why not to call icm/grepai directly"
-        );
-    }
-
-    #[test]
-    fn test_every_tool_has_a_name_description_and_schema() {
-        let tools = tool_definitions();
-        assert_eq!(tools.len(), 3);
-        for tool in &tools {
-            let name = tool["name"].as_str().expect("tool name");
-            assert!(
-                name.starts_with("hzr_"),
-                "tools must be namespaced to HZR: {name}"
-            );
-            assert!(
-                !tool["description"]
-                    .as_str()
-                    .expect("description")
-                    .is_empty()
-            );
-            assert_eq!(tool["inputSchema"]["type"], "object");
-            assert!(
-                tool["inputSchema"]["required"].is_array(),
-                "{name} must declare required arguments"
-            );
-        }
-    }
-
-    #[test]
-    fn test_tools_expose_no_direct_engine_access() {
-        let encoded = serde_json::to_string(&tool_definitions()).expect("serialize");
-        for forbidden in ["icm serve", "grepai watch", "rtk proxy"] {
-            assert!(
-                !encoded.contains(forbidden),
-                "the MCP surface must not offer direct engine control: {forbidden}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_notifications_are_never_answered() {
-        assert!(is_notification(
-            &json!({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        ));
-        assert!(!is_notification(
-            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-        ));
-    }
-
-    #[test]
-    fn test_unavailable_backend_reports_an_error_not_a_fake_success() {
-        let payload = tool_error("HZR daemon is unavailable; nothing was written.");
-        assert_eq!(payload["isError"], true);
-        assert!(
-            payload["content"][0]["text"]
-                .as_str()
-                .expect("text")
-                .contains("nothing was written"),
-            "a dead backend must never look like a successful store"
-        );
-        // And a real result must be clearly distinguishable.
-        assert_eq!(tool_text("ok")["isError"], false);
-    }
-
-    #[test]
-    fn test_error_codes_are_standard_json_rpc() {
-        assert_eq!(METHOD_NOT_FOUND, -32601);
-        assert_eq!(PARSE_ERROR, -32700);
-    }
 }

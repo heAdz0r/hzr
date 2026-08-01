@@ -40,6 +40,27 @@ pub fn execute(action: ServiceCommand) -> Result<ServiceReport> {
     }
 }
 
+/// Ensure the production daemon (and therefore the bundled visualizer) is running.
+/// Source/debug binaries return `None`; they must use `hzr daemon serve` and must never
+/// write a production user-service definition implicitly.
+pub fn ensure_running_if_installed() -> Result<Option<ServiceReport>> {
+    let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
+    let physical = executable.canonicalize().unwrap_or(executable);
+    if !is_versioned_install(&physical) {
+        return Ok(None);
+    }
+    let status = execute(ServiceCommand::Status)?;
+    if status.active {
+        return Ok(Some(status));
+    }
+    let action = if status.definition.is_file() {
+        ServiceCommand::Start
+    } else {
+        ServiceCommand::Install
+    };
+    execute(action).map(Some)
+}
+
 fn service_binary() -> Result<PathBuf> {
     if let Some(binary) = std::env::var_os("HZR_SERVICE_BINARY") {
         return validate_service_binary(PathBuf::from(binary));
@@ -89,6 +110,17 @@ fn stable_service_binary(executable: &Path) -> Result<PathBuf> {
         .parent()
         .context("HZR versions directory has no installation root")?;
     Ok(install_root.join("current/bin/hzrd"))
+}
+
+fn is_versioned_install(executable: &Path) -> bool {
+    let Some(release) = executable.parent().and_then(Path::parent) else {
+        return false;
+    };
+    release.file_name().is_some_and(|name| name == "current")
+        || release
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "versions")
 }
 
 fn launchd(action: ServiceCommand, home: &Path, binary: &Path) -> Result<ServiceReport> {
@@ -313,16 +345,19 @@ fn user_id() -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use tempfile::tempdir;
 
-    use super::{launchd_definition, stable_service_binary, systemd_definition};
+    use super::{
+        is_versioned_install, launchd_definition, stable_service_binary, systemd_definition,
+    };
 
     #[test]
     fn test_service_definitions_use_stable_current_binary() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let executable = root.join("versions/v0.2.0-test/bin/hzr");
+        let executable = root.join("versions/v0.3.0-test/bin/hzr");
         fs::create_dir_all(executable.parent().expect("bin parent")).expect("bin directory");
         let stable = stable_service_binary(&executable).expect("stable path");
 
@@ -341,6 +376,17 @@ mod tests {
     }
 
     #[test]
+    fn test_only_versioned_bundle_layout_is_a_production_install() {
+        assert!(is_versioned_install(Path::new(
+            "/opt/hzr/versions/v0.3.0-test/bin/hzr"
+        )));
+        assert!(is_versioned_install(Path::new("/opt/hzr/current/bin/hzr")));
+        assert!(!is_versioned_install(Path::new(
+            "/workspace/target/debug/hzr"
+        )));
+    }
+
+    #[test]
     fn test_service_definitions_escape_paths() {
         let home = std::path::Path::new("/tmp/a & b");
         let binary = std::path::Path::new("/tmp/a & b/current/bin/hzrd");
@@ -354,11 +400,11 @@ mod tests {
     fn test_public_binary_symlink_resolves_back_to_stable_service() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let release_bin = root.join("versions/v0.2.0-test/bin");
+        let release_bin = root.join("versions/v0.3.0-test/bin");
         fs::create_dir_all(&release_bin).expect("release bin");
         fs::write(release_bin.join("hzr"), b"hzr").expect("HZR binary");
         fs::write(release_bin.join("hzrd"), b"hzrd").expect("daemon binary");
-        std::os::unix::fs::symlink(root.join("versions/v0.2.0-test"), root.join("current"))
+        std::os::unix::fs::symlink(root.join("versions/v0.3.0-test"), root.join("current"))
             .expect("current link");
         let public = root.join("bin/hzr");
         fs::create_dir_all(public.parent().expect("public bin")).expect("public directory");

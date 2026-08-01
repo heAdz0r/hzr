@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-HZR_VERSION="${HZR_VERSION:-0.2.0}"
+HZR_VERSION="${HZR_VERSION:-0.3.0}"
 HZR_REPOSITORY="${HZR_REPOSITORY:-heAdz0r/hzr}"
 HZR_INSTALL_ROOT="${HZR_INSTALL_ROOT:-${HOME}/.local/share/hzr}"
 HZR_BIN_DIR="${HZR_BIN_DIR:-${HOME}/.local/bin}"
@@ -106,6 +106,10 @@ verify_hzr_bundle_root() {
     "engines/icm" \
     "runtime/node/bin/node" \
     "share/hzr/HZR.md" \
+    "share/hzr/visualizer/index.html" \
+    "share/hzr/visualizer/assets/app.css" \
+    "share/hzr/visualizer/assets/app.js" \
+    "share/hzr/visualizer/hzr-hero.png" \
     "share/hzr/BUNDLE_MANIFEST.sha256"; do
     if [ ! -f "${HZR_ROOT}/${HZR_REGULAR_PATH}" ] || [ -L "${HZR_ROOT}/${HZR_REGULAR_PATH}" ]; then
       echo "hzr: release bundle has an invalid regular file: ${HZR_REGULAR_PATH}" >&2
@@ -203,11 +207,18 @@ install_hzr_link hzr
 install_hzr_link hzrd
 install_hzr_link rtk
 
-"${HZR_INSTALL_ROOT}/current/bin/hzr" init --if-needed --quiet
+"${HZR_INSTALL_ROOT}/current/bin/hzr" init --if-needed --quiet --skip-service
 if [ "${HZR_INSTALL_HOOKS}" = "1" ]; then
-  "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force
+  if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
+    "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force
+  else
+    "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --skip-service
+  fi
 fi
 if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
+  # Reinstalling the definition restarts an already-running daemon after `current`
+  # changes, while also starting it on a first install. This keeps the live UI and
+  # API on the exact bundle that was just verified above.
   "${HZR_INSTALL_ROOT}/current/bin/hzr" daemon service install
 fi
 

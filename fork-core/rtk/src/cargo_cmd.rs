@@ -174,7 +174,9 @@ fn run_check(args: &[String], verbose: u8) -> Result<()> {
             filter_cargo_build_labeled(output, "check", exit_code)
         });
     }
-    run_cargo_filtered("check", args, verbose, filter_cargo_build)
+    run_cargo_filtered_with_exit("check", args, verbose, |output, exit_code| {
+        filter_cargo_build_labeled(output, "check", exit_code)
+    })
 }
 
 fn run_install(args: &[String], verbose: u8) -> Result<()> {
@@ -896,13 +898,111 @@ impl AggregatedTestResult {
     }
 }
 
-/// Filter cargo test output - compact 3-line summary (default mode)
+fn flush_cargo_test_failure(current: &mut Vec<String>, failures: &mut Vec<String>) {
+    while current.last().is_some_and(|line| line.trim().is_empty()) {
+        current.pop();
+    }
+    if !current.is_empty() {
+        failures.push(current.join("\n"));
+        current.clear();
+    }
+}
+
+fn cargo_test_failures(output: &str) -> Vec<String> {
+    let mut failures = Vec::new();
+    let mut current = Vec::new();
+    let mut in_failure_details = false;
+    let mut in_failure_names = false;
+
+    for line in output.lines() {
+        if line == "failures:" {
+            if in_failure_details {
+                flush_cargo_test_failure(&mut current, &mut failures);
+                in_failure_details = false;
+                in_failure_names = true;
+            } else if !in_failure_names {
+                in_failure_details = true;
+            }
+            continue;
+        }
+
+        if line.trim_start().starts_with("test result:") {
+            if in_failure_details {
+                flush_cargo_test_failure(&mut current, &mut failures);
+            }
+            in_failure_details = false;
+            in_failure_names = false;
+            continue;
+        }
+
+        if !in_failure_details {
+            continue;
+        }
+
+        if line.starts_with("---- ") {
+            flush_cargo_test_failure(&mut current, &mut failures);
+            current.push(line.to_string());
+        } else if !current.is_empty() {
+            current.push(line.to_string());
+        }
+    }
+
+    flush_cargo_test_failure(&mut current, &mut failures);
+    failures
+}
+
+fn format_cargo_test_failures(failures: &[String]) -> String {
+    let mut result = format!("FAILURES ({}):\n", failures.len());
+    for (index, failure) in failures.iter().take(CAP_WARNINGS).enumerate() {
+        let mut compact_lines = Vec::new();
+        for line in failure.lines().filter(|line| !line.trim().is_empty()) {
+            if line.starts_with("note: run with `RUST_BACKTRACE") {
+                continue;
+            }
+            if let Some((_, panic)) = line.split_once(" panicked at ") {
+                compact_lines.push(format!("panicked at {panic}"));
+            } else {
+                compact_lines.push(line.to_string());
+            }
+        }
+        result.push_str(&format!(
+            "{}. {}\n",
+            index + 1,
+            truncate(&compact_lines.join("\n"), 200)
+        ));
+    }
+    if failures.len() > CAP_WARNINGS {
+        result.push_str(&format!(
+            "… +{} more failures\n",
+            failures.len() - CAP_WARNINGS
+        ));
+    }
+    result
+}
+
+/// Filter cargo test output - compact summary with bounded failure details.
 pub(crate) fn filter_cargo_test(output: &str) -> String {
     let diag = crate::diag_summary::analyze_output(output);
     let json = extract_json_diagnostics(output);
+    let failures = cargo_test_failures(output);
 
-    fn with_diag(base: String, diag: &crate::diag_summary::DiagnosticSummary) -> String {
-        format!("{}\n{}\n{}", base, diag.warnings_line(), diag.errors_line())
+    fn with_diag(
+        base: String,
+        failures: &[String],
+        diag: &crate::diag_summary::DiagnosticSummary,
+    ) -> String {
+        let details = if failures.is_empty() {
+            String::new()
+        } else {
+            format_cargo_test_failures(failures)
+        };
+        format!(
+            "{}{}\n{}\n{}",
+            details,
+            base,
+            diag.warnings_line(),
+            diag.errors_line()
+        )
     }
     let summary_lines: Vec<&str> = output
         .lines()
@@ -934,7 +1034,7 @@ pub(crate) fn filter_cargo_test(output: &str) -> String {
     if parsed_any && parsed_all {
         if let Some(agg) = aggregated {
             if agg.suites > 0 {
-                return with_diag(agg.format_compact(), &diag);
+                return with_diag(agg.format_compact(), &failures, &diag);
             }
         }
     }
@@ -942,11 +1042,12 @@ pub(crate) fn filter_cargo_test(output: &str) -> String {
     if !summary_lines.is_empty() {
         return with_diag(
             format!("cargo test: {}", summary_lines.last().unwrap().trim()),
+            &failures,
             &diag,
         );
     }
 
-    with_diag("cargo test: completed".to_string(), &diag)
+    with_diag("cargo test: completed".to_string(), &failures, &diag)
 }
 
 /// Verbose cargo test filter with failure details (for `-v`).
@@ -1312,7 +1413,10 @@ failures:
         assert!(result.contains("✗ cargo test: 4 passed, 1 failed (1 suite)"));
         assert!(result.contains("warnings: 0"));
         assert!(result.contains("errors: 0"));
-        assert!(!result.contains("test_b"));
+        assert!(result.contains("FAILURES (1)"));
+        assert!(result.contains("foo::test_b"));
+        assert!(result.contains("assert_eq!(1, 2)"));
+        assert_eq!(result.matches("foo::test_b").count(), 1, "got: {result}");
     }
 
     #[test]
@@ -1380,7 +1484,28 @@ running 10 tests
         );
         assert!(result.contains("warnings: 0"), "got: {}", result);
         assert!(result.contains("errors: 0"), "got: {}", result);
-        assert!(!result.contains("test_bad"), "got: {}", result);
+        assert!(result.contains("FAILURES (1)"), "got: {}", result);
+        assert!(result.contains("test_bad"), "got: {}", result);
+        assert!(result.contains("assertion failed"), "got: {}", result);
+    }
+
+    #[test]
+    fn test_filter_cargo_test_caps_failure_details() {
+        let mut output = String::from("failures:\n\n");
+        for index in 0..=CAP_WARNINGS {
+            output.push_str(&format!(
+                "---- suite::test_{index} stdout ----\nthread panicked at 'failure {index}'\n\n"
+            ));
+        }
+        output.push_str(
+            "failures:\n    suite::test_0\n\ntest result: FAILED. 0 passed; 11 failed; 0 ignored; 0 measured; 0 filtered out\n",
+        );
+
+        let result = filter_cargo_test(&output);
+        assert!(result.contains("FAILURES (11)"), "got: {result}");
+        assert!(result.contains("suite::test_9"), "got: {result}");
+        assert!(!result.contains("suite::test_10 stdout"), "got: {result}");
+        assert!(result.contains("… +1 more failures"), "got: {result}");
     }
 
     #[test]
