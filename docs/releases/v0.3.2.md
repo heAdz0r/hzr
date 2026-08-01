@@ -1,134 +1,104 @@
-# HZR 0.3.2 — Honest accounting and live evidence
+# HZR 0.3.2 — Honest accounting
 
-The reduction ratio HZR reported was measuring a shrinking fraction of the traffic it
-claimed to cover. This release makes the uncovered part visible, gives agents the commands
-that close it, fixes the search mode whose name promised something it did not do, and makes
-the memory/index evidence behind `Ready` directly inspectable.
+HZR reported a reduction ratio that was measuring a shrinking fraction of the traffic it
+claimed to cover. This release makes the uncovered part visible, hands agents the commands
+that close it, and fixes the search mode whose name promised something it did not deliver.
 
-The command-output example below is a point-in-time ledger snapshot. It uses HZR's documented
-UTF-8-byte estimator, not provider billing; live values necessarily change as agents work.
+**Reference point:** comparisons below are against upstream RTK `v0.44.1`, the engine HZR
+forks. Where a row says *upstream*, that behaviour is unchanged in `rtk` today.
 
-> **Already on 0.3.1?** Your runtime already contains the behaviours described below because
-> their implementation commits landed before `v0.3.1` was tagged. `0.3.2` synchronizes the
-> distribution metadata and publishes the complete upgrade narrative. If you are upgrading
-> from `0.3.0` or earlier, the rest of these notes describes the user-visible change.
+> Already on `0.3.1`? The implementation landed before that tag, so your runtime already has
+> it. `0.3.2` adds the MSRV fix that turned CI green and publishes these notes as the release
+> description.
 
-## The number the headline was hiding
+## Optimizer bypass is measured and named
 
-A command routed through `hzr rtk -- raw` reaches the shell unfiltered. It delivers exactly
-as many tokens as it consumed, so it raises the numerator and the denominator of the
-reduction ratio by the same amount and **cancels out** instead of lowering it. A workspace
-could send half its tool output straight to the model and still read "87.3% avoided".
+- A command routed through `raw` reaches the shell unfiltered. It delivers exactly as many
+  tokens as it consumed, so it raises **both sides** of the reduction ratio and cancels out
+  instead of lowering it — a workspace could send half its output to the model and still read
+  "87.3% avoided".
+- `hzr stats` prints the bypass share directly beneath the headline: operations, delivered
+  tokens, and each bypassed tool ranked by cost.
+- Every bypassed read or search carries a **copyable** replacement, reconstructed from its
+  costliest recorded invocation — `sed -n 120,180p f` becomes
+  `hzr rtk -- read f --from 120 --to 180`.
+- Where no equivalent exists (`cargo`, `git`, `ps`, `tar`), the panel says so instead of
+  inventing one.
+- *Upstream:* RTK reports savings per command and has no notion of a bypassed route.
 
-`hzr stats` now prints the counterweight directly beneath the headline:
+## Agents are corrected, not only measured
 
-```
-OPTIMIZER BYPASS  estimated · these operations skipped HZR
-╭─────────────────────────────────────────────────────────────────────╮
-│  3.2K of 8.4K operations (37.6%) reached the shell unfiltered       │
-│  6.87M of 13.93M delivered tokens (49.3%) received zero filtering   │
-╰─────────────────────────────────────────────────────────────────────╯
-
-   sed             719 calls ·    984.0K delivered
-     → hzr rtk -- read install.sh --from 1 --to 80
-   rg              324 calls ·    294.7K delivered
-     → hzr search 'release artifact' --mode exact --path crates
-   cargo           511 calls ·    788.2K delivered
-     → no first-class equivalent; raw is correct here
-```
-
-Each replacement is reconstructed from the costliest recorded invocation of that tool, so
-it is a command you can copy — not a category name. Where no equivalent exists, the panel
-says so instead of inventing one.
-
-## Agents are told, not just measured
-
-Measurement changes nothing on its own. The `PreToolUse` hook now answers a bypassed read
-or search with the equivalent command already filled in:
-
-```
-sed -n 120,180p crates/hzr-core/src/ledger.rs
-  → hzr rtk -- read crates/hzr-core/src/ledger.rs --from 120 --to 180
-```
-
-The decision is **Ask**, never Deny. Raw stays one keystroke away, because it remains the
-correct tool for checksums, parsers, generated files, complete logs and machine-readable
-data. Commands with no first-class equivalent — `cargo`, `git`, `docker` — are never
-interrupted.
+- The `PreToolUse` hook answers a bypassed read or search with the equivalent command already
+  filled in.
+- The decision is **Ask**, never **Deny** — raw stays one keystroke away, because it remains
+  correct for checksums, parsers, generated files and complete logs.
+- Commands with no first-class equivalent are never interrupted.
 
 ## `--mode exact` is finally exact
 
-`hzr search "fn record_degraded_rewrite" --mode exact` used to return
-`fork-core/TRACKED_CHANGES.patch` as its top hit and never return the definition. Exact
-mode delegated to a ranked term model that lowercases the query, splits it on
-non-alphanumeric characters, drops stop words, stems what remains and ORs the survivors
-into one regex — so it matched every file containing `fn`.
+- Exact mode delegated to a **ranked term model**: the query was lowercased, split on
+  non-alphanumerics, stripped of stop words, stemmed, and the survivors OR-ed into one regex,
+  so `hzr search "fn record_degraded_rewrite" --mode exact` matched every file containing `fn`.
+- It is now a literal, case-sensitive lookup — `rtk rgai --literal` in fork-core, wired to
+  HZR's exact mode.
+- `--path` accepts several directories. `--path crates fork-core/src` used to fail with
+  `error: unexpected argument`.
 
-This is the single behaviour most likely to make an agent abandon `hzr search` for `raw rg`
-and never come back. Exact mode is now a literal, case-sensitive lookup.
-
-| Query | Before | After |
-|---|---|---|
-| `fn record_degraded_rewrite` | 21 files | **1 file** |
-
-`--path` also accepts several directories now. `--path crates fork-core/src` used to fail
-with `error: unexpected argument`, which is exactly the moment an agent gives up on the
-command.
+| Query `fn record_degraded_rewrite` | Files returned |
+|---|---|
+| RTK upstream `v0.44.1` — `rgai` | 21 (ranked terms) |
+| HZR `0.3.1` — `--mode exact` | 21 (same model) |
+| HZR `0.3.2` — `--mode exact` | **1** |
 
 ## Accounting coverage can return to COMPLETE
 
-Coverage was `line_count(degraded-rewrites.log) == 0` over an append-only file that nothing
-ever truncated. One installation performed while the daemon was down pinned `hzr stats` to
-`▲ INCOMPLETE` permanently — which teaches an operator to ignore the field entirely, the
-opposite of what an integrity signal is for.
-
-Coverage is now an *open gap*. The next managed rewrite folds it into a lifetime total and
-closes it. The history stays visible, so closing a gap never looks like erasing one.
+- Coverage was `line_count(degraded-rewrites.log) == 0` over an append-only file that nothing
+  truncated, so one install performed while the daemon was down pinned `hzr stats` to
+  `▲ INCOMPLETE` **permanently**.
+- It is now an *open gap*: the next managed rewrite closes it, and the lifetime count stays
+  visible, so closing a gap never looks like erasing one.
 
 ## The density codec is reachable and measurable
 
-`hzr-codec` existed but nothing called it: not the hook path, not the planner, not the MCP
-surface. It is now the `hzr_codec` MCP tool, and its transforms are recorded in the
-efficiency ledger under a `codec` subsystem — so the capability is justified by measurement
-rather than by assertion. Its `shadow` profile reports what compression *would* have saved
-without altering the text.
+- `hzr-codec` existed but nothing called it — not the hook path, not the planner, not MCP.
+- It is now the `hzr_codec` MCP tool, and its transforms are recorded in the efficiency ledger
+  under a `codec` subsystem.
+- The `shadow` profile reports what compression *would* have saved without altering the text.
 
 ## Engine health is read, not asserted
 
-`hzr daemon status` reported `caveman-code` with a hardcoded state and a hardcoded version
-string, so an installation missing the runtime entirely looked identical to a working one.
-The version now comes from `engines.lock.toml`, and a missing bridge or package is reported
-as degraded with the command that repairs it. Engines that rest by design no longer colour
-the overall verdict.
+- `caveman-code` was reported with a hardcoded state and a hardcoded version string, so an
+  installation missing the runtime looked identical to a working one.
+- The version now comes from `engines.lock.toml`; a missing bridge or package is reported as
+  degraded together with the command that repairs it.
+- Engines that rest by design no longer colour the overall verdict.
 
 ## The live observatory proves memory and search
 
-The loopback visualizer at `http://127.0.0.1:47391/` now answers the operational questions
-behind a green badge:
-
 - ICM `Ready` requires a successful supervised probe and a read-only snapshot of the canonical
-  store. FTS5-only retrieval is a supported ready capability; a missing database is unavailable,
-  never a synthetic empty project.
-- The current project's memory is rendered as a privacy-safe topic graph with opaque node IDs,
-  aggregate counts and bounded relationships. Memory bodies and store paths never enter the API.
-- grepai reports its full generation and configuration fingerprints, artifact freshness, watcher
-  PID/uptime, HZR ownership and ready marker. A cached semantic canary must return visible hits
-  before semantic search is `Ready`, and the canary cannot credit its own ledger.
-- Project-local activity shows optimized and RAW operations separately. RAW always receives zero
-  avoided-token credit, while avoidable reads/searches carry a copyable HZR replacement.
-- Provider tokens and cost appear only from accepted provider receipts. Without a receipt source,
-  the UI says `No provider receipts` instead of displaying invented zero usage.
-
-Utility and visualizer versions, help commands and per-service diagnostics are part of the same
-typed `/v1/dashboard` snapshot. The UI ships inside the daemon bundle and starts with the normal
-HZR user service; Bun is not required on the installed runtime.
+  store. FTS5-only retrieval is a supported ready capability; a missing database is
+  unavailable, never a synthetic empty project.
+- Project memory is a privacy-safe topic graph — opaque node IDs, aggregate counts, bounded
+  relationships. Memory bodies and store paths never enter the API.
+- grepai reports generation and configuration fingerprints, artifact freshness, watcher
+  PID/uptime and ownership. A cached semantic canary must return visible hits before semantic
+  search is `Ready`, and the canary cannot credit its own ledger.
+- Provider tokens and cost appear only from accepted receipts. Without a receipt source the UI
+  says `No provider receipts` rather than displaying an invented zero.
 
 ## One rule behind all of it
 
-"Did this operation go through the optimizer?" used to be answered in three places — the
-ledger, a hand-written SQL predicate, and the CLI — with three different answers. It is now
-one classifier in `hzr-core::operation`, and the SQL predicate is generated from the same
-marker list, so the terminal, the dashboard and the ledger cannot drift apart again.
+- "Did this operation go through the optimizer?" was answered in three places — the ledger, a
+  hand-written SQL predicate and the CLI — with three different answers.
+- It is now one classifier in `hzr-core::operation`, and the SQL predicate is generated from
+  the same marker list, so the terminal, the dashboard and the ledger cannot drift apart again.
+
+## Fixed in 0.3.2
+
+- A `let` chain in `hzr-core::operation` compiled locally but not on the declared MSRV
+  (`rust-version = "1.85"`), failing the `msrv` CI job and blocking the release workflow.
+- The GitHub Release description is taken from this file instead of an auto-generated commit
+  list, so the published release and the repository state the same thing.
 
 ## Upgrading
 
@@ -141,18 +111,14 @@ coverage closes on the next rewrite the daemon serves.
 
 ## Verification
 
-The source release gate is:
-
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
-scripts/verify-fork-core.sh
-cd visualizer && bun test && bun run build
+rustup run 1.85.0 cargo check --locked --workspace --all-targets --all-features
+scripts/verify-fork-core.sh --test
+cd visualizer && bun test && bun run typecheck && bun run build
 ```
 
-The GitHub tag workflow additionally builds Linux and macOS bundles for x64 and ARM64, packages
-each archive, proves a clean install without external engines, publishes aggregate checksums and
-attests build provenance. The live API must report separate project estimates and provider
-receipts, an HZR-owned grepai watcher, a successful semantic canary and a non-synthetic ICM
-snapshot before the observatory is accepted as `Ready`.
+The tag workflow additionally builds Linux and macOS bundles for x64 and ARM64, attests build
+provenance and publishes the pre-release.

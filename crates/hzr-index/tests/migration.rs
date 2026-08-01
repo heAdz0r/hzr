@@ -169,7 +169,7 @@ async fn test_migrate_legacy_index_refuses_active_legacy_writer() {
     assert!(matches!(result, Err(IndexError::IndexOwnerBusy { .. })));
     assert!(fixture.legacy.is_dir());
     assert!(!fixture.data.path().join("workspaces").exists());
-    lock.unlock().expect("release writer lock fixture");
+    FileExt::unlock(&lock).expect("release writer lock fixture");
 }
 
 struct MigrationFixture {

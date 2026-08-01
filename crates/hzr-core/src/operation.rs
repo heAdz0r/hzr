@@ -250,11 +250,11 @@ fn sed_replacement(arguments: &[String]) -> Option<RawReplacement> {
         if argument.starts_with('-') {
             continue;
         }
-        if span.is_none()
-            && let Some(parsed) = parse_sed_span(argument)
-        {
-            span = Some(parsed);
-            continue;
+        if span.is_none() {
+            if let Some(parsed) = parse_sed_span(argument) {
+                span = Some(parsed);
+                continue;
+            }
         }
         if file.is_none() {
             file = Some(argument.clone());

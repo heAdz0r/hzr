@@ -97,6 +97,19 @@ jobs:
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: release-assets/*.tar.gz
+      # The published release must say what the repository says. `--generate-notes` produced a
+      # commit list, so the GitHub Release and RELEASE_NOTES.md described the same version
+      # differently and the release page carried no upgrade guidance at all.
+      - name: Verify the release notes describe this tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          head -n 1 RELEASE_NOTES.md | grep -qF "HZR ${version}" || {
+            echo "RELEASE_NOTES.md does not describe ${version}; its first line is:" >&2
+            head -n 1 RELEASE_NOTES.md >&2
+            exit 1
+          }
       - name: Publish GitHub pre-release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,5 +119,5 @@ jobs:
           --repo "${GITHUB_REPOSITORY}"
           --verify-tag
           --prerelease
-          --generate-notes
+          --notes-file RELEASE_NOTES.md
           --title "HZR ${GITHUB_REF_NAME#v}"

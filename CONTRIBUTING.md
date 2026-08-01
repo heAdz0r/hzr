@@ -65,6 +65,25 @@ before the next release overwrites it.
 `CHANGELOG.md` keeps its Keep-a-Changelog structure and stays append-only. Promote its
 `[Unreleased]` heading to the released version rather than restating the entries.
 
+## Publishing a release
+
+`hzr release VERSION --force` synchronizes version surfaces, builds the bundle and installs
+it **locally**. It does not tag and it does not publish — the GitHub Release exists only
+because pushing a `v*` tag runs `.github/workflows/release.yml`. Skipping the tag is why the
+release badge can sit several versions behind a repository that looks fully released.
+
+```sh
+# 1. CI must already be green: the tag workflow builds the same gates and will not publish
+#    a release for a red commit.
+# 2. Notes first — the workflow refuses to publish if RELEASE_NOTES.md does not name the tag.
+git tag -a vX.Y.Z -m "HZR X.Y.Z"
+git push origin vX.Y.Z
+```
+
+The workflow builds Linux and macOS bundles for x64 and ARM64, attests build provenance, and
+publishes a pre-release whose description is `RELEASE_NOTES.md` verbatim. Do not write the
+release description in the GitHub UI: it would immediately disagree with the repository.
+
 ## Pull requests
 
 - Explain the ownership boundary affected by the change.

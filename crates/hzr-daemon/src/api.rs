@@ -545,15 +545,15 @@ async fn semantic_canary(
     const RETRY_CACHE_TTL: Duration = Duration::from_secs(2);
 
     let mut cache = state.semantic_canary.lock().await;
-    if let Some(cached) = cache.as_ref()
-        && cached.generation == generation
-        && cached.checked_at.elapsed()
-            < if cached.snapshot.state == DashboardState::Ready {
-                READY_CACHE_TTL
-            } else {
-                RETRY_CACHE_TTL
-            }
-    {
+    if let Some(cached) = cache.as_ref().filter(|cached| {
+        cached.generation == generation
+            && cached.checked_at.elapsed()
+                < if cached.snapshot.state == DashboardState::Ready {
+                    READY_CACHE_TTL
+                } else {
+                    RETRY_CACHE_TTL
+                }
+    }) {
         return cached.snapshot.clone();
     }
     let checked_at_ms = now_ms().ok();

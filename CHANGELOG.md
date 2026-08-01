@@ -49,11 +49,28 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   sends `--literal`. Measured on this repository, the same query returns 1 file instead of
   21.
 
+### Fixed
+
+- Release version synchronization is restricted to an explicit list of HZR-owned surfaces and
+  the two root version fields in the npm lockfile. A transitive package with the same numeric
+  version can no longer be rewritten into a nonexistent dependency release.
+- The complete workspace builds on the declared Rust 1.85 MSRV without unstable let-chain syntax.
+  Fork-core retains its separate pinned compiler and deterministic warning ratchet.
+- Public upgrade guidance uses `hzr update`; `hzr release` remains a maintainer command for
+  constructing and switching a source release.
+- The GitHub Release description is `RELEASE_NOTES.md` verbatim instead of an auto-generated
+  commit list, and the tag workflow refuses to publish when that file does not name the tag.
+  The published release and the repository can no longer describe the same version
+  differently.
+
 ### Documentation
 
 - `HZR.md` documents the `hzr rtk -- read` flags that remove the need for `sed`, `nl`,
   `cat`, `head` and `tail`; separates the literal and ranked search modes; and states the
   ledger cost of `raw`.
+- Release documentation now has three enforced responsibilities: `RELEASE_NOTES.md` explains the
+  current upgrade, `CHANGELOG.md` keeps exhaustive history, and `docs/releases/vX.Y.Z.md` preserves
+  the immutable statement published with an older release.
 
 ## [0.3.1] - 2026-08-01
 
@@ -161,6 +178,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.3.2]: https://github.com/heAdz0r/hzr/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/heAdz0r/hzr/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/heAdz0r/hzr/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/heAdz0r/hzr/compare/v0.1.0...v0.2.0
