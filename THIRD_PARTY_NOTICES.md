@@ -1,6 +1,6 @@
 # Third-party notices
 
-HZR 0.3.1 preserves the complete heAdz0r RTK fork baseline as its runtime execution lineage and composes
+HZR 0.3.2 preserves the complete heAdz0r RTK fork baseline as its runtime execution lineage and composes
 additional pinned engines plus a private Node.js runtime without removing their provenance.
 
 | Component | Version | License | Source | Role |

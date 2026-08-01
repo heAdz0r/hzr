@@ -43,6 +43,28 @@ self-contained bundle:
 scripts/build-bundle.sh /absolute/path/to/hzr-dist
 ```
 
+## Release notes
+
+Three files describe change, and they answer different questions. Keeping them separate is
+deliberate: a reader deciding whether to upgrade should not have to read a complete history
+to find out what changed for them.
+
+| File | Question it answers | Audience |
+|---|---|---|
+| `RELEASE_NOTES.md` | What did the current release change for me, and why does it matter? | Anyone deciding whether to upgrade |
+| `CHANGELOG.md` | What changed in every version, exhaustively? | Anyone auditing history |
+| `docs/releases/vX.Y.Z.md` | What did *that* release say at the time? | Anyone reading an old release |
+
+`RELEASE_NOTES.md` always describes the newest released version and is rewritten in full
+each release — it is not append-only. Explain the behaviour and the reason it changed, and
+prefer a measured figure over an adjective. State the upgrade command, and say plainly when
+existing data or configuration is affected. Copy the finished file to
+`docs/releases/vX.Y.Z.md` in the same commit, so the historical statement is preserved
+before the next release overwrites it.
+
+`CHANGELOG.md` keeps its Keep-a-Changelog structure and stays append-only. Promote its
+`[Unreleased]` heading to the released version rather than restating the entries.
+
 ## Pull requests
 
 - Explain the ownership boundary affected by the change.

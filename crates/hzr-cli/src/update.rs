@@ -563,10 +563,10 @@ mod tests {
             ]},
             {"tag_name":"v0.5.0","draft":true,"prerelease":false,"assets":[]},
             {"tag_name":"not-a-version","draft":false,"prerelease":false,"assets":[]},
-            {"tag_name":"v0.3.1","draft":false,"prerelease":false,"assets":[]}
+            {"tag_name":"v0.3.2","draft":false,"prerelease":false,"assets":[]}
         ]"#;
 
-        let current = parse_release_version("0.3.1").expect("current version");
+        let current = parse_release_version("0.3.2").expect("current version");
         let release = select_release(releases, current, "darwin-arm64")
             .expect("valid GitHub response")
             .expect("newer usable release");
@@ -596,7 +596,7 @@ mod tests {
             checked_at_unix_seconds: 1_000,
             latest_version: Some("0.4.0".to_owned()),
         };
-        let current = parse_release_version("0.3.1").expect("current version");
+        let current = parse_release_version("0.3.2").expect("current version");
 
         assert_eq!(
             classify_cache(&cached, 1_000 + 86_399, current),
@@ -610,12 +610,12 @@ mod tests {
 
     #[test]
     fn startup_notice_names_the_only_install_command() {
-        let current = parse_release_version("0.3.1").expect("current version");
+        let current = parse_release_version("0.3.2").expect("current version");
         let latest = parse_release_version("0.4.0").expect("latest version");
 
         assert_eq!(
             notice(current, latest),
-            "HZR 0.4.0 is available (current 0.3.1). Run `hzr update` to install it."
+            "HZR 0.4.0 is available (current 0.3.2). Run `hzr update` to install it."
         );
     }
 
@@ -625,7 +625,7 @@ mod tests {
             {"name":"hzr-v0.4.0-linux-x64.tar.gz","browser_download_url":"https://example.invalid/hzr-v0.4.0-linux-x64.tar.gz"},
             {"name":"SHA256SUMS","browser_download_url":"https://github.com/heAdz0r/hzr/releases/download/v0.4.0/SHA256SUMS"}
         ]}]"#;
-        let current = parse_release_version("0.3.1").expect("current version");
+        let current = parse_release_version("0.3.2").expect("current version");
 
         assert!(
             select_release(releases, current, "linux-x64")

@@ -707,7 +707,7 @@ mod tests {
     #[test]
     fn hook_binary_validates_but_preserves_a_durable_symlink() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.1/bin");
+        let release = directory.path().join("versions/v0.3.2/bin");
         let prefix = directory.path().join("bin");
         fs::create_dir_all(&release).expect("release directory");
         fs::create_dir_all(&prefix).expect("prefix directory");

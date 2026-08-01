@@ -1397,7 +1397,7 @@ mod tests {
             retries: 0,
             latency_ms: 10,
             outcome: "accepted".into(),
-            policy_version: "0.3.1".into(),
+            policy_version: "0.3.2".into(),
             cost_microusd: Some(50),
         };
 

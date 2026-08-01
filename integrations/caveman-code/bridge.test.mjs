@@ -49,7 +49,7 @@ test("production preparation owns tools and disables duplicate subsystems in ord
       assert.equal(method, "GET");
       return JSON.stringify({
         protocol_version: 1,
-        hzr_version: "0.3.1",
+        hzr_version: "0.3.2",
         engines: [
           { name: "rtk", state: "ready" },
           { name: "grepai", state: "stopped" },

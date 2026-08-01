@@ -2,7 +2,7 @@
 
 All notable HZR changes are documented here. HZR follows semantic versioning while the public API is in `0.x` development.
 
-## [Unreleased]
+## [0.3.2] - 2026-08-02
 
 ### Added
 

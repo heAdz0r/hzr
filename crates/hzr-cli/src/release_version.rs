@@ -163,7 +163,11 @@ fn synchronize_runtime_digests(
             format!("failed to read {source_relative} for digest synchronization")
         })?;
         let source_after = if dry_run && previous != target {
-            source_before.replace(previous, target)
+            if *source_relative == CAVEMAN_PACKAGE_LOCK {
+                replace_caveman_package_lock_versions(&source_before, previous, target)?
+            } else {
+                source_before.replace(previous, target)
+            }
         } else {
             source_before
         };
@@ -491,7 +495,7 @@ mod tests {
     fn same_minor_release_keeps_the_stable_release_line() {
         let before = "hzr_release_line = \"0.3.x\"\n";
         assert_eq!(
-            synchronize_release_line(before, "0.3.0", "0.3.1").expect("release line"),
+            synchronize_release_line(before, "0.3.0", "0.3.2").expect("release line"),
             before
         );
     }
@@ -525,9 +529,9 @@ mod tests {
             "  }\n",
             "}\n",
         );
-        let after = replace_caveman_package_lock_versions(before, "0.3.0", "0.3.1")
+        let after = replace_caveman_package_lock_versions(before, "0.3.0", "0.3.2")
             .expect("package-lock update");
-        assert_eq!(after.matches("\"version\": \"0.3.1\"").count(), 2);
+        assert_eq!(after.matches("\"version\": \"0.3.2\"").count(), 2);
         assert!(after.contains("\"dependency\": \"^0.3.0\""));
         assert!(after.contains("\"node_modules/dependency\": {\"version\": \"0.3.0\"}"));
     }
