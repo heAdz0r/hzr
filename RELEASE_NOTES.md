@@ -47,8 +47,7 @@ forks. Where a row says *upstream*, that behaviour is unchanged in `rtk` today.
 | Query `fn record_degraded_rewrite` | Files returned |
 |---|---|
 | RTK upstream `v0.44.1` — `rgai` | 21 (ranked terms) |
-| HZR `0.3.1` — `--mode exact` | **1** |
-| HZR `0.3.2` — `--mode exact` | **1** |
+| HZR `0.3.1` and later — `--mode exact` | **1** (literal) |
 
 ## Accounting coverage can return to COMPLETE
 
