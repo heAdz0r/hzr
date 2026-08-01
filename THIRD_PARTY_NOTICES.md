@@ -20,7 +20,7 @@ the preserved v1 content-manifest SHA-256 is
 entry paths, types, Git-portable modes, sizes and content digests, ordered deletions, source identity
 and dirty-state hashes, plus explicit exclusion rules and reasons. It was captured from `heAdz0r/rtk`
 at HEAD `5f403c465cbdbe148e9ca03e0ac8e856eef0bfee` together with its recorded working-tree state. Its MIT
-license remains at `fork-core/rtk/LICENSE` and is copied into every HZR bundle. Starting with 0.3.1,
+license remains at `fork-core/rtk/LICENSE` and is copied into every HZR bundle. Starting with 0.3.0,
 the complete fork-core evolves inside HZR; `fork-core/CURRENT_ENGINE.toml` and its companion manifests
 identify the built engine separately while the import baseline remains immutable. HZR verifies both
 identities before compilation and does not fetch or substitute stock RTK.

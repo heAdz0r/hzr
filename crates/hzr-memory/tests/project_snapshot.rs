@@ -1,9 +1,17 @@
-use hzr_memory::read_project_snapshot;
+use hzr_memory::{MemoryError, read_project_snapshot};
 use rusqlite::{Connection, params};
 use tempfile::tempdir;
 
 const PROJECT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const PROJECT_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+#[test]
+fn missing_canonical_store_is_unavailable_instead_of_ready_and_empty() {
+    let directory = tempdir().expect("temporary directory");
+    let error = read_project_snapshot(&directory.path().join("missing.db"), PROJECT_A)
+        .expect_err("an absent canonical store cannot prove an empty project");
+    assert!(matches!(error, MemoryError::SnapshotUnavailable));
+}
 
 #[test]
 fn project_snapshot_is_scoped_bounded_and_content_free() {

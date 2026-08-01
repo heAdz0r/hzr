@@ -128,7 +128,7 @@ verify_sha256 \
   "254d5a903dbc2b43419688f7e484d65e94c278eed20213bf0abfacf1fb44d0e3" \
   "${HZR_CAVEMAN_ROOT}/package.json"
 verify_sha256 \
-  "b5d34f69ad3a3913ec79b0195512adb448d9412523d80f420f62cdb077a03f38" \
+  "42daaad8abf0a781b1f6a99dfabe27a24bcf802b978a5f40f8fc2fdfb15e4855" \
   "${HZR_CAVEMAN_ROOT}/package-lock.json"
 verify_sha256 \
   "d66e2e2cebac811bbc23896645b3a3e25b635cb7358b1a0e36599008e10cd5ec" \

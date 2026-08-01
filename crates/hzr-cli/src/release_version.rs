@@ -13,9 +13,27 @@ const ROOT_VERSION_SURFACES: &[&str] = &[
     "FORK_PARITY.md",
     "HZR.md",
     "README.md",
-    "THIRD_PARTY_NOTICES.md",
     "install.sh",
 ];
+
+const VERSION_SURFACES: &[&str] = &[
+    ".github/workflows/ci.yml",
+    "crates/hzr-cli/src/adoption.rs",
+    "crates/hzr-cli/src/build.rs",
+    "crates/hzr-cli/src/client.rs",
+    "crates/hzr-cli/src/main.rs",
+    "crates/hzr-cli/src/service.rs",
+    "crates/hzr-cli/src/stats_output.rs",
+    "crates/hzr-core/src/config.rs",
+    "crates/hzr-core/src/ledger.rs",
+    "integrations/caveman-code/bridge.mjs",
+    "integrations/caveman-code/bridge.test.mjs",
+    "integrations/caveman-code/package.json",
+    "scripts/smoke-bundle.sh",
+    "scripts/smoke-install.sh",
+];
+
+const CAVEMAN_PACKAGE_LOCK: &str = "integrations/caveman-code/package-lock.json";
 
 const RUNTIME_DIGEST_SURFACES: &[(&str, &str)] = &[
     (
@@ -75,6 +93,13 @@ pub fn synchronize(repository: &Path, target: &str, dry_run: bool) -> Result<Ver
             }
             changed_files.push(relative);
         }
+        synchronize_caveman_package_lock(
+            repository,
+            &previous,
+            target,
+            dry_run,
+            &mut changed_files,
+        )?;
         let release_line_path = repository.join("scripts/refresh-current-engine.sh");
         let before = fs::read_to_string(&release_line_path)
             .context("failed to read scripts/refresh-current-engine.sh")?;
@@ -274,17 +299,83 @@ fn tracked_version_surfaces(repository: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn is_version_surface(path: &Path) -> bool {
-    if ROOT_VERSION_SURFACES
+    ROOT_VERSION_SURFACES
         .iter()
         .any(|surface| path == Path::new(surface))
-    {
-        return true;
+        || VERSION_SURFACES
+            .iter()
+            .any(|surface| path == Path::new(surface))
+}
+
+fn synchronize_caveman_package_lock(
+    repository: &Path,
+    previous: &str,
+    target: &str,
+    dry_run: bool,
+    changed_files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let relative = PathBuf::from(CAVEMAN_PACKAGE_LOCK);
+    let path = repository.join(&relative);
+    let before = fs::read_to_string(&path).context("failed to read Caveman package-lock.json")?;
+    let after = replace_caveman_package_lock_versions(&before, previous, target)?;
+    if after != before {
+        if !dry_run {
+            atomic_replace(&path, after.as_bytes())?;
+        }
+        changed_files.push(relative);
     }
-    path.starts_with(".github/workflows")
-        || path.starts_with("scripts")
-        || path.starts_with("crates")
-        || path.starts_with("integrations/caveman-code")
-        || path.starts_with("fork-core/rtk/src")
+    Ok(())
+}
+
+fn replace_caveman_package_lock_versions(
+    before: &str,
+    previous: &str,
+    target: &str,
+) -> Result<String> {
+    let document: serde_json::Value =
+        serde_json::from_str(before).context("failed to parse Caveman package-lock.json")?;
+    let root_version = document
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .context("Caveman package-lock.json is missing its root version")?;
+    let package_version = document
+        .pointer("/packages//version")
+        .and_then(serde_json::Value::as_str)
+        .context("Caveman package-lock.json is missing packages[''].version")?;
+    if root_version != previous || package_version != previous {
+        bail!(
+            "Caveman package-lock versions are not synchronized: root={root_version:?}, package={package_version:?}, expected={previous:?}"
+        );
+    }
+
+    let root_marker = format!("  \"version\": \"{previous}\",");
+    let root_replacement = format!("  \"version\": \"{target}\",");
+    let package_marker = format!(
+        "    \"\": {{\n      \"name\": \"@headz0r/hzr-caveman-code-bridge\",\n      \"version\": \"{previous}\","
+    );
+    let package_replacement = format!(
+        "    \"\": {{\n      \"name\": \"@headz0r/hzr-caveman-code-bridge\",\n      \"version\": \"{target}\","
+    );
+    if before.lines().filter(|line| *line == root_marker).count() != 1 {
+        bail!("Caveman package-lock root version marker is missing or ambiguous");
+    }
+    if before.matches(&package_marker).count() != 1 {
+        bail!("Caveman package-lock package version marker is missing or ambiguous");
+    }
+    let after = before
+        .replacen(&root_marker, &root_replacement, 1)
+        .replacen(&package_marker, &package_replacement, 1);
+    let updated: serde_json::Value =
+        serde_json::from_str(&after).context("updated Caveman package-lock.json is invalid")?;
+    if updated.get("version").and_then(serde_json::Value::as_str) != Some(target)
+        || updated
+            .pointer("/packages//version")
+            .and_then(serde_json::Value::as_str)
+            != Some(target)
+    {
+        bail!("Caveman package-lock version update did not reach both root fields");
+    }
+    Ok(after)
 }
 
 fn atomic_replace(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -391,15 +482,16 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        is_version_surface, release_changelog, replace_digest_after_marker,
-        replace_digest_for_artifact, synchronize_release_line, validate_version,
+        is_version_surface, release_changelog, replace_caveman_package_lock_versions,
+        replace_digest_after_marker, replace_digest_for_artifact, synchronize_release_line,
+        validate_version,
     };
 
     #[test]
     fn same_minor_release_keeps_the_stable_release_line() {
         let before = "hzr_release_line = \"0.3.x\"\n";
         assert_eq!(
-            synchronize_release_line(before, "0.3.1", "0.3.1").expect("release line"),
+            synchronize_release_line(before, "0.3.0", "0.3.1").expect("release line"),
             before
         );
     }
@@ -409,12 +501,41 @@ mod tests {
         assert!(is_version_surface(Path::new("README.md")));
         assert!(!is_version_surface(Path::new("PRD.md")));
         assert!(!is_version_surface(Path::new("PRD_ADOPTION.md")));
+        assert!(!is_version_surface(Path::new(
+            "integrations/caveman-code/package-lock.json"
+        )));
+        assert!(!is_version_surface(Path::new(
+            "fork-core/rtk/src/filters/bundle-install.toml"
+        )));
+    }
+
+    #[test]
+    fn package_lock_update_preserves_dependency_versions() {
+        let before = concat!(
+            "{\n",
+            "  \"name\": \"@headz0r/hzr-caveman-code-bridge\",\n",
+            "  \"version\": \"0.3.0\",\n",
+            "  \"packages\": {\n",
+            "    \"\": {\n",
+            "      \"name\": \"@headz0r/hzr-caveman-code-bridge\",\n",
+            "      \"version\": \"0.3.0\",\n",
+            "      \"dependencies\": {\"dependency\": \"^0.3.0\"}\n",
+            "    },\n",
+            "    \"node_modules/dependency\": {\"version\": \"0.3.0\"}\n",
+            "  }\n",
+            "}\n",
+        );
+        let after = replace_caveman_package_lock_versions(before, "0.3.0", "0.3.1")
+            .expect("package-lock update");
+        assert_eq!(after.matches("\"version\": \"0.3.1\"").count(), 2);
+        assert!(after.contains("\"dependency\": \"^0.3.0\""));
+        assert!(after.contains("\"node_modules/dependency\": {\"version\": \"0.3.0\"}"));
     }
 
     #[test]
     fn version_validation_rejects_ambiguous_or_partial_versions() {
-        assert!(validate_version("0.3.1").is_ok());
-        for invalid in ["v0.3.1", "0.3", "0.03.0", "0.3.1-beta"] {
+        assert!(validate_version("1.2.3").is_ok());
+        for invalid in ["v1.2.3", "1.2", "1.02.3", "1.2.3-beta"] {
             assert!(validate_version(invalid).is_err(), "accepted {invalid}");
         }
     }

@@ -7,7 +7,7 @@ use rusqlite::{Connection, OpenFlags, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{Result, topic_belongs_to_project};
+use crate::{MemoryError, Result, topic_belongs_to_project};
 
 const MAX_MEMORIES: usize = 256;
 const MAX_TOPICS: usize = 64;
@@ -61,7 +61,7 @@ struct TopicAccumulator {
 /// intentionally excluded from the serialized shape.
 pub fn read_project_snapshot(path: &Path, repository_id: &str) -> Result<ProjectMemorySnapshot> {
     if !path.is_file() {
-        return Ok(ProjectMemorySnapshot::default());
+        return Err(MemoryError::SnapshotUnavailable);
     }
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.busy_timeout(Duration::from_millis(250))?;

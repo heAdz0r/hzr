@@ -136,6 +136,9 @@ pub enum MemoryError {
     #[error("ICM snapshot database error: {0}")]
     Database(#[from] rusqlite::Error),
 
+    #[error("canonical ICM snapshot database is unavailable")]
+    SnapshotUnavailable,
+
     #[error("ICM MCP transport is not connected")]
     McpUnavailable,
 

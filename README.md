@@ -179,8 +179,8 @@ opt-out for release installation.
   <img src="docs/screenshots/hzr-visualizer-mobile.png" width="24%" alt="HZR visualizer responsive mobile view">
 </p>
 
-The screenshots use an isolated three-project registry and a real local daemon snapshot;
-no private working-copy paths or production usage records are included.
+The screenshots are sanitized captures from a live HZR project. Repository paths,
+memory contents, and provider records are intentionally excluded from the public assets.
 
 ```bash
 hzr index status --workspace .
