@@ -14,9 +14,9 @@ forks. Where a row says *upstream*, that behaviour is unchanged in `rtk` today.
 ## Optimizer bypass is measured and named
 
 - A command routed through `raw` reaches the shell unfiltered. It delivers exactly as many
-  tokens as it consumed, so it raises **both sides** of the reduction ratio and cancels out
-  instead of lowering it — a workspace could send half its output to the model and still read
-  "87.3% avoided".
+  tokens as its baseline and therefore contributes **zero** avoided tokens. When RAW is included
+  in the accounting boundary, the baseline grows while net avoided output does not, so the total
+  reduction percentage goes down. The separate bypass share makes that loss of coverage explicit.
 - `hzr stats` prints the bypass share directly beneath the headline: operations, delivered
   tokens, and each bypassed tool ranked by cost.
 - Every bypassed read or search carries a **copyable** replacement, reconstructed from its
