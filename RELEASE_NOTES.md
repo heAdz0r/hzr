@@ -99,6 +99,9 @@ forks. Where a row says *upstream*, that behaviour is unchanged in `rtk` today.
   (`rust-version = "1.85"`), failing the `msrv` CI job and blocking the release workflow.
 - The GitHub Release description is taken from this file instead of an auto-generated commit
   list, so the published release and the repository state the same thing.
+- CI uses the official Node 24 editions of GitHub's checkout, Node, Go, artifact and attestation
+  actions. Go caching is disabled where engine sources are cloned only after setup, eliminating
+  both the Node 20 deprecation annotations and the misleading missing-`go.sum` cache warning.
 
 ## Upgrading
 

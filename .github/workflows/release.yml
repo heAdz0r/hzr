@@ -12,7 +12,7 @@ jobs:
   preflight:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
@@ -44,15 +44,18 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: 1.24.2
+          # Managed Go sources are fetched by build-bundle.sh, so no repository-root
+          # go.sum exists for setup-go's automatic dependency cache.
+          cache: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.19
@@ -67,7 +70,7 @@ jobs:
           scripts/smoke-install.sh \
             "$RUNNER_TEMP/hzr-release/hzr-${GITHUB_REF_NAME}-${{ matrix.platform }}.tar.gz" \
             "$RUNNER_TEMP/hzr-release/SHA256SUMS"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: hzr-${{ matrix.platform }}
           path: ${{ runner.temp }}/hzr-release/hzr-${{ github.ref_name }}-${{ matrix.platform }}.tar.gz
@@ -82,8 +85,8 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v7
         with:
           pattern: hzr-*
           path: release-assets
@@ -94,7 +97,7 @@ jobs:
           set -euo pipefail
           test "$(find release-assets -maxdepth 1 -name '*.tar.gz' -type f | wc -l | tr -d ' ')" = 4
           (cd release-assets && sha256sum ./*.tar.gz | sed 's# \./#  #' | LC_ALL=C sort > SHA256SUMS)
-      - uses: actions/attest-build-provenance@v2
+      - uses: actions/attest-build-provenance@v4
         with:
           subject-path: release-assets/*.tar.gz
       # The published release must say what the repository says. `--generate-notes` produced a

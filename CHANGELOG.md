@@ -62,6 +62,9 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   commit list, and the tag workflow refuses to publish when that file does not name the tag.
   The published release and the repository can no longer describe the same version
   differently.
+- GitHub workflows use Node 24-compatible official actions and skip Go dependency caching in
+  jobs that clone their `go.sum` only after setup, removing deprecation and false cache-failure
+  annotations from otherwise successful CI runs.
 
 ### Documentation
 

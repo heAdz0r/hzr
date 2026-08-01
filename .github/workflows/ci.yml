@@ -16,17 +16,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: 1.24.2
+          # Managed Go sources are fetched by build-bundle.sh, so no repository-root
+          # go.sum exists for setup-go's automatic dependency cache.
+          cache: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.19
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20.18.1
           cache: npm
@@ -39,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       # The warning ratchet hashes Clippy diagnostics, whose default warning set changes
@@ -53,7 +56,7 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -64,15 +67,15 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.85.0
       - run: cargo check --locked --workspace --all-targets --all-features
 
   caveman-bridge:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 20.18.1
           cache: npm
@@ -85,7 +88,7 @@ jobs:
   visualizer:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.19
@@ -101,10 +104,12 @@ jobs:
   grepai-patch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: 1.24.2
+          # grepai is cloned after setup; caching cannot inspect its go.sum yet.
+          cache: false
       - run: git clone --filter=blob:none https://github.com/yoanbernabeu/grepai /tmp/hzr-grepai
       - run: git -C /tmp/hzr-grepai checkout --detach 65c345ca32122c17a39a5bbec2780c2eea773a12
       - run: git -C /tmp/hzr-grepai apply --check "$GITHUB_WORKSPACE/patches/grepai/0.35.0-disable-worktree-discovery.patch"
