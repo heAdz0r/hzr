@@ -285,6 +285,8 @@ done
 mkdir -p "${HZR_PROVENANCE_OUTPUT}/integrations/claude-code"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/HZR.md" \
   "${HZR_PROVENANCE_OUTPUT}/HZR.md"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/install.sh" \
+  "${HZR_PROVENANCE_OUTPUT}/install.sh"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/.claude/skills/hzr-tdd/SKILL.md" \
   "${HZR_PROVENANCE_OUTPUT}/skills/hzr-tdd/SKILL.md"
 install -m 0644 \

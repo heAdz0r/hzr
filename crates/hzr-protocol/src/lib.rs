@@ -9,12 +9,16 @@ mod api;
 pub use api::{
     CodecApiRequest, CommandTermination, ContextPlanApiRequest, ContextPlanApiResponse,
     ContextWarning, ContextWarningCode, DashboardEstimatedEfficiency, DashboardHelpCommand,
-    DashboardObservedUsage, DashboardProject, DashboardProjectArtifacts, DashboardProjectState,
-    DashboardResponse, DashboardService, DashboardState, ExecApiRequest, ExecApprovalApiRequest,
-    ForkPlannerMetadata, ForkRunApiRequest, ForkRunApiResponse, MemoryImportance,
-    MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest, MemoryWriteScope,
-    SearchApiRequest, SearchApiResponse, SearchHit, SearchLine, SearchMode, SearchSnippet,
-    SearchStrategy, UsageApiRequest, UsageApiResponse,
+    DashboardIndexArtifacts, DashboardIndexObservatory, DashboardIndexWatcher,
+    DashboardLocalActivity, DashboardLocalOperation, DashboardMemoryEdge,
+    DashboardMemoryObservatory, DashboardMemoryRetrieval, DashboardMemoryTopic,
+    DashboardObservedUsage, DashboardOperationRoute, DashboardProject, DashboardProjectArtifacts,
+    DashboardProjectState, DashboardProviderReceiptState, DashboardProviderReceipts,
+    DashboardResponse, DashboardSemanticCanary, DashboardService, DashboardState, ExecApiRequest,
+    ExecApprovalApiRequest, ForkPlannerMetadata, ForkRunApiRequest, ForkRunApiResponse,
+    MemoryImportance, MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest,
+    MemoryWriteScope, SearchApiRequest, SearchApiResponse, SearchHit, SearchLine, SearchMode,
+    SearchSnippet, SearchStrategy, UsageApiRequest, UsageApiResponse,
 };
 
 pub const PROTOCOL_VERSION: u16 = 1;

@@ -1,4 +1,9 @@
-import type { DashboardProject, DashboardState, ProjectState } from "./types";
+import type { DashboardProject, DashboardState, MemoryTopic, ProjectState } from "./types";
+
+export interface PositionedMemoryTopic extends MemoryTopic {
+  x: number;
+  y: number;
+}
 
 const compactNumber = new Intl.NumberFormat("en-US", {
   notation: "compact",
@@ -102,4 +107,26 @@ export function filterProjects(
       project.root.toLocaleLowerCase().includes(normalized);
     return matchesState && matchesQuery;
   });
+}
+
+export function layoutMemoryTopics(
+  topics: MemoryTopic[],
+  width: number,
+  height: number,
+): PositionedMemoryTopic[] {
+  if (topics.length === 0) return [];
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radiusX = Math.max(0, width / 2 - 60);
+  const radiusY = Math.max(0, height / 2 - 60);
+  return [...topics]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((topic, index) => {
+      const angle = -Math.PI / 2 + (index * Math.PI * 2) / topics.length;
+      return {
+        ...topic,
+        x: centerX + Math.cos(angle) * radiusX,
+        y: centerY + Math.sin(angle) * radiusY,
+      };
+    });
 }

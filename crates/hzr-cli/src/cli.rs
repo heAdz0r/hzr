@@ -151,6 +151,8 @@ pub enum Command {
         #[arg(long, value_name = "DIR")]
         install_root: Option<PathBuf>,
     },
+    #[command(about = "Download, verify, and install a newer GitHub release when available")]
+    Update,
     #[command(about = "Print the strict HZR Red-Green-Refactor contract before implementation")]
     Tdd,
     /// Build *your* project through the inherited token-optimized wrapper.
@@ -675,6 +677,13 @@ mod tests {
 
         assert!(cli.json);
         assert!(matches!(cli.command, Command::Tdd));
+    }
+
+    #[test]
+    fn test_cli_parses_update_command() {
+        let cli = Cli::try_parse_from(["hzr", "update"]).expect("native update command");
+
+        assert!(matches!(cli.command, Command::Update));
     }
 
     #[test]

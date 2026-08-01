@@ -9,6 +9,7 @@ import {
   formatSignedCount,
   refreshFailureAnnouncement,
   relativeTime,
+  layoutMemoryTopics,
 } from "./utils";
 
 const project = (name: string, root: string, state: DashboardProject["state"]): DashboardProject => ({
@@ -83,5 +84,23 @@ describe("project filtering", () => {
   test("combines query and state filters", () => {
     expect(filterProjects(projects, "work", "ready").map((item) => item.name)).toEqual(["hzr"]);
     expect(filterProjects(projects, "hzr", "warming")).toHaveLength(0);
+  });
+});
+
+describe("memory graph layout", () => {
+  test("is deterministic and keeps every topic inside the view box", () => {
+    const topics = [
+      { id: "one", label: "decisions", memory_count: 3, average_weight: 0.8, newest_at: null },
+      { id: "two", label: "architecture", memory_count: 2, average_weight: 0.6, newest_at: null },
+      { id: "three", label: "errors", memory_count: 1, average_weight: 0.4, newest_at: null },
+    ];
+
+    const first = layoutMemoryTopics(topics, 800, 460);
+    const second = layoutMemoryTopics(topics, 800, 460);
+
+    expect(first).toEqual(second);
+    expect(first).toHaveLength(3);
+    expect(first.every((node) => node.x >= 60 && node.x <= 740)).toBe(true);
+    expect(first.every((node) => node.y >= 60 && node.y <= 400)).toBe(true);
   });
 });

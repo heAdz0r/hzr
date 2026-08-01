@@ -86,6 +86,14 @@ const DEFAULT_HISTORY_DAYS: i64 = 90;
 /// Minimum interval between cleanup runs to reduce write amplification.
 const CLEANUP_INTERVAL_SECS: i64 = 60 * 60; // 1 hour
 
+fn tracking_disabled_value(value: Option<&OsStr>) -> bool {
+    value.is_some_and(|value| matches!(value.as_encoded_bytes(), b"1" | b"true"))
+}
+
+fn tracking_disabled() -> bool {
+    tracking_disabled_value(std::env::var_os("RTK_TRACKING_DISABLED").as_deref())
+}
+
 thread_local! {
     /// Process-local tracker cache to avoid reopening/migrating SQLite for every track call.
     static TRACKER_CACHE: RefCell<Option<Tracker>> = const { RefCell::new(None) };
@@ -1197,6 +1205,9 @@ impl TimedExecution {
     /// timer.track("ls -la", "rtk ls", input, output);
     /// ```
     pub fn track(&self, original_cmd: &str, rtk_cmd: &str, input: &str, output: &str) {
+        if tracking_disabled() {
+            return;
+        }
         with_cached_tracker(|tracker| {
             let _ = self.track_with(tracker, original_cmd, rtk_cmd, input, output);
         });
@@ -1240,6 +1251,9 @@ impl TimedExecution {
     /// timer.track_passthrough("git tag", "rtk git tag");
     /// ```
     pub fn track_passthrough(&self, original_cmd: &str, rtk_cmd: &str) {
+        if tracking_disabled() {
+            return;
+        }
         // input_tokens=0, output_tokens=0 won't dilute savings statistics
         with_cached_tracker(|tracker| {
             let _ = self.track_passthrough_with(tracker, original_cmd, rtk_cmd);
@@ -1462,6 +1476,14 @@ mod tests {
         let custom_path = "/tmp/rtk_test_custom.db";
         let db_path = resolve_db_path(Some(OsStr::new(custom_path)), None, None);
         assert_eq!(db_path, PathBuf::from(custom_path));
+    }
+
+    #[test]
+    fn test_tracking_disabled_accepts_only_explicit_true_values() {
+        assert!(tracking_disabled_value(Some(OsStr::new("1"))));
+        assert!(tracking_disabled_value(Some(OsStr::new("true"))));
+        assert!(!tracking_disabled_value(None));
+        assert!(!tracking_disabled_value(Some(OsStr::new("0"))));
     }
 
     // 8. get_db_path falls back to default when no custom config

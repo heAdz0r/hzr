@@ -274,6 +274,48 @@ fn read_csv_level_none_shows_raw() {
 }
 
 #[test]
+fn read_markdown_digest_is_self_describing_and_recoverable() {
+    let mut markdown = String::from("# Title\n\n");
+    for number in 1..=100 {
+        markdown.push_str(&format!(
+            "Important body line {number} with enough detail for a realistic document.\n"
+        ));
+    }
+    markdown.push_str("\n## Details\n\nExact detail.\n");
+    let f = write_temp(".md", markdown.as_bytes());
+
+    let out = rtk_bin()
+        .args(["read", f.path().to_str().unwrap()])
+        .output()
+        .expect("run rtk read markdown digest");
+
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Markdown digest (content omitted)"));
+    assert!(stdout.contains("Source:"));
+    assert!(stdout.contains("bytes"));
+    assert!(stdout.contains("Sections: 2/2 shown"));
+    assert!(stdout.contains("Lead preview:"));
+    assert!(stdout.contains("Important body line 1"));
+    assert!(stdout.contains("`--level none` for exact content"));
+    assert!(stdout.contains("`--from N --to M` for an exact range"));
+}
+
+#[test]
+fn read_markdown_level_none_is_byte_exact() {
+    let markdown = b"# Title\n\nImportant body.\n";
+    let f = write_temp(".md", markdown);
+
+    let out = rtk_bin()
+        .args(["read", f.path().to_str().unwrap(), "--level", "none"])
+        .output()
+        .expect("run exact rtk read markdown");
+
+    assert!(out.status.success());
+    assert_eq!(out.stdout, markdown);
+}
+
+#[test]
 fn read_csv_aggressive_no_numeric_stats() {
     let mut csv = String::from("id,val\n");
     for id in 1..=100 {

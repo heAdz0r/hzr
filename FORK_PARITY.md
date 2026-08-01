@@ -1,7 +1,7 @@
-# HZR 0.3.0 — fork-core parity ledger
+# HZR 0.3.1 — fork-core parity ledger
 
 **Audit date:** 2026-08-01
-**Status:** HZR 0.3.0 development; G1–G7/adoption implemented, functional all-gates green
+**Status:** HZR 0.3.1 development; G1–G7/adoption implemented, functional all-gates green
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -39,9 +39,8 @@ Baseline identity immutable. `fork-core/rtk` after `v0.1.0` develops directly in
 
 ### Current command-output parity delta
 
-The controlled RAW / upstream RTK v0.44.1 / HZR run is recorded in
-[`PRD_BENCHMARK_HZR_VS_UPSTREAM_RTK.md`](PRD_BENCHMARK_HZR_VS_UPSTREAM_RTK.md)
-with replayable evidence under
+The controlled RAW / upstream RTK v0.44.1 / HZR run, methodology and replayable
+evidence live under
 [`benchmarks/hzr-vs-rtk-upstream-v0.44.1`](benchmarks/hzr-vs-rtk-upstream-v0.44.1).
 
 The first pass found four shared-command gaps: missing `cargo test` failure
@@ -57,7 +56,7 @@ ties, 0 HZR losses, with matching exit-code vectors in all 14 cases.
 |---|---|
 | ✅ |Implemented and locally tested in the specified area|
 | 🟡 |There is a working path, but an honestly described border remains|
-| ⚪ |Not knowingly included in 0.3.0; exact compatibility path is not affected|
+| ⚪ |Not knowingly included in 0.3.1; exact compatibility path is not affected|
 
 ## Capability and routing matrix
 
@@ -72,7 +71,7 @@ ties, 0 HZR losses, with matching exit-code vectors in all 14 cases.
 | Raw shell rewrite |The complete line is passed to fork `rewrite`| Pipes, redirects, heredoc, multiline, quoting, `&&/||`, xargs are covered by tests| ✅ |
 | Exit `0/1/2/3` | rewrite / raw / deny / one-time approval |Approval ID bounded, TTL and single-use; approve/deny CLI/API| ✅ |
 | Command filters/guards |Fork rewrite selects exact command, HZR transport executes it|Private PATH resolves `rtk` again in exact fork; no generic replacement table| ✅ |
-| Enhanced read | Agent `hzr_read` → allowlisted `/v1/fork/run` → fork `read` |Bounds/modes are checked; traversal and symlink escape are rejected| ✅ |
+| Enhanced read | Agent `hzr_read` → allowlisted `/v1/fork/run` → fork `read` | Bounds/modes are checked; traversal and symlink escape are rejected; Markdown digests identify omitted content, include bounded semantic lead prose without HTML navigation/media noise, report source/section coverage and provide exact full/range recovery | ✅ |
 | Atomic edit/write | Agent edit/write → fork `write --output json patch|create` |Native Caveman file tools are not available; fork atomic semantics saved| ✅ |
 | `rgai` behavior | `/v1/search`, `hzr search|rgai`, agent search → exact fork `rgai --json` |Exact adds `--builtin`; semantic/auto uses managed grepai| ✅ |
 | One grepai store | Managed `.grepai` symlink → `<data>/workspaces/<repo>/<worktree>/index/grepai` |Real legacy, foreign link and nested duplicate fail closed| ✅ |
@@ -152,13 +151,13 @@ An external grepai process that does not respect HZR `hzr-owner.lock` cannot be 
 
 ## Caveman boundary
 
-Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.3.0 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
+Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.3.1 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
 
 Response density is set before generation by a short cache-stable contract. HZR Codec remains a separate explicit protected transform for CLI/API. Text quality is protected by instructions, native layer guards and raw exact tools; this is not a formal semantic equivalence proof.
 
 ## Release gates
 
-### Functional 0.3.0 gates
+### Functional 0.3.1 gates
 
 - [x] Exact dirty fork snapshot v2 imported and verified.
 - [x] Exact fork builds and its synthetic-Git suite passes.

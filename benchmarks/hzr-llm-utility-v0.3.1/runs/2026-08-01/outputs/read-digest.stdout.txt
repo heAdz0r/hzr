@@ -1,0 +1,9 @@
+Markdown digest (content omitted)
+  Source: 126 lines, 6903 bytes
+  Sections: 2/2 shown
+      Utility fixture
+        Exact recovery
+  Lead preview: 2 prose blocks shown (bounded to 3)
+    Evidence line 1: bounded reads must remain recoverable. Evidence line 2: bounded reads must remain recoverable. Evidence line 3: bounded reads must remain recoverable. Evidence line 4: bounded reads must remain recoverable. Evidence line 5…
+    Final fact.
+  Next: rerun this read with `--level none` for exact content, or add `--from N --to M` for an exact range.

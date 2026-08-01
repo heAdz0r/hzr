@@ -118,7 +118,10 @@ fn config(temp: &TempDir, executable: &str, address: SocketAddr) -> IcmConfig {
     config.bind_addr = address;
     config.request_timeout = Duration::from_millis(250);
     config.startup_timeout = Duration::from_secs(2);
-    config.cli_timeout = Duration::from_secs(2);
+    // Process creation can be delayed when Cargo runs this integration binary beside the
+    // workspace suite. Keep the fixture below production's 30-second budget without making
+    // an immediate fake `--version` response depend on a two-second scheduler window.
+    config.cli_timeout = Duration::from_secs(10);
     config.shutdown_timeout = Duration::from_secs(1);
     config.circuit_failure_threshold = 1;
     config.circuit_reset_timeout = Duration::from_secs(1);

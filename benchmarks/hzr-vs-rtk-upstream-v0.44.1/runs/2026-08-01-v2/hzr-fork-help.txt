@@ -1,0 +1,87 @@
+A high-performance CLI proxy designed to filter and summarize system outputs before they reach your LLM context.
+
+Usage: rtk [OPTIONS] <COMMAND>
+
+Commands:
+  ls             List directory contents with token-optimized output (proxy to native ls)
+  tree           Directory tree with token-optimized output (proxy to native tree)
+  read           Read file with intelligent filtering (CSV/TSV auto-digest in filtered modes)
+  smart          Generate 2-line technical summary (heuristic-based)
+  git            Git commands with compact output
+  write          Safe file writes (atomic + idempotent) with dry-run support
+  build          Build/install/verify rtk binaries (native replacement for rtk-build.sh)
+  gh             GitHub CLI (gh) commands with token-optimized output
+  pnpm           pnpm commands with ultra-compact output
+  err            Run command and show only errors/warnings
+  test           Run tests and show only failures
+  json           Show JSON structure without values
+  deps           Summarize project dependencies
+  env            Show environment variables (filtered, sensitive masked)
+  find           Find files with compact tree output (supports native find flags: -name, -type, -maxdepth, -iname)
+  diff           Ultra-condensed diff (only changed lines)
+  log            Filter and deduplicate log output
+  docker         Docker commands with compact output
+  kubectl        Kubectl commands with compact output
+  oc             OpenShift CLI commands with compact output
+  summary        Run command and show heuristic summary
+  grep           Compact grep - strips whitespace, truncates, groups by file
+  rg             Compact ripgrep - runs rg natively, same output filter as grep
+  rgai           Rust-native semantic search (grepai-style intent matching)
+  init           Initialize rtk instructions for assistant CLI usage
+  wget           Download with compact output (strips progress bars)
+  wc             Word/line/byte count with compact output (strips paths and padding)
+  gain           Show token savings summary and history
+  cc-economics   Claude Code economics: spending (ccusage) vs savings (rtk) analysis
+  config         Show or create configuration file
+  vitest         Vitest commands with compact output
+  prisma         Prisma commands with compact output (no ASCII art)
+  tsc            TypeScript compiler with grouped error output
+  next           Next.js build with compact output
+  lint           ESLint with grouped rule violations
+  prettier       Prettier format checker with compact output
+  format         Universal format checker (prettier, black, ruff format)
+  playwright     Playwright E2E tests with compact output
+  cargo          Cargo commands with compact output
+  npm            npm run with filtered output (strip boilerplate)
+  npx            npx with intelligent routing (tsc, eslint, prisma -> specialized filters)
+  bun            Bun commands with compact output (script boilerplate stripped)
+  curl           Curl with auto-JSON detection and schema output
+  ssh            SSH with smart output filtering (psql/json/html/generic)
+  lsof           lsof with compact port/socket output (groups by port, shows LISTEN + connection counts)
+  ps             ps with compact user-process table (filters system procs, sorts by CPU)
+  discover       Discover missed RTK savings from Claude Code history
+  memory         Shared project memory, cache artifacts, and incremental deltas
+  learn          Learn CLI corrections from Claude Code error history
+  proxy          Execute command without filtering but track usage [aliases: raw]
+  ruff           Ruff linter/formatter with compact output
+  pytest         Pytest test runner with compact output
+  pip            Pip package manager with compact output (auto-detects uv)
+  go             Go commands with compact output
+  golangci-lint  golangci-lint with compact output
+  hook-audit     Show hook rewrite audit metrics (requires RTK_HOOK_AUDIT=1) // upstream sync
+  aws            AWS CLI with compact output (force JSON, compress)
+  psql           PostgreSQL client with compact output (strip borders, compress tables)
+  mypy           Mypy type checker with grouped error output
+  gt             Graphite (gt) stacked PR commands with compact output
+  pipe           Read stdin, apply filter, print filtered output (Unix pipe mode)
+  trust          Trust project-local TOML filters in current directory
+  untrust        Revoke trust for project-local TOML filters
+  verify         Verify hook integrity and run TOML filter inline tests
+  rewrite        Rewrite a raw command to its RTK equivalent (single source of truth for hooks)
+  help           Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose...
+          Verbosity level (-v, -vv, -vvv)
+
+  -u, --ultra-compact
+          Ultra-compact mode: ASCII icons, inline format (Level 2 optimizations)
+
+      --skip-env
+          Set SKIP_ENV_VALIDATION=1 for child processes (Next.js, tsc, lint, prisma)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version

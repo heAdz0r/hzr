@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 141
-EXPECTED_SHA256 = "c20d4c52337e3175b6d053ba5d92e563ee484ceb4eab732a005f2f04226c944d"
+EXPECTED_SHA256 = "d8d43fe2ebbe61c5420ae7d458b0a6f7c7ee653bb186cb83f35f9bd50c579d45"
 
 
 def main() -> int:

@@ -1,0 +1,2248 @@
+{
+  "schema_version": 1,
+  "fixture_commit": "36591fb00d650bf987b57483c0b3a395a35a8dc1",
+  "repetitions": 5,
+  "token_method": "ceil(UTF-8 bytes / 4); approximate, not a provider tokenizer",
+  "rows": [
+    {
+      "case": "read README.md",
+      "slug": "read-readme-md",
+      "raw": {
+        "bytes_p50": 24184,
+        "tokens_est_p50": 6046,
+        "latency_p50_ms": 4.6,
+        "latency_min_ms": 3.9,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 6.265,
+            "exit_code": 0,
+            "bytes": 24184,
+            "tokens_est": 6046,
+            "sha256": "9eedab13449e48321140887bad972786f1faa25ac5b4120f0259f4086dd601e9"
+          },
+          {
+            "elapsed_ms": 4.582,
+            "exit_code": 0,
+            "bytes": 24184,
+            "tokens_est": 6046,
+            "sha256": "9eedab13449e48321140887bad972786f1faa25ac5b4120f0259f4086dd601e9"
+          },
+          {
+            "elapsed_ms": 4.037,
+            "exit_code": 0,
+            "bytes": 24184,
+            "tokens_est": 6046,
+            "sha256": "9eedab13449e48321140887bad972786f1faa25ac5b4120f0259f4086dd601e9"
+          },
+          {
+            "elapsed_ms": 4.711,
+            "exit_code": 0,
+            "bytes": 24184,
+            "tokens_est": 6046,
+            "sha256": "9eedab13449e48321140887bad972786f1faa25ac5b4120f0259f4086dd601e9"
+          },
+          {
+            "elapsed_ms": 3.898,
+            "exit_code": 0,
+            "bytes": 24184,
+            "tokens_est": 6046,
+            "sha256": "9eedab13449e48321140887bad972786f1faa25ac5b4120f0259f4086dd601e9"
+          }
+        ],
+        "canonical_output": "outputs/read-readme-md/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 24184,
+        "tokens_est_p50": 6046,
+        "latency_p50_ms": 9.3,
+        "latency_min_ms": 8.6,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 13.605,
+            "exit_code": 0,
+            "bytes": 24184,
+            "tokens_est": 6046,
+            "sha256": "9eedab13449e48321140887bad972786f1faa25ac5b4120f0259f4086dd601e9"
+          },
+          {
+            "elapsed_ms": 9.217,
+            "exit_code": 0,
+            "bytes": 24184,
+            "tokens_est": 6046,
+            "sha256": "9eedab13449e48321140887bad972786f1faa25ac5b4120f0259f4086dd601e9"
+          },
+          {
+            "elapsed_ms": 8.626,
+            "exit_code": 0,
+            "bytes": 24184,
+            "tokens_est": 6046,
+            "sha256": "9eedab13449e48321140887bad972786f1faa25ac5b4120f0259f4086dd601e9"
+          },
+          {
+            "elapsed_ms": 9.335,
+            "exit_code": 0,
+            "bytes": 24184,
+            "tokens_est": 6046,
+            "sha256": "9eedab13449e48321140887bad972786f1faa25ac5b4120f0259f4086dd601e9"
+          },
+          {
+            "elapsed_ms": 10.505,
+            "exit_code": 0,
+            "bytes": 24184,
+            "tokens_est": 6046,
+            "sha256": "9eedab13449e48321140887bad972786f1faa25ac5b4120f0259f4086dd601e9"
+          }
+        ],
+        "canonical_output": "outputs/read-readme-md/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 1057,
+        "tokens_est_p50": 265,
+        "latency_p50_ms": 31.3,
+        "latency_min_ms": 29.0,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 31.342,
+            "exit_code": 0,
+            "bytes": 1057,
+            "tokens_est": 265,
+            "sha256": "c0f59cf581795902e6bcdb9d033b59876114343083f3607e8588dfc8b24b9f56"
+          },
+          {
+            "elapsed_ms": 28.975,
+            "exit_code": 0,
+            "bytes": 1057,
+            "tokens_est": 265,
+            "sha256": "c0f59cf581795902e6bcdb9d033b59876114343083f3607e8588dfc8b24b9f56"
+          },
+          {
+            "elapsed_ms": 32.076,
+            "exit_code": 0,
+            "bytes": 1057,
+            "tokens_est": 265,
+            "sha256": "c0f59cf581795902e6bcdb9d033b59876114343083f3607e8588dfc8b24b9f56"
+          },
+          {
+            "elapsed_ms": 33.733,
+            "exit_code": 0,
+            "bytes": 1057,
+            "tokens_est": 265,
+            "sha256": "c0f59cf581795902e6bcdb9d033b59876114343083f3607e8588dfc8b24b9f56"
+          },
+          {
+            "elapsed_ms": 29.017,
+            "exit_code": 0,
+            "bytes": 1057,
+            "tokens_est": 265,
+            "sha256": "c0f59cf581795902e6bcdb9d033b59876114343083f3607e8588dfc8b24b9f56"
+          }
+        ],
+        "canonical_output": "outputs/read-readme-md/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 0.0,
+      "hzr_reduction_vs_raw_pct": 95.6,
+      "hzr_reduction_vs_upstream_pct": 95.6
+    },
+    {
+      "case": "read src/main.rs",
+      "slug": "read-src-main-rs",
+      "raw": {
+        "bytes_p50": 121825,
+        "tokens_est_p50": 30457,
+        "latency_p50_ms": 4.5,
+        "latency_min_ms": 4.1,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 5.643,
+            "exit_code": 0,
+            "bytes": 121825,
+            "tokens_est": 30457,
+            "sha256": "695842e2f300dfe18c0dd00f097fefd59c82e7245eb911589757e14ba742752c"
+          },
+          {
+            "elapsed_ms": 4.371,
+            "exit_code": 0,
+            "bytes": 121825,
+            "tokens_est": 30457,
+            "sha256": "695842e2f300dfe18c0dd00f097fefd59c82e7245eb911589757e14ba742752c"
+          },
+          {
+            "elapsed_ms": 4.06,
+            "exit_code": 0,
+            "bytes": 121825,
+            "tokens_est": 30457,
+            "sha256": "695842e2f300dfe18c0dd00f097fefd59c82e7245eb911589757e14ba742752c"
+          },
+          {
+            "elapsed_ms": 4.545,
+            "exit_code": 0,
+            "bytes": 121825,
+            "tokens_est": 30457,
+            "sha256": "695842e2f300dfe18c0dd00f097fefd59c82e7245eb911589757e14ba742752c"
+          },
+          {
+            "elapsed_ms": 4.523,
+            "exit_code": 0,
+            "bytes": 121825,
+            "tokens_est": 30457,
+            "sha256": "695842e2f300dfe18c0dd00f097fefd59c82e7245eb911589757e14ba742752c"
+          }
+        ],
+        "canonical_output": "outputs/read-src-main-rs/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 121825,
+        "tokens_est_p50": 30457,
+        "latency_p50_ms": 8.5,
+        "latency_min_ms": 7.8,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 7.835,
+            "exit_code": 0,
+            "bytes": 121825,
+            "tokens_est": 30457,
+            "sha256": "695842e2f300dfe18c0dd00f097fefd59c82e7245eb911589757e14ba742752c"
+          },
+          {
+            "elapsed_ms": 8.475,
+            "exit_code": 0,
+            "bytes": 121825,
+            "tokens_est": 30457,
+            "sha256": "695842e2f300dfe18c0dd00f097fefd59c82e7245eb911589757e14ba742752c"
+          },
+          {
+            "elapsed_ms": 8.001,
+            "exit_code": 0,
+            "bytes": 121825,
+            "tokens_est": 30457,
+            "sha256": "695842e2f300dfe18c0dd00f097fefd59c82e7245eb911589757e14ba742752c"
+          },
+          {
+            "elapsed_ms": 8.591,
+            "exit_code": 0,
+            "bytes": 121825,
+            "tokens_est": 30457,
+            "sha256": "695842e2f300dfe18c0dd00f097fefd59c82e7245eb911589757e14ba742752c"
+          },
+          {
+            "elapsed_ms": 8.467,
+            "exit_code": 0,
+            "bytes": 121825,
+            "tokens_est": 30457,
+            "sha256": "695842e2f300dfe18c0dd00f097fefd59c82e7245eb911589757e14ba742752c"
+          }
+        ],
+        "canonical_output": "outputs/read-src-main-rs/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 117117,
+        "tokens_est_p50": 29280,
+        "latency_p50_ms": 29.3,
+        "latency_min_ms": 27.6,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 30.644,
+            "exit_code": 0,
+            "bytes": 117116,
+            "tokens_est": 29279,
+            "sha256": "aa09522eb9094c21494f2ab2f672a3b6602688941a03533d17eb6bf602c48cf7"
+          },
+          {
+            "elapsed_ms": 27.56,
+            "exit_code": 0,
+            "bytes": 117117,
+            "tokens_est": 29280,
+            "sha256": "7a3ffe1aed57e6bb290adedc5abfb3a745f3983a2e15f8ebe61d6b27ba5d5152"
+          },
+          {
+            "elapsed_ms": 28.917,
+            "exit_code": 0,
+            "bytes": 117117,
+            "tokens_est": 29280,
+            "sha256": "7a3ffe1aed57e6bb290adedc5abfb3a745f3983a2e15f8ebe61d6b27ba5d5152"
+          },
+          {
+            "elapsed_ms": 29.32,
+            "exit_code": 0,
+            "bytes": 117117,
+            "tokens_est": 29280,
+            "sha256": "7a3ffe1aed57e6bb290adedc5abfb3a745f3983a2e15f8ebe61d6b27ba5d5152"
+          },
+          {
+            "elapsed_ms": 29.372,
+            "exit_code": 0,
+            "bytes": 117117,
+            "tokens_est": 29280,
+            "sha256": "7a3ffe1aed57e6bb290adedc5abfb3a745f3983a2e15f8ebe61d6b27ba5d5152"
+          }
+        ],
+        "canonical_output": "outputs/read-src-main-rs/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 0.0,
+      "hzr_reduction_vs_raw_pct": 3.9,
+      "hzr_reduction_vs_upstream_pct": 3.9
+    },
+    {
+      "case": "read src/core/filter.rs",
+      "slug": "read-src-core-filter-rs",
+      "raw": {
+        "bytes_p50": 17884,
+        "tokens_est_p50": 4471,
+        "latency_p50_ms": 5.0,
+        "latency_min_ms": 4.0,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 5.081,
+            "exit_code": 0,
+            "bytes": 17884,
+            "tokens_est": 4471,
+            "sha256": "d46b3c32ee0385fb14f8b1e79287e166644b58cbe1c9e618e5534c31979af55e"
+          },
+          {
+            "elapsed_ms": 5.486,
+            "exit_code": 0,
+            "bytes": 17884,
+            "tokens_est": 4471,
+            "sha256": "d46b3c32ee0385fb14f8b1e79287e166644b58cbe1c9e618e5534c31979af55e"
+          },
+          {
+            "elapsed_ms": 4.971,
+            "exit_code": 0,
+            "bytes": 17884,
+            "tokens_est": 4471,
+            "sha256": "d46b3c32ee0385fb14f8b1e79287e166644b58cbe1c9e618e5534c31979af55e"
+          },
+          {
+            "elapsed_ms": 4.188,
+            "exit_code": 0,
+            "bytes": 17884,
+            "tokens_est": 4471,
+            "sha256": "d46b3c32ee0385fb14f8b1e79287e166644b58cbe1c9e618e5534c31979af55e"
+          },
+          {
+            "elapsed_ms": 3.963,
+            "exit_code": 0,
+            "bytes": 17884,
+            "tokens_est": 4471,
+            "sha256": "d46b3c32ee0385fb14f8b1e79287e166644b58cbe1c9e618e5534c31979af55e"
+          }
+        ],
+        "canonical_output": "outputs/read-src-core-filter-rs/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 17884,
+        "tokens_est_p50": 4471,
+        "latency_p50_ms": 8.9,
+        "latency_min_ms": 8.4,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 8.851,
+            "exit_code": 0,
+            "bytes": 17884,
+            "tokens_est": 4471,
+            "sha256": "d46b3c32ee0385fb14f8b1e79287e166644b58cbe1c9e618e5534c31979af55e"
+          },
+          {
+            "elapsed_ms": 15.294,
+            "exit_code": 0,
+            "bytes": 17884,
+            "tokens_est": 4471,
+            "sha256": "d46b3c32ee0385fb14f8b1e79287e166644b58cbe1c9e618e5534c31979af55e"
+          },
+          {
+            "elapsed_ms": 8.437,
+            "exit_code": 0,
+            "bytes": 17884,
+            "tokens_est": 4471,
+            "sha256": "d46b3c32ee0385fb14f8b1e79287e166644b58cbe1c9e618e5534c31979af55e"
+          },
+          {
+            "elapsed_ms": 8.504,
+            "exit_code": 0,
+            "bytes": 17884,
+            "tokens_est": 4471,
+            "sha256": "d46b3c32ee0385fb14f8b1e79287e166644b58cbe1c9e618e5534c31979af55e"
+          },
+          {
+            "elapsed_ms": 28.259,
+            "exit_code": 0,
+            "bytes": 17884,
+            "tokens_est": 4471,
+            "sha256": "d46b3c32ee0385fb14f8b1e79287e166644b58cbe1c9e618e5534c31979af55e"
+          }
+        ],
+        "canonical_output": "outputs/read-src-core-filter-rs/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 13192,
+        "tokens_est_p50": 3298,
+        "latency_p50_ms": 31.1,
+        "latency_min_ms": 29.7,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 30.165,
+            "exit_code": 0,
+            "bytes": 13191,
+            "tokens_est": 3298,
+            "sha256": "0b2b7075975f313d4fb881760461a6f94ecb90974cc26a5a2b703c3e008512f0"
+          },
+          {
+            "elapsed_ms": 34.042,
+            "exit_code": 0,
+            "bytes": 13192,
+            "tokens_est": 3298,
+            "sha256": "37b3330b61502baa60762e4e2c2027b8609182a663c9b3e3c7a0e73001aac880"
+          },
+          {
+            "elapsed_ms": 31.143,
+            "exit_code": 0,
+            "bytes": 13192,
+            "tokens_est": 3298,
+            "sha256": "37b3330b61502baa60762e4e2c2027b8609182a663c9b3e3c7a0e73001aac880"
+          },
+          {
+            "elapsed_ms": 29.748,
+            "exit_code": 0,
+            "bytes": 13192,
+            "tokens_est": 3298,
+            "sha256": "37b3330b61502baa60762e4e2c2027b8609182a663c9b3e3c7a0e73001aac880"
+          },
+          {
+            "elapsed_ms": 33.312,
+            "exit_code": 0,
+            "bytes": 13192,
+            "tokens_est": 3298,
+            "sha256": "37b3330b61502baa60762e4e2c2027b8609182a663c9b3e3c7a0e73001aac880"
+          }
+        ],
+        "canonical_output": "outputs/read-src-core-filter-rs/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 0.0,
+      "hzr_reduction_vs_raw_pct": 26.2,
+      "hzr_reduction_vs_upstream_pct": 26.2
+    },
+    {
+      "case": "read Cargo.toml",
+      "slug": "read-cargo-toml",
+      "raw": {
+        "bytes_p50": 1704,
+        "tokens_est_p50": 426,
+        "latency_p50_ms": 4.0,
+        "latency_min_ms": 3.9,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 4.305,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 4.05,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 3.959,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 3.858,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 3.876,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          }
+        ],
+        "canonical_output": "outputs/read-cargo-toml/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 1704,
+        "tokens_est_p50": 426,
+        "latency_p50_ms": 8.5,
+        "latency_min_ms": 7.7,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 7.937,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 8.546,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 11.728,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 23.426,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 7.686,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          }
+        ],
+        "canonical_output": "outputs/read-cargo-toml/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 1704,
+        "tokens_est_p50": 426,
+        "latency_p50_ms": 28.2,
+        "latency_min_ms": 26.1,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 27.381,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 29.955,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 29.996,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 26.139,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          },
+          {
+            "elapsed_ms": 28.232,
+            "exit_code": 0,
+            "bytes": 1704,
+            "tokens_est": 426,
+            "sha256": "57b587d5f176ad5f72613dc50d1d29ddfccfcf16668452444fbf15271d9de691"
+          }
+        ],
+        "canonical_output": "outputs/read-cargo-toml/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 0.0,
+      "hzr_reduction_vs_raw_pct": 0.0,
+      "hzr_reduction_vs_upstream_pct": 0.0
+    },
+    {
+      "case": "ls src",
+      "slug": "ls-src",
+      "raw": {
+        "bytes_p50": 64,
+        "tokens_est_p50": 16,
+        "latency_p50_ms": 4.5,
+        "latency_min_ms": 3.7,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 5.147,
+            "exit_code": 0,
+            "bytes": 64,
+            "tokens_est": 16,
+            "sha256": "4f0ba70fbc1d532957405808c7065a43148fc9cee061f48a0dffb4fccb91534f"
+          },
+          {
+            "elapsed_ms": 4.948,
+            "exit_code": 0,
+            "bytes": 64,
+            "tokens_est": 16,
+            "sha256": "4f0ba70fbc1d532957405808c7065a43148fc9cee061f48a0dffb4fccb91534f"
+          },
+          {
+            "elapsed_ms": 3.886,
+            "exit_code": 0,
+            "bytes": 64,
+            "tokens_est": 16,
+            "sha256": "4f0ba70fbc1d532957405808c7065a43148fc9cee061f48a0dffb4fccb91534f"
+          },
+          {
+            "elapsed_ms": 3.742,
+            "exit_code": 0,
+            "bytes": 64,
+            "tokens_est": 16,
+            "sha256": "4f0ba70fbc1d532957405808c7065a43148fc9cee061f48a0dffb4fccb91534f"
+          },
+          {
+            "elapsed_ms": 4.46,
+            "exit_code": 0,
+            "bytes": 64,
+            "tokens_est": 16,
+            "sha256": "4f0ba70fbc1d532957405808c7065a43148fc9cee061f48a0dffb4fccb91534f"
+          }
+        ],
+        "canonical_output": "outputs/ls-src/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 80,
+        "tokens_est_p50": 20,
+        "latency_p50_ms": 13.7,
+        "latency_min_ms": 12.3,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 13.13,
+            "exit_code": 0,
+            "bytes": 80,
+            "tokens_est": 20,
+            "sha256": "7c42cd47b560f1439af078b82d53709dc85ae901310eb6347c81566c00523006"
+          },
+          {
+            "elapsed_ms": 28.74,
+            "exit_code": 0,
+            "bytes": 80,
+            "tokens_est": 20,
+            "sha256": "7c42cd47b560f1439af078b82d53709dc85ae901310eb6347c81566c00523006"
+          },
+          {
+            "elapsed_ms": 12.291,
+            "exit_code": 0,
+            "bytes": 80,
+            "tokens_est": 20,
+            "sha256": "7c42cd47b560f1439af078b82d53709dc85ae901310eb6347c81566c00523006"
+          },
+          {
+            "elapsed_ms": 33.036,
+            "exit_code": 0,
+            "bytes": 80,
+            "tokens_est": 20,
+            "sha256": "7c42cd47b560f1439af078b82d53709dc85ae901310eb6347c81566c00523006"
+          },
+          {
+            "elapsed_ms": 13.663,
+            "exit_code": 0,
+            "bytes": 80,
+            "tokens_est": 20,
+            "sha256": "7c42cd47b560f1439af078b82d53709dc85ae901310eb6347c81566c00523006"
+          }
+        ],
+        "canonical_output": "outputs/ls-src/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 80,
+        "tokens_est_p50": 20,
+        "latency_p50_ms": 47.0,
+        "latency_min_ms": 35.2,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 36.941,
+            "exit_code": 0,
+            "bytes": 80,
+            "tokens_est": 20,
+            "sha256": "7c42cd47b560f1439af078b82d53709dc85ae901310eb6347c81566c00523006"
+          },
+          {
+            "elapsed_ms": 46.967,
+            "exit_code": 0,
+            "bytes": 80,
+            "tokens_est": 20,
+            "sha256": "7c42cd47b560f1439af078b82d53709dc85ae901310eb6347c81566c00523006"
+          },
+          {
+            "elapsed_ms": 54.307,
+            "exit_code": 0,
+            "bytes": 80,
+            "tokens_est": 20,
+            "sha256": "7c42cd47b560f1439af078b82d53709dc85ae901310eb6347c81566c00523006"
+          },
+          {
+            "elapsed_ms": 48.848,
+            "exit_code": 0,
+            "bytes": 80,
+            "tokens_est": 20,
+            "sha256": "7c42cd47b560f1439af078b82d53709dc85ae901310eb6347c81566c00523006"
+          },
+          {
+            "elapsed_ms": 35.167,
+            "exit_code": 0,
+            "bytes": 80,
+            "tokens_est": 20,
+            "sha256": "7c42cd47b560f1439af078b82d53709dc85ae901310eb6347c81566c00523006"
+          }
+        ],
+        "canonical_output": "outputs/ls-src/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": -25.0,
+      "hzr_reduction_vs_raw_pct": -25.0,
+      "hzr_reduction_vs_upstream_pct": 0.0
+    },
+    {
+      "case": "grep -rn \"fn run\" src",
+      "slug": "grep-rn-fn-run-src",
+      "raw": {
+        "bytes_p50": 20698,
+        "tokens_est_p50": 5175,
+        "latency_p50_ms": 52.4,
+        "latency_min_ms": 48.7,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 84.145,
+            "exit_code": 0,
+            "bytes": 20698,
+            "tokens_est": 5175,
+            "sha256": "353ddcdb5f1579b923474f6213363347c1db55bc0730139f8283738fbbb6e4ba"
+          },
+          {
+            "elapsed_ms": 48.893,
+            "exit_code": 0,
+            "bytes": 20698,
+            "tokens_est": 5175,
+            "sha256": "353ddcdb5f1579b923474f6213363347c1db55bc0730139f8283738fbbb6e4ba"
+          },
+          {
+            "elapsed_ms": 48.664,
+            "exit_code": 0,
+            "bytes": 20698,
+            "tokens_est": 5175,
+            "sha256": "353ddcdb5f1579b923474f6213363347c1db55bc0730139f8283738fbbb6e4ba"
+          },
+          {
+            "elapsed_ms": 52.449,
+            "exit_code": 0,
+            "bytes": 20698,
+            "tokens_est": 5175,
+            "sha256": "353ddcdb5f1579b923474f6213363347c1db55bc0730139f8283738fbbb6e4ba"
+          },
+          {
+            "elapsed_ms": 57.908,
+            "exit_code": 0,
+            "bytes": 20698,
+            "tokens_est": 5175,
+            "sha256": "353ddcdb5f1579b923474f6213363347c1db55bc0730139f8283738fbbb6e4ba"
+          }
+        ],
+        "canonical_output": "outputs/grep-rn-fn-run-src/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 17739,
+        "tokens_est_p50": 4435,
+        "latency_p50_ms": 63.0,
+        "latency_min_ms": 50.4,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 55.409,
+            "exit_code": 0,
+            "bytes": 17739,
+            "tokens_est": 4435,
+            "sha256": "e624e9d64aca052634f3ff67436f027b029032824caae15eae8c47d428b8bbc2"
+          },
+          {
+            "elapsed_ms": 50.415,
+            "exit_code": 0,
+            "bytes": 17739,
+            "tokens_est": 4435,
+            "sha256": "e624e9d64aca052634f3ff67436f027b029032824caae15eae8c47d428b8bbc2"
+          },
+          {
+            "elapsed_ms": 64.686,
+            "exit_code": 0,
+            "bytes": 17739,
+            "tokens_est": 4435,
+            "sha256": "e624e9d64aca052634f3ff67436f027b029032824caae15eae8c47d428b8bbc2"
+          },
+          {
+            "elapsed_ms": 63.025,
+            "exit_code": 0,
+            "bytes": 17739,
+            "tokens_est": 4435,
+            "sha256": "e624e9d64aca052634f3ff67436f027b029032824caae15eae8c47d428b8bbc2"
+          },
+          {
+            "elapsed_ms": 63.132,
+            "exit_code": 0,
+            "bytes": 17739,
+            "tokens_est": 4435,
+            "sha256": "e624e9d64aca052634f3ff67436f027b029032824caae15eae8c47d428b8bbc2"
+          }
+        ],
+        "canonical_output": "outputs/grep-rn-fn-run-src/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 17739,
+        "tokens_est_p50": 4435,
+        "latency_p50_ms": 87.1,
+        "latency_min_ms": 78.6,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 82.934,
+            "exit_code": 0,
+            "bytes": 17739,
+            "tokens_est": 4435,
+            "sha256": "e624e9d64aca052634f3ff67436f027b029032824caae15eae8c47d428b8bbc2"
+          },
+          {
+            "elapsed_ms": 78.612,
+            "exit_code": 0,
+            "bytes": 17739,
+            "tokens_est": 4435,
+            "sha256": "e624e9d64aca052634f3ff67436f027b029032824caae15eae8c47d428b8bbc2"
+          },
+          {
+            "elapsed_ms": 95.972,
+            "exit_code": 0,
+            "bytes": 17739,
+            "tokens_est": 4435,
+            "sha256": "e624e9d64aca052634f3ff67436f027b029032824caae15eae8c47d428b8bbc2"
+          },
+          {
+            "elapsed_ms": 87.054,
+            "exit_code": 0,
+            "bytes": 17739,
+            "tokens_est": 4435,
+            "sha256": "e624e9d64aca052634f3ff67436f027b029032824caae15eae8c47d428b8bbc2"
+          },
+          {
+            "elapsed_ms": 102.167,
+            "exit_code": 0,
+            "bytes": 17739,
+            "tokens_est": 4435,
+            "sha256": "e624e9d64aca052634f3ff67436f027b029032824caae15eae8c47d428b8bbc2"
+          }
+        ],
+        "canonical_output": "outputs/grep-rn-fn-run-src/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 14.3,
+      "hzr_reduction_vs_raw_pct": 14.3,
+      "hzr_reduction_vs_upstream_pct": 0.0
+    },
+    {
+      "case": "find . -name \"*.rs\" -type f",
+      "slug": "find-name-rs-type-f",
+      "raw": {
+        "bytes_p50": 3387,
+        "tokens_est_p50": 847,
+        "latency_p50_ms": 25.7,
+        "latency_min_ms": 23.1,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 51.123,
+            "exit_code": 0,
+            "bytes": 3387,
+            "tokens_est": 847,
+            "sha256": "b0c6fd67ba53a3cd9bfb94f27bf191e73e6acc33de3322e9347754634d862bca"
+          },
+          {
+            "elapsed_ms": 23.106,
+            "exit_code": 0,
+            "bytes": 3387,
+            "tokens_est": 847,
+            "sha256": "b0c6fd67ba53a3cd9bfb94f27bf191e73e6acc33de3322e9347754634d862bca"
+          },
+          {
+            "elapsed_ms": 25.685,
+            "exit_code": 0,
+            "bytes": 3387,
+            "tokens_est": 847,
+            "sha256": "b0c6fd67ba53a3cd9bfb94f27bf191e73e6acc33de3322e9347754634d862bca"
+          },
+          {
+            "elapsed_ms": 33.098,
+            "exit_code": 0,
+            "bytes": 3387,
+            "tokens_est": 847,
+            "sha256": "b0c6fd67ba53a3cd9bfb94f27bf191e73e6acc33de3322e9347754634d862bca"
+          },
+          {
+            "elapsed_ms": 24.993,
+            "exit_code": 0,
+            "bytes": 3387,
+            "tokens_est": 847,
+            "sha256": "b0c6fd67ba53a3cd9bfb94f27bf191e73e6acc33de3322e9347754634d862bca"
+          }
+        ],
+        "canonical_output": "outputs/find-name-rs-type-f/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 736,
+        "tokens_est_p50": 184,
+        "latency_p50_ms": 22.7,
+        "latency_min_ms": 19.6,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 22.665,
+            "exit_code": 0,
+            "bytes": 736,
+            "tokens_est": 184,
+            "sha256": "d7353c9c2bc659e9089c3cea0ab24a9e962aff522868f64f83977f00a216533d"
+          },
+          {
+            "elapsed_ms": 19.634,
+            "exit_code": 0,
+            "bytes": 736,
+            "tokens_est": 184,
+            "sha256": "d7353c9c2bc659e9089c3cea0ab24a9e962aff522868f64f83977f00a216533d"
+          },
+          {
+            "elapsed_ms": 26.338,
+            "exit_code": 0,
+            "bytes": 736,
+            "tokens_est": 184,
+            "sha256": "d7353c9c2bc659e9089c3cea0ab24a9e962aff522868f64f83977f00a216533d"
+          },
+          {
+            "elapsed_ms": 19.942,
+            "exit_code": 0,
+            "bytes": 736,
+            "tokens_est": 184,
+            "sha256": "d7353c9c2bc659e9089c3cea0ab24a9e962aff522868f64f83977f00a216533d"
+          },
+          {
+            "elapsed_ms": 25.452,
+            "exit_code": 0,
+            "bytes": 736,
+            "tokens_est": 184,
+            "sha256": "d7353c9c2bc659e9089c3cea0ab24a9e962aff522868f64f83977f00a216533d"
+          }
+        ],
+        "canonical_output": "outputs/find-name-rs-type-f/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 733,
+        "tokens_est_p50": 184,
+        "latency_p50_ms": 44.6,
+        "latency_min_ms": 43.4,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 49.044,
+            "exit_code": 0,
+            "bytes": 733,
+            "tokens_est": 184,
+            "sha256": "4b6d513e7944092eb772bc9ea9e8b72e077ee120795c7d6e9f93026769635050"
+          },
+          {
+            "elapsed_ms": 43.378,
+            "exit_code": 0,
+            "bytes": 733,
+            "tokens_est": 184,
+            "sha256": "4b6d513e7944092eb772bc9ea9e8b72e077ee120795c7d6e9f93026769635050"
+          },
+          {
+            "elapsed_ms": 44.635,
+            "exit_code": 0,
+            "bytes": 733,
+            "tokens_est": 184,
+            "sha256": "4b6d513e7944092eb772bc9ea9e8b72e077ee120795c7d6e9f93026769635050"
+          },
+          {
+            "elapsed_ms": 51.694,
+            "exit_code": 0,
+            "bytes": 733,
+            "tokens_est": 184,
+            "sha256": "4b6d513e7944092eb772bc9ea9e8b72e077ee120795c7d6e9f93026769635050"
+          },
+          {
+            "elapsed_ms": 44.296,
+            "exit_code": 0,
+            "bytes": 733,
+            "tokens_est": 184,
+            "sha256": "4b6d513e7944092eb772bc9ea9e8b72e077ee120795c7d6e9f93026769635050"
+          }
+        ],
+        "canonical_output": "outputs/find-name-rs-type-f/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 78.3,
+      "hzr_reduction_vs_raw_pct": 78.3,
+      "hzr_reduction_vs_upstream_pct": 0.0
+    },
+    {
+      "case": "git status",
+      "slug": "git-status",
+      "raw": {
+        "bytes_p50": 63,
+        "tokens_est_p50": 16,
+        "latency_p50_ms": 18.4,
+        "latency_min_ms": 17.6,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 97.318,
+            "exit_code": 0,
+            "bytes": 63,
+            "tokens_est": 16,
+            "sha256": "20d16625a743bdc7be78b27eb3ce02697512427a7e99c4785b60bd539584076b"
+          },
+          {
+            "elapsed_ms": 20.04,
+            "exit_code": 0,
+            "bytes": 63,
+            "tokens_est": 16,
+            "sha256": "20d16625a743bdc7be78b27eb3ce02697512427a7e99c4785b60bd539584076b"
+          },
+          {
+            "elapsed_ms": 17.639,
+            "exit_code": 0,
+            "bytes": 63,
+            "tokens_est": 16,
+            "sha256": "20d16625a743bdc7be78b27eb3ce02697512427a7e99c4785b60bd539584076b"
+          },
+          {
+            "elapsed_ms": 17.933,
+            "exit_code": 0,
+            "bytes": 63,
+            "tokens_est": 16,
+            "sha256": "20d16625a743bdc7be78b27eb3ce02697512427a7e99c4785b60bd539584076b"
+          },
+          {
+            "elapsed_ms": 18.361,
+            "exit_code": 0,
+            "bytes": 63,
+            "tokens_est": 16,
+            "sha256": "20d16625a743bdc7be78b27eb3ce02697512427a7e99c4785b60bd539584076b"
+          }
+        ],
+        "canonical_output": "outputs/git-status/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 55,
+        "tokens_est_p50": 14,
+        "latency_p50_ms": 57.2,
+        "latency_min_ms": 38.5,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 52.636,
+            "exit_code": 0,
+            "bytes": 55,
+            "tokens_est": 14,
+            "sha256": "0a6056fd70ba8ce79dbadce2ccc042c8d36c27c66ad2a29eb42b2a463e589d07"
+          },
+          {
+            "elapsed_ms": 65.49,
+            "exit_code": 0,
+            "bytes": 55,
+            "tokens_est": 14,
+            "sha256": "0a6056fd70ba8ce79dbadce2ccc042c8d36c27c66ad2a29eb42b2a463e589d07"
+          },
+          {
+            "elapsed_ms": 38.516,
+            "exit_code": 0,
+            "bytes": 55,
+            "tokens_est": 14,
+            "sha256": "0a6056fd70ba8ce79dbadce2ccc042c8d36c27c66ad2a29eb42b2a463e589d07"
+          },
+          {
+            "elapsed_ms": 57.169,
+            "exit_code": 0,
+            "bytes": 55,
+            "tokens_est": 14,
+            "sha256": "0a6056fd70ba8ce79dbadce2ccc042c8d36c27c66ad2a29eb42b2a463e589d07"
+          },
+          {
+            "elapsed_ms": 65.097,
+            "exit_code": 0,
+            "bytes": 55,
+            "tokens_est": 14,
+            "sha256": "0a6056fd70ba8ce79dbadce2ccc042c8d36c27c66ad2a29eb42b2a463e589d07"
+          }
+        ],
+        "canonical_output": "outputs/git-status/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 22,
+        "tokens_est_p50": 6,
+        "latency_p50_ms": 75.0,
+        "latency_min_ms": 67.6,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 85.607,
+            "exit_code": 0,
+            "bytes": 22,
+            "tokens_est": 6,
+            "sha256": "d4961216aa5818973d9f79f224b07215545283f5536066c3c9f496eaccab13b3"
+          },
+          {
+            "elapsed_ms": 105.218,
+            "exit_code": 0,
+            "bytes": 22,
+            "tokens_est": 6,
+            "sha256": "d4961216aa5818973d9f79f224b07215545283f5536066c3c9f496eaccab13b3"
+          },
+          {
+            "elapsed_ms": 73.561,
+            "exit_code": 0,
+            "bytes": 22,
+            "tokens_est": 6,
+            "sha256": "d4961216aa5818973d9f79f224b07215545283f5536066c3c9f496eaccab13b3"
+          },
+          {
+            "elapsed_ms": 67.597,
+            "exit_code": 0,
+            "bytes": 22,
+            "tokens_est": 6,
+            "sha256": "d4961216aa5818973d9f79f224b07215545283f5536066c3c9f496eaccab13b3"
+          },
+          {
+            "elapsed_ms": 74.989,
+            "exit_code": 0,
+            "bytes": 22,
+            "tokens_est": 6,
+            "sha256": "d4961216aa5818973d9f79f224b07215545283f5536066c3c9f496eaccab13b3"
+          }
+        ],
+        "canonical_output": "outputs/git-status/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 12.5,
+      "hzr_reduction_vs_raw_pct": 62.5,
+      "hzr_reduction_vs_upstream_pct": 57.1
+    },
+    {
+      "case": "git log -30",
+      "slug": "git-log-30",
+      "raw": {
+        "bytes_p50": 11524,
+        "tokens_est_p50": 2881,
+        "latency_p50_ms": 12.0,
+        "latency_min_ms": 9.4,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 15.048,
+            "exit_code": 0,
+            "bytes": 11524,
+            "tokens_est": 2881,
+            "sha256": "7e5959624d0197e289645252089af0b6fba09e93358afd43a42d65168b2b0e05"
+          },
+          {
+            "elapsed_ms": 12.451,
+            "exit_code": 0,
+            "bytes": 11524,
+            "tokens_est": 2881,
+            "sha256": "7e5959624d0197e289645252089af0b6fba09e93358afd43a42d65168b2b0e05"
+          },
+          {
+            "elapsed_ms": 10.401,
+            "exit_code": 0,
+            "bytes": 11524,
+            "tokens_est": 2881,
+            "sha256": "7e5959624d0197e289645252089af0b6fba09e93358afd43a42d65168b2b0e05"
+          },
+          {
+            "elapsed_ms": 11.99,
+            "exit_code": 0,
+            "bytes": 11524,
+            "tokens_est": 2881,
+            "sha256": "7e5959624d0197e289645252089af0b6fba09e93358afd43a42d65168b2b0e05"
+          },
+          {
+            "elapsed_ms": 9.417,
+            "exit_code": 0,
+            "bytes": 11524,
+            "tokens_est": 2881,
+            "sha256": "7e5959624d0197e289645252089af0b6fba09e93358afd43a42d65168b2b0e05"
+          }
+        ],
+        "canonical_output": "outputs/git-log-30/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 5103,
+        "tokens_est_p50": 1276,
+        "latency_p50_ms": 19.8,
+        "latency_min_ms": 17.2,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 19.81,
+            "exit_code": 0,
+            "bytes": 5103,
+            "tokens_est": 1276,
+            "sha256": "07836df6577b5f97cac4890be6199bf3589ffd92a253560a79f08a998e2f569e"
+          },
+          {
+            "elapsed_ms": 21.039,
+            "exit_code": 0,
+            "bytes": 5103,
+            "tokens_est": 1276,
+            "sha256": "07836df6577b5f97cac4890be6199bf3589ffd92a253560a79f08a998e2f569e"
+          },
+          {
+            "elapsed_ms": 30.006,
+            "exit_code": 0,
+            "bytes": 5103,
+            "tokens_est": 1276,
+            "sha256": "07836df6577b5f97cac4890be6199bf3589ffd92a253560a79f08a998e2f569e"
+          },
+          {
+            "elapsed_ms": 17.231,
+            "exit_code": 0,
+            "bytes": 5103,
+            "tokens_est": 1276,
+            "sha256": "07836df6577b5f97cac4890be6199bf3589ffd92a253560a79f08a998e2f569e"
+          },
+          {
+            "elapsed_ms": 17.997,
+            "exit_code": 0,
+            "bytes": 5103,
+            "tokens_est": 1276,
+            "sha256": "07836df6577b5f97cac4890be6199bf3589ffd92a253560a79f08a998e2f569e"
+          }
+        ],
+        "canonical_output": "outputs/git-log-30/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 2369,
+        "tokens_est_p50": 593,
+        "latency_p50_ms": 48.1,
+        "latency_min_ms": 40.3,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 48.074,
+            "exit_code": 0,
+            "bytes": 2369,
+            "tokens_est": 593,
+            "sha256": "34f4a02f52bfbb4456c2f8e3a13afbd9b42e49e2d0e7011cd14187cd61362692"
+          },
+          {
+            "elapsed_ms": 46.281,
+            "exit_code": 0,
+            "bytes": 2369,
+            "tokens_est": 593,
+            "sha256": "34f4a02f52bfbb4456c2f8e3a13afbd9b42e49e2d0e7011cd14187cd61362692"
+          },
+          {
+            "elapsed_ms": 48.917,
+            "exit_code": 0,
+            "bytes": 2369,
+            "tokens_est": 593,
+            "sha256": "34f4a02f52bfbb4456c2f8e3a13afbd9b42e49e2d0e7011cd14187cd61362692"
+          },
+          {
+            "elapsed_ms": 64.434,
+            "exit_code": 0,
+            "bytes": 2369,
+            "tokens_est": 593,
+            "sha256": "34f4a02f52bfbb4456c2f8e3a13afbd9b42e49e2d0e7011cd14187cd61362692"
+          },
+          {
+            "elapsed_ms": 40.311,
+            "exit_code": 0,
+            "bytes": 2369,
+            "tokens_est": 593,
+            "sha256": "34f4a02f52bfbb4456c2f8e3a13afbd9b42e49e2d0e7011cd14187cd61362692"
+          }
+        ],
+        "canonical_output": "outputs/git-log-30/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 55.7,
+      "hzr_reduction_vs_raw_pct": 79.4,
+      "hzr_reduction_vs_upstream_pct": 53.5
+    },
+    {
+      "case": "git diff HEAD~5",
+      "slug": "git-diff-head-5",
+      "raw": {
+        "bytes_p50": 743721,
+        "tokens_est_p50": 185931,
+        "latency_p50_ms": 36.0,
+        "latency_min_ms": 33.2,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 990.238,
+            "exit_code": 0,
+            "bytes": 743721,
+            "tokens_est": 185931,
+            "sha256": "665c0ebc0a1a9b783ab854bb3732a9baa196c543c59be5ad7c5a06c977efdaa2"
+          },
+          {
+            "elapsed_ms": 37.314,
+            "exit_code": 0,
+            "bytes": 743721,
+            "tokens_est": 185931,
+            "sha256": "665c0ebc0a1a9b783ab854bb3732a9baa196c543c59be5ad7c5a06c977efdaa2"
+          },
+          {
+            "elapsed_ms": 34.351,
+            "exit_code": 0,
+            "bytes": 743721,
+            "tokens_est": 185931,
+            "sha256": "665c0ebc0a1a9b783ab854bb3732a9baa196c543c59be5ad7c5a06c977efdaa2"
+          },
+          {
+            "elapsed_ms": 36.014,
+            "exit_code": 0,
+            "bytes": 743721,
+            "tokens_est": 185931,
+            "sha256": "665c0ebc0a1a9b783ab854bb3732a9baa196c543c59be5ad7c5a06c977efdaa2"
+          },
+          {
+            "elapsed_ms": 33.211,
+            "exit_code": 0,
+            "bytes": 743721,
+            "tokens_est": 185931,
+            "sha256": "665c0ebc0a1a9b783ab854bb3732a9baa196c543c59be5ad7c5a06c977efdaa2"
+          }
+        ],
+        "canonical_output": "outputs/git-diff-head-5/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 41297,
+        "tokens_est_p50": 10325,
+        "latency_p50_ms": 77.3,
+        "latency_min_ms": 69.6,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 78.059,
+            "exit_code": 0,
+            "bytes": 41297,
+            "tokens_est": 10325,
+            "sha256": "0f1ca2cfbbdcf2601918ec6f972379d6b7bd264ba05c1cf14b02e84080dd66f2"
+          },
+          {
+            "elapsed_ms": 77.251,
+            "exit_code": 0,
+            "bytes": 41297,
+            "tokens_est": 10325,
+            "sha256": "0f1ca2cfbbdcf2601918ec6f972379d6b7bd264ba05c1cf14b02e84080dd66f2"
+          },
+          {
+            "elapsed_ms": 69.61,
+            "exit_code": 0,
+            "bytes": 41297,
+            "tokens_est": 10325,
+            "sha256": "0f1ca2cfbbdcf2601918ec6f972379d6b7bd264ba05c1cf14b02e84080dd66f2"
+          },
+          {
+            "elapsed_ms": 83.626,
+            "exit_code": 0,
+            "bytes": 41297,
+            "tokens_est": 10325,
+            "sha256": "0f1ca2cfbbdcf2601918ec6f972379d6b7bd264ba05c1cf14b02e84080dd66f2"
+          },
+          {
+            "elapsed_ms": 74.069,
+            "exit_code": 0,
+            "bytes": 41297,
+            "tokens_est": 10325,
+            "sha256": "0f1ca2cfbbdcf2601918ec6f972379d6b7bd264ba05c1cf14b02e84080dd66f2"
+          }
+        ],
+        "canonical_output": "outputs/git-diff-head-5/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 22158,
+        "tokens_est_p50": 5540,
+        "latency_p50_ms": 93.5,
+        "latency_min_ms": 88.7,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 94.468,
+            "exit_code": 0,
+            "bytes": 22158,
+            "tokens_est": 5540,
+            "sha256": "d8221f40d5447e5e6c4d157519f6a2f564bc60846258963794ae3e2d5f360113"
+          },
+          {
+            "elapsed_ms": 107.147,
+            "exit_code": 0,
+            "bytes": 22158,
+            "tokens_est": 5540,
+            "sha256": "d8221f40d5447e5e6c4d157519f6a2f564bc60846258963794ae3e2d5f360113"
+          },
+          {
+            "elapsed_ms": 93.544,
+            "exit_code": 0,
+            "bytes": 22158,
+            "tokens_est": 5540,
+            "sha256": "d8221f40d5447e5e6c4d157519f6a2f564bc60846258963794ae3e2d5f360113"
+          },
+          {
+            "elapsed_ms": 88.662,
+            "exit_code": 0,
+            "bytes": 22158,
+            "tokens_est": 5540,
+            "sha256": "d8221f40d5447e5e6c4d157519f6a2f564bc60846258963794ae3e2d5f360113"
+          },
+          {
+            "elapsed_ms": 92.268,
+            "exit_code": 0,
+            "bytes": 22158,
+            "tokens_est": 5540,
+            "sha256": "d8221f40d5447e5e6c4d157519f6a2f564bc60846258963794ae3e2d5f360113"
+          }
+        ],
+        "canonical_output": "outputs/git-diff-head-5/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 94.4,
+      "hzr_reduction_vs_raw_pct": 97.0,
+      "hzr_reduction_vs_upstream_pct": 46.3
+    },
+    {
+      "case": "git show HEAD",
+      "slug": "git-show-head",
+      "raw": {
+        "bytes_p50": 302,
+        "tokens_est_p50": 76,
+        "latency_p50_ms": 9.2,
+        "latency_min_ms": 8.9,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 8.878,
+            "exit_code": 0,
+            "bytes": 302,
+            "tokens_est": 76,
+            "sha256": "647b1251f46f45c59630e2b8e3c427a7670c78612609bf42b7ffab5ff42adb48"
+          },
+          {
+            "elapsed_ms": 9.229,
+            "exit_code": 0,
+            "bytes": 302,
+            "tokens_est": 76,
+            "sha256": "647b1251f46f45c59630e2b8e3c427a7670c78612609bf42b7ffab5ff42adb48"
+          },
+          {
+            "elapsed_ms": 8.868,
+            "exit_code": 0,
+            "bytes": 302,
+            "tokens_est": 76,
+            "sha256": "647b1251f46f45c59630e2b8e3c427a7670c78612609bf42b7ffab5ff42adb48"
+          },
+          {
+            "elapsed_ms": 9.386,
+            "exit_code": 0,
+            "bytes": 302,
+            "tokens_est": 76,
+            "sha256": "647b1251f46f45c59630e2b8e3c427a7670c78612609bf42b7ffab5ff42adb48"
+          },
+          {
+            "elapsed_ms": 10.86,
+            "exit_code": 0,
+            "bytes": 302,
+            "tokens_est": 76,
+            "sha256": "647b1251f46f45c59630e2b8e3c427a7670c78612609bf42b7ffab5ff42adb48"
+          }
+        ],
+        "canonical_output": "outputs/git-show-head/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 303,
+        "tokens_est_p50": 76,
+        "latency_p50_ms": 47.0,
+        "latency_min_ms": 39.1,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 767.62,
+            "exit_code": 0,
+            "bytes": 303,
+            "tokens_est": 76,
+            "sha256": "b5833e6555e82e42f9f0cf59190874655c14b412ef6d318679c54f3b6fcd5223"
+          },
+          {
+            "elapsed_ms": 39.131,
+            "exit_code": 0,
+            "bytes": 303,
+            "tokens_est": 76,
+            "sha256": "b5833e6555e82e42f9f0cf59190874655c14b412ef6d318679c54f3b6fcd5223"
+          },
+          {
+            "elapsed_ms": 39.91,
+            "exit_code": 0,
+            "bytes": 303,
+            "tokens_est": 76,
+            "sha256": "b5833e6555e82e42f9f0cf59190874655c14b412ef6d318679c54f3b6fcd5223"
+          },
+          {
+            "elapsed_ms": 46.951,
+            "exit_code": 0,
+            "bytes": 303,
+            "tokens_est": 76,
+            "sha256": "b5833e6555e82e42f9f0cf59190874655c14b412ef6d318679c54f3b6fcd5223"
+          },
+          {
+            "elapsed_ms": 47.638,
+            "exit_code": 0,
+            "bytes": 303,
+            "tokens_est": 76,
+            "sha256": "b5833e6555e82e42f9f0cf59190874655c14b412ef6d318679c54f3b6fcd5223"
+          }
+        ],
+        "canonical_output": "outputs/git-show-head/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 303,
+        "tokens_est_p50": 76,
+        "latency_p50_ms": 60.6,
+        "latency_min_ms": 59.8,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 60.161,
+            "exit_code": 0,
+            "bytes": 303,
+            "tokens_est": 76,
+            "sha256": "b5833e6555e82e42f9f0cf59190874655c14b412ef6d318679c54f3b6fcd5223"
+          },
+          {
+            "elapsed_ms": 60.638,
+            "exit_code": 0,
+            "bytes": 303,
+            "tokens_est": 76,
+            "sha256": "b5833e6555e82e42f9f0cf59190874655c14b412ef6d318679c54f3b6fcd5223"
+          },
+          {
+            "elapsed_ms": 59.801,
+            "exit_code": 0,
+            "bytes": 303,
+            "tokens_est": 76,
+            "sha256": "b5833e6555e82e42f9f0cf59190874655c14b412ef6d318679c54f3b6fcd5223"
+          },
+          {
+            "elapsed_ms": 77.741,
+            "exit_code": 0,
+            "bytes": 303,
+            "tokens_est": 76,
+            "sha256": "b5833e6555e82e42f9f0cf59190874655c14b412ef6d318679c54f3b6fcd5223"
+          },
+          {
+            "elapsed_ms": 75.212,
+            "exit_code": 0,
+            "bytes": 303,
+            "tokens_est": 76,
+            "sha256": "b5833e6555e82e42f9f0cf59190874655c14b412ef6d318679c54f3b6fcd5223"
+          }
+        ],
+        "canonical_output": "outputs/git-show-head/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 0.0,
+      "hzr_reduction_vs_raw_pct": 0.0,
+      "hzr_reduction_vs_upstream_pct": 0.0
+    },
+    {
+      "case": "git branch -a",
+      "slug": "git-branch-a",
+      "raw": {
+        "bytes_p50": 6242,
+        "tokens_est_p50": 1561,
+        "latency_p50_ms": 15.7,
+        "latency_min_ms": 12.0,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 12.749,
+            "exit_code": 0,
+            "bytes": 6242,
+            "tokens_est": 1561,
+            "sha256": "cdee7fc3c93582708f277d0212aa09c74caedf33249f24b4380e970eb5ea3fca"
+          },
+          {
+            "elapsed_ms": 15.676,
+            "exit_code": 0,
+            "bytes": 6242,
+            "tokens_est": 1561,
+            "sha256": "cdee7fc3c93582708f277d0212aa09c74caedf33249f24b4380e970eb5ea3fca"
+          },
+          {
+            "elapsed_ms": 16.862,
+            "exit_code": 0,
+            "bytes": 6242,
+            "tokens_est": 1561,
+            "sha256": "cdee7fc3c93582708f277d0212aa09c74caedf33249f24b4380e970eb5ea3fca"
+          },
+          {
+            "elapsed_ms": 16.234,
+            "exit_code": 0,
+            "bytes": 6242,
+            "tokens_est": 1561,
+            "sha256": "cdee7fc3c93582708f277d0212aa09c74caedf33249f24b4380e970eb5ea3fca"
+          },
+          {
+            "elapsed_ms": 12.011,
+            "exit_code": 0,
+            "bytes": 6242,
+            "tokens_est": 1561,
+            "sha256": "cdee7fc3c93582708f277d0212aa09c74caedf33249f24b4380e970eb5ea3fca"
+          }
+        ],
+        "canonical_output": "outputs/git-branch-a/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 399,
+        "tokens_est_p50": 100,
+        "latency_p50_ms": 26.4,
+        "latency_min_ms": 19.6,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 19.631,
+            "exit_code": 0,
+            "bytes": 399,
+            "tokens_est": 100,
+            "sha256": "b05f8c276ce60ff9412046c8d0685ff475d2bed8d8a179be90235d852f439618"
+          },
+          {
+            "elapsed_ms": 43.635,
+            "exit_code": 0,
+            "bytes": 399,
+            "tokens_est": 100,
+            "sha256": "b05f8c276ce60ff9412046c8d0685ff475d2bed8d8a179be90235d852f439618"
+          },
+          {
+            "elapsed_ms": 26.404,
+            "exit_code": 0,
+            "bytes": 399,
+            "tokens_est": 100,
+            "sha256": "b05f8c276ce60ff9412046c8d0685ff475d2bed8d8a179be90235d852f439618"
+          },
+          {
+            "elapsed_ms": 26.379,
+            "exit_code": 0,
+            "bytes": 399,
+            "tokens_est": 100,
+            "sha256": "b05f8c276ce60ff9412046c8d0685ff475d2bed8d8a179be90235d852f439618"
+          },
+          {
+            "elapsed_ms": 23.532,
+            "exit_code": 0,
+            "bytes": 399,
+            "tokens_est": 100,
+            "sha256": "b05f8c276ce60ff9412046c8d0685ff475d2bed8d8a179be90235d852f439618"
+          }
+        ],
+        "canonical_output": "outputs/git-branch-a/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 399,
+        "tokens_est_p50": 100,
+        "latency_p50_ms": 58.7,
+        "latency_min_ms": 54.6,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 66.034,
+            "exit_code": 0,
+            "bytes": 399,
+            "tokens_est": 100,
+            "sha256": "b05f8c276ce60ff9412046c8d0685ff475d2bed8d8a179be90235d852f439618"
+          },
+          {
+            "elapsed_ms": 55.639,
+            "exit_code": 0,
+            "bytes": 399,
+            "tokens_est": 100,
+            "sha256": "b05f8c276ce60ff9412046c8d0685ff475d2bed8d8a179be90235d852f439618"
+          },
+          {
+            "elapsed_ms": 58.669,
+            "exit_code": 0,
+            "bytes": 399,
+            "tokens_est": 100,
+            "sha256": "b05f8c276ce60ff9412046c8d0685ff475d2bed8d8a179be90235d852f439618"
+          },
+          {
+            "elapsed_ms": 54.618,
+            "exit_code": 0,
+            "bytes": 399,
+            "tokens_est": 100,
+            "sha256": "b05f8c276ce60ff9412046c8d0685ff475d2bed8d8a179be90235d852f439618"
+          },
+          {
+            "elapsed_ms": 60.136,
+            "exit_code": 0,
+            "bytes": 399,
+            "tokens_est": 100,
+            "sha256": "b05f8c276ce60ff9412046c8d0685ff475d2bed8d8a179be90235d852f439618"
+          }
+        ],
+        "canonical_output": "outputs/git-branch-a/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 93.6,
+      "hzr_reduction_vs_raw_pct": 93.6,
+      "hzr_reduction_vs_upstream_pct": 0.0
+    },
+    {
+      "case": "cargo check",
+      "slug": "cargo-check",
+      "raw": {
+        "bytes_p50": 72,
+        "tokens_est_p50": 18,
+        "latency_p50_ms": 123.2,
+        "latency_min_ms": 102.7,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 31780.755,
+            "exit_code": 0,
+            "bytes": 4385,
+            "tokens_est": 1097,
+            "sha256": "f01b26498438a80715c8209d88bbf3a85710375c810772c4113a796c536c1661"
+          },
+          {
+            "elapsed_ms": 124.123,
+            "exit_code": 0,
+            "bytes": 72,
+            "tokens_est": 18,
+            "sha256": "c92508a29848820f033cd2ea015c85dde0953c88b07cc967ce34b7c08f610549"
+          },
+          {
+            "elapsed_ms": 123.172,
+            "exit_code": 0,
+            "bytes": 72,
+            "tokens_est": 18,
+            "sha256": "c92508a29848820f033cd2ea015c85dde0953c88b07cc967ce34b7c08f610549"
+          },
+          {
+            "elapsed_ms": 121.633,
+            "exit_code": 0,
+            "bytes": 72,
+            "tokens_est": 18,
+            "sha256": "c92508a29848820f033cd2ea015c85dde0953c88b07cc967ce34b7c08f610549"
+          },
+          {
+            "elapsed_ms": 102.73,
+            "exit_code": 0,
+            "bytes": 72,
+            "tokens_est": 18,
+            "sha256": "59639588a6f1826f129cbcd121edc07279dab94786f5fa5bde6b3439b2e845cc"
+          }
+        ],
+        "canonical_output": "outputs/cargo-check/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 100,
+        "tokens_est_p50": 25,
+        "latency_p50_ms": 123.0,
+        "latency_min_ms": 104.0,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 351.217,
+            "exit_code": 0,
+            "bytes": 100,
+            "tokens_est": 25,
+            "sha256": "f31ee765735dbdc60f099bea541295404dc975866433f180a57afc9f72b50756"
+          },
+          {
+            "elapsed_ms": 126.865,
+            "exit_code": 0,
+            "bytes": 100,
+            "tokens_est": 25,
+            "sha256": "033817d4fab5fd7f4719bc123f7d3323ff5f68c0ff25e56bdfda4f44a9c96416"
+          },
+          {
+            "elapsed_ms": 123.022,
+            "exit_code": 0,
+            "bytes": 100,
+            "tokens_est": 25,
+            "sha256": "c8c70645872630d291f3a332a258493f198247c8ce98dd3b8753b7907c04127c"
+          },
+          {
+            "elapsed_ms": 105.558,
+            "exit_code": 0,
+            "bytes": 100,
+            "tokens_est": 25,
+            "sha256": "90c6e3569ae28b180e69cbf058165f7de9afd0f6da4bf8b523adfe4e4a366498"
+          },
+          {
+            "elapsed_ms": 103.962,
+            "exit_code": 0,
+            "bytes": 100,
+            "tokens_est": 25,
+            "sha256": "90c6e3569ae28b180e69cbf058165f7de9afd0f6da4bf8b523adfe4e4a366498"
+          }
+        ],
+        "canonical_output": "outputs/cargo-check/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 36,
+        "tokens_est_p50": 9,
+        "latency_p50_ms": 144.0,
+        "latency_min_ms": 123.4,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 187.505,
+            "exit_code": 0,
+            "bytes": 36,
+            "tokens_est": 9,
+            "sha256": "dbb4bc4445c2a97298fbf29cfa6360c69760961a379402f94d809e10a9d81998"
+          },
+          {
+            "elapsed_ms": 143.97,
+            "exit_code": 0,
+            "bytes": 36,
+            "tokens_est": 9,
+            "sha256": "dbb4bc4445c2a97298fbf29cfa6360c69760961a379402f94d809e10a9d81998"
+          },
+          {
+            "elapsed_ms": 151.648,
+            "exit_code": 0,
+            "bytes": 36,
+            "tokens_est": 9,
+            "sha256": "dbb4bc4445c2a97298fbf29cfa6360c69760961a379402f94d809e10a9d81998"
+          },
+          {
+            "elapsed_ms": 123.39,
+            "exit_code": 0,
+            "bytes": 36,
+            "tokens_est": 9,
+            "sha256": "dbb4bc4445c2a97298fbf29cfa6360c69760961a379402f94d809e10a9d81998"
+          },
+          {
+            "elapsed_ms": 135.967,
+            "exit_code": 0,
+            "bytes": 36,
+            "tokens_est": 9,
+            "sha256": "dbb4bc4445c2a97298fbf29cfa6360c69760961a379402f94d809e10a9d81998"
+          }
+        ],
+        "canonical_output": "outputs/cargo-check/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": -38.9,
+      "hzr_reduction_vs_raw_pct": 50.0,
+      "hzr_reduction_vs_upstream_pct": 64.0
+    },
+    {
+      "case": "cargo test",
+      "slug": "cargo-test",
+      "raw": {
+        "bytes_p50": 188298,
+        "tokens_est_p50": 47075,
+        "latency_p50_ms": 1870.0,
+        "latency_min_ms": 1003.1,
+        "exit_codes": [
+          101,
+          101,
+          101,
+          101,
+          101
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 34017.465,
+            "exit_code": 101,
+            "bytes": 191991,
+            "tokens_est": 47998,
+            "sha256": "09a6680467cb448bfaec0543dd25023db0ddc95603ea33e427c23b1d888cd36a"
+          },
+          {
+            "elapsed_ms": 1003.071,
+            "exit_code": 101,
+            "bytes": 188298,
+            "tokens_est": 47075,
+            "sha256": "0d7549541622ef105ccaa80ad29559c9f7b12a59ffbd5d0605055bdcc115c53f"
+          },
+          {
+            "elapsed_ms": 1178.189,
+            "exit_code": 101,
+            "bytes": 188298,
+            "tokens_est": 47075,
+            "sha256": "82cbbbe37cd3846baac5ec0638b2009e15777aafef879c67a877477601502a57"
+          },
+          {
+            "elapsed_ms": 1870.041,
+            "exit_code": 101,
+            "bytes": 188298,
+            "tokens_est": 47075,
+            "sha256": "eb1e075fc9754aa55d071faebdd22e83fe8af652a766716c0a93fc649644713d"
+          },
+          {
+            "elapsed_ms": 2461.278,
+            "exit_code": 101,
+            "bytes": 188298,
+            "tokens_est": 47075,
+            "sha256": "42d23c5392fca890d77f2df9a5f9316b7088c210bca2bef3129325415baf96b5"
+          }
+        ],
+        "canonical_output": "outputs/cargo-test/raw.txt"
+      },
+      "upstream": {
+        "bytes_p50": 1005,
+        "tokens_est_p50": 252,
+        "latency_p50_ms": 1341.6,
+        "latency_min_ms": 1146.2,
+        "exit_codes": [
+          101,
+          101,
+          101,
+          101,
+          101
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 1341.646,
+            "exit_code": 101,
+            "bytes": 1005,
+            "tokens_est": 252,
+            "sha256": "248611f0383b8c2511422234937e380fa3181c6a6110141bd1490fded0bcf49e"
+          },
+          {
+            "elapsed_ms": 1146.218,
+            "exit_code": 101,
+            "bytes": 1005,
+            "tokens_est": 252,
+            "sha256": "37a7333987584f59db4db2e42e6a84e7ec05629aed65405f601da64ed0c82414"
+          },
+          {
+            "elapsed_ms": 1246.631,
+            "exit_code": 101,
+            "bytes": 1005,
+            "tokens_est": 252,
+            "sha256": "e6778840340e195eed5e933dd152a4a0c1b3b4870ba1dfaab78335a7e6991bac"
+          },
+          {
+            "elapsed_ms": 2105.709,
+            "exit_code": 101,
+            "bytes": 1005,
+            "tokens_est": 252,
+            "sha256": "eb19dfbc90998661ef5f6ae2e4be1304702b7a03382c1cc9da4d4e2eaaf680bf"
+          },
+          {
+            "elapsed_ms": 2141.117,
+            "exit_code": 101,
+            "bytes": 1005,
+            "tokens_est": 252,
+            "sha256": "1c76a959cea6b84bd0563c51c5ea772478f660663fed5430626950ec3844aeb5"
+          }
+        ],
+        "canonical_output": "outputs/cargo-test/upstream.txt"
+      },
+      "hzr": {
+        "bytes_p50": 669,
+        "tokens_est_p50": 168,
+        "latency_p50_ms": 1687.5,
+        "latency_min_ms": 1121.6,
+        "exit_codes": [
+          101,
+          101,
+          101,
+          101,
+          101
+        ],
+        "samples": [
+          {
+            "elapsed_ms": 1176.159,
+            "exit_code": 101,
+            "bytes": 669,
+            "tokens_est": 168,
+            "sha256": "22197f5e5fb9d8ff6ff7f365f0feedf7ad9be60f04610a12d3540d42c8c0b6d6"
+          },
+          {
+            "elapsed_ms": 1687.534,
+            "exit_code": 101,
+            "bytes": 669,
+            "tokens_est": 168,
+            "sha256": "8fda716c5dca4e3eb51e0215b7a659c56288bd337116ad5d4d92405b03b7c1e2"
+          },
+          {
+            "elapsed_ms": 1121.551,
+            "exit_code": 101,
+            "bytes": 669,
+            "tokens_est": 168,
+            "sha256": "a37589c94acf9ea60696c634585dcfdea98877c0a3ca42f6fe0152546b253d8d"
+          },
+          {
+            "elapsed_ms": 2130.316,
+            "exit_code": 101,
+            "bytes": 669,
+            "tokens_est": 168,
+            "sha256": "ac08a2f0f6b361fcc825e21355d34a4e7f9a68ec402ce0a7826194fa7e344463"
+          },
+          {
+            "elapsed_ms": 2168.291,
+            "exit_code": 101,
+            "bytes": 669,
+            "tokens_est": 168,
+            "sha256": "0df3c2d08053694580342ddb83a4e777df300583e931f3a283c918a9c73d5cd3"
+          }
+        ],
+        "canonical_output": "outputs/cargo-test/hzr.txt"
+      },
+      "upstream_reduction_vs_raw_pct": 99.5,
+      "hzr_reduction_vs_raw_pct": 99.6,
+      "hzr_reduction_vs_upstream_pct": 33.3
+    }
+  ]
+}

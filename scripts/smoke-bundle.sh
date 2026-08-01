@@ -69,6 +69,7 @@ fi
 for HZR_PROVENANCE_FILE in \
   BUNDLE_MANIFEST.sha256 \
   HZR.md \
+  install.sh \
   skills/hzr-tdd/SKILL.md \
   skills/hzr-tdd/references/testing-patterns.md \
   integrations/claude-code/hzr-awareness.md \
@@ -121,13 +122,13 @@ verify_sha256() {
 }
 
 verify_sha256 \
-  "4a96bb91a79138ac9e095ae531464f5275c82427bd0bb3f980512e70f23e2525" \
+  "3292adea14ab1e5cfe5cdf280e6be77e64c05d7deb589eddd54ac632f4613fdb" \
   "${HZR_CAVEMAN_ROOT}/bridge.mjs"
 verify_sha256 \
-  "cd9e62742fac436446c6f8917dcc6dcbbcba044f2464fc16d771f47f4689ca99" \
+  "254d5a903dbc2b43419688f7e484d65e94c278eed20213bf0abfacf1fb44d0e3" \
   "${HZR_CAVEMAN_ROOT}/package.json"
 verify_sha256 \
-  "3d238666ca39dcaf318bd13c76cefb4c95e4aefc72761d5df8802e13f571e68b" \
+  "b5d34f69ad3a3913ec79b0195512adb448d9412523d80f420f62cdb077a03f38" \
   "${HZR_CAVEMAN_ROOT}/package-lock.json"
 verify_sha256 \
   "d66e2e2cebac811bbc23896645b3a3e25b635cb7358b1a0e36599008e10cd5ec" \
@@ -181,7 +182,7 @@ verify_sha256 \
 PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ls \
   --omit=dev --all --prefix "${HZR_CAVEMAN_ROOT}" >/dev/null
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.3.0" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.3.1" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
@@ -327,7 +328,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-  if (report.protocol_version !== 1 || report.hzr_version !== "0.3.0") {
+  if (report.protocol_version !== 1 || report.hzr_version !== "0.3.1") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -367,7 +368,7 @@ fi
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
       const ids = new Set(report.services.map((service) => service.id));
-      if (response.status !== 200 || report.hzr_version !== "0.3.0" ||
+      if (response.status !== 200 || report.hzr_version !== "0.3.1" ||
           !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
         throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
       }

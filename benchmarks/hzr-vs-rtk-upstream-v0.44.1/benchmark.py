@@ -161,6 +161,9 @@ def participant_env(args: argparse.Namespace, kind: str) -> dict[str, str]:
             "XDG_CONFIG_HOME": str(xdg),
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": os.devnull,
+            "CARGO_HOME": os.environ.get(
+                "HZR_BENCHMARK_CARGO_HOME", str(args.work_root / "cargo-home")
+            ),
             "CARGO_TARGET_DIR": str(args.work_root / "fixture-target"),
             "RTK_DB_PATH": str(args.work_root / f"{kind}-tracking.sqlite"),
             "RTK_TEE": "0",
@@ -306,7 +309,7 @@ def capture_environment(args: argparse.Namespace) -> None:
         "platform": platform.platform(),
         "machine": platform.machine(),
         "token_method": TOKEN_METHOD,
-        "environment_policy": "separate empty HOME/XDG roots; shared fixture and Cargo target; telemetry and tee disabled",
+        "environment_policy": "separate empty HOME/XDG/RTK state; one isolated Cargo cache prewarmed by source builds; shared fixture target; telemetry and tee disabled",
     }
     write_json(args.output / "environment.json", environment)
 

@@ -5,7 +5,8 @@ use hzr_context::ContextPlanner;
 use hzr_core::Config;
 use hzr_exec::{ExecutionPipeline, ForkRuntimePaths, PinnedRtkAdapter, RtkAdapterConfig};
 use hzr_memory::{IcmConfig, IcmSupervisor, StartOutcome};
-use tokio::sync::RwLock;
+use hzr_protocol::DashboardSemanticCanary;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::DaemonError;
 use crate::approval::ApprovalStore;
@@ -22,6 +23,14 @@ pub struct AppState {
     pub rtk: Arc<PinnedRtkAdapter>,
     pub executor: ExecutionPipeline,
     pub ledger: LedgerWriter,
+    pub semantic_canary: Arc<Mutex<Option<CachedSemanticCanary>>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct CachedSemanticCanary {
+    pub generation: Option<String>,
+    pub checked_at: Instant,
+    pub snapshot: DashboardSemanticCanary,
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +95,7 @@ impl AppState {
             rtk: Arc::new(rtk),
             executor: ExecutionPipeline,
             ledger,
+            semantic_canary: Arc::new(Mutex::new(None)),
         })
     }
 }

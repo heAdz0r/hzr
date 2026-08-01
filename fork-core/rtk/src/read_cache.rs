@@ -12,7 +12,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-const READ_CACHE_VERSION: u32 = 1;
+const READ_CACHE_VERSION: u32 = 5;
 const READ_CACHE_MAX_ENTRIES: usize = 512;
 
 // ── Public API ──────────────────────────────────────────────

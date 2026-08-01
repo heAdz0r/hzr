@@ -133,6 +133,9 @@ pub enum MemoryError {
     #[error("ICM request is invalid: {0}")]
     InvalidRequest(String),
 
+    #[error("ICM snapshot database error: {0}")]
+    Database(#[from] rusqlite::Error),
+
     #[error("ICM MCP transport is not connected")]
     McpUnavailable,
 

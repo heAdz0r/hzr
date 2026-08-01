@@ -328,10 +328,10 @@ mod tests {
 
     fn report(engines: Vec<EngineCheck>) -> BuildReport {
         BuildReport {
-            version: "0.3.0".to_owned(),
+            version: "0.3.1".to_owned(),
             platform: "darwin-arm64".to_owned(),
             bundle: "/tmp/dist".into(),
-            version_root: "/tmp/versions/v0.3.0-darwin-arm64".into(),
+            version_root: "/tmp/versions/v0.3.1-darwin-arm64".into(),
             current: "/tmp/current".into(),
             previous_target: None,
             switched: true,

@@ -632,12 +632,16 @@ fn digest_generated_file(content: &str, _level: FilterLevel) -> Result<String> {
 
 fn digest_markdown(content: &str, level: FilterLevel) -> Result<String> {
     let mut out = String::new();
-    out.push_str("Markdown digest\n");
+    out.push_str("Markdown digest (content omitted)\n");
 
     let total_lines = content.lines().count();
-    out.push_str(&format!("  Lines: {total_lines}\n"));
+    out.push_str(&format!(
+        "  Source: {total_lines} lines, {} bytes\n",
+        content.len()
+    ));
 
     let mut headers: Vec<String> = Vec::new();
+    let mut total_headers = 0usize;
     let header_limit = if level == FilterLevel::Aggressive {
         10
     } else {
@@ -646,24 +650,149 @@ fn digest_markdown(content: &str, level: FilterLevel) -> Result<String> {
 
     for line in content.lines() {
         if line.starts_with('#') {
+            total_headers += 1;
             let level_marker = line.chars().take_while(|c| *c == '#').count();
             let indent = "  ".repeat(level_marker);
             let text = line.trim_start_matches('#').trim();
-            headers.push(format!("{indent}{text}"));
-            if headers.len() >= header_limit {
-                break;
+            if headers.len() < header_limit {
+                headers.push(format!("{indent}{text}"));
             }
         }
     }
 
+    out.push_str(&format!(
+        "  Sections: {}/{} shown\n",
+        headers.len(),
+        total_headers
+    ));
     if !headers.is_empty() {
-        out.push_str("  Sections:\n");
         for h in &headers {
             out.push_str(&format!("    {h}\n"));
         }
     }
+    let lead = markdown_lead_preview(content, 3, 240);
+    if !lead.is_empty() {
+        out.push_str(&format!(
+            "  Lead preview: {} prose blocks shown (bounded to 3)\n",
+            lead.len()
+        ));
+        for block in lead {
+            out.push_str(&format!("    {block}\n"));
+        }
+    }
+    out.push_str(
+        "  Next: rerun this read with `--level none` for exact content, or add `--from N --to M` for an exact range.\n",
+    );
 
     Ok(out)
+}
+
+fn markdown_lead_preview(content: &str, limit: usize, max_chars: usize) -> Vec<String> {
+    if limit == 0 || max_chars == 0 {
+        return Vec::new();
+    }
+
+    let mut blocks = Vec::new();
+    let mut paragraph = String::new();
+    let mut in_fence = false;
+    let mut in_frontmatter = false;
+
+    for (index, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if index == 0 && trimmed == "---" {
+            in_frontmatter = true;
+            continue;
+        }
+        if in_frontmatter {
+            if trimmed == "---" {
+                in_frontmatter = false;
+            }
+            continue;
+        }
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if trimmed.is_empty() {
+            push_markdown_preview_block(&mut blocks, &mut paragraph, limit, max_chars);
+            if blocks.len() == limit {
+                break;
+            }
+            continue;
+        }
+        let structural = trimmed.starts_with('#')
+            || trimmed.starts_with("![")
+            || trimmed.starts_with("[![")
+            || trimmed.starts_with('|')
+            || trimmed == "---"
+            || trimmed == "***"
+            || trimmed.starts_with("<!--");
+        if structural {
+            push_markdown_preview_block(&mut blocks, &mut paragraph, limit, max_chars);
+            if blocks.len() == limit {
+                break;
+            }
+            continue;
+        }
+        if trimmed.starts_with('<') && (trimmed.contains("<a ") || trimmed.contains("<img ")) {
+            continue;
+        }
+        let preview_line = if trimmed.starts_with('<') {
+            strip_preview_html_tags(trimmed)
+        } else {
+            trimmed.to_string()
+        };
+        if preview_line.is_empty() {
+            continue;
+        }
+        if !paragraph.is_empty() {
+            paragraph.push(' ');
+        }
+        paragraph.push_str(&preview_line);
+    }
+    push_markdown_preview_block(&mut blocks, &mut paragraph, limit, max_chars);
+    blocks
+}
+
+fn strip_preview_html_tags(line: &str) -> String {
+    let mut text = String::new();
+    let mut in_tag = false;
+    for character in line.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => text.push(character),
+            _ => {}
+        }
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn push_markdown_preview_block(
+    blocks: &mut Vec<String>,
+    paragraph: &mut String,
+    limit: usize,
+    max_chars: usize,
+) {
+    if paragraph.is_empty() || blocks.len() == limit {
+        paragraph.clear();
+        return;
+    }
+    let char_count = paragraph.chars().count();
+    if char_count > max_chars {
+        let mut bounded = paragraph
+            .chars()
+            .take(max_chars.saturating_sub(1))
+            .collect::<String>();
+        bounded.push('…');
+        blocks.push(bounded);
+    } else {
+        blocks.push(std::mem::take(paragraph));
+    }
+    paragraph.clear();
 }
 
 // ── Long-line truncation (PR-6) ─────────────────────────────
@@ -890,9 +1019,81 @@ mod tests {
         let result = try_special_digest(Path::new("README.md"), content, FilterLevel::Minimal);
         assert!(result.is_some());
         let digest = result.unwrap();
-        assert!(digest.contains("Markdown digest"));
+        assert!(digest.contains("Markdown digest (content omitted)"));
+        assert!(digest.contains(&format!("Source: 9 lines, {} bytes", content.len())));
+        assert!(digest.contains("Sections: 3/3 shown"));
         assert!(digest.contains("Title"));
         assert!(digest.contains("Section 1"));
+        assert!(digest.contains("Lead preview: 2 prose blocks shown (bounded to 3)"));
+        assert!(digest.contains("Some text."));
+        assert!(digest.contains("Content."));
+        assert!(digest.contains("`--level none` for exact content"));
+        assert!(digest.contains("`--from N --to M` for an exact range"));
+    }
+
+    #[test]
+    fn digest_markdown_reports_truncated_section_count() {
+        let content = (1..=25)
+            .map(|number| format!("## Section {number}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let digest = try_special_digest(Path::new("README.md"), &content, FilterLevel::Minimal)
+            .expect("markdown digest");
+
+        assert!(digest.contains("Sections: 20/25 shown"));
+        assert!(digest.contains("Section 20"));
+        assert!(!digest.contains("Section 21"));
+    }
+
+    #[test]
+    fn markdown_lead_preview_skips_frontmatter_badges_tables_and_code() {
+        let content = r#"---
+title: Hidden metadata
+---
+# Product
+
+[![CI](badge.svg)](ci.example)
+
+> Product purpose in one sentence.
+
+| Column | Value |
+|---|---|
+
+The first explanatory paragraph.
+
+```text
+not prose
+```
+
+The second explanatory paragraph.
+"#;
+        let lead = markdown_lead_preview(content, 3, 240);
+
+        assert_eq!(
+            lead,
+            vec![
+                "> Product purpose in one sentence.",
+                "The first explanatory paragraph.",
+                "The second explanatory paragraph.",
+            ]
+        );
+    }
+
+    #[test]
+    fn markdown_lead_preview_keeps_html_text_and_drops_image_markup() {
+        let content = r#"# Product
+
+<p><img src="hero.png" alt="decorative hero"></p>
+
+<p><a href="https://example.com">Website</a> &bull; <a href="/fr">Francais</a></p>
+
+<p><strong>Useful product purpose.</strong></p>
+
+Plain explanation.
+"#;
+        let lead = markdown_lead_preview(content, 3, 240);
+
+        assert_eq!(lead, vec!["Useful product purpose.", "Plain explanation."]);
     }
 
     // ── Long-line truncation tests ──────────────────────────

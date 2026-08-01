@@ -106,5 +106,5 @@ jobs:
           --repo "${GITHUB_REPOSITORY}"
           --verify-tag
           --prerelease
-          --notes-file "docs/releases/${GITHUB_REF_NAME}.md"
+          --generate-notes
           --title "HZR ${GITHUB_REF_NAME#v}"

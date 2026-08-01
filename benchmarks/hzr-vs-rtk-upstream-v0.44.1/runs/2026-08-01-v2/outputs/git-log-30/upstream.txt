@@ -1,0 +1,71 @@
+36591fb Merge pull request #3281 from rtk-ai/release-please--branches--master--components--rtk (4 days ago) <aesoft>
+  chore(master): release 0.44.1
+062468c chore(master): release 0.44.1 (4 days ago) <rtk-release-bot[bot]>
+a7fad1f Merge pull request #3252 from rtk-ai/develop (4 days ago) <aesoft>
+  Next Release
+a8b9eb3 Merge pull request #3182 from rtk-ai/fix/grep-transparency (4 days ago) <aesoft>
+  fix(search): display nb line only if requested
+ca63868 test(search): check every grep scenario with and without -n (5 days ago) <Adrien Eppling>
+  Swapping the grep_n helper for grep_plain moved every scenario from the
+  -n path to the plain path, leaving exactly one assertion covering line
+  numbers. Both directions matter now that -n decides whether they appear,
+  [+4 lines omitted]
+643a039 refactor(search): narrow the grep transparency fix to show_line (5 days ago) <Adrien Eppling>
+  Strip the explanatory comments the branch accumulated and restore
+  match_block byte-for-byte to develop, so the diff is only what the
+  transparency fix needs: show_line() flips from opt-out to opt-in, plus
+  [+2 lines omitted]
+31093eb Revert "fix(search): make tee-recovery blocks respect show_file/show_line" (5 days ago) <Adrien Eppling>
+  This reverts commit 792f43276e568131782b62b0e8cc04afdfa888bd.
+  The tee block is recovery state, not command output. Mirroring the
+  display's show_file/show_line meant a plain `rtk grep pat file` that
+  [+15 lines omitted]
+1c5f164 Merge pull request #3254 from TaKO8Ki/refactor/simplify-cargo-regex-initialization (5 days ago) <Takayuki Maeda>
+  refactor: simplify regex initialization
+3694a20 refactor(cargo): simplify regex initialization (5 days ago) <Takayuki Maeda>
+1c5ffad Merge pull request #3244 from TaKO8Ki/refactor/replace-lazy-static (5 days ago) <Takayuki Maeda>
+  refactor: replace `lazy_static` with `LazyLock`
+48d45d3 Merge pull request #3250 from rtk-ai/fix/cicd/next-release-app-token (5 days ago) <aesoft>
+  fix(cicd): git app token for next release
+ae07b4b docs: update LazyLock guidance (5 days ago) <Takayuki Maeda>
+5269df7 refactor: replace lazy_static with LazyLock (5 days ago) <Takayuki Maeda>
+cdfb14c fix(cicd): git app token for next release (5 days ago) <Adrien Eppling>
+61790e4 Merge pull request #3249 from TaKO8Ki/deps/update-colored (5 days ago) <Takayuki Maeda>
+  chore(deps): update colored to 3.1.1
+7fc753d chore(deps): update colored to 3.1.1 (5 days ago) <Takayuki Maeda>
+7da2674 Merge pull request #3179 from romain-cureau/fix/hooks-copilot-windows-powershell-tool (5 days ago) <Nicolas L...
+  fix(hook): detect Copilot CLI shell tool on Windows
+10ca886 fix(hook): detect Copilot CLI shell tool on Windows (9 days ago) <Romain Cureau>
+  Copilot CLI names its shell tool "powershell" on Windows, so detect_format
+  only ever matched "bash" and fell through to PassThrough. The native
+  CopilotCli branch — the one returning modifiedArgs without a permissionDecision
+  [+7 lines omitted]
+3fc4070 Merge pull request #3217 from rtk-ai/release-please--branches--master--components--rtk (6 days ago) <aesoft>
+  chore(master): release 0.44.0
+5083091 chore(master): release 0.44.0 (6 days ago) <rtk-release-bot[bot]>
+63bcebd Merge pull request #2774 from rtk-ai/develop (6 days ago) <aesoft>
+  Next Release
+1d6798d Merge pull request #3093 from lntutor/fix/2443-copilot-ide-terminal (6 days ago) <Nicolas Le Cam>
+  fix(copilot): support IDE terminal hooks
+3483786 Merge pull request #3211 from rtk-ai/fix/permission-whitespace-normalization (6 days ago) <aesoft>
+  fix(permissions): stop extra whitespace from evading deny rules
+b434fd2 Merge branch 'develop' into fix/2443-copilot-ide-terminal (7 days ago) <Loi Nguyen>
+  Resolve a semantic (non-textual) merge conflict: develop's 0df6929
+  changed HookDecision::AskRewrite from a tuple variant AskRewrite(String)
+  to a struct variant AskRewrite { rewritten, explicit }. The auto-merge
+  [+10 lines omitted]
+d0f004f fix(copilot): support IDE terminal hooks (7 days ago) <Loi Nguyen>
+f6b9290 fix(permissions): stop extra whitespace from evading deny rules (7 days ago) <Adrien Eppling>
+  Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01BwRRhncpyLA9AybUU8KvVh
+23d1e89 Merge pull request #3149 from guyoron1/fix/copilot-permission-decision (7 days ago) <Nicolas Le Cam>
+  fix(hooks): emit permissionDecision allow for simple Copilot CLI rewrites
+0df6929 fix(hooks): distinguish explicit ask from default in AskRewrite (7 days ago) <guyoron1>
+  Change AskRewrite(String) to AskRewrite { rewritten, explicit } so the
+  Copilot path only auto-allows when the user didn't explicitly configure
+  "ask" for a command. Addresses KuSh's review feedback on #3149.
+  [+1 lines omitted]
+bee2178 Merge pull request #3181 from rtk-ai/rtk-rule-defaults (8 days ago) <Takayuki Maeda>
+  chore: declare RtkRule default to avoid repeating unecessary attributes
+8dd4aac Merge pull request #3061 from rtk-ai/fix/uv-run-preserve-stdout (9 days ago) <aesoft>
+  fix(uv): preserve program stdout and restore inner-command filtering
