@@ -43,6 +43,14 @@ lazy_static! {
 struct QueryModel {
     phrase: String,
     terms: Vec<String>,
+    /// fork: verbatim query for literal mode.
+    ///
+    /// The ranked model lowercases the query, splits it on non-alphanumerics, drops stop
+    /// words and stems what is left, then ORs the survivors into one regex. That is the
+    /// right shape for "find me code about X" and exactly the wrong shape for "find this
+    /// symbol": `fn handle_request` matches every `fn` in the tree. When this is `Some`,
+    /// the query is treated as one case-sensitive literal instead.
+    literal: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +93,8 @@ pub struct RgaiOptions<'a> {
     pub json_output: bool,
     pub compact: bool,
     pub builtin: bool,
+    /// fork: treat the query as one case-sensitive literal instead of ranked terms.
+    pub literal: bool,
     pub files: Option<&'a str>,
     pub verbose: u8,
 }
@@ -100,6 +110,7 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
         json_output,
         compact,
         builtin,
+        literal,
         files,
         verbose,
     } = options;
@@ -118,6 +129,9 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
     if !project_dir.is_dir() {
         bail!("project root is not a directory: {}", project_dir.display());
     }
+
+    // fork: a literal lookup is never a semantic one, so it never reaches grepai.
+    let builtin = builtin || literal;
 
     // Try grepai delegation first (unless --builtin flag is set or --files is provided)
     // CHANGED: unpack (raw, filtered) for correct savings tracking
@@ -144,7 +158,11 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
         // Fall through to built-in search
     }
 
-    let query_model = build_query_model(query);
+    let query_model = if literal {
+        build_literal_query_model(query)
+    } else {
+        build_query_model(query)
+    };
     if verbose > 0 {
         eprintln!(
             "rgai: '{}' in {} (terms: {})",
@@ -663,6 +681,11 @@ fn filter_grepai_output(
 /// Terms are regex-escaped to prevent injection.
 /// Caller must ensure terms is non-empty (try_ripgrep_search guards this).
 fn build_rg_pattern(query: &QueryModel) -> String {
+    // fork: a literal query is one escaped pattern, never an alternation — an OR over its
+    // words is what let a single common token match on its own.
+    if let Some(literal) = &query.literal {
+        return regex::escape(literal);
+    }
     debug_assert!(
         !query.terms.is_empty(),
         "build_rg_pattern called with empty terms"
@@ -799,14 +822,12 @@ fn search_file_list(
     }
     let pattern = build_rg_pattern(query_model);
     let mut cmd = Command::new("rg");
-    cmd.args([
-        "-n",
-        "--no-heading",
-        "--with-filename",
-        "-i",
-        "--max-count",
-        "50",
-    ]);
+    cmd.args(["-n", "--no-heading", "--with-filename", "--max-count", "50"]);
+    // fork: case folding belongs to the ranked model only; a literal lookup that ignores
+    // case is not literal.
+    if query_model.literal.is_none() {
+        cmd.arg("-i");
+    }
     cmd.arg(&pattern);
     // Resolve each path relative to root (or use as-is if absolute)
     let mut any_added = false;
@@ -956,12 +977,15 @@ fn try_ripgrep_search(
     cmd.args([
         "-n",
         "--no-heading",
-        "-i",
         "--max-filesize",
         &format!("{}K", max_file_kb),
         "--max-count",
         "50", // cap matches per file
     ]);
+    // fork: see try_ripgrep_search_in_files — literal mode stays case-sensitive.
+    if query_model.literal.is_none() {
+        cmd.arg("-i");
+    }
 
     // FIXED: map RTK type aliases to ripgrep type names
     if let Some(ft) = file_type {
@@ -1326,6 +1350,19 @@ fn score_line(line_idx: usize, line: &str, query: &QueryModel, ext: &str) -> Opt
         return None;
     }
 
+    // fork: literal mode is a containment test, not a score. A partial or differently-cased
+    // match is a miss, because a caller asking for an exact lookup cannot filter noise.
+    if let Some(literal) = &query.literal {
+        if !trimmed.contains(literal.as_str()) {
+            return None;
+        }
+        return Some(LineCandidate {
+            line_idx,
+            score: 10.0,
+            matched_terms: vec![literal.clone()],
+        });
+    }
+
     let lower = trimmed.to_lowercase();
     let mut score = 0.0;
     let mut matched_terms = Vec::new();
@@ -1375,6 +1412,14 @@ fn score_line(line_idx: usize, line: &str, query: &QueryModel, ext: &str) -> Opt
 }
 
 fn score_path(path: &str, query: &QueryModel) -> f64 {
+    // fork: literal mode compares the path verbatim, for the same reason score_line does.
+    if let Some(literal) = &query.literal {
+        return if path.contains(literal.as_str()) {
+            3.5
+        } else {
+            0.0
+        };
+    }
     let lower = path.to_lowercase();
     let mut score = 0.0;
 
@@ -1413,7 +1458,21 @@ fn build_query_model(query: &str) -> QueryModel {
         terms.push(phrase.clone());
     }
 
-    QueryModel { phrase, terms }
+    QueryModel {
+        phrase,
+        terms,
+        literal: None,
+    }
+}
+
+/// fork: build a model that matches the query verbatim and case-sensitively.
+fn build_literal_query_model(query: &str) -> QueryModel {
+    let literal = query.trim().to_string();
+    QueryModel {
+        phrase: literal.to_lowercase(),
+        terms: vec![literal.clone()],
+        literal: Some(literal),
+    }
 }
 
 fn split_terms(input: &str) -> Vec<String> {
@@ -2201,12 +2260,93 @@ pub fn log_info(msg: &str) {
         let model = QueryModel {
             phrase: "foo.bar".to_string(),
             terms: vec!["foo.bar".to_string(), "baz[0]".to_string()],
+            literal: None, // fork: ranked mode
         };
         // Act
         let pattern = build_rg_pattern(&model);
         // Assert: dots and brackets escaped
         assert!(pattern.contains(r"foo\.bar"));
         assert!(pattern.contains(r"baz\[0\]"));
+    }
+
+    // fork: literal mode — the ranked term search is the wrong tool for an exact lookup
+    #[test]
+    fn literal_query_model_keeps_the_query_whole() {
+        // Arrange + Act: the ranked model lowercases, splits, de-stops and stems this
+        let ranked = build_query_model("fn record_degraded_rewrite");
+        let literal = build_literal_query_model("fn record_degraded_rewrite");
+
+        // Assert: the ranked model matches every `fn` in the tree, the literal one does not
+        assert!(ranked.terms.contains(&"fn".to_string()));
+        assert_eq!(
+            literal.literal.as_deref(),
+            Some("fn record_degraded_rewrite")
+        );
+        assert_eq!(literal.terms, vec!["fn record_degraded_rewrite"]);
+    }
+
+    #[test]
+    fn literal_pattern_is_the_whole_query_not_an_or_of_terms() {
+        // Arrange
+        let model = build_literal_query_model("fn record_degraded_rewrite");
+
+        // Act
+        let pattern = build_rg_pattern(&model);
+
+        // Assert: no alternation, so a single common token cannot match on its own
+        assert_eq!(pattern, "fn record_degraded_rewrite");
+        assert!(!pattern.contains('|'));
+    }
+
+    #[test]
+    fn literal_pattern_escapes_regex_metacharacters() {
+        // Arrange
+        let model = build_literal_query_model("Vec<String>[0].len()");
+
+        // Act
+        let pattern = build_rg_pattern(&model);
+
+        // Assert
+        assert!(pattern.contains(r"\[0\]"));
+        assert!(pattern.contains(r"\("));
+    }
+
+    #[test]
+    fn literal_scoring_is_case_sensitive() {
+        // Arrange
+        let model = build_literal_query_model("RewriteDecision");
+
+        // Act
+        let exact = score_line(0, "    let decision: RewriteDecision = x;", &model, "rs");
+        let wrong_case = score_line(0, "    let decision: rewritedecision = x;", &model, "rs");
+
+        // Assert: an exact lookup that silently matches another casing is not exact
+        assert!(exact.is_some());
+        assert!(wrong_case.is_none());
+    }
+
+    #[test]
+    fn literal_scoring_rejects_a_line_holding_only_one_word_of_the_query() {
+        // Arrange
+        let model = build_literal_query_model("fn record_degraded_rewrite");
+
+        // Act
+        let partial = score_line(0, "fn main() {", &model, "rs");
+
+        // Assert: this is the exact noise the ranked model returns for the same query
+        assert!(partial.is_none());
+    }
+
+    #[test]
+    fn ranked_scoring_is_unchanged_by_literal_mode() {
+        // Arrange
+        let model = build_query_model("rewrite decision");
+
+        // Act
+        let candidate = score_line(0, "    let decision: RewriteDecision = x;", &model, "rs");
+
+        // Assert: the ranked path still matches case-insensitively on stemmed terms
+        assert!(candidate.is_some());
     }
 
     #[test]

@@ -398,6 +398,13 @@ enum Commands {
         /// Force built-in keyword search (skip grepai delegation)
         #[arg(long)]
         builtin: bool,
+        /// Match the query verbatim and case-sensitively instead of ranking its terms
+        ///
+        /// fork: without this the query is lowercased, split on non-alphanumerics,
+        /// stripped of stop words, stemmed and OR-ed, so `rtk rgai "fn handle_request"`
+        /// matches every `fn` in the tree. Implies --builtin.
+        #[arg(long)]
+        literal: bool,
         /// Restrict search to specific files (comma-separated paths)
         #[arg(long)]
         files: Option<String>, // ADDED: --files flag for two-stage memory pipeline
@@ -2520,6 +2527,7 @@ fn main() -> Result<()> {
             json,
             compact,
             builtin, // --builtin flag: skip grepai delegation
+            literal, // fork: verbatim, case-sensitive lookup
             files,   // ADDED: --files flag
             project_root,
         } => {
@@ -2537,6 +2545,7 @@ fn main() -> Result<()> {
                     json_output: json,
                     compact,
                     builtin,
+                    literal,
                     files: files.as_deref(),
                     verbose: cli.verbose,
                 },

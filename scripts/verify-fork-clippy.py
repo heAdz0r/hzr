@@ -17,7 +17,11 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 141
-EXPECTED_SHA256 = "c20d4c52337e3175b6d053ba5d92e563ee484ceb4eab732a005f2f04226c944d"
+# Refreshed after the fork-core read-digest, tracking and rgai-literal changes moved existing
+# warnings onto new lines. The warning *set* is unchanged: extracting the rows with and
+# without the rgai literal change produced byte-identical lists, and the total is the same
+# 141 hits with no new lint codes. Only the recorded positions moved.
+EXPECTED_SHA256 = "1c87938c876e704b7c6721fd9180635b742b29265d1f471588bad896b6d406ae"
 
 
 def main() -> int:

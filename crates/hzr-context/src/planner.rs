@@ -439,7 +439,12 @@ impl ContextPlanner {
             "--json".into(),
         ];
         let strategy = if request.mode == SearchMode::Exact {
-            args.push("--builtin".into());
+            // `--literal` matches the query verbatim and case-sensitively, and implies
+            // `--builtin`. Sending only `--builtin` handed the query to the ranked term
+            // model, which lowercases it, splits it on non-alphanumerics, drops stop words
+            // and stems the rest — so "exact" returned every file containing any one of the
+            // surviving tokens, and agents learned to distrust the mode entirely.
+            args.push("--literal".into());
             SearchStrategy::ForkRgaiBuiltin
         } else {
             self.ensure_managed_fork_search_config(workspace, account_usage)

@@ -52,7 +52,8 @@ dies.
 Context  -> hzr context plan "<intent>"
 Memory   -> hzr memory recall|store   (see scopes below)
 Semantic -> hzr rgai "<intent>"
-Ranked   -> hzr search "<terms>" --mode exact [--path DIR ...]
+Literal  -> hzr search "<pattern>" --mode exact [--path DIR ...]
+Ranked   -> hzr search "<terms>" --mode auto
 Read     -> hzr rtk -- read <file> [--from N --to M | --outline | --changed | -n]
 Write    -> hzr rtk -- write patch|replace|set ...
 Density  -> hzr codec compile --profile shadow|adaptive|compact
@@ -92,16 +93,16 @@ hzr rtk -- read <file> --max-lines N         # head(1)
 hzr rtk -- read <file> --tail-lines N        # tail(1)
 ```
 
-## What `--mode exact` actually does
+## Search modes
 
-`hzr search --mode exact` is a **ranked term search**, not `grep`. The query is
-lowercased, split on non-alphanumeric characters, stripped of stop words, stemmed,
-and the surviving terms are OR-ed together. `hzr search "fn handle_request"` therefore
-matches every `fn` in the repository. It reports one representative line per file and
-ranks files by score.
+`--mode exact` is a **literal, case-sensitive** lookup. The query is matched verbatim;
+`hzr search "fn handle_request" --mode exact` returns the definition, not every `fn` in
+the repository. Use it for symbols, error strings, config keys and audits.
 
-Use it to *locate* code. When you need every literal match — a symbol rename, an audit,
-a regex — use `hzr rtk -- grep "<pattern>"`, which is a real literal search and is filtered.
+`--mode semantic` and `--mode auto` use the ranked term model: the query is lowercased,
+split on non-alphanumeric characters, stripped of stop words and stemmed, and the surviving
+terms are ranked. Use it to *locate* code you cannot name exactly.
+
 `--path` accepts several directories: `--path crates fork-core/src`.
 
 ## The cost of `raw`

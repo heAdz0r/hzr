@@ -23,6 +23,8 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 - Codec transforms are recorded in the efficiency ledger under a `codec` subsystem, so the
   capability is justified by measurement instead of assertion.
 - `hzr search --path` accepts several directories.
+- `rtk rgai --literal` matches a query verbatim and case-sensitively instead of ranking its
+  terms, and implies `--builtin` because a literal lookup is never a semantic one.
 
 ### Changed
 
@@ -40,12 +42,18 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   hardcoded state and a hardcoded version string. A missing bridge or package is reported
   as degraded with the repair command, rather than as "stopped, starts on demand".
 - Engines that rest by design no longer colour the overall control-plane verdict.
+- `hzr search --mode exact` is finally exact. It sent `--builtin` to fork-core, which
+  handed the query to the ranked term model: lowercased, split on non-alphanumerics,
+  de-stopped, stemmed and OR-ed, so `hzr search "fn record_degraded_rewrite" --mode exact`
+  top-hit a patch file on the token `fn` and never returned the definition. Exact mode now
+  sends `--literal`. Measured on this repository, the same query returns 1 file instead of
+  21.
 
 ### Documentation
 
 - `HZR.md` documents the `hzr rtk -- read` flags that remove the need for `sed`, `nl`,
-  `cat`, `head` and `tail`; states plainly that `--mode exact` is a ranked term search and
-  not `grep`; and states the ledger cost of `raw`.
+  `cat`, `head` and `tail`; separates the literal and ranked search modes; and states the
+  ledger cost of `raw`.
 
 - `hzr update` checks GitHub Releases, downloads the matching native bundle and
   `SHA256SUMS`, verifies the archive, and installs the newer version through the bundled

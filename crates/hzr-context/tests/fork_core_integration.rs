@@ -66,6 +66,9 @@ async fn test_search_and_context_use_managed_fork_core_commands() {
         })
         .await
         .expect("fork rgai search");
+    // Exact mode must reach fork-core as a verbatim lookup. The fake engine exits 65 when
+    // `--literal` is absent, so this fails loudly rather than silently ranking terms — the
+    // behaviour that made `hzr search "fn handle_request" --mode exact` return every `fn`.
     assert_eq!(search.strategy, SearchStrategy::ForkRgaiBuiltin);
     assert_eq!(search.hits.len(), 1);
     assert_eq!(search.hits[0].path, "src/lib.rs");
@@ -130,13 +133,13 @@ case "$1" in
     fi
     ;;
   rgai)
-    builtin_found=false
+    literal_found=false
     for argument in "$@"; do
-      if [ "$argument" = "--builtin" ]; then
-        builtin_found=true
+      if [ "$argument" = "--literal" ]; then
+        literal_found=true
       fi
     done
-    if [ "$builtin_found" != "true" ]; then
+    if [ "$literal_found" != "true" ]; then
       exit 65
     fi
     printf '%s\n' '{"query":"managed_fork_hit","path":"src","total_hits":1,"shown_hits":1,"scanned_files":1,"skipped_large":0,"skipped_binary":0,"hits":[{"path":"src/lib.rs","score":9.5,"matched_lines":1,"snippets":[{"lines":[{"line":1,"text":"pub fn managed_fork_hit() {}"}],"matched_terms":["managed_fork_hit"]}]}]}'
