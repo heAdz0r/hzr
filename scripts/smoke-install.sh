@@ -314,29 +314,40 @@ if [[ ! -L "${HZR_CURRENT_LINK}" ]]; then
 fi
 HZR_FIRST_TARGET="$(readlink "${HZR_CURRENT_LINK}")"
 
-# Stage a second release directory that `current` must switch to. Copying the real
-# bundle keeps the engines genuinely executable so version probes stay meaningful.
-HZR_SECOND_RELEASE="${HZR_HOME}/.local/share/hzr/versions/v0.0.0-upgrade-smoke"
-cp -R "${HZR_FIRST_TARGET}" "${HZR_SECOND_RELEASE}"
-
-# Repoint `current` exactly the way install.sh does, through the shared helper, so this
-# asserts the shipped implementation rather than a re-implementation.
-HZR_UPGRADE_TEMP="${HZR_HOME}/.local/share/hzr/.current-upgrade-smoke"
-ln -s "${HZR_SECOND_RELEASE}" "${HZR_UPGRADE_TEMP}"
-# shellcheck source=/dev/null
-source <(sed -n '/^replace_hzr_symlink()/,/^}/p' "${HZR_REPOSITORY_ROOT}/install.sh")
-replace_hzr_symlink "${HZR_UPGRADE_TEMP}" "${HZR_CURRENT_LINK}"
+# Install the verified archive again under a synthetic later version. This executes
+# the shipped installer's real replacement helper end-to-end; extracting its shell
+# function with `sed | source` is not portable across BSD and GNU userlands.
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) HZR_SMOKE_PLATFORM="darwin-arm64" ;;
+  Darwin-x86_64) HZR_SMOKE_PLATFORM="darwin-x64" ;;
+  Linux-aarch64 | Linux-arm64) HZR_SMOKE_PLATFORM="linux-arm64" ;;
+  Linux-x86_64) HZR_SMOKE_PLATFORM="linux-x64" ;;
+  *) echo "unsupported upgrade-smoke platform" >&2; exit 1 ;;
+esac
+HZR_UPGRADE_VERSION="0.2.0-upgrade-smoke"
+HZR_UPGRADE_ARTIFACT="hzr-v${HZR_UPGRADE_VERSION}-${HZR_SMOKE_PLATFORM}.tar.gz"
+HZR_UPGRADE_CHECKSUMS="${HZR_SMOKE_TEMP}/SHA256SUMS.upgrade"
+awk -v artifact="${HZR_UPGRADE_ARTIFACT}" \
+  'NF >= 2 { print $1 "  " artifact; exit }' \
+  "${HZR_CHECKSUMS}" >"${HZR_UPGRADE_CHECKSUMS}"
+(
+  cd "${HZR_SMOKE_TEMP}/workspace"
+  HOME="${HZR_HOME}" \
+  HZR_VERSION="${HZR_UPGRADE_VERSION}" \
+  HZR_ARCHIVE_PATH="${HZR_ARCHIVE}" \
+  HZR_CHECKSUMS_PATH="${HZR_UPGRADE_CHECKSUMS}" \
+  HZR_INSTALL_HOOKS=0 \
+  HZR_INSTALL_SERVICE=0 \
+  PATH="/usr/bin:/bin" \
+    /bin/sh "${HZR_REPOSITORY_ROOT}/install.sh" >/dev/null
+)
+HZR_SECOND_RELEASE="${HZR_HOME}/.local/share/hzr/versions/v${HZR_UPGRADE_VERSION}-${HZR_SMOKE_PLATFORM}"
 
 HZR_SECOND_TARGET="$(readlink "${HZR_CURRENT_LINK}")"
 if [[ "${HZR_SECOND_TARGET}" == "${HZR_FIRST_TARGET}" ]]; then
   echo "upgrade did not repoint current: still ${HZR_SECOND_TARGET}" >&2
   exit 1
 fi
-if [[ -e "${HZR_FIRST_TARGET}/.current-upgrade-smoke" ]]; then
-  echo "upgrade leaked the temporary symlink into the previous release" >&2
-  exit 1
-fi
-
 # The whole point: every engine must now come from the NEW release. Checking
 # `hzr --version` alone would pass even when all four engines are stale.
 HZR_RESOLVED_ENGINES="$(cd -- "${HZR_CURRENT_LINK}/engines" && pwd -P)"
