@@ -5,16 +5,16 @@
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
-Этот ledger различает четыре проверяемых утверждения:
+This ledger distinguishes between four verifiable assertions:
 
-1. Полный fork source присутствует в HZR byte-for-byte.
-2. Этот source собирается и проходит собственный regression suite.
-3. Production routes действительно вызывают его, а не частичную HZR reimplementation.
-4. grepai, ICM и Caveman подключены вокруг fork через один control plane без дублирующих stores/tools.
+1. The full fork source is present in HZR byte-for-byte.
+2. This source is collected and goes through its own regression suite.
+3. Production routes actually call it, and not partial HZR reimplementation.
+4. grepai, ICM and Caveman are connected around the fork through one control plane without duplicate stores/tools.
 
 ## Locked fork identity
 
-| Поле | Значение |
+|Field|Meaning|
 |---|---|
 | Source | `https://github.com/heAdz0r/rtk.git` |
 | Branch at capture | `feat/upstream-0.42-fork.1` |
@@ -33,44 +33,44 @@
 | Current engine manifest | [`fork-core/CURRENT_ENGINE.toml`](fork-core/CURRENT_ENGINE.toml) + `CURRENT_ENGINE_V1.tsv` |
 | Current engine content list | `CURRENT_FILES` + `CURRENT_SHA256SUMS` |
 
-Snapshot v2 включает ordered path, entry type, Git-portable mode, size и content/target digest, а также source identity, tracked deletions, dirty diff/status hashes и explicit exclusions. Verifier отклоняет missing/extra files, type/mode/byte drift, traversal, undeclared deletion и nested `.git`.
+Snapshot v2 includes ordered path, entry type, Git-portable mode, size and content/target digest, as well as source identity, tracked deletions, dirty diff/status hashes and explicit exclusions. Verifier rejects missing/extra files, type/mode/byte drift, traversal, undeclared deletion and nested `.git`.
 
-Baseline identity immutable. `fork-core/rtk` после `v0.1.0` развивается прямо в HZR: каждый delta обязан сохранять inherited capability surface, обновлять current-engine identity/parity и проходить полный regression suite. Старый `/Users/andrew/Programming/rtk` не изменяется.
+Baseline identity immutable. `fork-core/rtk` after `v0.1.0` develops directly into HZR: each delta is required to preserve the inherited capability surface, update the current-engine identity/parity and go through a full regression suite. The old `/Users/andrew/Programming/rtk` is not changed.
 
-## Статусы
+## Statuses
 
-| Маркер | Значение |
+|Marker|Meaning|
 |---|---|
-| ✅ | Реализовано и локально проверено в указанной области |
-| 🟡 | Рабочий путь есть, но остаётся честно описанная граница |
-| ⚪ | Осознанно не входит в 0.2.0; exact compatibility path не затронут |
+| ✅ |Implemented and locally tested in the specified area|
+| 🟡 |There is a working path, but an honestly described border remains|
+| ⚪ |Not knowingly included in 0.2.0; exact compatibility path is not affected|
 
-## Capability и routing matrix
+## Capability and routing matrix
 
-| Surface | Фактический HZR route | Проверка / граница | Статус |
+| Surface |Actual HZR route|Check/bound|Status|
 |---|---|---|---|
-| Exact source snapshot | `fork-core/rtk` + manifest v2 | 516 files, modes/types/bytes/deletions/exclusions; verifier перед build | ✅ |
-| Exact fork build | `cargo build --locked --release` внутри snapshot | Bundle принимает только output `rtk 0.44.1-fork.1` | ✅ |
-| Fork regression suite | Synthetic temporary Git history + `cargo test --locked --all-targets` | Git history нужен штатному `git_churn`; `.git` не попадает в snapshot | ✅ |
-| No stock RTK fallback | Runtime pin — fork; upstream RTK — `reference-only` | Bundle не fetch/build/install stock RTK | ✅ |
-| Full fork CLI | `hzr rtk -- <args>` и `bin/rtk -> bin/hzr` | Unix passthrough сохраняет argv, non-UTF8, cwd, stdio, signals, PID и exit | ✅ |
-| Runtime detection | `PinnedRtkAdapter` требует exact version `0.44.1-fork.1` | Binary строится только после snapshot verification; runtime отдельно не re-hash-ит compiled executable | 🟡 |
-| Raw shell rewrite | Полная строка передаётся fork `rewrite` | Pipes, redirects, heredoc, multiline, quoting, `&&/||`, xargs покрыты tests | ✅ |
-| Exit `0/1/2/3` | rewrite / raw / deny / one-time approval | Approval ID bounded, TTL и single-use; approve/deny CLI/API | ✅ |
-| Command filters/guards | Fork rewrite выбирает exact command, HZR transport выполняет его | Private PATH снова разрешает `rtk` в exact fork; no generic replacement table | ✅ |
-| Enhanced read | Agent `hzr_read` → allowlisted `/v1/fork/run` → fork `read` | Bounds/modes проверяются; traversal и symlink escape отклоняются | ✅ |
-| Atomic edit/write | Agent edit/write → fork `write --output json patch|create` | Native Caveman file tools недоступны; fork atomic semantics сохранены | ✅ |
-| `rgai` behavior | `/v1/search`, `hzr search|rgai`, agent search → exact fork `rgai --json` | Exact добавляет `--builtin`; semantic/auto использует managed grepai | ✅ |
-| One grepai store | Managed `.grepai` symlink → `<data>/workspaces/<repo>/<worktree>/index/grepai` | Real legacy, foreign link и nested duplicate fail closed | ✅ |
+| Exact source snapshot | `fork-core/rtk` + manifest v2 |516 files, modes/types/bytes/deletions/exclusions; verifier before build| ✅ |
+| Exact fork build |`cargo build --locked --release` inside snapshot|Bundle only accepts output `rtk 0.44.1-fork.1`| ✅ |
+| Fork regression suite | Synthetic temporary Git history + `cargo test --locked --all-targets` |Git history is needed by the staff `git_churn`; `.git` is not included in the snapshot| ✅ |
+| No stock RTK fallback | Runtime pin — fork; upstream RTK — `reference-only` |Bundle not fetch/build/install stock RTK| ✅ |
+| Full fork CLI |`hzr rtk -- <args>` and `bin/rtk -> bin/hzr`|Unix passthrough saves argv, non-UTF8, cwd, stdio, signals, PID and exit| ✅ |
+| Runtime detection |`PinnedRtkAdapter` requires exact version `0.44.1-fork.1`|Binary is built only after snapshot verification; runtime separately does not re-hash-it compiled executable| 🟡 |
+| Raw shell rewrite |The complete line is passed to fork `rewrite`| Pipes, redirects, heredoc, multiline, quoting, `&&/||`, xargs are covered by tests| ✅ |
+| Exit `0/1/2/3` | rewrite / raw / deny / one-time approval |Approval ID bounded, TTL and single-use; approve/deny CLI/API| ✅ |
+| Command filters/guards |Fork rewrite selects exact command, HZR transport executes it|Private PATH resolves `rtk` again in exact fork; no generic replacement table| ✅ |
+| Enhanced read | Agent `hzr_read` → allowlisted `/v1/fork/run` → fork `read` |Bounds/modes are checked; traversal and symlink escape are rejected| ✅ |
+| Atomic edit/write | Agent edit/write → fork `write --output json patch|create` |Native Caveman file tools are not available; fork atomic semantics saved| ✅ |
+| `rgai` behavior | `/v1/search`, `hzr search|rgai`, agent search → exact fork `rgai --json` |Exact adds `--builtin`; semantic/auto uses managed grepai| ✅ |
+| One grepai store | Managed `.grepai` symlink → `<data>/workspaces/<repo>/<worktree>/index/grepai` |Real legacy, foreign link and nested duplicate fail closed| ✅ |
 | grepai lifecycle | `IndexCoordinator` owns init/generation/watcher; daemon owns coordinator | Patched 0.35 watcher, one worktree owner lock, one daemon per data root | ✅ |
 | Legacy index migration | Explicit `hzr migrate apply --workspace` | Full-SHA retained backup, prepared/applied manifests, idempotent replay | ✅ |
 | Fork IMG planner | Every context plan invokes fork `memory plan --format json` | `RTK_MEM_DB_PATH=<data>/fork/mem.db`; it remains derived cache | ✅ |
 | Central ICM | One HZR-supervised 0.10.61 DB/process; MCP store + typed JSON recall | Required workspace → repository topic/project namespace; strict post-filter blocks global/foreign records | ✅ |
 | Context composition | Fork plan + one ICM recall in parallel; one fork `rgai` only on empty planner | No unconditional second semantic pass; evidence estimates stay within hard limit | ✅ |
-| Context/code consumption | Plan returns bounded metadata/snippets/memory summaries; agent exact-reads chosen paths later | Нет ложного claim об eager reread всех selected files или final provider-token proof | ✅ |
+| Context/code consumption | Plan returns bounded metadata/snippets/memory summaries; agent exact-reads chosen paths later |There is no false claim about eager reread of all selected files or final provider-token proof| ✅ |
 | Context exposure | `/v1/context/plan`, `hzr context plan`, `hzr_context`, bounded prefetch | Native pre-read hooks/repo map disabled | ✅ |
 | Fork runtime state | `RTK_MEM_DB_PATH`, `RTK_DB_PATH`, private PATH/audit dirs | Managed path also sets `RTK_TEE=0`, `RTK_TELEMETRY_DISABLED=1` | ✅ |
-| Trust/custom filters | Fork остаётся источником rewrite/filter verdict | HZR сохраняет exact output/exit and approval state | ✅ |
+| Trust/custom filters |Fork remains the source rewrite/filter verdict|HZR saves exact output/exit and approval state| ✅ |
 | Caveman response density | Short stable contract injected before generation | No post-hoc lossy rewrite; strict JSON parses, empty output fails | ✅ |
 | Explicit codec | Exact duplicate-paragraph transform + protected spans/raw guard | Shadow returns original with counterfactual bytes; trailing newline preserved | ✅ |
 | Caveman tool boundary | Exact HZR custom-tool allowlist; native layers/resources disabled and repeatedly asserted | SDK still makes inactive `cavemem --version` probe at session construction | 🟡 |
@@ -83,7 +83,7 @@ Baseline identity immutable. `fork-core/rtk` после `v0.1.0` развива�
 
 ## Compatibility boundary
 
-Fork-core остаётся отдельным exact executable, потому что преобразование его monolithic CLI в HZR library потребовало бы переписать `process::exit`, global state, shell behavior и десятки command-local subprocess paths.
+Fork-core remains a separate exact executable, because converting its monolithic CLI to HZR library would require rewriting `process::exit`, global state, shell behavior and dozens of command-local subprocess paths.
 
 ```text
 bin/hzr                    public product CLI
@@ -95,9 +95,9 @@ engines/icm                HZR-owned pinned 0.10.61
 engines/caveman-code/      managed bridge + exact npm production tree
 ```
 
-`hzr rtk`/`bin/rtk` не проходят повторный rewrite: explicit compatibility invocation уже является решением пользователя. Managed `hzr exec` сначала получает fork verdict; HZR добавляет только cwd confinement, timeout, bounded capture и typed approval lifecycle.
+`hzr rtk`/`bin/rtk` do not pass repeated rewrite: explicit compatibility invocation is already a user decision. Managed `hzr exec` first receives a fork verdict; HZR adds only cwd confinement, timeout, bounded capture and typed approval lifecycle.
 
-## Фактическая context composition
+## Actual context composition
 
 ```mermaid
 flowchart TD
@@ -116,35 +116,35 @@ flowchart TD
     A --> X["exact fork-backed reads/writes as needed"]
 ```
 
-Важные границы:
+Important boundaries:
 
-- Fork IMG planner сам вызывает builtin `rgai --files`; HZR не дублирует его отдельным unconditional semantic query.
-- grepai остаётся единственной code-embedding базой, даже когда текущий turn обошёлся structural planner result.
-- Content-ref dedupe хранит один candidate/content; protocol 0.1 имеет одну primary provenance record, а не provenance multiset.
-- Budget ограничивает сумму маркированных token estimates evidence. Он не выдаётся за точный provider tokenizer или полный будущий agent context.
-- Agent читает нужные файлы после plan через fork-backed tool; planner не загружает каждый selected file целиком.
+- Fork IMG planner itself calls builtin `rgai --files`; HZR does not duplicate it as a separate unconditional semantic query.
+- grepai remains the only code-embedding base, even when the current turn bypassed the structural planner result.
+- Content-ref dedupe stores one candidate/content; protocol 0.1 has one primary provenance record, not a provenance multiset.
+- Budget limits the amount of marked token estimates evidence. It is not presented as an exact provider tokenizer or a complete future agent context.
+- Agent reads the necessary files after plan via fork-backed tool; planner does not download each selected file entirely.
 
 ## Single grepai ownership
 
-1. `Workspace::discover_managed` вычисляет canonical repository/worktree identity.
-2. Store располагается только под HZR data root, project `.grepai` — проверенный symlink.
-3. `IndexCoordinator` — lifecycle/store owner; search ranking остаётся в fork `rgai`.
-4. Patched watcher получает `--no-worktree-discovery`; HZR держит один owner lock на worktree.
-5. Daemon singleton исключает второй HZR coordinator для того же data root.
-6. Fork config проверяется: disabled grepai или foreign `binary_path` блокирует adaptive delegation.
-7. Legacy real directory не используется молча; требуется recoverable explicit migration.
+1. `Workspace::discover_managed` calculates canonical repository/worktree identity.
+2. Store is located only under HZR data root, project `.grepai` - verified symlink.
+3. `IndexCoordinator` — lifecycle/store owner; search ranking remains in fork `rgai`.
+4. Patched watcher receives `--no-worktree-discovery`; HZR holds one owner lock on the worktree.
+5. Daemon singleton excludes the second HZR coordinator for the same data root.
+6. Fork config is checked: disabled grepai or foreign `binary_path` blocks adaptive delegation.
+7. Legacy real directory is not used silently; recoverable explicit migration is required.
 
-Внешний grepai process, который не соблюдает HZR `hzr-owner.lock`, нельзя надёжно остановить без отдельной process-ownership модели. Migration повторно hashes source перед switch и fail closed при обнаруженном изменении; пользователь должен остановить доказанно внешний writer перед apply.
+An external grepai process that does not respect HZR `hzr-owner.lock` cannot be reliably stopped without a separate process-ownership model. Migration re-hashes source before switch and fail closed when change detected; the user must stop the proven external writer before apply.
 
 ## Caveman boundary
 
-Managed bridge отключает native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills и extensions. Перед каждым tool call действует exact custom-tool allowlist. До agent session проверяются Node/npm integrity; до prompt — authenticated daemon health с protocol 1, HZR 0.2.0 и ровно одним ready `rtk`. Порядок проверяется реальным Node runtime test через тот же `prepareManagedRuntime`, который вызывает production `run()`.
+Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.2.0 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
 
-Response density задаётся до generation коротким cache-stable contract. HZR Codec остаётся отдельным explicit protected transform для CLI/API. Text quality защищена инструкцией, native layer guards и raw exact tools; это не формальный semantic equivalence proof.
+Response density is set before generation by a short cache-stable contract. HZR Codec remains a separate explicit protected transform for CLI/API. Text quality is protected by instructions, native layer guards and raw exact tools; this is not a formal semantic equivalence proof.
 
 ## Release gates
 
-### Функциональные 0.2.0 gates
+### Functional 0.2.0 gates
 
 - [x] Exact dirty fork snapshot v2 imported and verified.
 - [x] Exact fork builds and its synthetic-Git suite passes.
@@ -159,16 +159,16 @@ Response density задаётся до generation коротким cache-stable 
 - [x] Daemon singleton/auth/path/capture boundaries.
 - [x] Relocatable assembled local-platform bundle and compatibility alias.
 
-### Честно оставленные границы
+### Honestly left boundaries
 
-- [ ] Финальный paired provider-billed benchmark и accepted-task feedback workflow.
+- [ ] Final paired provider-billed benchmark and accepted-task feedback workflow.
 - [ ] Crash-safe usage outbox for hard process termination.
-- [x] HZR hook installer/status/uninstall и hybrid dispatcher.
+- [x] HZR hook installer/status/uninstall and hybrid dispatcher.
 - [ ] Background service manager/engine updater.
 - [ ] Runtime re-attestation of compiled fork binary beyond verified build chain + exact version.
 - [ ] Windows assembled artifact and formal third-party legal review.
 
-Эти пункты не заменяют и не обходят fork functionality. Они являются измерением/operability следующего этапа и не создают второй runtime path.
+These items do not replace or bypass fork functionality. They are a measurement/operability of the next stage and do not create a second runtime path.
 
 ## Verification commands
 
@@ -184,4 +184,4 @@ npm audit --omit=dev --audit-level=high --prefix integrations/caveman-code
 scripts/build-bundle.sh /absolute/temporary/hzr-dist
 ```
 
-Финальные результаты, commit/tag и unchanged-source proof записываются в README checkpoint и centralized ICM handoff.
+The final results, commit/tag and unchanged-source proof are written to README checkpoint and centralized ICM handoff.

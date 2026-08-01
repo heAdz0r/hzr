@@ -1,321 +1,321 @@
-# PRD: HZR 0.1.0 — статус реализации по разделам
+# PRD: HZR 0.1.0 - implementation status by sections
 
-> Исторический аудит `v0.1.0`; сводки, gap registry и acceptance ниже намеренно не переписываются задним числом. В release candidate 0.2.0 G1–G7 и instruction-wiring gap A1 закрыты, а один installer поставляет versioned self-contained bundle с full fork-core, patched grepai, ICM, caveman-code и Node.js 22.17.1. Актуальный статус, включая platform-verification boundary и неизмеренный economic KPI, находится в [PRD_STATUS_0.2.0.md](PRD_STATUS_0.2.0.md); требования — в [PRD.md](PRD.md) и [PRD_ADOPTION.md](PRD_ADOPTION.md).
+> Historical audit `v0.1.0`; The summaries, gap registry and acceptance below are intentionally not rewritten retroactively. In the release candidate 0.2.0 G1–G7 and instruction-wiring gap A1 are closed, and one installer delivers a versioned self-contained bundle with full fork-core, patched grepai, ICM, caveman-code and Node.js 22.17.1. The current status, including platform-verification boundary and unmeasured economic KPI, is in [PRD_STATUS_0.2.0.md](PRD_STATUS_0.2.0.md); requirements - in [PRD.md](PRD.md) and [PRD_ADOPTION.md](PRD_ADOPTION.md).
 
-**Дата аудита:** 2026-07-31
-**База:** [PRD.md](PRD.md) · перекрёстно с [FORK_PARITY.md](FORK_PARITY.md) · детали в [REVIEW.md](REVIEW.md)
-**Метод:** самостоятельный запуск gate + end-to-end прогон продукта из чистого data root
+**Audit date:** 2026-07-31
+**Base:** [PRD.md](PRD.md) · cross with [FORK_PARITY.md](FORK_PARITY.md) · details in [REVIEW.md](REVIEW.md)
+**Method:** self-launch gate + end-to-end product run from clean data root
 
-## Легенда
+## Legend
 
-| Маркер | Значение |
+|Marker|Meaning|
 |---|---|
-| ✅ | Реализовано и **проверено мной запуском**, а не по отчёту |
-| 🟢 | Реализовано, проверено чтением кода/тестов (без отдельного прогона) |
-| 🟡 | Реализовано частично либо гарантия слабее заявленной; есть gap |
-| ❌ | Заявлено в PRD, фактическое поведение противоположно |
-| ⚪ | Осознанно вне 0.1.0, зафиксировано в PRD/FORK_PARITY |
-| 📊 | Требует измерения; данных нет |
+| ✅ |Implemented and **tested by me by launch**, not by report|
+| 🟢 |Implemented, verified by reading code/tests (without separate run)|
+| 🟡 |Partially implemented or the guarantee is weaker than stated; there is a gap|
+| ❌ |Stated in PRD, actual behavior is the opposite|
+| ⚪ |Knowingly outside 0.1.0, recorded in PRD/FORK_PARITY|
+| 📊 |Requires measurement; no data|
 
-**Сводка:** ✅ 34 · 🟢 21 · 🟡 5 · ❌ 1 · ⚪ 7 · 📊 9
+**Summary:** ✅ 34 · 🟢 21 · 🟡 5 · ❌ ​​1 · ⚪ 7 · 📊 9
 
 ---
 
-## §1 Решение и fork-core contract
+## §1 Solution and fork-core contract
 
-| # | Требование | Статус | Основание |
+| # |Requirement|Status|Base|
 |---|---|---|---|
-| 1.1.1 | Источник истины — фактический worktree, включая dirty/untracked | ✅ | `SNAPSHOT.toml`: `source_head=5f403c46`, `source_diff_sha256`, `source_status_sha256`, `selection = "git tracked ... plus untracked"` |
-| 1.1.2 | Перенесён весь source/product surface | ✅ | 516 файлов на диске = `included_file_count = 516` |
-| 1.1.3 | **Ноль упрощённых reimplementations в runtime-пути** | ✅ | Целенаправленно искал: search → fork `rgai`, plan → fork `memory plan`, exec → fork `rewrite`. Не найдено |
-| 1.1.4 | Исключения только генерируемые/секретные | 🟢 | `exclusion_record_count = 32`, категории заявлены |
-| 1.1.5 | Машинно проверяемый manifest | ✅ | `SNAPSHOT_V2.tsv` (79 KB), hex-encoded paths, per-file digest, 4 tracked deletions |
-| 1.1.6 | Fork собирается и проходит свои тесты из HZR; CI отклоняет дрейф | 🟡 | Сборка и verify — ✅; regression suite **недетерминирован** → **G3** |
-| 1.1.7 | Интеграция через adapters; overlay auditable | ✅ | `hzr-exec` — process adapter, своей таблицы rewrite нет |
-| 1.1.8 | Stock RTK не fallback | ✅ | `engines.lock.toml`: `rtk-upstream-reference` с `runtime = false`, `source_kind = "reference-only"` |
-| 1.x | Один CLI / daemon / config root / protocol / budget / ledger | ✅ | Прогон: 15 команд, singleton `hzrd`, один data root, protocol 1 |
+| 1.1.1 |The source of truth is the actual worktree, including dirty/untracked| ✅ | `SNAPSHOT.toml`: `source_head=5f403c46`, `source_diff_sha256`, `source_status_sha256`, `selection = "git tracked ... plus untracked"` |
+| 1.1.2 |The entire source/product surface has been transferred| ✅ |516 files on disk = `included_file_count = 516`|
+| 1.1.3 |**Zero simplified reimplementations in the runtime path**| ✅ |Purposefully searched: search → fork `rgai`, plan → fork `memory plan`, exec → fork `rewrite`. Not found|
+| 1.1.4 |Only thrown/secret exceptions| 🟢 |`exclusion_record_count = 32`, categories declared|
+| 1.1.5 |Machine verifiable manifest| ✅ | `SNAPSHOT_V2.tsv` (79 KB), hex-encoded paths, per-file digest, 4 tracked deletions |
+| 1.1.6 |Fork builds and passes its tests from HZR; CI rejects drift| 🟡 |Assembly and verify - ✅; regression suite **non-deterministic** → **G3**|
+| 1.1.7 | Integration through auditable adapters | ✅ | `hzr-exec` is a process adapter with no independent rewrite table |
+| 1.1.8 |Stock RTK does not fallback| ✅ |`engines.lock.toml`: `rtk-upstream-reference` with `runtime = false`, `source_kind = "reference-only"`|
+| 1.x |One CLI/daemon/config root/protocol/budget/ledger| ✅ |Run: 15 commands, singleton `hzrd`, one data root, protocol 1|
 
 ## §2 Product contract
 
-| Требование | Статус | Основание |
+|Requirement|Status|Base|
 |---|---|---|
-| Формула `cost_per_accepted_task` как оптимизируемая функция | 🟢 | `EconomicInput::expected_value()` в [hzr-codec/src/lib.rs](crates/hzr-codec/src/lib.rs) реализует `saved − overhead − p(retry)·cost` |
-| Трансформация только при положительном expected_value | 🟢 | `is_profitable()` + `test_economic_gate_charges_instruction_and_retry_cost` |
-| Exact/lossless policy для code/JSON/paths/commands | 🟡 | `FidelityClass::Exact` соблюдается (проверено), но protected-регекс не покрывает 4 заявленных класса → **G2** |
-| Raw / content-addressed reference при неопределённости | ✅ | `test_choose_never_worse_*`, `test_protected_duplicate_falls_back_to_raw`; в прогоне raw сохранён byte-for-byte |
+|Formula `cost_per_accepted_task` as a function to be optimized| 🟢 |`EconomicInput::expected_value()` in [hzr-codec/src/lib.rs](crates/hzr-codec/src/lib.rs) implements `saved − overhead − p(retry)·cost`|
+|Transformation only if expected_value is positive| 🟢 | `is_profitable()` + `test_economic_gate_charges_instruction_and_retry_cost` |
+|Exact/lossless policy for code/JSON/paths/commands| 🟡 |`FidelityClass::Exact` is respected (checked), but the protected regex does not cover the 4 declared classes → **G2**|
+|Raw / content-addressed reference when undefined| ✅ |`test_choose_never_worse_*`, `test_protected_duplicate_falls_back_to_raw`; in the raw run it is stored byte-for-byte|
 
 ## §3 Evidence
 
-| Требование | Статус |
+|Requirement|Status|
 |---|---|
-| §3.1–3.5 выводы исследования зафиксированы с источниками | 🟢 Документ, не код. Все 5 подразделов имеют ссылки; выводы согласованы с §15 |
+|§3.1–3.5 research findings recorded with sources|🟢 Document, not code. All 5 subsections have links; conclusions are consistent with §15|
 
-## §4 Goals и guardrails
+## §4 Goals and guardrails
 
-### §4.1 Goals для 0.1.x
+### §4.1 Goals for 0.1.x
 
-| Goal | Статус | Основание |
+| Goal |Status|Base|
 |---|---|---|
-| Один semantic index на `(workspace, root, embedder, model, dim)` | ✅ | Прогон: `generation=68f4b53a...`; `test_linked_worktrees_share_repository_identity_but_not_index_identity` |
-| 100% fork surface в hash-locked fork-core | ✅ | verify-fork-core.sh → `verified` |
-| Ноль reimplementations в runtime-пути | ✅ | см. 1.1.3 |
-| Ноль project-local index data; только проверенный symlink | ✅ | Прогон: `ForeignSymlink` детектирован и заблокирован без мутации |
-| Один ICM process и одна canonical DB | 🟢 | `test_supervisor_owns_one_process_and_second_instance_attaches`, `test_supervisor_recovers_orphan_without_spawning_duplicate` |
-| Точный RTK rewrite contract (rewrite ≠ auto-allow) | ✅ | Прогон: вердикт `ask:` для `cat main.rs`; exit 0/1/2/3 покрыты тестами |
-| Hard evidence budget по маркированной estimate; без скрытого второго pre-read | ✅ | Прогон: `tokens=180/16000` и `180/12000`; `test_plan_never_exceeds_hard_budget` |
-| **Адаптивный codec с protected spans и raw fallback** | 🟡 | Raw fallback ✅; но codec сводится к dedupe абзацев, spans узкие → **G2**, **G4** |
-| caveman-code managed mode без дублирующих слоёв | 🟡 | Отключения присутствуют, но порядок «before first prompt» проверяется текстовым поиском → **G5** |
-| Actual usage отдельно от estimates | 🟢 | `test_ledger_keeps_estimates_out_of_actual_totals` + `test_usage_route_records_provider_tokens_separately_from_estimates` |
-| Все engines проверяются по version/integrity до запуска | ✅ | Прогон: `doctor` поймал реальный дрейф ICM 0.10.57 vs 0.10.61 → exit 1 |
-| Offline local mode; telemetry off | ✅ | Прогон: `RTK_TEE=0`, `RTK_TELEMETRY_DISABLED=1`; loopback-only |
+|One semantic index on `(workspace, root, embedder, model, dim)`| ✅ |Run: `generation=68f4b53a...`; `test_linked_worktrees_share_repository_identity_but_not_index_identity`|
+|100% fork surface in hash-locked fork-core| ✅ | verify-fork-core.sh → `verified` |
+|Zero reimplementations in the runtime path| ✅ |see 1.1.3|
+|Zero project-local index data; only verified symlink| ✅ |Run: `ForeignSymlink` detected and blocked without mutation|
+|One ICM process and one canonical DB| 🟢 | `test_supervisor_owns_one_process_and_second_instance_attaches`, `test_supervisor_recovers_orphan_without_spawning_duplicate` |
+|Exact RTK rewrite contract (rewrite ≠ auto-allow)| ✅ |Run: verdict `ask:` for `cat main.rs`; exit 0/1/2/3 are covered by tests|
+|Hard evidence budget according to the marked estimate; without hidden second pre-read| ✅ |Run: `tokens=180/16000` and `180/12000`; `test_plan_never_exceeds_hard_budget`|
+|**Adaptive codec with protected spans and raw fallback**| 🟡 |Raw fallback ✅; but the codec is reduced to a dedupe of paragraphs, spans are narrow → **G2**, **G4**|
+|caveman-code managed mode without duplicate layers| 🟡 |Disablements are present, but the order "before first prompt" is checked by text search → **G5**|
+|Actual usage separate from estimates| 🟢 | `test_ledger_keeps_estimates_out_of_actual_totals` + `test_usage_route_records_provider_tokens_separately_from_estimates` |
+|All engines are checked by version/integrity before launch| ✅ |Run: `doctor` caught real drift ICM 0.10.57 vs 0.10.61 → exit 1|
+| Offline local mode; telemetry off | ✅ |Run: `RTK_TEE=0`, `RTK_TELEMETRY_DISABLED=1`; loopback-only|
 
-### §4.2 Product metrics — 0 из 9 измерено
+### §4.2 Product metrics - 0 out of 9 measured
 
-| Метрика | Цель | Статус |
+|Metrics|Target|Status|
 |---|---|---|
-| median billed cost / accepted task | ≥ −30% | 📊 нет данных |
+| median billed cost / accepted task | ≥ −30% |📊 no data|
 | median turns | ≥ −20% | 📊 |
 | uncached input tokens | ≥ −35% | 📊 |
-| tool-result bytes в context | ≥ −60% | 📊 |
-| retrieval recall@20 | ≥ 95% | 📊 нет gold set |
-| task success non-inferiority | ≤ 1 п.п. | 📊 |
-| p95 warm overhead | ≤ 250 ms | 📊 не инструментировано |
-| p90 cost отдельной задачи | ≤ +5% | 📊 |
-| stale-index инциденты | 0 | 📊 нет продакшн-наблюдений |
+|tool-result bytes in context| ≥ −60% | 📊 |
+| retrieval recall@20 | ≥ 95% |📊 no gold set|
+| task success non-inferiority |≤ 1 p.p.| 📊 |
+| p95 warm overhead | ≤ 250 ms |📊 not instrumented|
+|p90 cost of a single task| ≤ +5% | 📊 |
+|stale-index incidents| 0 |📊 no production observations|
 
-**Соблюдение дисциплины отчётности — ✅ (проверено).** `hzr savings` выдаёт `tasks: 0, accepted: 0` и **не** печатает `cost_per_accepted_task`. Требование «UI не имеет права показывать прогноз как доказанную экономию» выполнено буквально.
+**Reporting Compliance - ✅ (verified).** `hzr savings` produces `tasks: 0, accepted: 0` and **does not** print `cost_per_accepted_task`. The requirement “UI is not allowed to show the forecast as proven savings” is met literally.
 
-### §4.3 Non-goals — соблюдены
+### §4.3 Non-goals - met
 
-| Non-goal | Статус |
+| Non-goal |Status|
 |---|---|
-| Сжатие reasoning провайдера | ✅ не делается |
-| Regex-переписывание code/JSON/enums/args | ✅ `FidelityClass::Exact` короткозамыкает; проверено прогоном |
-| Общая физическая SQLite для index+memory+ledger | ✅ Прогон: `memory/icm/memories.db`, `ledger/usage.sqlite`, `fork/history.db` раздельны |
-| Облачный control plane | ✅ loopback-only, `test_config_rejects_non_loopback_bind` |
-| Автоудаление legacy indexes | ✅ `test_migrate_legacy_index_refuses_*` — ничего не удаляется |
-| Копирование caveman-code в Rust | ✅ managed npm runtime |
-| Переписывание fork | ✅ snapshot immutable |
-| Замена fork-core на stock RTK | ✅ `runtime = false` для upstream |
-| Обещание «нулевой потери качества» | ✅ формулировок нет |
+|Compression reasoning provider|✅ not done|
+|Regex rewrite code/JSON/enums/args|✅ `FidelityClass::Exact` short-circuits; tested by run|
+|Shared physical SQLite for index+memory+ledger|✅ Run: `memory/icm/memories.db`, `ledger/usage.sqlite`, `fork/history.db` are separate|
+|Cloud control plane| ✅ loopback-only, `test_config_rejects_non_loopback_bind` |
+|Auto-delete legacy indexes|✅ `test_migrate_legacy_index_refuses_*` - nothing is deleted|
+|Copying caveman-code in Rust| ✅ managed npm runtime |
+|Rewriting fork| ✅ snapshot immutable |
+|Replacing fork-core with stock RTK|✅ `runtime = false` for upstream|
+|"Zero Quality Loss" Promise|✅ no wording|
 
-## §5 Архитектура
+## §5 Architecture
 
-| Требование | Статус | Основание |
+|Requirement|Status|Base|
 |---|---|---|
-| §5.1 Ownership matrix — единственный владелец на concern | ✅ | Проверено прогоном по всем 10 строкам матрицы |
-| §5.2 п.1 intent без переписывания | 🟢 | Codec не трогает user intent; density-контракт добавляется к ответу |
-| §5.2 п.2 один managed grepai lifecycle, без unconditional query | 🟢 | `IndexCoordinator`, `test_coordinator_reuses_one_watcher_for_repeated_prepare` |
-| §5.2 п.3 fork `memory plan` + один ICM recall параллельно | ✅ | Прогон: `fork-plan pipeline=graph_first_v1` + `warning MemoryUnavailable` в одном ответе |
-| §5.2 п.4 `rgai` только при пустом planner | 🟢 | Логика планировщика; `test_search_and_context_use_managed_fork_core_commands` |
-| §5.2 п.5 нормализация в `ContextCandidate` с provenance/hash/generation | ✅ | Прогон: `{"sources":["tier_c","semantic:budget"],"estimated_tokens":180}` |
-| §5.2 п.6 один candidate на content ref + hard limit | 🟢 | `test_plan_deduplicates_same_content_reference`, `test_equal_content_has_stable_reference` |
-| §5.2 п.7 bounded metadata, без eager reread | 🟢 | Прогон: план вернул метаданные+оценку, не содержимое файла |
-| §5.2 п.8 density contract до generation; без второго lossy post-processing | 🟢 | `appendSystemPrompt: responseContract` в bridge |
-| §5.2 п.9 только allowlisted tools | 🟢 | `installManagedToolGuard` + `beforeToolCall`; но см. **G5** |
-| §5.2 п.10 JSON validation, empty output отклоняется, usage в ledger | 🟢 | `test_bridge_enforces_response_quality_before_and_after_generation` |
-| §5.2 п.11 в ICM только durable facts | 🟢 | Нет автоматической записи tool output |
+|§5.1 Ownership matrix - the only owner on concern| ✅ |Checked by running through all 10 rows of the matrix|
+|§5.2 clause 1 intent without rewriting| 🟢 |Codec doesn't touch user intent; density contract is added to the answer|
+|§5.2 p.2 one managed grepai lifecycle, without unconditional query| 🟢 | `IndexCoordinator`, `test_coordinator_reuses_one_watcher_for_repeated_prepare` |
+|§5.2 p.3 fork `memory plan` + one ICM recall in parallel| ✅ |Run: `fork-plan pipeline=graph_first_v1` + `warning MemoryUnavailable` in one answer|
+|§5.2 p.4 `rgai` only with an empty planner| 🟢 |Scheduler logic; `test_search_and_context_use_managed_fork_core_commands`|
+|§5.2 p.5 normalization to `ContextCandidate` with provenance/hash/generation| ✅ |Run: `{"sources":["tier_c","semantic:budget"],"estimated_tokens":180}`|
+|§5.2 p.6 one candidate per content ref + hard limit| 🟢 | `test_plan_deduplicates_same_content_reference`, `test_equal_content_has_stable_reference` |
+|§5.2 p.7 bounded metadata, without eager reread| 🟢 |Run: plan returned metadata+score, not file content|
+|§5.2 clause 8 density contract up to generation; without second lossy post-processing| 🟢 |`appendSystemPrompt: responseContract` in bridge|
+|§5.2 clause 9 only allowlisted tools| 🟢 |`installManagedToolGuard` + `beforeToolCall`; but see **G5**|
+|§5.2 clause 10 JSON validation, empty output rejected, usage in ledger| 🟢 | `test_bridge_enforces_response_quality_before_and_after_generation` |
+|§5.2 clause 11 in ICM only durable facts| 🟢 |No automatic recording tool output|
 
-## §6 Компоненты
+## §6 Components
 
 ### §6.1 `hzr-protocol` — ✅
-Versioned envelopes; actual/estimated разделены на уровне типов. `test_envelope_serialization_preserves_protocol_version`, `test_token_source_preserves_provider_only_counts`.
+Versioned envelopes; actual/estimated are separated at the type level. `test_envelope_serialization_preserves_protocol_version`, `test_token_source_preserves_provider_only_counts`.
 
 ### §6.2 `hzr-core` — ✅
-Canonical layout, engine lock, fusion, budgets, ledger, migration state. Прогон `hzr init` создал ровно спроектированный layout.
+Canonical layout, engine lock, fusion, budgets, ledger, migration state. The run `hzr init` created a smoothly designed layout.
 
-### §6.3 `fork-core` + `hzr-exec` — ✅ (сильнейшая часть)
+### §6.3 `fork-core` + `hzr-exec` — ✅ (strongest part)
 
-| Требование | Статус |
+|Requirement|Status|
 |---|---|
-| Полный hash-locked snapshot dirty worktree | ✅ verified |
-| `hzr-exec` — тонкий adapter без своей таблицы rewrite | ✅ |
-| Exit code / stderr / paths / identifiers сохранены | ✅ `test_pipeline_reports_exact_exit_and_stderr_channels`, `test_pipeline_reports_exact_unix_signal` |
-| Raw/direct fallback по fork-семантике; stock RTK запрещён | ✅ |
-| Публичное имя `hzr`; fork не публикуется как control plane | ✅ Прогон: `hzr rtk -- --version` → `rtk 0.44.1-fork.1` |
+|Full hash-locked snapshot dirty worktree| ✅ verified |
+|`hzr-exec` - thin adapter without its own rewrite table| ✅ |
+|Exit code/stderr/paths/identifiers saved| ✅ `test_pipeline_reports_exact_exit_and_stderr_channels`, `test_pipeline_reports_exact_unix_signal` |
+|Raw/direct fallback based on fork semantics; stock RTK is prohibited| ✅ |
+|Public name `hzr`; fork is not published as control plane|✅ Run: `hzr rtk -- --version` → `rtk 0.44.1-fork.1`|
 
-40 тестов на 2843 LOC: pipes, `&&/||`, heredoc, redirects, xargs, quoting, non-UTF8 argv, process-group timeout, spill на диск.
+40 tests for 2843 LOC: pipes, `&&/||`, heredoc, redirects, xargs, quoting, non-UTF8 argv, process-group timeout, spill to disk.
 
-### §6.4 `hzr-index` — ✅ (11/11 пунктов)
-Canonical paths + git common dir, стабильные ID, один config/watcher/generation, version check против lock, подготовка store, никакого конкурирующего ranker, детекция nested/legacy без удаления, отказ чужому watcher, блокировка legacy до `migrate apply`, инвалидация по generation+hash.
-Прогон подтвердил `ForeignSymlink` и `grepai_duplicates: none found`. Патч `--no-worktree-discovery` проверяется в CI на pinned commit + `go test ./cli`.
+### §6.4 `hzr-index` — ✅ (11/11 points)
+Canonical paths + git common dir, stable IDs, one config/watcher/generation, version check against lock, store preparation, no competing ranker, nested/legacy detection without deletion, refusal of someone else's watcher, legacy locking up to `migrate apply`, generation+hash invalidation.
+The run confirmed `ForeignSymlink` and `grepai_duplicates: none found`. Patch `--no-worktree-discovery` is being checked in CI on pinned commit + `go test ./cli`.
 
-### §6.5 `hzr-memory` — 🟢 (13/13 пунктов реализованы)
-Фиксированная DB, singleton lock, MCP store с полной семантикой, typed CLI JSON recall, repository-scoped topic namespace, private permissions, circuit breaker, idempotent lifecycle, version check, без индексации кода.
-Проект-скоупинг покрыт всерьёз: `test_isolate_project_memories_removes_global_and_cross_repo_records`, `test_topic_belongs_to_project_never_accepts_global_or_foreign_topics`, `test_memory_route_rejects_user_supplied_project_override`.
-Прогон: version check сработал (0.10.57 ≠ 0.10.61) → `warning MemoryUnavailable`, code plan сохранён. Ровно §10.
+### §6.5 `hzr-memory` — 🟢 (13/13 points implemented)
+Fixed DB, singleton lock, MCP store with full semantics, typed CLI JSON recall, repository-scoped topic namespace, private permissions, circuit breaker, idempotent lifecycle, version check, no code indexing.
+The scoping project is seriously covered: `test_isolate_project_memories_removes_global_and_cross_repo_records`, `test_topic_belongs_to_project_never_accepts_global_or_foreign_topics`, `test_memory_route_rejects_user_supplied_project_override`.
+Run: version check worked (0.10.57 ≠ 0.10.61) → `warning MemoryUnavailable`, code plan saved. Exactly §10.
 
-### §6.6 `hzr-codec` — ❌ / 🟡 (единственное нарушение контракта)
+### §6.6 `hzr-codec` - ❌ / 🟡 (the only breach of contract)
 
-| Требование | Статус | Основание |
+|Requirement|Status|Base|
 |---|---|---|
-| Профили `off`, `safe`, `adaptive`, `compact`, `shadow` | 🟢 | Все 5 в CLI и protocol |
-| `adaptive` проверяет экономику до добавления контракта | 🟢 | `is_profitable()` + порог `>= 600` output tokens |
-| **`shadow` не меняет доставляемый контент** | ❌ | **Меняет.** `--profile shadow` → `"changed": true`, абзац удалён → **G1** |
-| **`shadow` записывает counterfactual size** | ❌ | Не записывает. `counterfactual\|shadow_size` → 0 совпадений → **G1** |
-| Protected spans: code fences, inline code, URLs, flags, hashes, versions | 🟢 | Покрыты регексом, проверено |
+|Profiles `off`, `safe`, `adaptive`, `compact`, `shadow`| 🟢 |All 5 in CLI and protocol|
+|`adaptive` checks the economy before adding a contract| 🟢 |`is_profitable()` + threshold `>= 600` output tokens|
+|**`shadow` does not change the delivered content**| ❌ |**Changes.** `--profile shadow` → `"changed": true`, paragraph deleted → **G1**|
+|**`shadow` writes counterfactual size**| ❌ |Doesn't record. `counterfactual\|shadow_size` → 0 matches → **G1**|
+| Protected spans: code fences, inline code, URLs, flags, hashes, versions | 🟢 |Regex coated, verified|
 | Protected spans: **paths, identifiers, enum-like, structured payloads** | 🟡 | `src/main.rs`, `MAX_RETRIES`, `handle_budget_overflow`, `{"k":1}` → `protected_spans: []` → **G2** |
 
-Причина G1 — [lib.rs:106](crates/hzr-codec/src/lib.rs#L106): short-circuit покрывает только `Exact` и `Off`; `Shadow` проваливается в `deduplicate_paragraphs`. Ни один из 5 тестов codec не покрывает `Shadow`.
+Reason G1 - [lib.rs:106](crates/hzr-codec/src/lib.rs#L106): short-circuit only covers `Exact` and `Off`; `Shadow` falls into `deduplicate_paragraphs`. None of the 5 codec tests cover `Shadow`.
 
 ### §6.7 `hzr-agent` — 🟡
 
-| Требование | Статус |
+|Requirement|Status|
 |---|---|
 | Version + npm integrity pinned | ✅ `test_package_lock_digest_matches_compiled_provenance`, `test_package_lock_digest_rejects_tampering` |
-| Изолированный `agentDir` под HZR data root | 🟢 `test_prepare_agent_data_dir_rejects_symlink` |
-| Native RTK/repo-map/memory/hooks/compression/telemetry/builtins отключены **до первого prompt** | 🟡 Вызовы присутствуют, но порядок проверяется `BRIDGE.contains(...)` → **G5** |
+|Isolated `agentDir` under HZR data root| 🟢 `test_prepare_agent_data_dir_rejects_symlink` |
+|Native RTK/repo-map/memory/hooks/compression/telemetry/builtins disabled **before first prompt**|🟡 Calls are present, but the order is checked `BRIDGE.contains(...)` → **G5**|
 | Exact allowlist custom tools | 🟢 `installManagedToolGuard` + `beforeToolCall` |
-| Один bounded prefetch как untrusted evidence | 🟢 `context_prefetched: true` |
-| Text и strict JSON режимы | 🟢 |
-| Credentials не копируются в ledger | 🟢 §9 |
-| Health: protocol 1, HZR 0.1.0, ровно один ready fork-core | ✅ `test_bridge_preflight_requires_compatible_hzr_and_ready_fork_core`; прогон: `state Degraded` при незавершённом окружении |
-| Usage постится один раз с terminal outcome; сбой учёта не маскирует результат | 🟢 `test_bridge_accounts_provider_usage_once_for_every_terminal_outcome` |
-| Managed launch fails closed; прочие команды работают | ✅ Прогон подтвердил |
-| Node ≥ 20.18.1, Node 26 заблокирован | 🟢 `test_supported_node_range_keeps_node_25_and_excludes_node_26` |
-| `adm-zip` override, `npm audit` без high/critical | ✅ CI-шаг зелёный |
-| Остаточный `cavemem --version` probe | 🟡 Признано в PRD и FORK_PARITY |
+|One bounded prefetch as untrusted evidence| 🟢 `context_prefetched: true` |
+|Text and strict JSON modes| 🟢 |
+|Credentials are not copied to ledger| 🟢 §9 |
+|Health: protocol 1, HZR 0.1.0, exactly one ready fork-core|✅ `test_bridge_preflight_requires_compatible_hzr_and_ready_fork_core`; run: `state Degraded` with incomplete environment|
+|Usage fasts once with terminal outcome; accounting failure does not mask the result| 🟢 `test_bridge_accounts_provider_usage_once_for_every_terminal_outcome` |
+|Managed launch fails closed; other commands are working|✅ Run confirmed|
+|Node ≥ 20.18.1, Node 26 blocked| 🟢 `test_supported_node_range_keeps_node_25_and_excludes_node_26` |
+|`adm-zip` override, `npm audit` without high/critical|✅ CI step green|
+|Residual `cavemem --version` probe|🟡 Recognized in PRD and FORK_PARITY|
 
-### §6.8 `hzrd` и `hzr-cli` — ✅ точное совпадение
+### §6.8 `hzrd` and `hzr-cli` — ✅ exact match
 
-**12/12 routes** в [server.rs:22-33](crates/hzr-daemon/src/server.rs#L22) — health, engines, search, context/plan, memory/recall, memory/store, exec/rewrite, exec/run, exec/approval, fork/run, codec/compile, usage. Без лишних и без недостающих.
+**12/12 routes** in [server.rs:22-33](crates/hzr-daemon/src/server.rs#L22) - health, engines, search, context/plan, memory/recall, memory/store, exec/rewrite, exec/run, exec/approval, fork/run, codec/compile, usage. No extra ones and no missing ones.
 
-**15/15 команд CLI** — `init, doctor, daemon, engines, index, search, rgai, context, memory, exec, codec, agent, savings, migrate, rtk`.
+**15/15 commands CLI** - `init, doctor, daemon, engines, index, search, rgai, context, memory, exec, codec, agent, savings, migrate, rtk`.
 
-`bin/rtk` → alias на `bin/hzr` с нормализацией в `hzr rtk --`: `test_normalize_rewrites_installed_rtk_alias`, `test_normalize_preserves_non_utf8_fork_argument`.
+`bin/rtk` → alias to `bin/hzr` with normalization to `hzr rtk --`: `test_normalize_rewrites_installed_rtk_alias`, `test_normalize_preserves_non_utf8_fork_argument`.
 
-## §7 Data layout и запрет дублей — ✅
+## §7 Data layout and prohibition of duplicates — ✅
 
-Прогон `hzr init` из чистого `HOME` создал `runtime/`, `workspaces/`, `memory/icm/`, `ledger/`, `engines/`, `config.toml`; `fork/` и `migrations/` создаются лениво (подтверждено `RTK_MEM_DB_PATH=<data>/fork/mem.db` в прогоне).
+Running `hzr init` from pure `HOME` created `runtime/`, `workspaces/`, `memory/icm/`, `ledger/`, `engines/`, `config.toml`; `fork/` and `migrations/` are created lazily (confirmed by `RTK_MEM_DB_PATH=<data>/fork/mem.db` in the run).
 
-| Инвариант | Статус |
+|Invariant|Status|
 |---|---|
-| index и memory физически раздельны | ✅ проверено |
-| Нет project-local index data; `.grepai` только symlink | ✅ проверено |
-| Real `.grepai` = legacy, блокирует до migration | ✅ проверено (`ForeignSymlink`) |
-| Legacy обнаруживается read-only scan | 🟢 `test_collect_markers_finds_database_without_following_symlinks` |
-| Migration только явной командой + backup + 2 manifest | 🟢 6 тестов `test_migrate_legacy_index_*` |
-| Автоудаление/quarantine запрещены | ✅ |
-| Singleton `hzrd` + worktree owner lock | ✅ Прогон: `hzrd.lock`; `test_acquire_refuses_second_owner_and_releases_without_deleting_file` |
-| Один content hash не повторяется в pack | 🟢 `test_plan_deduplicates_same_content_reference` |
+|index and memory are physically separate|✅ verified|
+|No project-local index data; `.grepai` symlink only|✅ verified|
+|Real `.grepai` = legacy, blocks until migration|✅ verified (`ForeignSymlink`)|
+|Legacy is detected by read-only scan| 🟢 `test_collect_markers_finds_database_without_following_symlinks` |
+|Migration only with explicit command + backup + 2 manifest|🟢 6 tests `test_migrate_legacy_index_*`|
+|Auto-delete/quarantine prohibited| ✅ |
+| Singleton `hzrd` + worktree owner lock |✅ Run: `hzrd.lock`; `test_acquire_refuses_second_owner_and_releases_without_deleting_file`|
+|One content hash is not repeated in pack| 🟢 `test_plan_deduplicates_same_content_reference` |
 
-## §8 Version и supply-chain — ✅
+## §8 Version and supply-chain — ✅
 
-`engines.lock.toml` совпадает с таблицей §8 **буквально** по всем 6 компонентам (grepai 0.35.0/`65c345ca`, ICM 0.10.61/`c3a1bac7`, fork 0.44.1-fork.1/`5f403c46`, upstream 0.44.1/`36591fb0` reference-only, Caveman 1.9.1/`0d95a81d`, caveman-code 0.65.2/`4700b8fa` + sha512 integrity).
+`engines.lock.toml` coincides with table §8 **literally** for all 6 components (grepai 0.35.0/`65c345ca`, ICM 0.10.61/`c3a1bac7`, fork 0.44.1-fork.1/`5f403c46`, upstream 0.44.1/`36591fb0` reference-only, Caveman 1.9.1/`0d95a81d`, caveman-code 0.65.2/`4700b8fa` + sha512 integrity).
 
-CI реально клонирует grepai на pinned commit, применяет патч, гоняет `go test ./cli`. Patch SHA-256 зафиксированы для обоих патчей.
+CI actually clones grepai on pinned commit, applies the patch, runs `go test ./cli`. Patch SHA-256 are fixed for both patches.
 
-## §9 Security и privacy — ✅ (проверено на живом процессе)
+## §9 Security and privacy — ✅ (tested on a live trial)
 
-| Требование | Статус |
+|Requirement|Status|
 |---|---|
-| Loopback-only; non-loopback не поддержан | ✅ `test_config_rejects_non_loopback_bind`, `test_hzr_api_rejects_remote_or_credentialed_hosts` |
-| Bearer token на локальный API | ✅ `test_all_routes_require_bearer_authentication` |
-| Private permissions на секреты | 🟡 `hzrd.token` = `0600` ✅, но `hzrd.token.lock` = `0644` → **G7** (секрета не содержит) |
-| API keys не логируются | ✅ `test_bearer_token_debug_is_redacted`, `test_redact_token_removes_every_occurrence` |
-| `RTK_TEE=0`, `RTK_TELEMETRY_DISABLED=1` | ✅ **наблюдал в выводе `exec rewrite`** |
-| Telemetry и raw retention off | ✅ |
+|Loopback-only; non-loopback is not supported| ✅ `test_config_rejects_non_loopback_bind`, `test_hzr_api_rejects_remote_or_credentialed_hosts` |
+|Bearer token to local API| ✅ `test_all_routes_require_bearer_authentication` |
+|Private permissions for secrets|🟡 `hzrd.token` = `0600` ✅, but `hzrd.token.lock` = `0644` → **G7** (does not contain a secret)|
+|API keys are not logged| ✅ `test_bearer_token_debug_is_redacted`, `test_redact_token_removes_every_occurrence` |
+| `RTK_TEE=0`, `RTK_TELEMETRY_DISABLED=1` |✅ **observed in the output `exec rewrite`**|
+|Telemetry and raw retention off| ✅ |
 | Allowlist argument shapes + canonical paths | ✅ `test_managed_fork_api_confines_read_and_write_paths`, `test_managed_fork_api_rejects_symlink_escape` |
-| Destructive commands → отдельный verdict | ✅ Прогон: вердикт `ask:` |
-| Body/capture/time limits; traversal отклоняется | ✅ `test_payload_limit_reserves_json_envelope_space`, `test_capture_writer_truncates_at_safe_memory_cap` |
-| Ledger без prompt/response body | 🟢 |
+|Destructive commands → separate verdict|✅ Run: verdict `ask:`|
+|Body/capture/time limits; traversal deviates| ✅ `test_payload_limit_reserves_json_envelope_space`, `test_capture_writer_truncates_at_safe_memory_cap` |
+|Ledger without prompt/response body| 🟢 |
 
-## §10 Failure modes — ✅ все 11 воспроизведены или покрыты
+## §10 Failure modes — ✅ all 11 played or covered
 
-| Failure | Статус |
+| Failure |Status|
 |---|---|
-| `hzrd` недоступен → блок managed, `hzr rtk` работает | ✅ **проверено прогоном** |
-| grepai отсутствует/устарел → exact fallback, degraded | 🟢 `test_connect_rejects_unpinned_grepai_version` |
+|`hzrd` is not available → managed block, `hzr rtk` is working|✅ **tested by run**|
+|grepai is missing/deprecated → exact fallback, degraded| 🟢 `test_connect_rejects_unpinned_grepai_version` |
 | index stale → stale provenance | 🟢 |
-| legacy/duplicate/foreign index → typed error, без удаления | ✅ **проверено** (`ForeignSymlink`) |
-| ICM недоступен → warning + code plan | ✅ **проверено** (`warning MemoryUnavailable` + план) |
-| codec invariant нарушен → raw | ✅ `test_protected_duplicate_falls_back_to_raw` |
-| fork-core недоступен/version mismatch → блок, без stock RTK | ✅ `test_adapter_version_mismatch_fails_closed`, `test_adapter_missing_binary_fails_closed` |
-| fork выбрал raw/fail-open → семантика сохранена | ✅ |
-| provider usage отсутствует → только estimated columns | 🟢 |
-| caveman-code SDK drift → блок с remediation | 🟢 `test_bridge_preflight_*` |
-| budget исчерпан → отказ с reason, без скрытого расширения | 🟢 `test_plan_never_exceeds_hard_budget`, `test_budget_never_underflows` |
+|legacy/duplicate/foreign index → ​​typed error, no deletion|✅ **verified** (`ForeignSymlink`)|
+|ICM not available → warning + code plan|✅ **verified** (`warning MemoryUnavailable` + plan)|
+|codec invariant is broken → raw| ✅ `test_protected_duplicate_falls_back_to_raw` |
+|fork-core unavailable/version mismatch → block, no stock RTK| ✅ `test_adapter_version_mismatch_fails_closed`, `test_adapter_missing_binary_fails_closed` |
+|fork chose raw/fail-open → semantics preserved| ✅ |
+|provider usage missing → estimated columns only| 🟢 |
+|caveman-code SDK drift → block with remediation| 🟢 `test_bridge_preflight_*` |
+|budget exhausted → refusal with reason, no hidden extension| 🟢 `test_plan_never_exceeds_hard_budget`, `test_budget_never_underflows` |
 
 ## §11 Migration — 🟢
-Все 8 шагов `migrate apply` реализованы; `scan` read-only. Отказы (escaping symlink, special files, active owner, source mutation, partial state) покрыты 6 тестами. Backup не удаляется автоматически. `/Users/andrew/Programming/rtk` не изменялся.
+All 8 steps of `migrate apply` are implemented; `scan` read-only. Failures (escaping symlink, special files, active owner, source mutation, partial state) are covered by 6 tests. Backup is not deleted automatically. `/Users/andrew/Programming/rtk` has not been changed.
 
 ## §12 Verification strategy
 
-### §12.1 Rust quality gates — ✅ запущены мной
+### §12.1 Rust quality gates — ✅ launched by me
 ```
 cargo fmt --all --check                → exit 0
 cargo clippy --workspace -D warnings   → exit 0
 cargo test --workspace --all-targets   → 160 passed; 0 failed
 ```
-Плюс CI: MSRV 1.85, `bash -n scripts/*.sh`, `node --check`, `npm audit`.
+Plus CI: MSRV 1.85, `bash -n scripts/*.sh`, `node --check`, `npm audit`.
 
 ### §12.2 Contract tests
 
-| Требование | Статус |
+|Requirement|Status|
 |---|---|
-| Snapshot manifest воспроизводит 100% source set | ✅ verified |
-| **Весь fork test/benchmark harness присутствует и запускается** | 🟡 присутствует и запускается, но **недетерминированно** → **G3** |
-| Fork CLI/rewrite/read/write/rgai/memory/guard без потерь | ✅ |
+|Snapshot manifest reproduces 100% source set| ✅ verified |
+|**The entire fork test/benchmark harness is present and running**|🟡 is present and runs, but **non-deterministically** → **G3**|
+|Fork CLI/rewrite/read/write/rgai/memory/guard lossless| ✅ |
 | stdout/stderr/exit preservation | ✅ |
 | grepai JSON fixtures + version drift | 🟢 |
 | root/worktree identity + duplicate detection | 🟢 |
-| ICM singleton race, stale PID, token perms, breaker | 🟢 4 теста |
-| Сумма token estimates ≤ hard limit | 🟢 |
-| **Protected spans survive byte-for-byte** | 🟡 доказано только на подмножестве регекса → **G2** |
+| ICM singleton race, stale PID, token perms, breaker |🟢 4 tests|
+|Amount of token estimates ≤ hard limit| 🟢 |
+| **Protected spans survive byte-for-byte** |🟡 proved only on a subset of the regex → **G2**|
 | Estimates never increment actual | 🟢 |
-| **Caveman duplicate layers disabled before prompt** | 🟡 текстовый поиск, не runtime-порядок → **G5** |
+| **Caveman duplicate layers disabled before prompt** |🟡 text search, not runtime order → **G5**|
 | Daemon body limit, timeout, auth, loopback | 🟢 |
 
-### §12.3 Paired benchmark — 📊 не выполнен
-Инфраструктура готова (ledger разделяет actual/estimated, outcome-метки есть), самих данных нет.
+### §12.3 Paired benchmark — 📊 not completed
+The infrastructure is ready (ledger separates actual/estimated, there are outcome labels), the data itself is missing.
 
-## §13 Release acceptance — 15 ✅ / 2 🟡 из 17
+## §13 Release acceptance — 15 ✅ / 2 🟡 out of 17
 
-| # | Критерий | Статус |
+| # |Criterion|Status|
 |---|---|---|
-| 1 | fork-core импортирован целиком, manifest проверен независимо | ✅ |
-| 2 | `FORK_PARITY.md` без `missing`/`reimplemented` | ✅ (единственное вхождение — в описании легенды) |
-| 3 | Stock RTK отсутствует в execution path и bundle | ✅ |
-| 4 | Все crates компилируются без warnings | ✅ |
-| 5 | Quality gates зелёные | ✅ |
-| 6 | `hzr doctor --json` проверяет pins и ownership | ✅ **прогон: поймал реальный дрейф, exit 1** |
-| 7 | ICM start/stop race test доказывает singleton | 🟢 |
-| 8 | Nested `.grepai` fixture обнаруживается и не удаляется | ✅ |
-| 9 | `hzr search` использует grepai 0.35.0 + exact fallback | ✅ |
-| 10 | `hzr rgai` использует ту же generation | ✅ |
-| 11 | **`hzr exec` делегирует fork-core и проходит весь fork regression suite** | 🟡 делегирование ✅; suite недетерминирован → **G3** |
-| 12 | **Codec сохраняет protected spans** | 🟡 на подмножестве; `shadow` вообще мутирует контент → **G1/G2** |
-| 13 | Managed caveman-code smoke подтверждает отключение слоёв | 🟢 (метод проверки слабый → **G5**) |
-| 14 | CLI/daemon smoke из чистого data root | ✅ **воспроизведено** |
-| 15 | README: установка, инварианты, recovery | ✅ 14 разделов, включая «Быстрый старт», «Data root», «Проверки», «Честные границы» |
-| 16 | ICM содержит handoff | 🟢 README §«Handoff для LOOP-агентов» |
-| 17 | Initial commit и version 0.1.0 | ✅ `c5a10f1 feat: release hzr 0.1.0`, workspace `version = "0.1.0"` |
+| 1 |fork-core imported in its entirety, manifest verified independently| ✅ |
+| 2 |`FORK_PARITY.md` without `missing`/`reimplemented`|✅ (the only occurrence is in the description of the legend)|
+| 3 |Stock RTK is missing from execution path and bundle| ✅ |
+| 4 |All crates are compiled without warnings| ✅ |
+| 5 |Quality gates green| ✅ |
+| 6 |`hzr doctor --json` checks pins and ownership|✅ **run: caught a real drift, exit 1**|
+| 7 |ICM start/stop race test proves singleton| 🟢 |
+| 8 |Nested `.grepai` fixture is detected and not removed| ✅ |
+| 9 |`hzr search` uses grepai 0.35.0 + exact fallback| ✅ |
+| 10 |`hzr rgai` uses the same generation| ✅ |
+| 11 |**`hzr exec` delegates to fork-core and goes through the entire fork regression suite**|🟡 delegation ✅; suite is non-deterministic → **G3**|
+| 12 |**Codec keeps protected spans**|🟡 on a subset; `shadow` generally mutates the content → **G1/G2**|
+| 13 |Managed caveman-code smoke confirms disabling layers|🟢 (weak verification method → ​​**G5**)|
+| 14 |CLI/daemon smoke from clean data root|✅ **reproduced**|
+| 15 |README: installation, invariants, recovery|✅ 14 sections, including “Quick start”, “Data root”, “Checks”, “Fair boundaries”|
+| 16 |ICM contains handoff|🟢 README §"Handoff for LOOP-agents"|
+| 17 |Initial commit and version 0.1.0| ✅ `c5a10f1 feat: release hzr 0.1.0`, workspace `version = "0.1.0"` |
 
 ## §14 Delivery status
 
-Заявленное реализовано и подтверждено. Осознанно не включённое (⚪, не является gap): фоновые `daemon start/stop`, automatic engine sync, hook installer, destructive cleanup, Windows artifact, формальный legal review, crash-safe usage outbox, runtime re-attestation скомпилированного бинаря.
+What was declared has been implemented and confirmed. Deliberately not included (⚪, not a gap): background `daemon start/stop`, automatic engine sync, hook installer, destructive cleanup, Windows artifact, formal legal review, crash-safe usage outbox, runtime re-attestation of the compiled binary.
 
-## §15 Decision log — все 11 решений соблюдены в коде ✅
-Проверено: HZR — самостоятельный продукт; fork неизымаем; grepai — единственный semantic index; `rgai` — facade без storage; ICM — единственная durable memory; Caveman — адаптивный contract; caveman-code — optional runtime, не второй control plane; HZR Core — владелец budget/policy/lifecycle/ledger; actual ≠ estimates; duplicates не удаляются; quality через outcome и инварианты.
+## §15 Decision log - all 11 decisions are followed in the code ✅
+Tested: HZR - stand-alone product; fork is irrevocable; grepai is the only semantic index; `rgai` — facade without storage; ICM is the only durable memory; Caveman - adaptive contract; caveman-code - optional runtime, not second control plane; HZR Core - owner of budget/policy/lifecycle/ledger; actual ≠ estimates; duplicates are not removed; quality through outcome and invariants.
 
 ---
 
-## Реестр gap
+## Registry gap
 
-| ID | Раздел PRD | Severity | Суть | Фикс |
+| ID | PRD section | Severity | Summary | Fix |
 |---|---|---|---|---|
-| **G1** | §6.6, §13.12 | **ВЫСОКИЙ** | `shadow` мутирует доставляемый контент (`changed: true`, абзац удалён) и не пишет counterfactual size — поведение **инвертировано** относительно PRD | Добавить `Shadow` в short-circuit `transform()` (1 строка) + тест профиля; реализовать учёт либо убрать заявление из §6.6 |
-| **G3** | §1.1.6, §12.2, §13.11 | **СРЕДНИЙ** | `tracking::tests::test_timed_execution_records_time` — race на общей tracker-БД (`get_recent(5)`): parallel FAILED 3/3, single-threaded ok. Делает release-gate недетерминированным | `--test-threads=1` для модуля, per-test `RTK_DB_PATH`, либо уникальное имя команды + фильтр |
-| **G2** | §6.6, §2, §12.2 | СРЕДНИЙ (латентный) | Protected spans не покрывают относительные пути, identifiers, enum-like, structured payloads — 4 заявленных класса | Расширить регекс **до** появления любой трансформации уровня предложения |
-| **G5** | §6.7, §12.2, §13.13 | НИЗКИЙ | Инварианты bridge проверяются `BRIDGE.contains(...)` — наличием строки, а не порядком «before first prompt» | Runtime-ассерт порядка вызовов в fake-bridge |
-| **G4** | §4.1, §6.6 | НИЗКИЙ | «Адаптивный codec» = селектор density + dedupe точных дубликатов абзацев (261 LOC); формулировка переобещает. Плюс срезается trailing `\n` | Привести §6.6 к факту |
-| **G6** | — | КОСМЕТИКА | Дублированный суффикс ошибки: `...(os error 2); run \`hzr daemon serve\`: ...(os error 2)` | Убрать лишний `anyhow` context |
-| **G7** | §9 | ИНФО | `hzrd.token.lock` = `0644` при `hzrd.token` = `0600` (секрета не содержит) | Выровнять права в `runtime/` |
+| **G1** | §6.6, §13.12 |**HIGH**|`shadow` mutates the delivered content (`changed: true`, paragraph removed) and does not write counterfactual size - the behavior is **inverted** relative to PRD|Add `Shadow` to short-circuit `transform()` (1 line) + profile test; implement accounting or remove the statement from §6.6|
+| **G3** | §1.1.6, §12.2, §13.11 |**AVERAGE**|`tracking::tests::test_timed_execution_records_time` — race on a common tracker database (`get_recent(5)`): parallel FAILED 3/3, single-threaded ok. Makes release-gate non-deterministic|`--test-threads=1` for the module, per-test `RTK_DB_PATH`, or a unique command name + filter|
+| **G2** | §6.6, §2, §12.2 |MEDIUM (latent)|Protected spans do not cover relative paths, identifiers, enum-like, structured payloads - 4 declared classes|Expand the regex **to** the appearance of any sentence-level transformation|
+| **G5** | §6.7, §12.2, §13.13 | LOW | Bridge invariants are checked by `BRIDGE.contains(...)`: string presence does not prove the required “before first prompt” ordering | Add a runtime assertion for call order in the fake bridge |
+| **G4** | §4.1, §6.6 | LOW | “Adaptive codec” means selector density plus exact duplicate-paragraph deduplication (261 LOC), so the wording overpromises. It also removes the trailing `\n` | Align §6.6 with the implementation |
+| **G6** | — |COSMETICS|Duplicate error suffix: `...(os error 2); run \`hzr daemon serve\`: ...(os error 2)`|Remove extra `anyhow` context|
+| **G7** | §9 |INFO|`hzrd.token.lock` = `0644` with `hzrd.token` = `0600` (does not contain a secret)|Align rights in `runtime/`|
 
-## Открытый вопрос релиза
+## Open release issue
 
-Не gap, а незавершённое измерение: **0 из 9 метрик §4.2**. Функциональные предпосылки для paired benchmark (§14 п.1–2) готовы — ledger разделяет actual/estimated, outcome-метки пишутся, `savings` не подменяет отсутствие данных прогнозом. До получения данных утверждения о −30% cost / −20% turns / −35% uncached input остаются гипотезой, что PRD признаёт прямо.
+Not a gap, but an incomplete measurement: **0 of 9 metrics §4.2**. The functional prerequisites for paired benchmark (§14 p. 1–2) are ready - ledger separates actual/estimated, outcome labels are written, `savings` does not replace the absence of data with a forecast. Until data is received, the statements about −30% cost / −20% turns / −35% uncached input remain a hypothesis, as PRD explicitly acknowledges.
 
-## Следующий архитектурный этап: HZR MCP
+## Next architectural stage: HZR MCP
 
-После стабилизации и публикации 0.2.0 запланирован HZR-owned MCP gateway. Он обязан переиспользовать canonical HZR Index, Memory, execution, codec, policy и ledger; создание параллельных индексов, memory stores или daemon owners запрещено. Claude и Codex должны подключаться к одному HZR entrypoint вместо прямого запуска внутренних engines. Полная спецификация — §14.1 `PRD.md`.
+After stabilization and publication of 0.2.0, HZR-owned MCP gateway is planned. He must reuse canonical HZR Index, Memory, execution, codec, policy and ledger; creation of parallel indexes, memory stores or daemon owners is prohibited. Claude and Codex should connect to the same HZR entrypoint instead of running the internal engines directly. Full specification - §14.1 `PRD.md`.

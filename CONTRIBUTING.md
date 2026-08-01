@@ -38,6 +38,7 @@ scripts/build-bundle.sh /absolute/path/to/hzr-dist
 
 - Explain the ownership boundary affected by the change.
 - Add regression coverage for behavior changes.
+- Write public HZR documentation and user-facing text in English. Historical fork-core audit and provenance files retain their original language unless a dedicated migration updates current-engine identity and passes the complete fork regression gate.
 - Keep the immutable `v0.1.0` import baseline unchanged.
 - Do not introduce a second semantic index, memory store, command interceptor,
   or simplified fork-core implementation.

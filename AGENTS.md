@@ -11,5 +11,6 @@
 - User intent, code, commands, JSON, paths, symbols, errors and security text are exact content.
 - Semantic compression creates a versioned derivative and never overwrites canonical data.
 - Provider usage and estimates are separate fields. Never present estimated counters as billed savings.
+- Public HZR documentation and user-facing text are written in English. Preserve imported fork-core audit and provenance artifacts in their original form unless a dedicated migration updates current-engine identity and passes the complete fork regression gate.
 - Production Rust must pass cargo fmt, cargo clippy --all-targets --all-features -- -D warnings, and cargo test --all-targets --all-features.
 - Do not add placeholders, TODOs, dead abstractions or suppressed lints.
