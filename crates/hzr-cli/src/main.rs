@@ -16,6 +16,7 @@ mod output;
 mod prefix;
 mod service;
 mod stats;
+mod stats_output;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
