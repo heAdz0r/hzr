@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use hzr_protocol::{MemoryImportance, MemoryScopeSelector, MemoryWriteScope, SearchMode};
+use hzr_protocol::{
+    CodecProfile, FidelityClass, MemoryImportance, MemoryScopeSelector, MemoryWriteScope,
+    RiskClass, SearchMode,
+};
 use serde_json::Value;
 
 pub(super) fn parse_importance(value: &str) -> Option<MemoryImportance> {
@@ -34,6 +37,37 @@ pub(super) fn parse_mode(value: &str) -> Option<SearchMode> {
         "auto" => Some(SearchMode::Auto),
         "semantic" => Some(SearchMode::Semantic),
         "exact" => Some(SearchMode::Exact),
+        _ => None,
+    }
+}
+
+pub(super) fn parse_fidelity(value: &str) -> Option<FidelityClass> {
+    match value {
+        "exact" => Some(FidelityClass::Exact),
+        "lossless_structural" => Some(FidelityClass::LosslessStructural),
+        "semantic" => Some(FidelityClass::Semantic),
+        "summary" => Some(FidelityClass::Summary),
+        _ => None,
+    }
+}
+
+pub(super) fn parse_risk(value: &str) -> Option<RiskClass> {
+    match value {
+        "low" => Some(RiskClass::Low),
+        "medium" => Some(RiskClass::Medium),
+        "high" => Some(RiskClass::High),
+        "irreversible" => Some(RiskClass::Irreversible),
+        _ => None,
+    }
+}
+
+pub(super) fn parse_codec_profile(value: &str) -> Option<CodecProfile> {
+    match value {
+        "off" => Some(CodecProfile::Off),
+        "safe" => Some(CodecProfile::Safe),
+        "adaptive" => Some(CodecProfile::Adaptive),
+        "compact" => Some(CodecProfile::Compact),
+        "shadow" => Some(CodecProfile::Shadow),
         _ => None,
     }
 }

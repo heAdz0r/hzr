@@ -39,8 +39,8 @@ use hzr_index::{
 };
 use hzr_protocol::{
     CodecApiRequest, ContextPlanApiRequest, ExecApiRequest, ExecApprovalApiRequest,
-    MemoryRecallApiRequest, MemoryStoreApiRequest, PROTOCOL_VERSION, SearchApiRequest, SearchMode,
-    SessionId,
+    MemoryRecallApiRequest, MemoryStoreApiRequest, PROTOCOL_VERSION, SearchApiRequest,
+    SearchApiResponse, SearchMode, SessionId,
 };
 
 use crate::cli::{
@@ -1071,23 +1071,72 @@ async fn execute_search(
     json: bool,
 ) -> Result<ExitCode> {
     let workspace = canonical_directory(arguments.workspace.as_deref())?;
-    let request = SearchApiRequest {
-        workspace: workspace.to_string_lossy().into_owned(),
-        query: arguments.query,
-        path: arguments
+    let mode = arguments.mode.map_or(default_mode, Into::into);
+    // One request per subtree, merged. The daemon filter takes a single path, and running
+    // the searches here keeps that contract while letting an agent write the multi-path
+    // invocation it would reach for anyway.
+    let paths = if arguments.path.is_empty() {
+        vec![None]
+    } else {
+        arguments
             .path
-            .map(|path| path.to_string_lossy().into_owned()),
-        limit: arguments.limit,
-        mode: arguments.mode.map_or(default_mode, Into::into),
-        include_content: arguments.include_content,
+            .iter()
+            .map(|path| Some(path.to_string_lossy().into_owned()))
+            .collect()
     };
-    let response = DaemonClient::from_config(config)?.search(&request).await?;
+    let client = DaemonClient::from_config(config)?;
+    let mut merged: Option<SearchApiResponse> = None;
+    for path in paths {
+        let response = client
+            .search(&SearchApiRequest {
+                workspace: workspace.to_string_lossy().into_owned(),
+                query: arguments.query.clone(),
+                path,
+                limit: arguments.limit,
+                mode,
+                include_content: arguments.include_content,
+            })
+            .await?;
+        merged = Some(match merged {
+            None => response,
+            Some(accumulated) => merge_search_responses(accumulated, response),
+        });
+    }
+    let mut response = merged.unwrap_or_else(|| unreachable!("at least one search is issued"));
+    response.hits.truncate(arguments.limit);
+    response.shown_hits = response.hits.len();
     if json {
         print_json(&response)?;
     } else {
         print_search(&response)?;
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Combine two subtree searches into one response, keeping the strongest hit per file.
+fn merge_search_responses(
+    mut accumulated: SearchApiResponse,
+    other: SearchApiResponse,
+) -> SearchApiResponse {
+    accumulated.path = format!("{}, {}", accumulated.path, other.path);
+    accumulated.total_hits += other.total_hits;
+    accumulated.scanned_files += other.scanned_files;
+    accumulated.skipped_large += other.skipped_large;
+    accumulated.skipped_binary += other.skipped_binary;
+    for hit in other.hits {
+        if !accumulated
+            .hits
+            .iter()
+            .any(|existing| existing.path == hit.path)
+        {
+            accumulated.hits.push(hit);
+        }
+    }
+    accumulated
+        .hits
+        .sort_by(|left, right| right.score.total_cmp(&left.score));
+    accumulated.shown_hits = accumulated.hits.len();
+    accumulated
 }
 
 async fn execute_context_plan(

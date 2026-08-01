@@ -64,7 +64,7 @@ fn test_initialize_requires_a_protocol_version() {
 #[test]
 fn test_every_tool_has_model_guidance_and_typed_schemas() {
     let tools = tool_definitions();
-    assert_eq!(tools.len(), 4);
+    assert_eq!(tools.len(), 5);
     for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
         assert!(
@@ -90,6 +90,35 @@ fn test_every_tool_has_model_guidance_and_typed_schemas() {
     assert!(
         tools.iter().any(|tool| tool["name"] == "hzr_context_plan"),
         "the MCP surface must expose HZR graph-first planning"
+    );
+}
+
+/// The density codec was reachable only through `hzr codec compile`, so no agent ever
+/// used it: nothing in the hook path, the planner or the MCP surface called it. A
+/// capability the control plane advertises but never exposes is dead weight.
+#[test]
+fn test_the_density_codec_is_reachable_over_mcp() {
+    let tools = tool_definitions();
+    let codec = tools
+        .iter()
+        .find(|tool| tool["name"] == "hzr_codec")
+        .expect("the MCP surface must expose the density codec");
+
+    assert_eq!(
+        codec["inputSchema"]["properties"]["content"]["type"],
+        "string"
+    );
+    assert_eq!(codec["inputSchema"]["required"][0], "content");
+    assert!(
+        codec["inputSchema"]["properties"]["profile"]["enum"]
+            .as_array()
+            .is_some_and(|profiles| profiles.iter().any(|profile| profile == "shadow")),
+        "shadow profile must be selectable so a counterfactual can be measured without changing output"
+    );
+    assert_eq!(codec["annotations"]["readOnlyHint"], true);
+    assert!(
+        codec["outputSchema"]["properties"]["counterfactual"].is_object(),
+        "the codec must report what it would have saved, otherwise it earns no ledger credit"
     );
 }
 

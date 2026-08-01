@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 axum.workspace = true
 fs2.workspace = true
+hzr-agent = { path = "../hzr-agent" }
 hzr-codec = { path = "../hzr-codec" }
 hzr-context = { path = "../hzr-context" }
 hzr-core = { path = "../hzr-core" }

@@ -91,8 +91,12 @@ fn test_stdio_mcp_negotiates_lists_typed_tools_and_exits_on_eof() -> anyhow::Res
     )
     .expect("parse tools/list response");
     let tools = list["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 4);
+    assert_eq!(tools.len(), 5);
     assert!(tools.iter().any(|tool| tool["name"] == "hzr_context_plan"));
+    assert!(
+        tools.iter().any(|tool| tool["name"] == "hzr_codec"),
+        "the density codec must be reachable over the wire, not only in the tool table"
+    );
     assert!(tools.iter().all(|tool| {
         tool["inputSchema"]["additionalProperties"] == false
             && tool["outputSchema"]["type"] == "object"

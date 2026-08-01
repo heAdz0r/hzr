@@ -494,6 +494,49 @@ impl Ledger {
         Ok(summary)
     }
 
+    /// Record one HZR-owned operation in the same table the pinned engine writes to.
+    ///
+    /// Everything in the efficiency ledger used to arrive from fork-core, which is why HZR's
+    /// own reductions — the density codec above all — were invisible: they saved tokens that
+    /// nothing counted, so the subsystem could never appear in `hzr stats` and the capability
+    /// read as dead weight. The summaries derive their figures from the token columns, so a
+    /// transform that grew the text stays a regression rather than being clamped to zero.
+    pub fn record_operation(
+        &self,
+        original_command: &str,
+        recorded_command: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        execution_ms: u64,
+        project_path: &str,
+    ) -> Result<(), LedgerError> {
+        let saved = input_tokens.saturating_sub(output_tokens);
+        let savings_pct = if input_tokens == 0 {
+            0.0
+        } else {
+            saved as f64 * 100.0 / input_tokens as f64
+        };
+        self.connection
+            .execute(
+                "INSERT INTO commands (
+                    timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
+                    saved_tokens, savings_pct, exec_time_ms, project_path
+                 ) VALUES (datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    original_command,
+                    recorded_command,
+                    input_tokens,
+                    output_tokens,
+                    saved,
+                    savings_pct,
+                    execution_ms,
+                    project_path,
+                ],
+            )
+            .map_err(LedgerError::Database)?;
+        Ok(())
+    }
+
     /// Count the operations that reached the shell without passing through the optimizer.
     ///
     /// A bypassed row delivers exactly as many tokens as it consumed, so it cancels out of

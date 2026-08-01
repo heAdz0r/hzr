@@ -20,6 +20,7 @@ results are accounted:
 | `hzr_search` | Find code by intent (`mode: "semantic"`) or by exact pattern (`mode: "exact"`). |
 | `hzr_memory_recall` | Recall durable facts, past decisions and resolved errors before re-reading earlier work. |
 | `hzr_memory_store` | Persist a decision, resolved error, user preference or finished handoff. Not ephemeral state or raw tool output. |
+| `hzr_codec` | Compress a long prose answer while provably preserving code, commands, paths, identifiers, errors and numbers. Use `profile: "shadow"` to measure the saving without changing the text. |
 
 The gateway negotiates the latest stable MCP revision it supports
 (`2025-11-25`) while retaining compatible older revisions. Tools publish JSON
@@ -51,10 +52,11 @@ dies.
 Context  -> hzr context plan "<intent>"
 Memory   -> hzr memory recall|store   (see scopes below)
 Semantic -> hzr rgai "<intent>"
-Exact    -> hzr search "<pattern>" --mode exact
-Read     -> hzr rtk -- read <file>
+Ranked   -> hzr search "<terms>" --mode exact [--path DIR ...]
+Read     -> hzr rtk -- read <file> [--from N --to M | --outline | --changed | -n]
 Write    -> hzr rtk -- write patch|replace|set ...
-Raw      -> hzr rtk -- raw <command...>
+Density  -> hzr codec compile --profile shadow|adaptive|compact
+Raw      -> hzr rtk -- raw <command...>   (escape hatch — see the cost below)
 TDD      -> hzr tdd                  (read before production changes)
 MCP      -> hzr mcp serve            (launched by a client, never by hand)
 Config   -> hzr mcp config --client codex|claude-desktop
@@ -73,6 +75,48 @@ test without an observed relevant failure is regression coverage, not TDD.
 `hzr build` and `hzr release` are different verbs on purpose: `build` builds **your
 project**, `release` rebuilds and reinstalls **HZR itself**. Do not use `release` to build
 a project.
+
+## Reading a file: reach for the flags, not for `sed`
+
+`hzr rtk -- read` is not "cat with filtering". It takes the arguments you would
+otherwise express by piping through another tool, and it is the single most common
+source of avoidable output:
+
+```text
+hzr rtk -- read <file> --from 120 --to 180   # a line span  (instead of `sed -n 120,180p`)
+hzr rtk -- read <file> -n                    # with line numbers (instead of `nl -ba`)
+hzr rtk -- read <file> --outline             # structure only, ~98% smaller
+hzr rtk -- read <file> --changed             # only the working-tree hunks
+hzr rtk -- read <file> --since HEAD~3        # only what changed since a revision
+hzr rtk -- read <file> --max-lines N         # head(1)
+hzr rtk -- read <file> --tail-lines N        # tail(1)
+```
+
+## What `--mode exact` actually does
+
+`hzr search --mode exact` is a **ranked term search**, not `grep`. The query is
+lowercased, split on non-alphanumeric characters, stripped of stop words, stemmed,
+and the surviving terms are OR-ed together. `hzr search "fn handle_request"` therefore
+matches every `fn` in the repository. It reports one representative line per file and
+ranks files by score.
+
+Use it to *locate* code. When you need every literal match — a symbol rename, an audit,
+a regex — use `hzr rtk -- grep "<pattern>"`, which is a real literal search and is filtered.
+`--path` accepts several directories: `--path crates fork-core/src`.
+
+## The cost of `raw`
+
+`hzr rtk -- raw <cmd>` hands the command to the shell unfiltered. It is recorded in the
+ledger as a bypass, delivers exactly as many tokens as it consumed, and receives **zero**
+savings credit. `hzr stats` reports the bypass share directly under the headline ratio,
+because a bypassed operation raises both sides of that ratio and cancels out instead of
+lowering it.
+
+Raw is correct for checksums, parsers, generated files, complete logs and machine-readable
+data. It is *not* correct for reading a file, searching for a symbol, or numbering lines —
+the hook will offer you the first-class command with the arguments already filled in, and
+you can accept it or re-run the original. Reaching for `sed -n`, `nl`, `cat`, `head`, `tail`
+or `rg` through `raw` is the single largest recorded source of wasted tokens.
 
 ## Memory scopes
 
@@ -100,6 +144,21 @@ degraded rewrite preserves command policy but is absent from the managed usage
 ledger; `hzr doctor` and `hzr stats` report that incomplete accounting instead of
 hiding it.
 
-Use raw/exact paths for checksums, parsers, generated files, complete logs and
-machine-readable data. Prefer the bounded HZR planner for discovery. Never
-create a second `.grepai` index, a second ICM database, or parallel RTK hooks.
+Prefer the bounded HZR planner for discovery. Never create a second `.grepai` index,
+a second ICM database, or parallel RTK hooks.
+
+## Reading `hzr stats`
+
+Four numbers, in the order they must be read:
+
+1. **LOCAL OUTPUT REDUCTION** — an estimate from before/after output size. Not a bill.
+2. **OPTIMIZER BYPASS** — the share of operations and delivered tokens that skipped HZR
+   entirely, with the first-class command that replaces each bypassed tool. A high
+   headline ratio next to a high bypass share means the ratio is measuring a shrinking
+   fraction of your actual traffic.
+3. **PROVIDER USAGE** — actual, billed. Populated by `hzr agent run`, which reports real
+   token counts through the managed bridge. Empty means no provider-billed task has run,
+   not that the cost was zero.
+4. **ACCOUNTING COVERAGE** — `COMPLETE` unless rewrites happened while the daemon was
+   down. The gap closes by itself on the next managed rewrite; the lifetime count of past
+   gaps stays visible so closing one never looks like erasing it.

@@ -11,9 +11,27 @@ pub struct LedgerWriter {
     sender: mpsc::Sender<WriteCommand>,
 }
 
-struct WriteCommand {
-    record: LedgerRecord,
-    reply: oneshot::Sender<Result<(), LedgerError>>,
+enum WriteCommand {
+    Usage {
+        record: LedgerRecord,
+        reply: oneshot::Sender<Result<(), LedgerError>>,
+    },
+    /// An HZR-owned reduction, written to the same table the pinned engine uses so it is
+    /// summarized by exactly the same queries.
+    Operation {
+        record: OperationRecord,
+        reply: oneshot::Sender<Result<(), LedgerError>>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct OperationRecord {
+    pub original_command: String,
+    pub recorded_command: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub execution_ms: u64,
+    pub project_path: String,
 }
 
 #[derive(Debug, Error)]
@@ -34,8 +52,21 @@ impl LedgerWriter {
             .name("hzr-ledger-writer".into())
             .spawn(move || {
                 while let Some(command) = receiver.blocking_recv() {
-                    let result = ledger.record(&command.record);
-                    let _ = command.reply.send(result);
+                    match command {
+                        WriteCommand::Usage { record, reply } => {
+                            let _ = reply.send(ledger.record(&record));
+                        }
+                        WriteCommand::Operation { record, reply } => {
+                            let _ = reply.send(ledger.record_operation(
+                                &record.original_command,
+                                &record.recorded_command,
+                                record.input_tokens,
+                                record.output_tokens,
+                                record.execution_ms,
+                                &record.project_path,
+                            ));
+                        }
+                    }
                 }
             })
             .map_err(LedgerWriterError::Thread)?;
@@ -45,7 +76,17 @@ impl LedgerWriter {
     pub async fn record(&self, record: LedgerRecord) -> Result<(), LedgerWriterError> {
         let (reply, result) = oneshot::channel();
         self.sender
-            .send(WriteCommand { record, reply })
+            .send(WriteCommand::Usage { record, reply })
+            .await
+            .map_err(|_| LedgerWriterError::Unavailable)?;
+        result.await.map_err(|_| LedgerWriterError::Unavailable)??;
+        Ok(())
+    }
+
+    pub async fn record_operation(&self, record: OperationRecord) -> Result<(), LedgerWriterError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriteCommand::Operation { record, reply })
             .await
             .map_err(|_| LedgerWriterError::Unavailable)?;
         result.await.map_err(|_| LedgerWriterError::Unavailable)??;

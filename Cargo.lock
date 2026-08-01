@@ -711,6 +711,7 @@ version = "0.3.0"
 dependencies = [
  "axum",
  "fs2",
+ "hzr-agent",
  "hzr-codec",
  "hzr-context",
  "hzr-core",

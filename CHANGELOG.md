@@ -6,6 +6,47 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ### Added
 
+- `hzr stats` reports an **OPTIMIZER BYPASS** panel directly beneath the headline
+  reduction ratio: the share of operations and of delivered tokens that reached the shell
+  unfiltered, and for each bypassed tool the first-class HZR command that replaces it,
+  reconstructed from the costliest recorded invocation. A bypassed operation delivers
+  exactly as many tokens as it consumed, so it cancels out of the reduction ratio instead
+  of lowering it; the headline alone was therefore never a sufficient measure.
+- The `PreToolUse` hook answers a bypassed read or search with the equivalent `hzr`
+  command already filled in — `sed -n 120,180p f` becomes
+  `hzr rtk -- read f --from 120 --to 180`. The decision is `Ask`, never `Deny`: raw stays
+  one keystroke away because it is the correct tool for checksums, generated files and
+  complete logs.
+- `hzr_codec` is exposed over MCP, so the response-density codec is reachable by agents
+  rather than only through `hzr codec compile`. Its `shadow` profile measures what
+  compression would have saved without altering the text.
+- Codec transforms are recorded in the efficiency ledger under a `codec` subsystem, so the
+  capability is justified by measurement instead of assertion.
+- `hzr search --path` accepts several directories.
+
+### Changed
+
+- One classifier in `hzr-core::operation` now answers "did this operation go through the
+  optimizer?" for the ledger, the CLI, the dashboard and the hook. The answer used to be
+  computed in three places with three different rules, and bypassed operations landed in
+  the `execution` subsystem where their zero savings were indistinguishable from filtered
+  commands. The SQL predicate is generated from the same marker list.
+- Accounting coverage is an open gap rather than a lifetime tally. It was
+  `line_count(degraded-rewrites.log) == 0` over an append-only file nothing truncated, so
+  a single install performed while the daemon was down pinned `hzr stats` to `INCOMPLETE`
+  permanently. A successful managed rewrite now folds the gap into a lifetime total and
+  closes it; the history stays visible so closing a gap never looks like erasing it.
+- `hzr daemon status` reports the managed agent runtime from what is on disk instead of a
+  hardcoded state and a hardcoded version string. A missing bridge or package is reported
+  as degraded with the repair command, rather than as "stopped, starts on demand".
+- Engines that rest by design no longer colour the overall control-plane verdict.
+
+### Documentation
+
+- `HZR.md` documents the `hzr rtk -- read` flags that remove the need for `sed`, `nl`,
+  `cat`, `head` and `tail`; states plainly that `--mode exact` is a ranked term search and
+  not `grep`; and states the ledger cost of `raw`.
+
 - `hzr update` checks GitHub Releases, downloads the matching native bundle and
   `SHA256SUMS`, verifies the archive, and installs the newer version through the bundled
   versioned installer. The idempotent project-start initialization caches release checks

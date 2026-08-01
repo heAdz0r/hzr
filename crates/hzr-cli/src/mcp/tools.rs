@@ -247,5 +247,71 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 "openWorldHint": false,
             },
         }),
+        json!({
+            "name": "hzr_codec",
+            "title": "Compile an HZR Response-Density Contract",
+            "description": "Compress prose while provably preserving code, commands, paths, \
+        identifiers, errors, numbers and URLs. Use before emitting a long natural-language \
+        answer, or with profile \"shadow\" to measure what compression would have saved \
+        without changing the text. Protected spans are verified after the transform: if any \
+        of them changed, the call fails rather than returning altered technical content.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "content": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The prose to compile. Code blocks, inline code, paths, flags, URLs, hashes and versions inside it are protected and returned unchanged.",
+                    },
+                    "fidelity": {
+                        "type": "string",
+                        "enum": ["exact", "lossless_structural", "semantic", "summary"],
+                        "default": "semantic",
+                        "description": "How much rewriting is permitted. exact returns the input untouched; summary permits the most aggressive rewrite.",
+                    },
+                    "risk": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "irreversible"],
+                        "default": "low",
+                        "description": "Risk of the action being described. high and irreversible force full detail regardless of profile.",
+                    },
+                    "profile": {
+                        "type": "string",
+                        "enum": ["off", "safe", "adaptive", "compact", "shadow"],
+                        "default": "adaptive",
+                        "description": "shadow computes the counterfactual without changing the content, which is the only honest way to measure the codec's value.",
+                    },
+                },
+                "required": ["content"],
+            },
+            "outputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string"},
+                    "changed": {"type": "boolean"},
+                    "profile": {"type": "string"},
+                    "protected_spans": {"type": "array", "items": {"type": "object"}},
+                    "counterfactual": {
+                        "type": "object",
+                        "description": "Present in shadow profile: the sizes the transform would have produced.",
+                        "properties": {
+                            "input_bytes": {"type": "integer", "minimum": 0},
+                            "output_bytes": {"type": "integer", "minimum": 0},
+                            "saved_bytes": {"type": "integer", "minimum": 0},
+                            "would_change": {"type": "boolean"},
+                        },
+                    },
+                },
+                "required": ["content", "changed", "profile", "protected_spans"],
+            },
+            "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "openWorldHint": false,
+            },
+        }),
     ]
 }

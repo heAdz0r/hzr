@@ -301,8 +301,13 @@ pub struct SearchArgs {
     pub query: String,
     #[arg(long, value_name = "DIR")]
     pub workspace: Option<PathBuf>,
-    #[arg(long, value_name = "PATH")]
-    pub path: Option<PathBuf>,
+    /// Restrict the search to one or more subtrees.
+    ///
+    /// Accepts several values because `--path crates fork-core/src` is the natural way to
+    /// write it, and rejecting that with clap's "unexpected argument" sent agents straight
+    /// to `raw rg` and kept them there.
+    #[arg(long, value_name = "PATH", num_args = 1..)]
+    pub path: Vec<PathBuf>,
     #[arg(long, default_value_t = 10, value_parser = parse_limit)]
     pub limit: usize,
     #[arg(long, value_enum)]
@@ -609,6 +614,44 @@ mod tests {
         Cli, Command, ContextCommand, DaemonCommand, ExecCommand, HooksCommand, IndexCommand,
         McpCommand, MigrateCommand, ServiceCommand,
     };
+
+    /// `hzr search q --mode exact --path crates fork-core/src` used to fail with clap's
+    /// "unexpected argument", which is the exact moment an agent gives up on `hzr search`
+    /// and switches to `raw rg` for the rest of the session.
+    #[test]
+    fn test_search_accepts_several_paths_instead_of_rejecting_the_second() {
+        let cli = Cli::try_parse_from([
+            "hzr",
+            "search",
+            "RewriteDecision",
+            "--mode",
+            "exact",
+            "--path",
+            "crates",
+            "fork-core/src",
+        ])
+        .expect("multiple search paths are valid");
+
+        assert!(matches!(
+            cli.command,
+            Command::Search(ref arguments)
+                if arguments.path
+                    == [
+                        std::path::PathBuf::from("crates"),
+                        std::path::PathBuf::from("fork-core/src"),
+                    ]
+        ));
+    }
+
+    #[test]
+    fn test_search_without_a_path_still_covers_the_whole_workspace() {
+        let cli = Cli::try_parse_from(["hzr", "search", "needle"]).expect("bare search");
+
+        assert!(matches!(
+            cli.command,
+            Command::Search(ref arguments) if arguments.path.is_empty()
+        ));
+    }
 
     #[test]
     fn test_cli_parses_adoption_and_idempotent_init_surface() {

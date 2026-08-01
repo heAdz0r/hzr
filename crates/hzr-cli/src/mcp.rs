@@ -28,8 +28,9 @@ use std::io::IsTerminal;
 use anyhow::{Context, Result};
 use hzr_core::Config;
 use hzr_protocol::{
-    ContextPlanApiRequest, MemoryImportance, MemoryRecallApiRequest, MemoryScopeSelector,
-    MemoryStoreApiRequest, MemoryWriteScope, SearchApiRequest, SearchMode,
+    CodecApiRequest, CodecProfile, ContextPlanApiRequest, FidelityClass, MemoryImportance,
+    MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest, MemoryWriteScope,
+    RiskClass, SearchApiRequest, SearchMode,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -37,8 +38,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use crate::cli::McpClientArg;
 use crate::client::DaemonClient;
 use arguments::{
-    bounded_usize, optional_bool, optional_enum, optional_string, parse_importance, parse_mode,
-    parse_recall_scope, parse_write_scope, reject_unknown, required_string, string_array,
+    bounded_usize, optional_bool, optional_enum, optional_string, parse_codec_profile,
+    parse_fidelity, parse_importance, parse_mode, parse_recall_scope, parse_risk,
+    parse_write_scope, reject_unknown, required_string, string_array,
 };
 use tools::tool_definitions;
 
@@ -223,7 +225,7 @@ async fn call_tool(config: &Config, workspace: &str, id: Value, request: &Value)
     };
     if !matches!(
         name,
-        "hzr_memory_recall" | "hzr_memory_store" | "hzr_search" | "hzr_context_plan"
+        "hzr_memory_recall" | "hzr_memory_store" | "hzr_search" | "hzr_context_plan" | "hzr_codec"
     ) {
         return error_response(id, INVALID_PARAMS, &format!("unknown tool: {name}"));
     }
@@ -258,6 +260,7 @@ async fn call_tool(config: &Config, workspace: &str, id: Value, request: &Value)
         "hzr_memory_store" => store(&client, workspace, &arguments).await,
         "hzr_search" => search(&client, workspace, &arguments).await,
         "hzr_context_plan" => context_plan(&client, workspace, &arguments).await,
+        "hzr_codec" => codec(&client, &arguments).await,
         _ => {
             return error_response(id, INVALID_PARAMS, &format!("unknown tool: {name}"));
         }
@@ -281,6 +284,40 @@ async fn call_tool(config: &Config, workspace: &str, id: Value, request: &Value)
             )),
         ),
     }
+}
+
+/// Compile a response-density contract through the daemon.
+///
+/// Takes no workspace: the codec is a pure text transform over content the agent already
+/// holds, so binding it to a repository would imply an index lookup that never happens.
+async fn codec(client: &DaemonClient, arguments: &Value) -> Result<Value> {
+    reject_unknown(arguments, &["content", "fidelity", "risk", "profile"])?;
+    let request = CodecApiRequest {
+        content: required_string(arguments, "content")?,
+        fidelity: optional_enum(
+            arguments,
+            "fidelity",
+            FidelityClass::default(),
+            parse_fidelity,
+            "exact, lossless_structural, semantic, summary",
+        )?,
+        risk: optional_enum(
+            arguments,
+            "risk",
+            RiskClass::default(),
+            parse_risk,
+            "low, medium, high, irreversible",
+        )?,
+        profile: optional_enum(
+            arguments,
+            "profile",
+            CodecProfile::default(),
+            parse_codec_profile,
+            "off, safe, adaptive, compact, shadow",
+        )?,
+    };
+    let transform = client.codec_compile(&request).await?;
+    Ok(serde_json::to_value(transform)?)
 }
 
 async fn recall(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {

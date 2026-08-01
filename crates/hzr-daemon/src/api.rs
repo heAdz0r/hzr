@@ -68,21 +68,9 @@ fn health_response(state: &AppState, memory_health: EngineHealth) -> HealthRespo
             },
             detail: Some(format!("{:?}", rtk_capabilities.rewrite)),
         },
-        EngineHealth {
-            name: "caveman-code".into(),
-            version: Some("0.65.2".into()),
-            state: EngineState::Stopped,
-            detail: Some("managed agent runtime is launched by hzr agent".into()),
-        },
+        caveman_engine_health(&caveman_layout(&state.config)),
     ];
-    let overall = if engines
-        .iter()
-        .any(|engine| engine.state == EngineState::Degraded)
-    {
-        EngineState::Degraded
-    } else {
-        EngineState::Ready
-    };
+    let overall = overall_engine_state(&engines);
 
     HealthResponse {
         protocol_version: PROTOCOL_VERSION,
@@ -97,6 +85,84 @@ fn health_response(state: &AppState, memory_health: EngineHealth) -> HealthRespo
             "exec".into(),
             "codec".into(),
         ],
+    }
+}
+
+/// The overall verdict must ignore engines that are resting by design.
+///
+/// `grepai` and `caveman-code` start on demand; reporting them as `Stopped` is correct and
+/// says nothing about health. Folding `Stopped` into the verdict — as the previous
+/// `any(Degraded)` over a list containing two permanently-stopped engines effectively did
+/// once anything else slipped — trains an operator to ignore a yellow control plane.
+fn overall_engine_state(engines: &[EngineHealth]) -> EngineState {
+    if engines
+        .iter()
+        .any(|engine| engine.state == EngineState::Degraded)
+    {
+        return EngineState::Degraded;
+    }
+    if engines
+        .iter()
+        .any(|engine| engine.state == EngineState::Rebuilding)
+    {
+        return EngineState::Rebuilding;
+    }
+    EngineState::Ready
+}
+
+fn caveman_layout(config: &hzr_core::Config) -> hzr_agent::IntegrationLayout {
+    if let Some(root) = std::env::var_os("HZR_CAVEMAN_CODE_DIR") {
+        return hzr_agent::IntegrationLayout::new(PathBuf::from(root));
+    }
+    match &config.engines.directory {
+        Some(directory) => hzr_agent::IntegrationLayout::new(directory.join("caveman-code")),
+        None => hzr_agent::IntegrationLayout::new(config.data_dir.join("engines/caveman-code")),
+    }
+}
+
+/// Report the managed agent runtime from what is actually on disk.
+///
+/// The version used to be a string literal in this file and the state was unconditionally
+/// `Stopped`, so an installation missing the runtime entirely reported exactly the same
+/// health as a working one. An absent bridge or package will never start on demand — that
+/// is a degradation, and the detail says how to repair it.
+fn caveman_engine_health(layout: &hzr_agent::IntegrationLayout) -> EngineHealth {
+    let version = locked_engines()
+        .ok()
+        .and_then(|manifest| {
+            manifest
+                .engine
+                .into_iter()
+                .find(|engine| engine.name == "caveman-code")
+        })
+        .map(|engine| engine.version);
+    let missing = [
+        ("bridge.mjs", layout.bridge()),
+        (
+            "node_modules/@juliusbrussee/caveman-code",
+            layout.installed_package(),
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, path)| !path.exists())
+    .map(|(name, _)| name)
+    .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return EngineHealth {
+            name: "caveman-code".into(),
+            version,
+            state: EngineState::Stopped,
+            detail: Some("managed agent runtime is launched by hzr agent".into()),
+        };
+    }
+    EngineHealth {
+        name: "caveman-code".into(),
+        version,
+        state: EngineState::Degraded,
+        detail: Some(format!(
+            "managed agent runtime is not installed ({}); run `hzr install --force`",
+            missing.join(", ")
+        )),
     }
 }
 
@@ -1248,11 +1314,60 @@ pub async fn exec_rewrite(
 }
 
 pub async fn codec_compile(
+    State(state): State<AppState>,
     Json(request): Json<CodecApiRequest>,
 ) -> Result<Json<hzr_codec::Transform>, ApiError> {
-    hzr_codec::transform(&request.content, request.fidelity, request.profile)
-        .map(Json)
-        .map_err(|error| ApiError::bad_request(error.to_string()))
+    let started = Instant::now();
+    let transform = hzr_codec::transform(&request.content, request.fidelity, request.profile)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    record_codec_operation(&state, &request, &transform, started.elapsed()).await;
+    Ok(Json(transform))
+}
+
+/// Credit the codec in the same ledger the pinned engine writes to.
+///
+/// Without this the codec is unmeasurable: it saves output tokens that nothing counts, so
+/// the `codec` subsystem never appears in `hzr stats` and the capability is indistinguishable
+/// from one that is never called. A failed write is not surfaced to the caller — the
+/// transform itself succeeded, and losing a measurement must never fail a working request.
+async fn record_codec_operation(
+    state: &AppState,
+    request: &CodecApiRequest,
+    transform: &hzr_codec::Transform,
+    elapsed: Duration,
+) {
+    // Shadow reports what it *would* have saved; every other profile reports what it did.
+    let delivered = match &transform.counterfactual {
+        Some(counterfactual) => counterfactual.output_bytes,
+        None => transform.content.len(),
+    };
+    let _ = state
+        .ledger
+        .record_operation(crate::ledger_writer::OperationRecord {
+            original_command: "hzr codec compile".into(),
+            recorded_command: format!("hzr codec {}", codec_profile_name(request.profile)),
+            input_tokens: estimated_tokens(request.content.len()),
+            output_tokens: estimated_tokens(delivered),
+            execution_ms: elapsed.as_millis() as u64,
+            project_path: String::new(),
+        })
+        .await;
+}
+
+/// The same `bytes / 4` heuristic the rest of the estimated ledger uses. Sharing it is the
+/// point: a codec figure that used a different estimator could not be summed with the rest.
+fn estimated_tokens(bytes: usize) -> u64 {
+    (bytes / 4) as u64
+}
+
+fn codec_profile_name(profile: hzr_protocol::CodecProfile) -> &'static str {
+    match profile {
+        hzr_protocol::CodecProfile::Off => "off",
+        hzr_protocol::CodecProfile::Safe => "safe",
+        hzr_protocol::CodecProfile::Adaptive => "adaptive",
+        hzr_protocol::CodecProfile::Compact => "compact",
+        hzr_protocol::CodecProfile::Shadow => "shadow",
+    }
 }
 
 fn validate_search(request: &SearchApiRequest) -> Result<(), ApiError> {
@@ -1655,7 +1770,98 @@ mod tests {
     use std::fs;
     use std::time::{Duration, Instant};
 
-    use super::{ManagedExecutionBudget, memory_ready_state, validate_managed_fork_tool};
+    use super::{
+        ManagedExecutionBudget, caveman_engine_health, memory_ready_state, overall_engine_state,
+        validate_managed_fork_tool,
+    };
+    use hzr_protocol::{EngineHealth, EngineState};
+
+    fn engine(name: &str, state: EngineState) -> EngineHealth {
+        EngineHealth {
+            name: name.into(),
+            version: None,
+            state,
+            detail: None,
+        }
+    }
+
+    /// `Stopped` is the designed resting state for engines that start on demand. Folding
+    /// it into the overall verdict is what painted the whole control plane yellow while
+    /// every part of it was working.
+    #[test]
+    fn an_on_demand_engine_at_rest_does_not_degrade_the_control_plane() {
+        let engines = [
+            engine("rtk", EngineState::Ready),
+            engine("icm", EngineState::Ready),
+            engine("grepai", EngineState::Stopped),
+            engine("caveman-code", EngineState::Stopped),
+        ];
+
+        assert_eq!(overall_engine_state(&engines), EngineState::Ready);
+    }
+
+    #[test]
+    fn a_degraded_engine_still_degrades_the_control_plane() {
+        let engines = [
+            engine("rtk", EngineState::Ready),
+            engine("icm", EngineState::Degraded),
+        ];
+
+        assert_eq!(overall_engine_state(&engines), EngineState::Degraded);
+    }
+
+    /// The caveman version used to be the string literal "0.65.2" in this file, which
+    /// stays convincing long after the pin moves. It must come from the lock.
+    #[test]
+    fn the_caveman_version_comes_from_the_engine_lock() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let health = caveman_engine_health(&hzr_agent::IntegrationLayout::new(
+            directory.path().join("caveman-code"),
+        ));
+
+        let pinned = hzr_core::locked_engines()
+            .expect("engine lock parses")
+            .engine
+            .into_iter()
+            .find(|engine| engine.name == "caveman-code")
+            .expect("caveman pin")
+            .version;
+        assert_eq!(health.version.as_deref(), Some(pinned.as_str()));
+    }
+
+    /// An absent runtime is not "stopped, will start on demand" — it will never start.
+    #[test]
+    fn an_uninstalled_caveman_runtime_is_reported_as_degraded_not_stopped() {
+        let directory = tempfile::tempdir().expect("temp directory");
+
+        let health = caveman_engine_health(&hzr_agent::IntegrationLayout::new(
+            directory.path().join("caveman-code"),
+        ));
+
+        assert_eq!(health.state, EngineState::Degraded);
+        assert!(
+            health
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("hzr install")),
+            "the detail must say how to fix it, got {:?}",
+            health.detail
+        );
+    }
+
+    #[test]
+    fn an_installed_caveman_runtime_is_stopped_until_hzr_agent_launches_it() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let root = directory.path().join("caveman-code");
+        let package = root.join("node_modules/@juliusbrussee/caveman-code");
+        fs::create_dir_all(&package).expect("package directory");
+        fs::write(root.join("bridge.mjs"), "// bridge").expect("bridge");
+        fs::write(package.join("package.json"), "{}").expect("package manifest");
+
+        let health = caveman_engine_health(&hzr_agent::IntegrationLayout::new(root));
+
+        assert_eq!(health.state, EngineState::Stopped);
+    }
 
     #[test]
     fn fts_only_icm_is_ready_with_an_explicit_retrieval_capability() {
