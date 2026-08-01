@@ -5,7 +5,7 @@
 **Предыдущий аудит:** [PRD_STATUS.md](PRD_STATUS.md) и [REVIEW.md](REVIEW.md) — исторический `v0.1.0` audit trail
 **Метод:** повторный прогон **тех же самых repro-кейсов**, что дали G1–G7, end-to-end проверка adoption-поверхности в изолированном `HOME` и аудит self-contained release pipeline
 
-> Source/release gates выполнялись в throwaway `HOME`, затем тот же verified Darwin ARM64
+> Source/release gates выполнялись в throwaway `HOME`, затем опубликованный Darwin ARM64
 > artifact установлен глобально. Повторный live audit подтвердил bundle equality, active
 > launchd service, отсутствие foreign engine owners и `hzr doctor --json` без errors.
 
@@ -20,7 +20,7 @@
 user service. Legacy ICM memory и platform RTK history имеют отдельные snapshot-first,
 manifested, idempotent migrations.
 
-**Self-contained distribution реализован как release candidate:** `install.sh` ставит один versioned platform bundle с full fork-core, patched grepai, ICM, exact caveman-code production tree и bundled Node.js 22.17.1. Same-version roots проходят повторную полную аттестацию; production `hzrd` управляется launchd/systemd user service. Native package/install smoke подтверждён для `darwin-arm64`; остальные публикуемые платформы ещё требуют собственных native jobs.
+**Self-contained distribution опубликован:** [`v0.2.0`](https://github.com/heAdz0r/hzr/releases/tag/v0.2.0) ставит один versioned platform bundle с full fork-core, patched grepai, ICM, exact caveman-code production tree и bundled Node.js 22.17.1. Same-version roots проходят повторную полную аттестацию; production `hzrd` управляется launchd/systemd user service. [Release workflow 30676586828](https://github.com/heAdz0r/hzr/actions/runs/30676586828) подтвердил native package/install/upgrade smoke для `darwin-arm64`, `darwin-x64`, `linux-arm64` и `linux-x64` до публикации artifacts.
 
 | Область | Было (0.1.0) | Сейчас (0.2.0) |
 |---|---|---|
@@ -32,7 +32,7 @@ manifested, idempotent migrations.
 | G6 дублированная ошибка | 🟡 | ✅ исправлено |
 | G7 права lock-файла | 🟡 `0644` | ✅ все `0600` |
 | Adoption / hooks / instructions (§16) | ⚪ не реализовано | ✅ реализовано полностью |
-| Self-contained release installer | ⚪ отсутствовал | ✅ local native release candidate green; public 4-platform matrix остаётся внешним gate |
+| Self-contained release installer | ⚪ отсутствовал | ✅ public `v0.2.0`; native 4-platform matrix green |
 | Economic KPI (§4.2) | 📊 0/9 | 📊 **0/9 — без изменений** |
 
 ---
@@ -129,7 +129,7 @@ hzr: failed to read daemon token <path>; run `hzr daemon serve`: No such file or
 | `scripts/verify-fork-core.sh --test` | ✅ baseline `f4296ec4…` + current engine `a8512845…`; 1699 passed, 1 documented ignored, остальные suites green |
 | `FORK_PARITY.md` без `missing`/`reimplemented` | ✅ (единственное вхождение — легенда) |
 | assembled bundle smoke | ✅ versions, ownership, provenance, daemon и bundled Node 22.17.1 покрыты |
-| outer `package-release.sh` + `smoke-install.sh` | ✅ Darwin ARM64 candidate: clean runtime, reinstall, tamper/missing/symlink rejection и upgrade green; public workflow запускает тот же gate на 4 native runners |
+| outer `package-release.sh` + `smoke-install.sh` | ✅ clean runtime, reinstall, tamper/missing/symlink rejection и upgrade green на 4 native runners |
 
 **Отмечу архитектурное решение 0.2.0:** verifier теперь ведёт **двойную identity** — неизменяемый baseline `v0.1.0` (`f4296ec4…`) и evolvable current engine (`a8512845…`). Это корректный способ разрешить развитие fork-core, не потеряв provenance: §1.1 больше не читается как «snapshot заморожен навсегда», но исходный импорт остаётся доказуемым.
 
@@ -185,12 +185,16 @@ Release pipeline теперь включает четыре отдельных �
 3. `package-release.sh` создаёт platform archive и внутренний `BUNDLE_MANIFEST.sha256`;
 4. `install.sh` проверяет release `SHA256SUMS` и manifest, ставит отдельный `versions/v0.2.0-<platform>` root и атомарно переключает `current`; `smoke-install.sh` доказывает clean install с урезанным `PATH` без внешних Node/RTK/grepai/ICM.
 
-Artifact mappings реализованы для macOS/Linux arm64/x64. Release workflow настроен собирать каждый artifact на native runner и выполнять тот же outer package/install smoke до публикации. Локально этот полный gate подтверждён на Darwin ARM64; остальные три платформы не считаются подтверждёнными до green public matrix. Windows artifact в 0.2.0 отсутствует.
+Artifact mappings реализованы для macOS/Linux arm64/x64. Release workflow собрал каждый artifact на native runner и выполнил тот же outer package/install smoke до публикации. Матрица полностью green в [run 30676586828](https://github.com/heAdz0r/hzr/actions/runs/30676586828); release содержит четыре platform archives, единый `SHA256SUMS` и GitHub build-provenance attestations. Windows artifact в 0.2.0 отсутствует.
 
-### 4.3 Финальный live audit 2026-08-01
+### 4.3 Финальный live audit опубликованного `v0.2.0` — 2026-08-01
 
-- verified `darwin-arm64` artifact установлен в `~/.local/share/hzr/current`; повторный
-  installer: `changed=false` для hooks, instructions, client MCP и service;
+- release tag указывает на commit `551e91f2445cd51f52ff22052cc1d5592fd96475`;
+  source CI [30675757188](https://github.com/heAdz0r/hzr/actions/runs/30675757188) и native
+  release matrix [30676586828](https://github.com/heAdz0r/hzr/actions/runs/30676586828) — green;
+- опубликованный `darwin-arm64` artifact установлен в `~/.local/share/hzr/current`;
+  Claude/Codex hooks, instructions и MCP registrations используют только stable
+  `~/.local/bin/hzr` и `~/.local/share/hzr/current/...`, без `versions/`/`target/` paths;
 - launchd service активен и использует только stable `current/bin/hzrd`;
 - bundle attestation: `hzr`, `hzrd`, RTK, grepai, ICM, Node, Caveman bridge и `HZR.md`
   — все `pass`; installed RTK SHA совпадает с current-engine release binary;
@@ -198,10 +202,15 @@ Artifact mappings реализованы для macOS/Linux arm64/x64. Release w
   FTS-only memory, 59 исторических daemon-free rewrites и двух host-global codec paths,
   помеченных `unintercepted` без начисления savings;
 - legacy ICM: 141 memories / 148 durable rows импортированы в repository namespace;
-  legacy RTK: 22 982 commands + 725 parse failures импортированы с signed totals;
+  legacy RTK source: 23 228 operations + 725 parse failures; финальный delta-import добавил
+  246 ранее отсутствовавших commands, после чего повторный run стал no-op;
   оба повторных migration run вернули нулевой импорт и `changed=false`;
-- два legacy `icm serve`, запущенные Claude до миграции config, завершены `SIGTERM` после
-  проверки точных PID/command; повторный doctor не находит foreign owners или wrappers.
+- process audit после production restart: ровно один `hzrd`, один HZR-owned `icm serve`
+  и один managed `grepai watch`; doctor не находит foreign owners, wrappers или duplicate indexes;
+- centralized memory содержит critical handoff `hzr-release-0-2-0` для следующих LOOP-агентов;
+- cumulative `hzr stats`: 24 156 operations, 188 782 166 estimated net avoided tokens
+  (`89.6355%`); provider-observed tasks/accepted остаются `0/0`, поэтому
+  `economic_claim_ready=false` и cost reduction не заявляется как измеренный результат.
 
 ---
 
@@ -209,20 +218,22 @@ Artifact mappings реализованы для macOS/Linux arm64/x64. Release w
 
 | ID | Раздел | Severity | Суть |
 |---|---|---|---|
-| **R1** | §8 / §13 | RELEASE | Full archive/install/re-attestation smoke подтверждён на `darwin-arm64`; `darwin-x64`, `linux-x64` и `linux-arm64` требуют native CI jobs перед публикацией соответствующих artifacts |
 | **A3** | §6.6 / RB-08 | ПРИНЯТАЯ ГРАНИЦА | Claude/Codex не дают безопасный global response hook. Doctor маркирует путь `unintercepted`, managed codec остаётся в `hzr agent`, а savings для host-global ответов не начисляются |
 | **A4** | §11 / §16.5 | НИЗКИЙ | Content-addressed backups изменяемых `settings.json`, `CLAUDE.md` и `AGENTS.md` сохраняются; автоудаление запрещено верно, но долгосрочная политика ротации не определена |
 | **A5** | §6.6 | НИЗКИЙ | Идентификаторы защищены только при наличии `_`; CamelCase и однословные — нет. Латентно безопасно при paragraph-level трансформе |
 | **KPI** | §4.2 | **ОТКРЫТО** | **0 из 9 product metrics измерено — без изменений с 0.1.0** |
 
-R1 блокирует только честное заявление «вся platform matrix verified». A3/A4/A5 — документированные
-ограничения, KPI — незавершённое измерение; ни один из них не разрешает публиковать
+R1 закрыт публичной native matrix. A3/A4/A5 — документированные ограничения,
+KPI — незавершённое измерение; ни один из них не разрешает публиковать
 прогноз экономии как результат.
 
 ---
 
 ## 6. Что дальше
 
-Перед публикацией release: push `main`, дождаться зелёного CI, затем выпустить matching `v0.2.0` tag. Release workflow обязан получить четыре green native package/install jobs, четыре archives, provenance attestations и единый `SHA256SUMS` manifest.
+`v0.2.0` опубликован и глобально принят как active bundle. Следующий release LOOP начинается с
+paired provider benchmark, расширения MCP schema/accounting coverage и доступного только через
+официальные host hooks request/response interception; exact/shadow safety и запрет двойного
+accounting остаются непереговорными инвариантами.
 
 Главный открытый продуктовый вопрос не изменился: §4.2 остаётся 0/9. Функциональные предпосылки готовы, а `hzr stats` честно разделяет actual usage, estimated local effect и неполный accounting. Превращать целевые −30% cost / −20% turns / −35% uncached input из гипотезы в результат можно только после paired benchmark из §14.
