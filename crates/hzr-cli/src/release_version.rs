@@ -12,8 +12,6 @@ const ROOT_VERSION_SURFACES: &[&str] = &[
     "Cargo.toml",
     "FORK_PARITY.md",
     "HZR.md",
-    "PRD.md",
-    "PRD_ADOPTION.md",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
     "install.sh",
@@ -80,19 +78,13 @@ pub fn synchronize(repository: &Path, target: &str, dry_run: bool) -> Result<Ver
         let release_line_path = repository.join("scripts/refresh-current-engine.sh");
         let before = fs::read_to_string(&release_line_path)
             .context("failed to read scripts/refresh-current-engine.sh")?;
-        let previous_line = release_line(&previous)?;
-        let target_line = release_line(target)?;
-        let after = before.replace(
-            &format!("hzr_release_line = \"{previous_line}\""),
-            &format!("hzr_release_line = \"{target_line}\""),
-        );
-        if before == after {
-            bail!("scripts/refresh-current-engine.sh did not contain release line {previous_line}");
+        let after = synchronize_release_line(&before, &previous, target)?;
+        if before != after {
+            if !dry_run {
+                atomic_replace(&release_line_path, after.as_bytes())?;
+            }
+            changed_files.push(PathBuf::from("scripts/refresh-current-engine.sh"));
         }
-        if !dry_run {
-            atomic_replace(&release_line_path, after.as_bytes())?;
-        }
-        changed_files.push(PathBuf::from("scripts/refresh-current-engine.sh"));
         let changelog = repository.join("CHANGELOG.md");
         let before = fs::read_to_string(&changelog).context("failed to read CHANGELOG.md")?;
         let after = release_changelog(&before, &previous, target, release_date()?)?;
@@ -344,6 +336,22 @@ fn release_line(version: &str) -> Result<String> {
     Ok(format!("{major}.{minor}.x"))
 }
 
+fn synchronize_release_line(before: &str, previous: &str, target: &str) -> Result<String> {
+    let previous_line = release_line(previous)?;
+    let target_line = release_line(target)?;
+    if previous_line == target_line {
+        return Ok(before.to_owned());
+    }
+    let after = before.replace(
+        &format!("hzr_release_line = \"{previous_line}\""),
+        &format!("hzr_release_line = \"{target_line}\""),
+    );
+    if before == after {
+        bail!("scripts/refresh-current-engine.sh did not contain release line {previous_line}");
+    }
+    Ok(after)
+}
+
 fn release_date() -> Result<String> {
     let output = Command::new("date")
         .arg("+%Y-%m-%d")
@@ -380,10 +388,28 @@ fn release_changelog(before: &str, previous: &str, target: &str, date: String) -
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{
-        release_changelog, replace_digest_after_marker, replace_digest_for_artifact,
-        validate_version,
+        is_version_surface, release_changelog, replace_digest_after_marker,
+        replace_digest_for_artifact, synchronize_release_line, validate_version,
     };
+
+    #[test]
+    fn same_minor_release_keeps_the_stable_release_line() {
+        let before = "hzr_release_line = \"0.3.x\"\n";
+        assert_eq!(
+            synchronize_release_line(before, "0.3.0", "0.3.1").expect("release line"),
+            before
+        );
+    }
+
+    #[test]
+    fn version_surfaces_exclude_internal_planning_documents() {
+        assert!(is_version_surface(Path::new("README.md")));
+        assert!(!is_version_surface(Path::new("PRD.md")));
+        assert!(!is_version_surface(Path::new("PRD_ADOPTION.md")));
+    }
 
     #[test]
     fn version_validation_rejects_ambiguous_or_partial_versions() {

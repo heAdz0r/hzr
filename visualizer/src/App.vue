@@ -3,6 +3,9 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import CommandCard from "./components/CommandCard.vue";
 import AppIcon from "./components/AppIcon.vue";
 import MetricCard from "./components/MetricCard.vue";
+import MemoryGraph from "./components/MemoryGraph.vue";
+import IndexPipeline from "./components/IndexPipeline.vue";
+import LiveActivity from "./components/LiveActivity.vue";
 import ProjectCard from "./components/ProjectCard.vue";
 import ServiceNode from "./components/ServiceNode.vue";
 import StatusChip from "./components/StatusChip.vue";
@@ -10,6 +13,7 @@ import type { DashboardResponse, ProjectState } from "./types";
 import {
   dashboardStateLabel,
   filterProjects,
+  formatBytes,
   formatCost,
   formatCount,
   formatDuration,
@@ -20,7 +24,7 @@ import {
   relativeTime,
 } from "./utils";
 
-const REFRESH_INTERVAL_MS = 5_000;
+const REFRESH_INTERVAL_MS = 2_000;
 
 const snapshot = ref<DashboardResponse | null>(null);
 const error = ref<string | null>(null);
@@ -49,9 +53,15 @@ const readyProjectCount = computed(
   () => snapshot.value?.projects.filter((project) => project.state === "ready").length ?? 0,
 );
 
-const totalObservedTokens = computed(() => {
-  const usage = snapshot.value?.observed_usage;
+const totalProviderTokens = computed(() => {
+  const usage = snapshot.value?.provider_receipts;
   return usage ? usage.actual_input_tokens + usage.actual_output_tokens : 0;
+});
+
+const localReduction = computed(() => {
+  const activity = snapshot.value?.local_activity;
+  if (!activity || activity.baseline_tokens_estimated === 0) return 0;
+  return (activity.net_avoided_tokens_estimated * 100) / activity.baseline_tokens_estimated;
 });
 
 async function refresh(manual = false): Promise<void> {
@@ -227,8 +237,8 @@ onBeforeUnmount(() => {
               <h2 id="system-title">The control plane pulse</h2>
             </div>
             <p>
-              One persistent daemon supervises the exact fork-core and managed engines.
-              Standby means on-demand, not broken.
+              One persistent daemon supervises fork-core, ICM, and each project watcher.
+              Readiness comes from live protocol and canary evidence.
             </p>
           </div>
           <div class="service-flow">
@@ -242,57 +252,137 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
+        <section class="observatory-grid" aria-label="Project memory and index observatories">
+          <article class="observatory-panel memory-panel">
+            <div class="observatory-head">
+              <div>
+                <span class="eyebrow">ICM memory observatory</span>
+                <h2>Project knowledge, alive.</h2>
+                <p>{{ snapshot.memory_observatory.detail }}</p>
+              </div>
+              <StatusChip :state="snapshot.memory_observatory.state" />
+            </div>
+            <div class="observatory-statline">
+              <span><strong>{{ formatCount(snapshot.memory_observatory.memory_count) }}</strong> memories</span>
+              <span><strong>{{ snapshot.memory_observatory.topics.length }}</strong> topics</span>
+              <span><strong>{{ snapshot.memory_observatory.edges.length }}</strong> links</span>
+              <span v-if="snapshot.memory_observatory.truncated" class="bounded-pill">
+                Graph bounded<span v-if="snapshot.memory_observatory.hidden_memory_count"> · {{ snapshot.memory_observatory.hidden_memory_count }} hidden</span>
+              </span>
+              <span class="capability-pill">{{ snapshot.memory_observatory.retrieval.toUpperCase() }}</span>
+            </div>
+            <MemoryGraph :observatory="snapshot.memory_observatory" />
+            <div class="evidence-strip">
+              <span><AppIcon name="check" :size="15" /> Positive repository filter</span>
+              <span><AppIcon name="check" :size="15" /> Read-only snapshot</span>
+              <span><AppIcon name="check" :size="15" /> No memory content exposed</span>
+              <span><AppIcon name="clock" :size="15" /> {{ snapshot.memory_observatory.latency_ms }}ms · {{ relativeTime(snapshot.memory_observatory.observed_at_ms) }}</span>
+            </div>
+          </article>
+
+          <article class="observatory-panel index-panel">
+            <div class="observatory-head">
+              <div>
+                <span class="eyebrow">grepai index observatory</span>
+                <h2>From files to semantic proof.</h2>
+                <p>{{ snapshot.index_observatory.semantic.detail }}</p>
+              </div>
+              <StatusChip :state="snapshot.index_observatory.state" />
+            </div>
+            <IndexPipeline :observatory="snapshot.index_observatory" />
+            <div class="canary-card">
+              <div class="canary-orb" :class="`canary-${snapshot.index_observatory.semantic.state}`">
+                <AppIcon name="search" :size="24" />
+              </div>
+              <div>
+                <span>Live semantic canary</span>
+                <strong>“{{ snapshot.index_observatory.semantic.query }}”</strong>
+                <small>
+                  {{ formatCount(snapshot.index_observatory.semantic.scanned_files) }} files scanned ·
+                  {{ formatCount(snapshot.index_observatory.semantic.total_hits) }} total hits ·
+                  {{ snapshot.index_observatory.semantic.backend ?? "backend unavailable" }} ·
+                  {{ snapshot.index_observatory.semantic.latency_ms }}ms
+                </small>
+              </div>
+            </div>
+            <dl class="index-evidence">
+              <div><dt>Generation</dt><dd :title="snapshot.index_observatory.generation ?? undefined">{{ snapshot.index_observatory.generation ?? "Unavailable" }}</dd></div>
+              <div><dt>Watcher</dt><dd>{{ snapshot.index_observatory.watcher.detail }}</dd></div>
+              <div>
+                <dt>Last proof</dt>
+                <dd>{{ snapshot.index_observatory.semantic.checked_at_ms ? relativeTime(snapshot.index_observatory.semantic.checked_at_ms) : "Not checked" }}</dd>
+              </div>
+              <div><dt>Artifacts</dt><dd>{{ formatBytes(snapshot.index_observatory.artifacts.size_bytes) }} · {{ snapshot.index_observatory.artifacts.modified_at_ms ? relativeTime(snapshot.index_observatory.artifacts.modified_at_ms) : "No files" }}</dd></div>
+              <div><dt>Watcher age</dt><dd>{{ snapshot.index_observatory.watcher.uptime_ms !== null ? formatDuration(snapshot.index_observatory.watcher.uptime_ms) : "Standby" }}</dd></div>
+              <div><dt>Config fingerprint</dt><dd :title="snapshot.index_observatory.config_fingerprint ?? undefined">{{ snapshot.index_observatory.config_fingerprint ?? "Unavailable" }}</dd></div>
+            </dl>
+          </article>
+        </section>
+
         <section class="metrics-section" aria-labelledby="metrics-title">
           <div class="section-heading metrics-heading">
             <div>
-              <span class="eyebrow">Accounting boundary</span>
-              <h2 id="metrics-title">Observed is not estimated</h2>
+              <span class="eyebrow">Verifiable accounting</span>
+              <h2 id="metrics-title">This project. This ledger.</h2>
             </div>
             <p>
-              Provider-observed usage stays separate from the deterministic
-              <code>{{ snapshot.estimated_efficiency.measurement }}</code> counterfactual.
+              Exact canonical-path records for <strong>{{ snapshot.local_activity.project ?? "the selected project" }}</strong>.
+              Estimates remain named; provider receipts remain separate.
             </p>
           </div>
 
-          <div class="metric-group observed-group">
+          <div class="metric-group local-group">
             <div class="metric-group-title">
-              <span class="metric-group-mark observed-mark"><AppIcon name="activity" :size="18" /></span>
-              <div><strong>Observed usage</strong><span>Provider and runtime records</span></div>
-              <span class="metric-legend">Actual</span>
+              <span class="metric-group-mark local-mark"><AppIcon name="activity" :size="18" /></span>
+              <div><strong>Verified local activity</strong><span>{{ snapshot.local_activity.measurement }}</span></div>
+              <span class="metric-legend">Project-scoped</span>
             </div>
-            <div class="metric-grid">
+            <div class="metric-grid metric-grid-four">
               <MetricCard
-                eyebrow="Observed"
-                :value="formatCount(snapshot.observed_usage.tasks)"
-                label="Recorded tasks"
-                :detail="`${formatCount(snapshot.observed_usage.accepted)} externally accepted`"
+                eyebrow="Ledger rows"
+                :value="formatCount(snapshot.local_activity.operations)"
+                label="Recorded operations"
+                :detail="`${formatDuration(snapshot.local_activity.total_execution_ms)} measured execution`"
                 icon="activity"
-                tone="observed"
+                tone="estimated"
               />
               <MetricCard
-                eyebrow="Observed"
-                :value="formatCount(totalObservedTokens)"
-                label="Actual tokens"
-                :detail="`${formatCount(snapshot.observed_usage.actual_input_tokens)} input · ${formatCount(snapshot.observed_usage.actual_output_tokens)} output`"
+                eyebrow="Estimate"
+                :value="formatSignedCount(snapshot.local_activity.net_avoided_tokens_estimated)"
+                label="Net avoided tokens"
+                :detail="`${formatCount(snapshot.local_activity.regression_tokens_estimated)} regression tokens accounted`"
                 icon="memory"
-                tone="observed"
+                tone="estimated"
               />
               <MetricCard
-                eyebrow="Observed"
-                :value="formatCost(snapshot.observed_usage.cost_microusd)"
-                label="Provider cost"
-                detail="Only provider-attributed records are included"
+                eyebrow="Estimate"
+                :value="formatPercent(localReduction)"
+                label="Project reduction"
+                detail="Deterministic output sizing, not billing"
                 icon="database"
-                tone="observed"
+                tone="estimated"
+              />
+              <MetricCard
+                eyebrow="Delivered"
+                :value="formatCount(snapshot.local_activity.delivered_tokens_estimated)"
+                label="Delivered token estimate"
+                :detail="`${formatCount(snapshot.local_activity.baseline_tokens_estimated)} baseline`"
+                icon="clock"
+                tone="estimated"
               />
             </div>
+            <LiveActivity
+              :operations="snapshot.local_activity.recent_operations"
+              :optimized-count="snapshot.local_activity.optimized_operations"
+              :raw-count="snapshot.local_activity.raw_operations"
+            />
           </div>
 
           <div class="metric-group estimate-group">
             <div class="metric-group-title">
               <span class="metric-group-mark estimate-mark"><AppIcon name="cpu" :size="18" /></span>
-              <div><strong>Direct efficiency estimate</strong><span>Deterministic before/after output sizing</span></div>
-              <span class="metric-legend">Estimate</span>
+              <div><strong>All-workspace efficiency ledger</strong><span>Global operational context, separate from selected-project proof</span></div>
+              <span class="metric-legend">Global estimate</span>
             </div>
             <div class="metric-grid metric-grid-four">
               <MetricCard
@@ -327,6 +417,48 @@ onBeforeUnmount(() => {
                 icon="clock"
                 tone="estimated"
               />
+            </div>
+          </div>
+
+          <div class="metric-group provider-group">
+            <div class="metric-group-title">
+              <span class="metric-group-mark observed-mark"><AppIcon name="database" :size="18" /></span>
+              <div><strong>Provider receipt coverage</strong><span>Externally attributed usage only; not project-scoped unless the provider supplies attribution</span></div>
+              <span class="metric-legend">Observed</span>
+            </div>
+            <div v-if="snapshot.provider_receipts.state === 'available'" class="metric-grid">
+              <MetricCard
+                eyebrow="Receipts"
+                :value="formatCount(snapshot.provider_receipts.records)"
+                label="Provider records"
+                :detail="`${formatCount(snapshot.provider_receipts.accepted)} accepted`"
+                icon="activity"
+                tone="observed"
+              />
+              <MetricCard
+                eyebrow="Actual"
+                :value="formatCount(totalProviderTokens)"
+                label="Provider tokens"
+                :detail="`${formatCount(snapshot.provider_receipts.actual_input_tokens)} input · ${formatCount(snapshot.provider_receipts.actual_output_tokens)} output`"
+                icon="memory"
+                tone="observed"
+              />
+              <MetricCard
+                eyebrow="Actual"
+                :value="formatCost(snapshot.provider_receipts.cost_microusd)"
+                label="Provider cost"
+                detail="Attributed receipts only"
+                icon="database"
+                tone="observed"
+              />
+            </div>
+            <div v-else class="receipt-empty">
+              <span class="receipt-icon"><AppIcon name="database" :size="22" /></span>
+              <div>
+                <strong>No provider receipts connected</strong>
+                <p>{{ snapshot.provider_receipts.detail }}</p>
+              </div>
+              <span class="receipt-state">No data ≠ zero usage</span>
             </div>
           </div>
         </section>

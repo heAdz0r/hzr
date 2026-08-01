@@ -106,6 +106,7 @@ verify_hzr_bundle_root() {
     "engines/icm" \
     "runtime/node/bin/node" \
     "share/hzr/HZR.md" \
+    "share/hzr/install.sh" \
     "share/hzr/visualizer/index.html" \
     "share/hzr/visualizer/assets/app.css" \
     "share/hzr/visualizer/assets/app.js" \

@@ -8,6 +8,8 @@ HZR_RUN_ID="${HZR_BENCHMARK_RUN_ID:-$(date -u +%Y-%m-%dT%H%M%SZ)}"
 HZR_OUTPUT_ROOT="${HZR_BENCHMARK_OUTPUT:-${HZR_BENCHMARK_DIR}/runs/${HZR_RUN_ID}}"
 HZR_REPETITIONS="${HZR_BENCHMARK_REPETITIONS:-5}"
 HZR_TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/hzr-rtk-benchmark.XXXXXX")"
+HZR_SHARED_CARGO_HOME="${HZR_TEMP_ROOT}/cargo-home"
+export HZR_BENCHMARK_CARGO_HOME="${HZR_SHARED_CARGO_HOME}"
 
 cleanup_hzr_benchmark() {
   rm -rf -- "${HZR_TEMP_ROOT}"
@@ -21,18 +23,21 @@ for HZR_REQUIRED_COMMAND in cargo git python3 rustc; do
   }
 done
 
-git clone --quiet --no-tags \
+git clone --quiet --no-tags --filter=blob:none --no-checkout \
   https://github.com/rtk-ai/rtk.git \
   "${HZR_TEMP_ROOT}/upstream"
 git -C "${HZR_TEMP_ROOT}/upstream" checkout --quiet "${HZR_UPSTREAM_COMMIT}"
 
-CARGO_TARGET_DIR="${HZR_TEMP_ROOT}/upstream-target" \
+CARGO_HOME="${HZR_SHARED_CARGO_HOME}" \
+  CARGO_TARGET_DIR="${HZR_TEMP_ROOT}/upstream-target" \
   cargo build --quiet --locked --release --bin rtk \
   --manifest-path "${HZR_TEMP_ROOT}/upstream/Cargo.toml"
-CARGO_TARGET_DIR="${HZR_TEMP_ROOT}/fork-target" \
+CARGO_HOME="${HZR_SHARED_CARGO_HOME}" \
+  CARGO_TARGET_DIR="${HZR_TEMP_ROOT}/fork-target" \
   cargo build --quiet --locked --release --bin rtk \
   --manifest-path "${HZR_REPOSITORY_ROOT}/fork-core/rtk/Cargo.toml"
-CARGO_TARGET_DIR="${HZR_TEMP_ROOT}/hzr-target" \
+CARGO_HOME="${HZR_SHARED_CARGO_HOME}" \
+  CARGO_TARGET_DIR="${HZR_TEMP_ROOT}/hzr-target" \
   cargo build --quiet --locked --release --bin hzr \
   --manifest-path "${HZR_REPOSITORY_ROOT}/Cargo.toml"
 

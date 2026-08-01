@@ -20,6 +20,7 @@ mod service;
 mod stats;
 mod stats_output;
 mod tdd;
+mod update;
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -222,6 +223,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         .await;
     }
 
+    if matches!(&cli.command, Command::Update) {
+        return update::execute(cli.json).await;
+    }
+
     let config = Config::load_or_default(&config_path)
         .with_context(|| format!("failed to load {}", config_path.display()))?;
     match cli.command {
@@ -232,6 +237,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Hooks {
             command: HooksCommand::Status,
         } => bail!("hook status entered configured execution path"),
+        Command::Update => bail!("update is not implemented"),
         Command::Hooks {
             command: HooksCommand::Dispatch,
         } => {
@@ -1006,6 +1012,9 @@ async fn initialize_if_needed(
                 workspace.identity.root.display()
             )?;
         }
+    }
+    if !json && let Some(notice) = update::startup_notice(&config.data_dir).await {
+        println!("{notice}");
     }
     Ok(ExitCode::SUCCESS)
 }

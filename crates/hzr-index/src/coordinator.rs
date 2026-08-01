@@ -4,12 +4,35 @@ use std::sync::Arc;
 
 use tokio::sync::{Mutex, RwLock};
 
+use crate::IndexStatus;
 use crate::{Deadlines, GrepAi, IndexGeneration, InitOptions, Result, WatchHandle, Workspace};
 
 #[derive(Clone, Debug)]
 pub struct PreparedIndex {
     pub workspace: Workspace,
     pub generation: IndexGeneration,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IndexWatcherState {
+    Live,
+    Standby,
+    Failed,
+}
+
+#[derive(Clone, Debug)]
+pub struct IndexWatcherSnapshot {
+    pub state: IndexWatcherState,
+    pub pid: Option<u32>,
+    pub uptime_ms: Option<u64>,
+    pub ready_marker_observed: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct IndexCoordinatorSnapshot {
+    pub workspace: Workspace,
+    pub index: IndexStatus,
+    pub watcher: IndexWatcherSnapshot,
 }
 
 #[derive(Clone)]
@@ -108,6 +131,53 @@ impl IndexCoordinator {
         Ok(PreparedIndex {
             workspace,
             generation,
+        })
+    }
+
+    pub async fn status(&self, start: &Path) -> Result<IndexCoordinatorSnapshot> {
+        let workspace = self.workspace(start).await?;
+        let initialized = workspace.index.config.is_file();
+        let index = IndexStatus {
+            placement: workspace.placement()?,
+            initialized,
+            vectors_present: workspace.index.vectors.is_file(),
+            symbols_present: workspace.index.symbols.is_file(),
+            repository_graph_present: workspace.index.repository_graph.is_file(),
+            duplicate_index_dirs: workspace.duplicate_index_dirs.clone(),
+            generation: initialized
+                .then(|| IndexGeneration::read(&workspace))
+                .transpose()?,
+        };
+        let watcher = {
+            let mut watchers = self.watchers.lock().await;
+            match watchers.get_mut(&workspace.identity.worktree_id) {
+                Some(handle) => {
+                    let pid = handle.pid();
+                    let uptime_ms = u64::try_from(handle.uptime().as_millis()).unwrap_or(u64::MAX);
+                    let state = if handle.is_running()? {
+                        IndexWatcherState::Live
+                    } else {
+                        IndexWatcherState::Failed
+                    };
+                    IndexWatcherSnapshot {
+                        state,
+                        pid,
+                        uptime_ms: Some(uptime_ms),
+                        ready_marker_observed: true,
+                    }
+                }
+                None => IndexWatcherSnapshot {
+                    state: IndexWatcherState::Standby,
+                    pid: None,
+                    uptime_ms: None,
+                    ready_marker_observed: false,
+                },
+            }
+        };
+        Ok(IndexCoordinatorSnapshot {
+            workspace,
+            index,
+            watcher,
         })
     }
 

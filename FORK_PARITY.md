@@ -39,9 +39,8 @@ Baseline identity immutable. `fork-core/rtk` after `v0.1.0` develops directly in
 
 ### Current command-output parity delta
 
-The controlled RAW / upstream RTK v0.44.1 / HZR run is recorded in
-[`PRD_BENCHMARK_HZR_VS_UPSTREAM_RTK.md`](PRD_BENCHMARK_HZR_VS_UPSTREAM_RTK.md)
-with replayable evidence under
+The controlled RAW / upstream RTK v0.44.1 / HZR run, methodology and replayable
+evidence live under
 [`benchmarks/hzr-vs-rtk-upstream-v0.44.1`](benchmarks/hzr-vs-rtk-upstream-v0.44.1).
 
 The first pass found four shared-command gaps: missing `cargo test` failure
@@ -72,7 +71,7 @@ ties, 0 HZR losses, with matching exit-code vectors in all 14 cases.
 | Raw shell rewrite |The complete line is passed to fork `rewrite`| Pipes, redirects, heredoc, multiline, quoting, `&&/||`, xargs are covered by tests| ✅ |
 | Exit `0/1/2/3` | rewrite / raw / deny / one-time approval |Approval ID bounded, TTL and single-use; approve/deny CLI/API| ✅ |
 | Command filters/guards |Fork rewrite selects exact command, HZR transport executes it|Private PATH resolves `rtk` again in exact fork; no generic replacement table| ✅ |
-| Enhanced read | Agent `hzr_read` → allowlisted `/v1/fork/run` → fork `read` |Bounds/modes are checked; traversal and symlink escape are rejected| ✅ |
+| Enhanced read | Agent `hzr_read` → allowlisted `/v1/fork/run` → fork `read` | Bounds/modes are checked; traversal and symlink escape are rejected; Markdown digests identify omitted content, report source/section coverage and provide exact full/range recovery | ✅ |
 | Atomic edit/write | Agent edit/write → fork `write --output json patch|create` |Native Caveman file tools are not available; fork atomic semantics saved| ✅ |
 | `rgai` behavior | `/v1/search`, `hzr search|rgai`, agent search → exact fork `rgai --json` |Exact adds `--builtin`; semantic/auto uses managed grepai| ✅ |
 | One grepai store | Managed `.grepai` symlink → `<data>/workspaces/<repo>/<worktree>/index/grepai` |Real legacy, foreign link and nested duplicate fail closed| ✅ |

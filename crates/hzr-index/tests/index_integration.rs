@@ -7,8 +7,8 @@ use std::process::Command;
 use std::time::Duration;
 
 use hzr_index::{
-    Deadlines, GrepAi, IndexCoordinator, IndexError, IndexPlacement, InitOptions, InitOutcome,
-    Workspace,
+    Deadlines, GrepAi, IndexCoordinator, IndexError, IndexPlacement, IndexWatcherState,
+    InitOptions, InitOutcome, Workspace,
 };
 use tempfile::TempDir;
 
@@ -375,6 +375,35 @@ async fn test_coordinator_reuses_one_watcher_for_repeated_prepare() {
 }
 
 #[tokio::test]
+async fn test_coordinator_status_proves_index_artifacts_and_live_watcher() {
+    let repo = git_repo();
+    let data = tempfile::tempdir().expect("managed data root");
+    write_source(repo.path(), "pub fn observable() {}\n");
+    fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    let grepai = fake_grepai(repo.path(), "0.35.0");
+    let coordinator = IndexCoordinator::new(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        grepai,
+        deadlines(),
+        true,
+    );
+    coordinator
+        .prepare(repo.path())
+        .await
+        .expect("prepared index");
+
+    let snapshot = coordinator.status(repo.path()).await.expect("typed status");
+
+    assert!(snapshot.index.initialized);
+    assert!(snapshot.index.vectors_present);
+    assert!(snapshot.index.symbols_present);
+    assert_eq!(snapshot.watcher.state, IndexWatcherState::Live);
+    assert!(snapshot.watcher.pid.is_some());
+    coordinator.shutdown().await.expect("coordinator shutdown");
+}
+
+#[tokio::test]
 async fn test_connect_rejects_unpinned_grepai_version() {
     let repo = git_repo();
     let grepai = fake_grepai(repo.path(), "0.36.0");
@@ -443,6 +472,8 @@ case "$command_name" in
   init)
     mkdir -p .grepai
     printf 'version: 1\n' > .grepai/config.yaml
+    : > .grepai/index.gob
+    : > .grepai/symbols.gob
     ;;
   search)
     query="${{2:-}}"

@@ -153,10 +153,10 @@ async fn test_dropping_handle_terminates_process_group() -> Result<()> {
 
     let pid = tokio::time::timeout(std::time::Duration::from_secs(2), async {
         loop {
-            if let Ok(text) = fs::read_to_string(&pid_path)
-                && let Ok(pid) = text.parse::<i32>()
-            {
-                break pid;
+            if let Ok(text) = fs::read_to_string(&pid_path) {
+                if let Ok(pid) = text.parse::<i32>() {
+                    break pid;
+                }
             }
             tokio::task::yield_now().await;
         }

@@ -349,6 +349,154 @@ pub struct DashboardEstimatedEfficiency {
     pub measurement: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardMemoryRetrieval {
+    Hybrid,
+    Fts5,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DashboardMemoryTopic {
+    pub id: String,
+    pub label: String,
+    pub memory_count: usize,
+    pub average_weight: f64,
+    pub newest_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardMemoryEdge {
+    pub source: String,
+    pub target: String,
+    pub relationship_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DashboardMemoryObservatory {
+    pub state: DashboardState,
+    pub project: Option<String>,
+    pub retrieval: DashboardMemoryRetrieval,
+    pub observed_at_ms: u64,
+    pub latency_ms: u64,
+    pub transport: String,
+    pub source: String,
+    pub memory_count: usize,
+    pub visible_memory_count: usize,
+    pub hidden_memory_count: usize,
+    pub topics: Vec<DashboardMemoryTopic>,
+    pub edges: Vec<DashboardMemoryEdge>,
+    pub truncated: bool,
+    pub diagnostic_command: String,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardIndexArtifacts {
+    pub initialized: bool,
+    pub vectors_present: bool,
+    pub symbols_present: bool,
+    pub repository_graph_present: bool,
+    pub size_bytes: u64,
+    pub modified_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardIndexWatcher {
+    pub state: DashboardState,
+    pub pid: Option<u32>,
+    pub uptime_ms: Option<u64>,
+    pub owned_by_hzr: bool,
+    pub ready_marker_observed: bool,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardSemanticCanary {
+    pub state: DashboardState,
+    pub checked_at_ms: Option<u64>,
+    pub latency_ms: u64,
+    pub query: String,
+    pub total_hits: usize,
+    pub shown_hits: usize,
+    pub scanned_files: usize,
+    pub strategy: Option<String>,
+    pub backend: Option<String>,
+    pub generation: Option<String>,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardIndexObservatory {
+    pub state: DashboardState,
+    pub project: Option<String>,
+    pub observed_at_ms: u64,
+    pub generation: Option<String>,
+    pub config_fingerprint: Option<String>,
+    pub artifacts: DashboardIndexArtifacts,
+    pub watcher: DashboardIndexWatcher,
+    pub semantic: DashboardSemanticCanary,
+    pub diagnostic_command: String,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardLocalActivity {
+    pub project: Option<String>,
+    pub operations: u64,
+    pub optimized_operations: u64,
+    pub raw_operations: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub gross_avoided_tokens_estimated: u64,
+    pub regression_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub total_execution_ms: u64,
+    pub first_record_at: Option<String>,
+    pub last_record_at: Option<String>,
+    pub unscoped_operations: u64,
+    pub measurement: String,
+    pub recent_operations: Vec<DashboardLocalOperation>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardOperationRoute {
+    Optimized,
+    Raw,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardLocalOperation {
+    pub timestamp: String,
+    pub operation: String,
+    pub route: DashboardOperationRoute,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub execution_ms: u64,
+    pub replacement: Option<String>,
+    pub rationale: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardProviderReceiptState {
+    Available,
+    NoReceipts,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardProviderReceipts {
+    pub state: DashboardProviderReceiptState,
+    pub records: u64,
+    pub accepted: u64,
+    pub actual_input_tokens: u64,
+    pub actual_output_tokens: u64,
+    pub cost_microusd: u64,
+    pub detail: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DashboardHelpCommand {
     pub label: String,
@@ -370,6 +518,10 @@ pub struct DashboardResponse {
     pub registry_warnings: usize,
     pub observed_usage: DashboardObservedUsage,
     pub estimated_efficiency: DashboardEstimatedEfficiency,
+    pub memory_observatory: DashboardMemoryObservatory,
+    pub index_observatory: DashboardIndexObservatory,
+    pub local_activity: DashboardLocalActivity,
+    pub provider_receipts: DashboardProviderReceipts,
     pub help: Vec<DashboardHelpCommand>,
     pub notes: Vec<String>,
 }

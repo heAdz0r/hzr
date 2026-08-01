@@ -42,7 +42,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      # The warning ratchet hashes Clippy diagnostics, whose default warning set changes
+      # between Rust releases. Keep its compiler fixed; stable Rust is covered separately.
+      - uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          components: clippy
       - run: bash -n scripts/*.sh
       - run: ./scripts/verify-fork-core.sh --test
 

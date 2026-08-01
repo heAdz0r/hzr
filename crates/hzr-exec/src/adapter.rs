@@ -76,6 +76,7 @@ impl ForkRuntimePaths {
             .env("RTK_AUDIT_DIR", &self.audit_dir)
             .env("RTK_TEE", "0")
             .env("RTK_HISTORY_DAYS", "0")
+            .env("RTK_TRACKING_DISABLED", "0")
             .env("RTK_TELEMETRY_DISABLED", "1")
             .env("PATH", prefixed_path(binary_directory)?);
         Ok(())
@@ -98,6 +99,7 @@ impl ForkRuntimePaths {
             ("RTK_AUDIT_DIR", path_text(&self.audit_dir)?),
             ("RTK_TEE", "0"),
             ("RTK_HISTORY_DAYS", "0"),
+            ("RTK_TRACKING_DISABLED", "0"),
             ("RTK_TELEMETRY_DISABLED", "1"),
         ] {
             environment.set.insert(key.to_owned(), value.to_owned());
@@ -129,6 +131,7 @@ impl ForkRuntimePaths {
             .env("RTK_AUDIT_DIR", &self.audit_dir)
             .env("RTK_TEE", "0")
             .env("RTK_HISTORY_DAYS", "0")
+            .env("RTK_TRACKING_DISABLED", "0")
             .env("RTK_TELEMETRY_DISABLED", "1")
             .env("PATH", prefixed_path(binary_directory)?);
         Ok(())
@@ -143,7 +146,7 @@ impl ForkRuntimePaths {
                     path: binary_directory.to_owned(),
                 })?;
         Ok(format!(
-            "RTK_MEM_DB_PATH={}\nRTK_DB_PATH={}\nRTK_TEE_DIR={}\nRTK_AUDIT_DIR={}\nRTK_TEE=0\nRTK_HISTORY_DAYS=0\nRTK_TELEMETRY_DISABLED=1\nPATH={}${{PATH:+\":$PATH\"}}\nexport RTK_MEM_DB_PATH RTK_DB_PATH RTK_TEE_DIR RTK_AUDIT_DIR RTK_TEE RTK_HISTORY_DAYS RTK_TELEMETRY_DISABLED PATH\n",
+            "RTK_MEM_DB_PATH={}\nRTK_DB_PATH={}\nRTK_TEE_DIR={}\nRTK_AUDIT_DIR={}\nRTK_TEE=0\nRTK_HISTORY_DAYS=0\nRTK_TRACKING_DISABLED=0\nRTK_TELEMETRY_DISABLED=1\nPATH={}${{PATH:+\":$PATH\"}}\nexport RTK_MEM_DB_PATH RTK_DB_PATH RTK_TEE_DIR RTK_AUDIT_DIR RTK_TEE RTK_HISTORY_DAYS RTK_TRACKING_DISABLED RTK_TELEMETRY_DISABLED PATH\n",
             shell_quote(path_text(&self.memory_db)?),
             shell_quote(path_text(&self.history_db)?),
             shell_quote(path_text(&self.tee_dir)?),
@@ -208,6 +211,7 @@ pub struct ForkCoreInvocation {
     pub timeout_ms: Option<u64>,
     pub capture: crate::CaptureConfig,
     pub stdin: crate::StdinSpec,
+    account_usage: bool,
 }
 
 impl ForkCoreInvocation {
@@ -219,7 +223,14 @@ impl ForkCoreInvocation {
             timeout_ms: None,
             capture: crate::CaptureConfig::default(),
             stdin: crate::StdinSpec::default(),
+            account_usage: true,
         }
+    }
+
+    #[must_use]
+    pub fn without_accounting(mut self) -> Self {
+        self.account_usage = false;
+        self
     }
 }
 
@@ -286,6 +297,12 @@ impl ForkCoreRunner {
         invocation: ForkCoreInvocation,
     ) -> Result<crate::ExecutionOutcome, ExecError> {
         let mut envelope = self.envelope(&invocation.args)?;
+        if !invocation.account_usage {
+            envelope
+                .environment
+                .set
+                .insert("RTK_TRACKING_DISABLED".into(), "1".into());
+        }
         envelope.cwd = invocation.cwd;
         envelope.timeout_ms = invocation.timeout_ms;
         envelope.capture = invocation.capture;

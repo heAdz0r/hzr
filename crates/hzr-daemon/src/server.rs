@@ -199,6 +199,19 @@ mod tests {
         }
         assert!(payload.get("observed_usage").is_some());
         assert!(payload.get("estimated_efficiency").is_some());
+        assert!(payload.get("memory_observatory").is_some());
+        assert!(payload.get("index_observatory").is_some());
+        assert!(payload["memory_observatory"]["observed_at_ms"].is_number());
+        assert!(payload["memory_observatory"]["latency_ms"].is_number());
+        assert_eq!(
+            payload["memory_observatory"]["source"],
+            "canonical_icm_store"
+        );
+        assert!(payload["index_observatory"]["observed_at_ms"].is_number());
+        assert!(payload["index_observatory"]["artifacts"]["size_bytes"].is_number());
+        assert!(payload["index_observatory"]["semantic"]["latency_ms"].is_number());
+        assert!(payload.get("local_activity").is_some());
+        assert!(payload.get("provider_receipts").is_some());
         assert!(payload.get("token").is_none());
     }
 

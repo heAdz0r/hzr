@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use hzr_core::{Config, EfficiencySummary, Ledger, LedgerSummary};
+use hzr_core::{
+    BypassSummary, Config, EfficiencySummary, Ledger, LedgerSummary, classify_operation,
+};
 use serde::Serialize;
 
-use crate::hook_runner;
+use crate::hook_runner::{self, AccountingCoverage};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct StatsReport {
@@ -14,10 +16,39 @@ pub struct StatsReport {
     pub by_subsystem: Vec<SubsystemSavings>,
     pub by_command: Vec<CommandSavings>,
     pub observed_model_usage: LedgerSummary,
+    /// Operations that skipped the optimizer. Reported next to the headline ratio because
+    /// a bypassed row cancels out of that ratio instead of lowering it.
+    pub bypass: BypassReport,
     pub degraded_rewrites: usize,
+    /// Full accounting-coverage state: the open gap, the historical total, and when the
+    /// last gap occurred. `degraded_rewrites` above is the open gap alone, retained for
+    /// callers that already read it.
+    pub coverage: AccountingCoverage,
     pub runtime_accounting_complete: bool,
     pub economic_claim_ready: bool,
     pub notes: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct BypassReport {
+    pub operations: u64,
+    pub total_operations: u64,
+    pub operation_share_pct: f64,
+    pub delivered_tokens_estimated: u64,
+    pub total_delivered_tokens_estimated: u64,
+    pub token_share_pct: f64,
+    pub by_tool: Vec<BypassToolReport>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BypassToolReport {
+    pub tool: String,
+    pub executions: u64,
+    pub delivered_tokens_estimated: u64,
+    pub example_command: String,
+    /// The first-class HZR command that would have replaced the example, when one exists.
+    pub replacement: Option<String>,
+    pub rationale: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -61,14 +92,16 @@ pub fn collect(config: &Config) -> Result<StatsReport> {
     let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?;
     let gain = ledger.efficiency_summary()?;
     let observed_model_usage = ledger.summary()?;
-    let degraded_rewrites = hook_runner::degraded_rewrite_count(config)?;
-    Ok(build_report(gain, observed_model_usage, degraded_rewrites))
+    let coverage = hook_runner::degraded_rewrite_coverage(config)?;
+    let bypass = ledger.bypass_summary()?;
+    Ok(build_report(gain, observed_model_usage, coverage, bypass))
 }
 
 fn build_report(
     gain: EfficiencySummary,
     observed_model_usage: LedgerSummary,
-    degraded_rewrites: usize,
+    coverage: AccountingCoverage,
+    bypass: BypassSummary,
 ) -> StatsReport {
     let commands = gain
         .by_command
@@ -151,33 +184,46 @@ fn build_report(
         by_subsystem,
         by_command: commands,
         observed_model_usage,
-        degraded_rewrites,
-        runtime_accounting_complete: degraded_rewrites == 0,
+        bypass: bypass_report(bypass),
+        degraded_rewrites: coverage.unreconciled_rewrites,
+        coverage,
+        runtime_accounting_complete: coverage.complete,
         economic_claim_ready: false,
         notes: vec![
             "direct savings are estimated from before/after output size and never mixed with provider usage",
             "read, write, rgai/search, and command filters share the same cumulative HZR-owned history",
+            "a bypassed operation delivers as many tokens as it consumed, so it cancels out of the reduction ratio instead of lowering it",
             "context selection, memory recall, and response contracts receive no savings credit without a measured counterfactual",
         ],
     }
 }
 
-fn classify_command(command: &str) -> &'static str {
-    let command = command.to_ascii_lowercase();
-    if command.contains("rtk write") {
-        "write"
-    } else if command.contains("rtk rgai")
-        || command.contains("rtk grep")
-        || command.contains("rtk rg")
-    {
-        "search"
-    } else if command.contains("rtk read") || command.starts_with("cat ") {
-        "read"
-    } else if command.contains("rtk memory") {
-        "memory"
-    } else {
-        "execution"
+fn bypass_report(bypass: BypassSummary) -> BypassReport {
+    BypassReport {
+        operations: bypass.lifetime.operations,
+        total_operations: bypass.lifetime.total_operations,
+        operation_share_pct: bypass.lifetime.operation_share_pct(),
+        delivered_tokens_estimated: bypass.lifetime.delivered_tokens_estimated,
+        total_delivered_tokens_estimated: bypass.lifetime.total_delivered_tokens_estimated,
+        token_share_pct: bypass.lifetime.token_share_pct(),
+        by_tool: bypass
+            .by_tool
+            .into_iter()
+            .map(|tool| BypassToolReport {
+                tool: tool.tool,
+                executions: tool.executions,
+                delivered_tokens_estimated: tool.delivered_tokens_estimated,
+                example_command: tool.example_command,
+                replacement: tool.replacement,
+                rationale: tool.rationale,
+            })
+            .collect(),
     }
+}
+
+/// Route one recorded command to its subsystem through the shared classifier.
+fn classify_command(command: &str) -> &'static str {
+    classify_operation(command).subsystem.as_str()
 }
 
 fn normalize_command(command: &str) -> String {
@@ -199,7 +245,10 @@ mod tests {
     use hzr_core::LedgerSummary;
 
     use super::{build_report, classify_command, normalize_command};
-    use hzr_core::{EfficiencyCommandSummary, EfficiencySummary};
+    use crate::hook_runner::AccountingCoverage;
+    use hzr_core::{
+        BypassSummary, BypassTool, BypassWindow, EfficiencyCommandSummary, EfficiencySummary,
+    };
 
     #[test]
     fn test_build_report_keeps_estimated_savings_separate_from_actual_usage() {
@@ -241,7 +290,12 @@ mod tests {
             ..LedgerSummary::default()
         };
 
-        let report = build_report(gain, usage, 0);
+        let report = build_report(
+            gain,
+            usage,
+            AccountingCoverage::default_complete(),
+            BypassSummary::default(),
+        );
 
         assert_eq!(report.direct_savings.net_avoided_tokens_estimated, 730);
         assert_eq!(report.direct_savings.regression_tokens_estimated, 20);
@@ -259,5 +313,80 @@ mod tests {
         assert_eq!(classify_command("rtk memory (hook)"), "memory");
         assert_eq!(classify_command("rtk cargo test"), "execution");
         assert_eq!(normalize_command("rtk rgai"), "hzr rgai");
+    }
+
+    /// A bypassed command must never be counted as an optimized execution: that is exactly
+    /// how thousands of `sed`/`rg` invocations hid inside the `execution` subsystem while
+    /// contributing zero savings.
+    #[test]
+    fn test_bypassed_commands_leave_the_execution_bucket() {
+        assert_eq!(
+            classify_command("rtk proxy sed -n 1,80p src/lib.rs"),
+            "bypass"
+        );
+        assert_eq!(classify_command("rtk proxy cargo test"), "bypass");
+        assert_eq!(classify_command("rtk fallback: grep -rn needle"), "bypass");
+    }
+
+    #[test]
+    fn test_report_states_the_bypass_share_and_its_replacements() {
+        let gain = EfficiencySummary {
+            operations: 2,
+            baseline_tokens_estimated: 1_000,
+            delivered_tokens_estimated: 900,
+            gross_avoided_tokens_estimated: 100,
+            regression_tokens_estimated: 0,
+            net_avoided_tokens_estimated: 100,
+            total_execution_ms: 10,
+            by_command: Vec::new(),
+        };
+        let bypass = BypassSummary {
+            lifetime: BypassWindow {
+                operations: 3,
+                total_operations: 8,
+                delivered_tokens_estimated: 600,
+                total_delivered_tokens_estimated: 1_000,
+            },
+            by_tool: vec![BypassTool {
+                tool: "sed".into(),
+                executions: 3,
+                delivered_tokens_estimated: 600,
+                example_command: "rtk proxy sed -n 1,80p src/lib.rs".into(),
+                replacement: Some("hzr rtk -- read src/lib.rs --from 1 --to 80".into()),
+                rationale: Some("hzr read streams the requested span".into()),
+            }],
+        };
+
+        let report = build_report(
+            gain,
+            LedgerSummary::default(),
+            AccountingCoverage::default_complete(),
+            bypass,
+        );
+
+        assert_eq!(report.bypass.operations, 3);
+        assert_eq!(report.bypass.operation_share_pct.round(), 38.0);
+        assert_eq!(report.bypass.token_share_pct.round(), 60.0);
+        assert_eq!(report.bypass.by_tool.len(), 1);
+        assert_eq!(
+            report.bypass.by_tool[0].replacement.as_deref(),
+            Some("hzr rtk -- read src/lib.rs --from 1 --to 80")
+        );
+    }
+
+    /// The headline ratio is honest only when it is read next to the bypass share, so the
+    /// report must never omit the second number.
+    #[test]
+    fn test_a_clean_ledger_reports_a_zero_bypass_share_rather_than_nothing() {
+        let report = build_report(
+            EfficiencySummary::default(),
+            LedgerSummary::default(),
+            AccountingCoverage::default_complete(),
+            BypassSummary::default(),
+        );
+
+        assert_eq!(report.bypass.operations, 0);
+        assert_eq!(report.bypass.operation_share_pct, 0.0);
+        assert!(report.bypass.by_tool.is_empty());
     }
 }

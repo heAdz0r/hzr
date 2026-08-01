@@ -253,16 +253,27 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             ));
         }
     }
-    match hook_runner::degraded_rewrite_count(config) {
-        Ok(0) => checks.push(check(
+    match hook_runner::degraded_rewrite_coverage(config) {
+        // A closed gap is a pass, not a permanent warning — the ledger is whole again and
+        // the history stays visible in the detail line.
+        Ok(coverage) if coverage.complete && coverage.lifetime_rewrites == 0 => checks.push(
+            check("degraded_rewrites", CheckStatus::Pass, "none recorded"),
+        ),
+        Ok(coverage) if coverage.complete => checks.push(check(
             "degraded_rewrites",
             CheckStatus::Pass,
-            "none recorded",
+            format!(
+                "{} historical daemon-free rewrite(s), all reconciled",
+                coverage.lifetime_rewrites
+            ),
         )),
-        Ok(count) => checks.push(check(
+        Ok(coverage) => checks.push(check(
             "degraded_rewrites",
             CheckStatus::Warning,
-            format!("{count} daemon-free rewrite(s) recorded"),
+            format!(
+                "{} daemon-free rewrite(s) are not in the ledger; the next managed rewrite reconciles them",
+                coverage.unreconciled_rewrites
+            ),
         )),
         Err(error) => checks.push(check("degraded_rewrites", CheckStatus::Warning, error)),
     }

@@ -7,7 +7,10 @@ use hzr_exec::{
     CaptureConfig, CaptureOverflow, CapturedContent, ExecutionOutcome, ForkCoreInvocation,
     ForkCoreRunner, TerminationCause,
 };
-use hzr_index::{Deadlines, IndexCoordinator, IndexGeneration, PreparedIndex, Workspace};
+use hzr_index::{
+    Deadlines, IndexCoordinator, IndexCoordinatorSnapshot, IndexGeneration, PreparedIndex,
+    Workspace,
+};
 use hzr_memory::{
     IcmClient, RecallRequest, isolate_project_memories, namespaced_topic, recall_candidate_limit,
     validate_memory_kind,
@@ -127,7 +130,19 @@ impl ContextPlanner {
         }
     }
 
-    pub async fn search(&self, mut request: SearchRequest) -> Result<SearchApiResponse> {
+    pub async fn search(&self, request: SearchRequest) -> Result<SearchApiResponse> {
+        self.search_with_accounting(request, true).await
+    }
+
+    pub async fn search_unaccounted(&self, request: SearchRequest) -> Result<SearchApiResponse> {
+        self.search_with_accounting(request, false).await
+    }
+
+    async fn search_with_accounting(
+        &self,
+        mut request: SearchRequest,
+        account_usage: bool,
+    ) -> Result<SearchApiResponse> {
         request.validate()?;
         let workspace = self.indexes.workspace(&request.workspace).await?;
         let initial_generation = IndexGeneration::read(&workspace)?;
@@ -148,9 +163,18 @@ impl ContextPlanner {
                 }
             }
         };
-        let mut response = self.search_in(&workspace, &generation, &request).await?;
+        let mut response = self
+            .search_in(&workspace, &generation, &request, account_usage)
+            .await?;
         response.fallback_reason = fallback_reason;
         Ok(response)
+    }
+
+    pub async fn index_status(&self, workspace: &Path) -> Result<IndexCoordinatorSnapshot> {
+        self.indexes
+            .status(workspace)
+            .await
+            .map_err(ContextError::from)
     }
 
     pub async fn plan(&self, request: PlanRequest) -> Result<ContextPlanApiResponse> {
@@ -333,7 +357,7 @@ impl ContextPlanner {
             include_content: true,
         };
         let source = match self
-            .search_in(workspace, &generation, &search_request)
+            .search_in(workspace, &generation, &search_request, true)
             .await
         {
             Ok(response) => Some(normalize_search(response, &generation.generation)),
@@ -387,6 +411,7 @@ impl ContextPlanner {
             &workspace.identity.root,
             PLAN_CAPTURE_BYTES,
             "memory plan",
+            true,
         )
         .await
     }
@@ -396,6 +421,7 @@ impl ContextPlanner {
         workspace: &Workspace,
         generation: &IndexGeneration,
         request: &SearchRequest,
+        account_usage: bool,
     ) -> Result<SearchApiResponse> {
         let filter = workspace.normalize_filter(request.path.as_deref())?;
         let path = filter.as_deref().unwrap_or_else(|| Path::new("."));
@@ -416,7 +442,8 @@ impl ContextPlanner {
             args.push("--builtin".into());
             SearchStrategy::ForkRgaiBuiltin
         } else {
-            self.ensure_managed_fork_search_config(workspace).await?;
+            self.ensure_managed_fork_search_config(workspace, account_usage)
+                .await?;
             args.push("--project-root".into());
             args.push(
                 workspace
@@ -440,6 +467,7 @@ impl ContextPlanner {
                 &workspace.identity.root,
                 SEARCH_CAPTURE_BYTES,
                 "rgai search",
+                account_usage,
             )
             .await?;
         if let Some(parse_error) = raw.parse_error {
@@ -475,9 +503,10 @@ impl ContextPlanner {
         cwd: &Path,
         max_capture_bytes: usize,
         operation: &'static str,
+        account_usage: bool,
     ) -> Result<T> {
         let stdout = self
-            .run_fork_output(args, cwd, max_capture_bytes, operation)
+            .run_fork_output(args, cwd, max_capture_bytes, operation, account_usage)
             .await?;
         serde_json::from_slice(&stdout).map_err(|error| ContextError::InvalidForkOutput {
             operation,
@@ -491,6 +520,7 @@ impl ContextPlanner {
         cwd: &Path,
         max_capture_bytes: usize,
         operation: &'static str,
+        account_usage: bool,
     ) -> Result<Vec<u8>> {
         let runner = self.fork.as_ref().ok_or_else(|| {
             ContextError::ForkUnavailable(
@@ -500,6 +530,9 @@ impl ContextPlanner {
             )
         })?;
         let mut invocation = ForkCoreInvocation::new(args);
+        if !account_usage {
+            invocation = invocation.without_accounting();
+        }
         invocation.cwd = Some(cwd.to_owned());
         invocation.timeout_ms = Some(self.fork_timeout_ms);
         invocation.capture = CaptureConfig {
@@ -532,7 +565,11 @@ impl ContextPlanner {
         Ok(stdout.to_vec())
     }
 
-    async fn ensure_managed_fork_search_config(&self, workspace: &Workspace) -> Result<()> {
+    async fn ensure_managed_fork_search_config(
+        &self,
+        workspace: &Workspace,
+        account_usage: bool,
+    ) -> Result<()> {
         let validation = self
             .fork_search_config
             .get_or_init(|| async {
@@ -542,6 +579,7 @@ impl ContextPlanner {
                         &workspace.identity.root,
                         256 * 1024,
                         "config inspection",
+                        account_usage,
                     )
                     .await
                     .map_err(|error| error.to_string())?;

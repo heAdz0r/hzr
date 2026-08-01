@@ -15,11 +15,24 @@ HZR is an independent product from heAdz0r that turns disparate layers of agent 
 
 > HZR does not claim unverified percentage savings. Functional and supply-chain gates are defined and repeatedly tested before release; the end-to-end economic effect must still be measured through paired, provider-billed benchmarks on identical tasks.
 
-## Why HZR
+## Agent-useful output first
+
+HZR optimizes for an agent reaching the correct next action, not for the smallest output in isolation. A bounded response must say what it represents, what was omitted, how much source it covers, and how to recover exact evidence. Mutations need the same discipline: exact preconditions, atomic replacement, idempotent retries, dry-run, and structured outcomes.
+
+| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.3.0` |
+|---|---|---|---|
+| Understand a large Markdown file quickly | no common bounded contract | full file in the recorded case | self-described digest: bounded lead prose, omitted-content marker, source lines/bytes, section coverage, exact recovery hint |
+| Recover authoritative content | command-specific full output | full output | `--level none` is byte-exact; `--from`/`--to` gives an exact focused range |
+| Make one safe edit | tool/shell-specific behavior | no `write` command | `replace`, `patch`, JSON/TOML `set`, and idempotent `create`; lock + atomic rename, durable by default |
+| Apply an edit plan | scripts or repeated processes | no `write batch` command | ordered JSON plan, grouped per-file I/O, dry-run, CAS/retry options, JSON v1 outcome |
+| Know whether the answer is complete | varies by command | command-dependent filters | explicit mode, coverage, exit state and recovery path; exact-class invariants remain testable |
+| Avoid duplicate optimization state | each tool owns itself | command filter only | one owner for execution, semantic index, memory, context budget, lifecycle and ledger |
+
+The deterministic [LLM utility contract](benchmarks/hzr-llm-utility-v0.3.0/README.md) passes **9/9 gates**: **6/6 read-clarity signals**, byte-exact full/range recovery, **4/4 single-write operations**, **4/4 batch operations**, idempotent create, dry-run, and JSON schema v1. This proves the observable contract, not comprehension by every model or accepted-task quality. Batch atomicity is per file, not a transaction across all files in a plan.
 
 Independently installed optimization tools often repeat the same work: scan the repository, build parallel indexes, remember the same context, compress it several times and write incompatible telemetry estimates. HZR assigns one owner to each concern.
 
-## Measured command-output benchmark
+## Secondary metric: measured command-output size
 
 The reproducible 2026-08-01 development run compares identical commands through
 RAW tools, upstream RTK `v0.44.1` and HZR with fork-core `0.44.1-fork.1` on the
@@ -28,30 +41,21 @@ order and isolated participant state.
 
 | Case | RAW | RTK upstream | HZR | HZR vs upstream |
 |---|---:|---:|---:|---:|
-| `read README.md` | 6,046 | 6,046 | **132** | **−97.8%** |
+| `read README.md` | 6,046 | 6,046 | **171** | **−97.2%** |
 | `git diff HEAD~5` | 185,931 | 10,325 | **5,540** | **−46.3%** |
-| `cargo check` | 1,088 | 26 | **10** | **−61.5%** |
-| `cargo test` (same exit `101`) | 48,136 | 252 | **168** | **−33.3%** |
-| **All 14 cases** | **287,124** | **58,102** | **44,263** | **−23.8%** |
+| `cargo check` | 1,096 | 26 | **10** | **−61.5%** |
+| `cargo test` (same exit `101`) | 48,153 | 252 | **168** | **−33.3%** |
+| **All 14 cases** | **287,152** | **58,108** | **44,307** | **−23.8%** |
 
 HZR won 8 measured cases and tied upstream on 6, with no remaining measured
-losses after fixing `cargo test` diagnostics, the `cargo check` label, and
-captured `find`/`ls` output. HZR also emitted 84.6% fewer estimated output tokens
-than RAW across the matrix.
-
-```mermaid
-xychart-beta
-    title "Estimated output tokens — lower is better"
-    x-axis [RAW, RTK_upstream, HZR]
-    y-axis "tokens" 0 --> 300000
-    bar [287124, 58102, 44263]
-```
+losses and matching exit codes after fixing `cargo test` diagnostics, the
+`cargo check` label, and captured `find`/`ls` output. Across the matrix HZR also
+emitted 84.6% fewer estimated output tokens than RAW.
 
 Tokens use `ceil(UTF-8 bytes / 4)`: this is a command-output estimate, not a
 provider tokenizer, total-session measurement, answer-fidelity result or billing
-claim. Read the [full PRD](PRD_BENCHMARK_HZR_VS_UPSTREAM_RTK.md), inspect the
-[recorded result](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01/RESULTS.md),
-or rerun the [benchmark harness](benchmarks/hzr-vs-rtk-upstream-v0.44.1/README.md).
+claim. Read the [methodology and reproduction guide](benchmarks/hzr-vs-rtk-upstream-v0.44.1/README.md)
+or inspect the [recorded result](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RESULTS.md).
 
 ## Architecture: one owner per concern
 
@@ -186,9 +190,7 @@ opt-out for release installation.
 </p>
 
 The screenshots use an isolated three-project registry and a real local daemon snapshot;
-no private working-copy paths or production usage records are included. The complete
-product, interaction, state, accessibility, security, lifecycle, and acceptance contract
-is in the [visualizer PRD](docs/PRD_HZR_VISUALIZER.md).
+no private working-copy paths or production usage records are included.
 
 ```bash
 hzr index status --workspace .
@@ -297,6 +299,7 @@ hzr tdd                                strict RED → GREEN → REFACTOR contrac
 hzr stats                              global cumulative efficiency ledger
 hzr build <args>                       build YOUR project (token-optimized output)
 hzr release --force                    rebuild and reinstall HZR itself
+hzr update                             install a newer published HZR release
 hzr migrate scan|apply|history|memory
 hzr rtk -- <fork arguments>
 ```
@@ -313,6 +316,37 @@ habits keep working. `hzr release` rebuilds **HZR itself**: it assembles the bun
 installs it version-scoped, switches `current` atomically, restarts the daemon and then
 verifies the reported version of all four engines, because checking `hzr --version` alone
 previously allowed a stale bundle to look current.
+
+`hzr update` queries the repository's published GitHub releases, selects a newer native
+bundle for the current platform, verifies it against the release `SHA256SUMS`, and installs
+it through HZR's versioned, atomic `current` switch. Project startup checks at most once per
+24 hours and prints `Run hzr update` when a newer release is available; missing network
+access never blocks workspace initialization.
+
+### Read, write, and batch write
+
+Default Markdown reads are bounded overviews. They explicitly identify the output as a digest,
+report source and section coverage, and tell the agent how to recover exact evidence:
+
+```bash
+hzr rtk -- read README.md                         # self-described bounded overview
+hzr rtk -- read README.md --level none            # byte-exact full content
+hzr rtk -- read README.md --from 120 --to 180     # exact focused range
+```
+
+File mutations use one predictable contract with concise, quiet, or JSON v1 output:
+
+```bash
+hzr rtk -- write --output json replace app.rs --from old --to new --dry-run
+hzr rtk -- write patch app.rs --old @/tmp/old.txt --new @/tmp/new.txt --cas --retry 2
+hzr rtk -- write set config.json --key agent.enabled --value true --value-type bool
+hzr rtk -- write create notes.md --content @/tmp/notes.md
+hzr rtk -- write batch --plan '[{"op":"replace","file":"a.txt","from":"old","to":"new"}]'
+```
+
+`batch` applies operations for the same file in plan order and performs one atomic file commit
+for that group. Independent file groups can succeed or fail separately; use the per-operation
+result instead of assuming an all-files transaction.
 
 ## Memory: one store, two scopes
 
@@ -475,15 +509,13 @@ facade over HZR Core, and not a new service, index, memory store or control plan
 
 ## Documentation
 
-- [`CHANGELOG.md`](CHANGELOG.md) — history of public releases.
-- [`PRD.md`](PRD.md) — architecture, requirements, and acceptance criteria for 0.3.0.
-- [`PRD_STATUS_0.3.0.md`](PRD_STATUS_0.3.0.md) — current release status and open dimensions.
-- [`PRD_ADOPTION.md`](PRD_ADOPTION.md) — hooks, degraded path, and safe adoption model.
-- [`PRD_BENCHMARK_HZR_VS_UPSTREAM_RTK.md`](PRD_BENCHMARK_HZR_VS_UPSTREAM_RTK.md) — reproducible RAW / upstream RTK / HZR comparison and HZR-only USP metrics.
-- [`FORK_PARITY.md`](FORK_PARITY.md) — provenance of complete fork and regression contract.
-- [`HZR.md`](HZR.md) — short tool contract for coding agents.
-- [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — pins, patches and licenses.
-- [`NOTICE`](NOTICE) — copyright and link to bundled attribution.
+- [`CHANGELOG.md`](CHANGELOG.md) — public release history.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — development workflow and quality gates.
+- [`SECURITY.md`](SECURITY.md) — supported versions and vulnerability reporting.
+- [Benchmark methodology](benchmarks/hzr-vs-rtk-upstream-v0.44.1/README.md) — reproducible RAW / upstream RTK / HZR comparison.
+- [`FORK_PARITY.md`](FORK_PARITY.md) — fork provenance and regression contract.
+- [`HZR.md`](HZR.md) — tool contract for coding agents.
+- [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`NOTICE`](NOTICE) — bundled-engine attribution.
 
 ## Origin and licenses
 

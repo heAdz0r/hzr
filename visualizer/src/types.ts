@@ -13,6 +13,116 @@ export type ProjectState =
   | "unavailable"
   | "degraded";
 
+export interface MemoryTopic {
+  id: string;
+  label: string;
+  memory_count: number;
+  average_weight: number;
+  newest_at: string | null;
+}
+
+export interface MemoryEdge {
+  source: string;
+  target: string;
+  relationship_count: number;
+}
+
+export type MemoryRetrieval = "hybrid" | "fts5" | "unavailable";
+
+export interface DashboardMemoryObservatory {
+  state: DashboardState;
+  project: string | null;
+  retrieval: MemoryRetrieval;
+  observed_at_ms: number;
+  latency_ms: number;
+  transport: string;
+  source: string;
+  memory_count: number;
+  visible_memory_count: number;
+  hidden_memory_count: number;
+  topics: MemoryTopic[];
+  edges: MemoryEdge[];
+  truncated: boolean;
+  diagnostic_command: string;
+  detail: string;
+}
+
+export interface DashboardIndexObservatory {
+  state: DashboardState;
+  project: string | null;
+  observed_at_ms: number;
+  generation: string | null;
+  config_fingerprint: string | null;
+  artifacts: {
+    initialized: boolean;
+    vectors_present: boolean;
+    symbols_present: boolean;
+    repository_graph_present: boolean;
+    size_bytes: number;
+    modified_at_ms: number | null;
+  };
+  watcher: {
+    state: DashboardState;
+    pid: number | null;
+    uptime_ms: number | null;
+    owned_by_hzr: boolean;
+    ready_marker_observed: boolean;
+    detail: string;
+  };
+  semantic: {
+    state: DashboardState;
+    checked_at_ms: number | null;
+    latency_ms: number;
+    query: string;
+    total_hits: number;
+    shown_hits: number;
+    scanned_files: number;
+    strategy: string | null;
+    backend: string | null;
+    generation: string | null;
+    detail: string;
+  };
+  diagnostic_command: string;
+}
+
+export interface DashboardLocalActivity {
+  project: string | null;
+  operations: number;
+  optimized_operations: number;
+  raw_operations: number;
+  baseline_tokens_estimated: number;
+  delivered_tokens_estimated: number;
+  gross_avoided_tokens_estimated: number;
+  regression_tokens_estimated: number;
+  net_avoided_tokens_estimated: number;
+  total_execution_ms: number;
+  first_record_at: string | null;
+  last_record_at: string | null;
+  unscoped_operations: number;
+  measurement: string;
+  recent_operations: DashboardLocalOperation[];
+}
+
+export interface DashboardLocalOperation {
+  timestamp: string;
+  operation: string;
+  route: "optimized" | "raw";
+  baseline_tokens_estimated: number;
+  delivered_tokens_estimated: number;
+  net_avoided_tokens_estimated: number;
+  execution_ms: number;
+}
+
+export interface DashboardProviderReceipts {
+  state: "available" | "no_receipts";
+  records: number;
+  accepted: number;
+  actual_input_tokens: number;
+  actual_output_tokens: number;
+  cost_microusd: number;
+  detail: string;
+}
+
 export interface DashboardService {
   id: string;
   name: string;
@@ -85,6 +195,10 @@ export interface DashboardResponse {
   registry_warnings: number;
   observed_usage: DashboardObservedUsage;
   estimated_efficiency: DashboardEstimatedEfficiency;
+  memory_observatory: DashboardMemoryObservatory;
+  index_observatory: DashboardIndexObservatory;
+  local_activity: DashboardLocalActivity;
+  provider_receipts: DashboardProviderReceipts;
   help: DashboardHelpCommand[];
   notes: string[];
 }

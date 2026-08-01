@@ -4,10 +4,20 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Added
+
+- `hzr update` checks GitHub Releases, downloads the matching native bundle and
+  `SHA256SUMS`, verifies the archive, and installs the newer version through the bundled
+  versioned installer. The idempotent project-start initialization caches release checks
+  for 24 hours and reports a newer version without making offline startup fail.
+
 ## [0.3.0] - 2026-08-01
 
 ### Added
 
+- Deterministic LLM utility evidence for self-describing bounded reads, byte-exact
+  recovery, four single-write operations, ordered batch writes, dry-run,
+  idempotency, and JSON schema v1 outcomes.
 - Bun-built Vue local visualizer, served by the existing loopback `hzrd`, with typed
   service/project health, versions, help commands, and strictly separated observed
   usage versus direct-efficiency estimates.
@@ -25,6 +35,11 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ### Changed
 
+- Markdown digests now state that content was omitted, include bounded lead prose,
+  report source and section coverage, and provide exact full/range recovery hints. The read-cache schema was
+  advanced so an upgraded binary cannot replay the ambiguous legacy digest.
+- README positioning now treats LLM-useful output and safe WRITE/BATCH WRITE as the
+  primary product criterion; command-output size remains a separately qualified metric.
 - Installed-bundle `hzr init` and confirmed `hzr install` now ensure the single
   daemon/visualizer user service is running; `--skip-service` and
   `HZR_INSTALL_SERVICE=0` preserve controlled opt-out behavior.

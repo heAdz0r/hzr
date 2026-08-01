@@ -69,6 +69,7 @@ fi
 for HZR_PROVENANCE_FILE in \
   BUNDLE_MANIFEST.sha256 \
   HZR.md \
+  install.sh \
   skills/hzr-tdd/SKILL.md \
   skills/hzr-tdd/references/testing-patterns.md \
   integrations/claude-code/hzr-awareness.md \

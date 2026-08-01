@@ -80,6 +80,7 @@ pub(crate) async fn start(
         child,
         _owner: owner,
         stop_deadline: deadlines.watch_stop,
+        started_at: Instant::now(),
         stopped: false,
     })
 }
@@ -92,6 +93,7 @@ pub struct WatchHandle {
     child: Child,
     _owner: IndexOwner,
     stop_deadline: Duration,
+    started_at: Instant,
     stopped: bool,
 }
 
@@ -106,6 +108,10 @@ impl WatchHandle {
 
     pub fn runtime_dir(&self) -> &Path {
         &self.runtime_dir
+    }
+
+    pub fn uptime(&self) -> Duration {
+        self.started_at.elapsed()
     }
 
     pub fn is_running(&mut self) -> Result<bool> {

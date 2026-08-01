@@ -10,7 +10,10 @@ mod registry;
 mod watch;
 mod workspace;
 
-pub use coordinator::{IndexCoordinator, PreparedIndex};
+pub use coordinator::{
+    IndexCoordinator, IndexCoordinatorSnapshot, IndexWatcherSnapshot, IndexWatcherState,
+    PreparedIndex,
+};
 pub use error::{ErrorCode, IndexError, Result};
 pub use generation::{CACHE_SCHEMA_VERSION, IndexGeneration};
 pub use grepai::{

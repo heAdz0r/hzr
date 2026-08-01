@@ -38,6 +38,7 @@ fn write_stats(output: &mut impl Write, report: &StatsReport, color: bool) -> io
     )?;
 
     write_local_reduction(output, report, color)?;
+    write_optimizer_bypass(output, report, color)?;
     write_subsystems(output, report, color)?;
     write_hot_paths(output, report, color)?;
     write_provider_usage(output, report, color)?;
@@ -112,6 +113,106 @@ fn write_local_reduction(
         "   {}",
         style(
             &format!("measurement: {}", savings.measurement),
+            "2;37",
+            color
+        )
+    )
+}
+
+/// Section 2 — what the headline ratio does not say.
+///
+/// A bypassed operation delivers exactly as many tokens as it consumed, so it raises both
+/// sides of the reduction ratio equally and leaves the percentage looking healthy. This
+/// panel sits directly under the headline because the two numbers are only meaningful
+/// together: "87% avoided" next to "49% of delivered tokens never reached the optimizer"
+/// tells a very different story than the headline alone.
+fn write_optimizer_bypass(
+    output: &mut impl Write,
+    report: &StatsReport,
+    color: bool,
+) -> io::Result<()> {
+    let bypass = &report.bypass;
+    if bypass.operations == 0 {
+        return Ok(());
+    }
+    writeln!(output)?;
+    writeln!(
+        output,
+        "{}  {}",
+        style("OPTIMIZER BYPASS", "1;38;5;208", color),
+        style("estimated · these operations skipped HZR", "2;37", color)
+    )?;
+    writeln!(output, "╭{}╮", "─".repeat(WIDTH))?;
+    writeln!(
+        output,
+        "│  {:<68}  │",
+        truncate(
+            &format!(
+                "{} of {} operations ({:.1}%) reached the shell unfiltered",
+                format_count(bypass.operations),
+                format_count(bypass.total_operations),
+                bypass.operation_share_pct
+            ),
+            68
+        )
+    )?;
+    writeln!(
+        output,
+        "│  {:<68}  │",
+        truncate(
+            &format!(
+                "{} of {} delivered tokens ({:.1}%) received zero filtering",
+                format_count(bypass.delivered_tokens_estimated),
+                format_count(bypass.total_delivered_tokens_estimated),
+                bypass.token_share_pct
+            ),
+            68
+        )
+    )?;
+    writeln!(output, "│{}│", " ".repeat(WIDTH))?;
+    writeln!(
+        output,
+        "│  {}  │",
+        style(&progress_bar(bypass.token_share_pct, 68), "1;33", color)
+    )?;
+    writeln!(output, "╰{}╯", "─".repeat(WIDTH))?;
+
+    if bypass.by_tool.is_empty() {
+        return Ok(());
+    }
+    // A free-form list rather than a table: the replacement is a command an operator
+    // should be able to copy, and truncating it into a fixed column would defeat that.
+    writeln!(output)?;
+    for tool in bypass.by_tool.iter().take(8) {
+        writeln!(
+            output,
+            "   {:<10} {:>8} calls · {:>9} delivered",
+            truncate(&tool.tool, 10),
+            format_count(tool.executions),
+            format_count(tool.delivered_tokens_estimated)
+        )?;
+        match tool.replacement.as_deref() {
+            Some(replacement) => writeln!(
+                output,
+                "     {}",
+                style(&format!("→ {replacement}"), "32", color)
+            )?,
+            None => writeln!(
+                output,
+                "     {}",
+                style(
+                    "→ no first-class equivalent; raw is correct here",
+                    "2;37",
+                    color
+                )
+            )?,
+        }
+    }
+    writeln!(
+        output,
+        "   {}",
+        style(
+            "each replacement is reconstructed from the costliest recorded invocation",
             "2;37",
             color
         )
@@ -292,15 +393,23 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
         style("ACCOUNTING COVERAGE", "1;38;5;208", color),
         style(label, status_color, color)
     )?;
-    if report.degraded_rewrites > 0 {
+    let coverage = &report.coverage;
+    if coverage.unreconciled_rewrites > 0 {
         writeln!(
             output,
             "├─ {} daemon-free rewrite(s) are absent from the ledger",
-            report.degraded_rewrites
+            coverage.unreconciled_rewrites
         )?;
         writeln!(
             output,
-            "├─ start the daemon (`hzr daemon service status`) to account for them"
+            "├─ start the daemon (`hzr daemon service status`); the next managed rewrite closes this gap"
+        )?;
+    } else if coverage.lifetime_rewrites > 0 {
+        // Closing a gap must not read as if it never happened.
+        writeln!(
+            output,
+            "├─ {} daemon-free rewrite(s) occurred historically and are reconciled",
+            coverage.lifetime_rewrites
         )?;
     }
     for note in &report.notes {
@@ -370,7 +479,11 @@ fn truncate(value: &str, width: usize) -> String {
 mod tests {
     use hzr_core::LedgerSummary;
 
-    use crate::stats::{CommandSavings, DirectSavings, StatsReport, SubsystemSavings};
+    use crate::hook_runner::AccountingCoverage;
+    use crate::stats::{
+        BypassReport, BypassToolReport, CommandSavings, DirectSavings, StatsReport,
+        SubsystemSavings,
+    };
 
     use super::write_stats;
 
@@ -414,10 +527,24 @@ mod tests {
             }],
             by_command: commands,
             observed_model_usage: usage,
+            bypass: BypassReport::default(),
             degraded_rewrites: 3,
+            coverage: AccountingCoverage {
+                unreconciled_rewrites: 3,
+                lifetime_rewrites: 3,
+                complete: false,
+                last_degraded_at_unix: Some(1_785_531_432),
+            },
             runtime_accounting_complete: false,
             economic_claim_ready: false,
             notes: Vec::new(),
+        }
+    }
+
+    fn report_with_bypass(bypass: BypassReport) -> StatsReport {
+        StatsReport {
+            bypass,
+            ..report(LedgerSummary::default(), Vec::new())
         }
     }
 
@@ -439,6 +566,55 @@ mod tests {
         }) {
             assert_eq!(line.chars().count(), 74, "misaligned line: {line}");
         }
+    }
+
+    /// The headline ratio is only honest when the bypass share is next to it, so the
+    /// bypass panel must render before the reader reaches the subsystem breakdown.
+    #[test]
+    fn test_bypass_share_is_reported_next_to_the_headline_ratio() {
+        let rendered = render(&report_with_bypass(BypassReport {
+            operations: 3_152,
+            total_operations: 8_393,
+            operation_share_pct: 37.6,
+            delivered_tokens_estimated: 6_865_388,
+            total_delivered_tokens_estimated: 13_927_266,
+            token_share_pct: 49.3,
+            by_tool: vec![BypassToolReport {
+                tool: "sed".into(),
+                executions: 719,
+                delivered_tokens_estimated: 983_969,
+                example_command: "rtk proxy sed -n 1,80p install.sh".into(),
+                replacement: Some("hzr rtk -- read install.sh --from 1 --to 80".into()),
+                rationale: Some("hzr read streams the requested span".into()),
+            }],
+        }));
+
+        assert!(rendered.contains("OPTIMIZER BYPASS"));
+        assert!(
+            rendered.contains("37.6%"),
+            "the operation share must be stated"
+        );
+        assert!(
+            rendered.contains("49.3%"),
+            "the delivered-token share is the number that matters"
+        );
+        assert!(
+            rendered.contains("hzr rtk -- read install.sh --from 1 --to 80"),
+            "every bypassed tool must show the command that replaces it"
+        );
+        assert!(
+            rendered.find("OPTIMIZER BYPASS") < rendered.find("WHERE IT WAS AVOIDED"),
+            "the bypass panel belongs beside the headline, not after the breakdown"
+        );
+        assert_aligned(&rendered);
+    }
+
+    /// A workspace that never bypassed the optimizer should not be shown an empty table.
+    #[test]
+    fn test_a_clean_bypass_record_renders_no_panel() {
+        let rendered = render(&report(LedgerSummary::default(), Vec::new()));
+
+        assert!(!rendered.contains("OPTIMIZER BYPASS"));
     }
 
     #[test]

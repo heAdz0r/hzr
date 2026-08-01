@@ -1,8 +1,11 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use directories::BaseDirs;
 use hzr_protocol::{TraceId, Usage};
+
+use crate::operation::{OperationRoute, classify_operation, raw_route_sql_predicate};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -58,6 +61,96 @@ pub struct EfficiencyCommandSummary {
     pub regression_tokens_estimated: u64,
     pub net_avoided_tokens_estimated: i64,
     pub avg_time_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProjectActivitySummary {
+    pub operations: u64,
+    pub optimized_operations: u64,
+    pub raw_operations: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub gross_avoided_tokens_estimated: u64,
+    pub regression_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub total_execution_ms: u64,
+    pub first_record_at: Option<String>,
+    pub last_record_at: Option<String>,
+    pub unscoped_operations: u64,
+    pub recent_operations: Vec<ProjectOperationSummary>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectOperationRoute {
+    Optimized,
+    Raw,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProjectOperationSummary {
+    pub timestamp: String,
+    pub operation: String,
+    pub route: ProjectOperationRoute,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub execution_ms: u64,
+    pub replacement: Option<String>,
+    pub rationale: Option<String>,
+}
+
+/// Operations that never reached the optimizer, split out of the reduction ratio they
+/// would otherwise silently dilute.
+///
+/// A bypassed row delivers exactly as many tokens as it consumed, so it contributes
+/// equally to both sides of the ratio and cancels out instead of lowering it. Reporting
+/// it separately is the only way an operator sees that half the tool output skipped HZR.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BypassSummary {
+    pub lifetime: BypassWindow,
+    /// Bypassed tools ranked by delivered tokens — the costliest leak first.
+    pub by_tool: Vec<BypassTool>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BypassWindow {
+    pub operations: u64,
+    pub total_operations: u64,
+    pub delivered_tokens_estimated: u64,
+    pub total_delivered_tokens_estimated: u64,
+}
+
+impl BypassWindow {
+    pub fn operation_share_pct(&self) -> f64 {
+        percentage_of(self.operations, self.total_operations)
+    }
+
+    pub fn token_share_pct(&self) -> f64 {
+        percentage_of(
+            self.delivered_tokens_estimated,
+            self.total_delivered_tokens_estimated,
+        )
+    }
+}
+
+fn percentage_of(part: u64, whole: u64) -> f64 {
+    if whole == 0 {
+        return 0.0;
+    }
+    part as f64 * 100.0 / whole as f64
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BypassTool {
+    pub tool: String,
+    pub executions: u64,
+    pub delivered_tokens_estimated: u64,
+    /// The costliest concrete invocation seen for this tool.
+    pub example_command: String,
+    /// The first-class HZR command that would have replaced it, when one exists.
+    pub replacement: Option<String>,
+    pub rationale: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -125,6 +218,22 @@ impl Ledger {
             .map_err(LedgerError::Database)?;
         let ledger = Self { connection };
         Ok((ledger.summary()?, ledger.efficiency_summary()?))
+    }
+
+    /// Read exact-path local activity without creating or migrating the ledger.
+    pub fn project_activity_read_only(
+        path: &Path,
+        project_path: &str,
+    ) -> Result<ProjectActivitySummary, LedgerError> {
+        if !path.is_file() {
+            return Ok(ProjectActivitySummary::default());
+        }
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(LedgerError::Database)?;
+        connection
+            .busy_timeout(std::time::Duration::from_millis(250))
+            .map_err(LedgerError::Database)?;
+        Self { connection }.project_activity(project_path)
     }
 
     pub fn open(path: &Path) -> Result<Self, LedgerError> {
@@ -385,6 +494,204 @@ impl Ledger {
         Ok(summary)
     }
 
+    /// Count the operations that reached the shell without passing through the optimizer.
+    ///
+    /// A bypassed row delivers exactly as many tokens as it consumed, so it cancels out of
+    /// the reduction ratio instead of lowering it. Without this query a workspace can send
+    /// half of its tool output straight to the model while `hzr stats` still reports a
+    /// healthy percentage.
+    pub fn bypass_summary(&self) -> Result<BypassSummary, LedgerError> {
+        let (total_operations, total_delivered) = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(output_tokens), 0) FROM commands",
+                [],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .map_err(LedgerError::Database)?;
+        let query = format!(
+            "SELECT rtk_cmd, COUNT(*), COALESCE(SUM(output_tokens), 0)
+             FROM commands
+             WHERE {}
+             GROUP BY rtk_cmd",
+            raw_route_sql_predicate("rtk_cmd")
+        );
+        let mut statement = self
+            .connection
+            .prepare(&query)
+            .map_err(LedgerError::Database)?;
+        let groups = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u64>(1)?,
+                    row.get::<_, u64>(2)?,
+                ))
+            })
+            .map_err(LedgerError::Database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LedgerError::Database)?;
+
+        let mut by_tool: BTreeMap<String, BypassTool> = BTreeMap::new();
+        let mut heaviest: BTreeMap<String, u64> = BTreeMap::new();
+        let mut operations = 0;
+        let mut delivered = 0;
+        for (command, executions, delivered_tokens) in groups {
+            let classification = classify_operation(&command);
+            operations += executions;
+            delivered += delivered_tokens;
+            let entry = by_tool
+                .entry(classification.operation.clone())
+                .or_insert_with(|| BypassTool {
+                    tool: classification.operation.clone(),
+                    executions: 0,
+                    delivered_tokens_estimated: 0,
+                    example_command: command.clone(),
+                    replacement: None,
+                    rationale: None,
+                });
+            entry.executions += executions;
+            entry.delivered_tokens_estimated += delivered_tokens;
+            // The costliest concrete invocation becomes the worked example, so the
+            // suggestion an operator reads is the one that would have saved the most.
+            let previous = heaviest
+                .entry(classification.operation.clone())
+                .or_default();
+            if delivered_tokens >= *previous {
+                *previous = delivered_tokens;
+                entry.example_command = command.clone();
+                entry.replacement = classification
+                    .replacement
+                    .as_ref()
+                    .map(|replacement| replacement.suggestion.clone());
+                entry.rationale = classification
+                    .replacement
+                    .as_ref()
+                    .map(|replacement| replacement.rationale.to_owned());
+            }
+        }
+        let mut by_tool = by_tool.into_values().collect::<Vec<_>>();
+        by_tool.sort_by(|left, right| {
+            right
+                .delivered_tokens_estimated
+                .cmp(&left.delivered_tokens_estimated)
+                .then_with(|| left.tool.cmp(&right.tool))
+        });
+
+        Ok(BypassSummary {
+            lifetime: BypassWindow {
+                operations,
+                total_operations,
+                delivered_tokens_estimated: delivered,
+                total_delivered_tokens_estimated: total_delivered,
+            },
+            by_tool,
+        })
+    }
+
+    pub fn project_activity(
+        &self,
+        project_path: &str,
+    ) -> Result<ProjectActivitySummary, LedgerError> {
+        let mut summary = self
+            .connection
+            .query_row(
+                "SELECT
+                    COUNT(*),
+                    COALESCE(SUM(input_tokens), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(CASE WHEN input_tokens > output_tokens
+                                      THEN input_tokens - output_tokens ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN output_tokens > input_tokens
+                                      THEN output_tokens - input_tokens ELSE 0 END), 0),
+                    COALESCE(SUM(input_tokens - output_tokens), 0),
+                    COALESCE(SUM(exec_time_ms), 0),
+                    MIN(timestamp),
+                    MAX(timestamp)
+                 FROM commands
+                 WHERE project_path = ?1
+                    OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2",
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                |row| {
+                    Ok(ProjectActivitySummary {
+                        operations: row.get(0)?,
+                        optimized_operations: 0,
+                        raw_operations: 0,
+                        baseline_tokens_estimated: row.get(1)?,
+                        delivered_tokens_estimated: row.get(2)?,
+                        gross_avoided_tokens_estimated: row.get(3)?,
+                        regression_tokens_estimated: row.get(4)?,
+                        net_avoided_tokens_estimated: row.get(5)?,
+                        total_execution_ms: row.get(6)?,
+                        first_record_at: row.get(7)?,
+                        last_record_at: row.get(8)?,
+                        unscoped_operations: 0,
+                        recent_operations: Vec::new(),
+                    })
+                },
+            )
+            .map_err(LedgerError::Database)?;
+        summary.unscoped_operations = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM commands WHERE project_path = ''",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(LedgerError::Database)?;
+        summary.raw_operations = self
+            .connection
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*)
+                     FROM commands
+                     WHERE (project_path = ?1
+                            OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                       AND ({})",
+                    raw_route_sql_predicate("rtk_cmd")
+                ),
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(LedgerError::Database)?;
+        summary.optimized_operations = summary.operations.saturating_sub(summary.raw_operations);
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT timestamp, rtk_cmd, input_tokens, output_tokens,
+                        input_tokens - output_tokens, exec_time_ms
+                 FROM commands
+                 WHERE project_path = ?1
+                    OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2
+                 ORDER BY id DESC
+                 LIMIT 24",
+            )
+            .map_err(LedgerError::Database)?;
+        summary.recent_operations = statement
+            .query_map(
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                |row| {
+                    let command: String = row.get(1)?;
+                    let (operation, route, replacement, rationale) = operation_identity(&command);
+                    Ok(ProjectOperationSummary {
+                        timestamp: row.get(0)?,
+                        operation,
+                        route,
+                        baseline_tokens_estimated: row.get(2)?,
+                        delivered_tokens_estimated: row.get(3)?,
+                        net_avoided_tokens_estimated: row.get(4)?,
+                        execution_ms: row.get(5)?,
+                        replacement,
+                        rationale,
+                    })
+                },
+            )
+            .map_err(LedgerError::Database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LedgerError::Database)?;
+        Ok(summary)
+    }
+
     pub fn migrate_legacy_efficiency(
         &self,
         source_path: &Path,
@@ -629,6 +936,29 @@ pub fn inspect_legacy_efficiency(path: &Path) -> Result<LegacyEfficiencySource, 
     })
 }
 
+fn operation_identity(
+    command: &str,
+) -> (
+    String,
+    ProjectOperationRoute,
+    Option<String>,
+    Option<String>,
+) {
+    let classification = classify_operation(command);
+    let route = match classification.route {
+        OperationRoute::Optimized => ProjectOperationRoute::Optimized,
+        OperationRoute::Bypassed => ProjectOperationRoute::Raw,
+    };
+    let replacement = classification
+        .replacement
+        .as_ref()
+        .map(|value| value.suggestion.clone());
+    let rationale = classification
+        .replacement
+        .map(|value| value.rationale.to_owned());
+    (classification.operation, route, replacement, rationale)
+}
+
 fn open_legacy_read_only(path: &Path) -> Result<Connection, LedgerError> {
     Connection::open_with_flags(
         path,
@@ -816,7 +1146,23 @@ mod tests {
     use rusqlite::Connection;
     use tempfile::tempdir;
 
-    use super::{Ledger, LedgerRecord, PriceTable};
+    use super::{Ledger, LedgerRecord, PriceTable, ProjectOperationRoute, operation_identity};
+
+    #[test]
+    fn test_proxy_ledger_rows_are_classified_as_raw() {
+        assert_eq!(
+            operation_identity("rtk proxy sed -n 1,20p file"),
+            (
+                "sed".into(),
+                ProjectOperationRoute::Raw,
+                Some("hzr rtk -- read file --from 1 --to 20".into()),
+                Some(
+                    "hzr read streams the requested span with filtering instead of the whole slice"
+                        .into()
+                ),
+            )
+        );
+    }
 
     /// Regression for the empty-ledger crash: `SUM(...)` over zero rows yields NULL, so
     /// a fresh install — the very first `hzr stats` anyone runs — failed instead of
@@ -847,6 +1193,59 @@ mod tests {
         assert!(
             !path.exists(),
             "a GET-style summary must not create the ledger"
+        );
+    }
+
+    #[test]
+    fn test_project_activity_is_exactly_scoped_and_reports_unscoped_rows() {
+        let directory = tempdir().expect("temp directory");
+        let ledger = Ledger::open(&directory.path().join("usage.sqlite")).expect("ledger open");
+        ledger
+            .connection
+            .execute_batch(
+                "INSERT INTO commands (
+                    timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
+                    saved_tokens, savings_pct, exec_time_ms, project_path
+                 ) VALUES
+                    ('2026-08-01T10:00:00Z', 'cat a', 'read', 100, 20, 80, 80.0, 5, '/work/a'),
+                    ('2026-08-01T10:01:00Z', 'cat b', 'read', 70, 10, 60, 85.7, 7, '/work/b'),
+                    ('2026-08-01T10:02:00Z', 'cat x', 'read', 50, 10, 40, 80.0, 3, ''),
+                    ('2026-08-01T10:03:00Z', 'sed a', 'rtk proxy sed', 40, 40, 0, 0.0, 4, '/work/a'),
+                    ('2026-08-01T10:04:00Z', 'read nested', 'read', 30, 10, 20, 66.7, 2, '/work/a/sub'),
+                    ('2026-08-01T10:05:00Z', 'read sibling', 'read', 100, 0, 100, 100.0, 1, '/work/ab');",
+            )
+            .expect("activity fixture");
+
+        let activity = ledger
+            .project_activity("/work/a")
+            .expect("project activity");
+
+        assert_eq!(activity.operations, 3);
+        assert_eq!(activity.optimized_operations, 2);
+        assert_eq!(activity.raw_operations, 1);
+        assert_eq!(activity.baseline_tokens_estimated, 170);
+        assert_eq!(activity.delivered_tokens_estimated, 70);
+        assert_eq!(activity.net_avoided_tokens_estimated, 100);
+        assert_eq!(activity.total_execution_ms, 11);
+        assert_eq!(activity.unscoped_operations, 1);
+        assert_eq!(activity.recent_operations.len(), 3);
+        assert_eq!(
+            activity.recent_operations[1].route,
+            ProjectOperationRoute::Raw
+        );
+        assert_eq!(activity.recent_operations[1].baseline_tokens_estimated, 40);
+        assert_eq!(activity.recent_operations[1].delivered_tokens_estimated, 40);
+        assert_eq!(
+            activity.recent_operations[1].net_avoided_tokens_estimated,
+            0
+        );
+        assert_eq!(
+            activity.first_record_at.as_deref(),
+            Some("2026-08-01T10:00:00Z")
+        );
+        assert_eq!(
+            activity.last_record_at.as_deref(),
+            Some("2026-08-01T10:04:00Z")
         );
     }
 

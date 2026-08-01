@@ -73,6 +73,10 @@ if test "${{1:-}}" = stdin; then
   cat
   exit 0
 fi
+if test "${{1:-}}" = accounting; then
+  printf '%s' "${{RTK_TRACKING_DISABLED:-0}}"
+  exit 0
+fi
 exit 64
 "#
         );
@@ -348,6 +352,20 @@ async fn test_runner_executes_exact_argv_with_centralized_runtime_and_stdin() ->
             & 0o777,
         0o700
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_runner_can_disable_tracking_for_observability_canaries() -> Result<()> {
+    let _guard = TEST_LOCK.lock().await;
+    let fork = FakeFork::new(PINNED_RTK_VERSION, "exit 1")?;
+    let adapter = PinnedRtkAdapter::detect(fork.config()).await;
+    let runner = adapter.runner()?;
+    let invocation = ForkCoreInvocation::new(vec!["accounting".to_owned()]).without_accounting();
+
+    let result = completed(runner.execute(invocation).await?)?;
+
+    assert_eq!(inline(result.stdout.content)?, b"1");
     Ok(())
 }
 
