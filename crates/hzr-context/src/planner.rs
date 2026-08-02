@@ -24,8 +24,8 @@ use serde::de::DeserializeOwned;
 use tokio::sync::OnceCell;
 
 use crate::candidate::{
-    ForkPlanCandidate, NormalizedSource, RetrievedCandidate, normalize_memory, normalize_plan,
-    normalize_search,
+    ForkPlanCandidate, ForkSymbolIndex, NormalizedSource, RetrievedCandidate, normalize_memory,
+    normalize_plan, normalize_search,
 };
 use crate::error::{ContextError, Result};
 
@@ -35,6 +35,8 @@ const MAX_WARNINGS: usize = 8;
 const MAX_WARNING_BYTES: usize = 512;
 const SEARCH_CAPTURE_BYTES: usize = 2 * 1024 * 1024;
 const PLAN_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
+/// A symbol index is a list of names and line spans, so it is small even for a large file.
+const OUTLINE_CAPTURE_BYTES: usize = 512 * 1024;
 const FORK_TIMEOUT_MARGIN_MS: u64 = 500;
 
 /// Share of the request budget a cold semantic index may consume before the request
@@ -321,15 +323,19 @@ impl ContextPlanner {
         let plan = self.run_memory_plan(workspace, request).await?;
         let planner = Some(plan.metadata());
         if !plan.selected.is_empty() {
+            let selected: Vec<_> = plan
+                .selected
+                .into_iter()
+                .take(request.search_limit)
+                .collect();
+            let outlines = self.candidate_outlines(workspace, &selected).await;
             return Ok(CodePlanResult {
                 source: Some(normalize_plan(
-                    plan.selected
-                        .into_iter()
-                        .take(request.search_limit)
-                        .collect(),
+                    selected,
                     workspace,
                     &generation.generation,
                     plan.pipeline_version.as_deref(),
+                    &outlines,
                 )?),
                 warnings,
                 planner,
@@ -377,6 +383,45 @@ impl ContextPlanner {
             warnings,
             planner,
         })
+    }
+
+    /// Fetch the symbol outline for each plan candidate.
+    ///
+    /// Without this a candidate is a bare path, so an agent has to open every file just to find
+    /// out whether it is relevant — the work the plan exists to save. The fork already has the
+    /// extractor (`rtk read <file> --symbols`), so this delegates to it rather than growing a
+    /// second, weaker one inside HZR.
+    ///
+    /// Outlines are best-effort by design. A file that is unreadable, generated, binary or in an
+    /// unsupported language contributes no outline and its candidate degrades to exactly the
+    /// path it was before; a plan must not fail because one lead could not be summarised.
+    async fn candidate_outlines(
+        &self,
+        workspace: &Workspace,
+        selected: &[ForkPlanCandidate],
+    ) -> BTreeMap<String, ForkSymbolIndex> {
+        let mut outlines = BTreeMap::new();
+        for candidate in selected {
+            let Ok(path) = workspace.normalize_result(Path::new(&candidate.rel_path)) else {
+                continue;
+            };
+            let Some(path) = path.to_str() else { continue };
+            let index: std::result::Result<ForkSymbolIndex, _> = self
+                .run_fork_json(
+                    vec!["read".into(), path.to_owned(), "--symbols".into()],
+                    &workspace.identity.root,
+                    OUTLINE_CAPTURE_BYTES,
+                    "read symbols",
+                    // Outline assembly happens inside one plan the ledger already accounts
+                    // for; charging it again would double-count that plan.
+                    false,
+                )
+                .await;
+            if let Ok(index) = index {
+                outlines.insert(path.to_owned(), index);
+            }
+        }
+        outlines
     }
 
     async fn run_memory_plan(
