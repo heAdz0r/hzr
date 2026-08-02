@@ -83,8 +83,8 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
         Surface::Claude => format!("@{}\n\n", contract_path.display()),
         // Codex has no import directive; it reads AGENTS.md literally.
         Surface::Codex => format!(
-            "Read the full contract at `{}` before using any tool.\n\n",
-            contract_path.display()
+            "Bootstrap by reading `{0}` with `hzr rtk -- read {0} --level none` before other tool use.\n\n",
+            contract_path.display(),
         ),
     };
 
@@ -95,17 +95,26 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          invoke a separately installed `rtk`, `grepai` or `icm` binary: HZR owns those\n\
          engines internally, and a direct call creates the duplicate scan, duplicate\n\
          store and unaccounted usage this engine exists to remove.\n\n\
+         This managed region defines tool routing only. Keep repository-specific roles,\n\
+         source paths and test commands in that repository's root instruction file, not\n\
+         in a user-global instruction file.\n\n\
          {import}\
          | Instead of | Use |\n\
          |---|---|\n\
-         | `Read` | `hzr rtk -- read <file>` |\n\
+         | `Read` | `hzr rtk -- read <file>`; Markdown defaults to a digest, `--level none` is exact |\n\
          | `Grep` | `hzr rgai \"<intent>\"` (semantic) or `hzr search \"<pattern>\" --mode exact` |\n\
-         | `Edit`/`Write` | `hzr rtk -- write patch\\|replace\\|set ...` |\n\
+         | `Edit`/`Write` | `hzr rtk -- write patch\\|replace\\|set\\|create\\|batch ...` |\n\
          | memory | `hzr memory recall\\|store` |\n\
          | context | `hzr context plan \"<intent>\"` |\n\
          | exact/raw output | `hzr rtk -- raw <command...>` |\n\
          | test-first development | `hzr tdd` before production changes |\n\
          | build this project | `hzr build <args>` (not `hzr release`, which rebuilds HZR) |\n\n\
+         `read -n` defaults to exact content and preserves source coordinates, including\n\
+         ranged and tail reads. `--max-lines N` is the exact head equivalent. `--outline`\n\
+         returns Markdown headings or heuristic symbols for Rust, Python, TypeScript,\n\
+         JavaScript, Go and Java.\n\n\
+         Batch writes are atomic and idempotent per file; independent file groups can fail separately,\n\
+         so inspect every operation result. Batch is not an all-files transaction.\n\n\
          ## Memory scopes\n\n\
          One store, two namespaces. `--scope project` (the store default) is for facts about\n\
          *this repository*. `--scope global` is for facts about the **user** — a preference or\n\
@@ -120,16 +129,19 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          | `hzr_context_plan` | Build bounded graph-first evidence for unfamiliar or cross-cutting work. |\n\
          | `hzr_search` | Find code by intent (`mode: semantic`) or exactly (`mode: exact`). |\n\
          | `hzr_memory_recall` | Recall decisions, resolved errors and prior context before re-reading files. |\n\
-         | `hzr_memory_store` | Persist a decision, resolved error or finished work. Not ephemeral state. |\n\n\
+         | `hzr_memory_store` | Persist a decision, resolved error or finished work. Not ephemeral state. |\n\
+         | `hzr_codec` | Apply or shadow-measure protected response-density transforms. |\n\n\
          MCP inputs are strictly validated and results include typed `structuredContent`.\n\
          `isError: true` means no success was confirmed and no fallback engine or store\n\
          was used. If a store transport fails after dispatch, recall before retrying because\n\
          completion may be unknown.\n\
          MCP is client-managed stdio: `hzr init` never starts it. Run `hzr install --force`\n\
          once to register it, and `hzr mcp status` to audit native client launch state.\n\
-         Register the server with `hzr mcp config --client codex\\|claude-desktop`. Never\n\
+         `hzr mcp config --client codex\\|claude-desktop` prints a registration snippet without modifying client config. Never\n\
          register `icm`, `grepai` or `rtk` as your own MCP server: each direct launch adds\n\
          another writer to the store HZR supervises and leaks orphans when the session dies.\n\n\
+         `hzr rtk -- raw <command> <args...>` directly spawns the first argument; it does\n\
+         not interpret pipes, redirects or globs unless an explicit shell is the command.\n\n\
          The installed `PreToolUse` hook routes Bash through the managed daemon and\n\
          falls back to the same pinned fork-core when the daemon is down. A degraded\n\
          rewrite keeps command policy but is absent from the usage ledger; `hzr doctor`\n\
@@ -180,7 +192,7 @@ fn strip_legacy_imports(text: &str) -> (String, usize) {
     (out, removed)
 }
 
-const LEGACY_COMMAND_MIGRATIONS: [(&str, &str); 20] = [
+const LEGACY_COMMAND_MIGRATIONS: [(&str, &str); 25] = [
     ("`which rtk`", "`command -v hzr`"),
     ("`rtk read <file>`", "`hzr rtk -- read <file>`"),
     (
@@ -219,6 +231,20 @@ const LEGACY_COMMAND_MIGRATIONS: [(&str, &str); 20] = [
     ("if rtk is unavailable", "if hzr is unavailable"),
     ("`icm_memory_recall`", "`hzr_memory_recall`"),
     ("`icm_memory_store`", "`hzr_memory_store`"),
+    ("(icm_memory_recall)", "(hzr_memory_recall)"),
+    ("(icm_memory_store)", "(hzr_memory_store)"),
+    (
+        "`hzr search --mode exact` (regex)",
+        "`hzr search --mode exact` (literal, case-sensitive)",
+    ),
+    (
+        "you MUST use Bash tool with `hzr` commands INSTEAD of native tools",
+        "prefer Bash with `hzr` commands for HZR-covered operations",
+    ),
+    (
+        "single Bash call, atomic, idempotent",
+        "single Bash call; atomic and idempotent per file, with independent file results",
+    ),
 ];
 
 fn migrate_legacy_directives(text: &str) -> (String, usize) {
@@ -298,6 +324,11 @@ fn referenced_contract(block: &str) -> Option<PathBuf> {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix('@') {
             return Some(PathBuf::from(rest));
+        }
+        if let Some(rest) = line.strip_prefix("Bootstrap by reading `") {
+            if let Some(end) = rest.find('`') {
+                return Some(PathBuf::from(&rest[..end]));
+            }
         }
         if let Some(start) = line.find("Read the full contract at `") {
             let rest = &line[start + "Read the full contract at `".len()..];
@@ -533,6 +564,24 @@ mod tests {
     }
 
     #[test]
+    fn test_install_migrates_ambiguous_legacy_hzr_directives() {
+        let legacy = "Use `hzr search --mode exact` (regex). Recall with \
+                      (icm_memory_recall). For covered work you MUST use Bash tool with \
+                      `hzr` commands INSTEAD of native tools. Apply the plan in a single \
+                      Bash call, atomic, idempotent.\n";
+        let (out, _, migrated) = compose(legacy, Surface::Codex, contract());
+
+        assert_eq!(migrated, 4);
+        assert!(out.contains("`hzr search --mode exact` (literal, case-sensitive)"));
+        assert!(out.contains("(hzr_memory_recall)"));
+        assert!(out.contains("prefer Bash with `hzr` commands for HZR-covered operations"));
+        assert!(out.contains(
+            "single Bash call; atomic and idempotent per file, with independent file results"
+        ));
+        assert_eq!(compose(&out, Surface::Codex, contract()).0, out);
+    }
+
+    #[test]
     fn test_uninstall_restores_original_body() {
         let original = "# Mine\n\nKeep this.\n";
         let installed = compose(original, Surface::Claude, contract()).0;
@@ -544,11 +593,37 @@ mod tests {
     #[test]
     fn test_codex_surface_uses_literal_reference_not_claude_import() {
         let out = compose("", Surface::Codex, contract()).0;
-        assert!(out.contains("Read the full contract at `/opt/hzr/share/hzr/HZR.md`"));
+        assert!(out.contains(
+            "Bootstrap by reading `/opt/hzr/share/hzr/HZR.md` with `hzr rtk -- read /opt/hzr/share/hzr/HZR.md --level none` before other tool use"
+        ));
         assert!(
             !out.contains("\n@/opt/hzr"),
             "Codex has no @import directive"
         );
+    }
+
+    #[test]
+    fn test_managed_block_describes_mcp_and_batch_semantics_exactly() {
+        let out = compose("", Surface::Codex, contract()).0;
+        assert!(out.contains("`hzr_codec`"));
+        assert!(out.contains("prints a registration snippet without modifying client config"));
+        assert!(out.contains("independent file groups can fail separately"));
+        assert!(!out.contains("Register the server with `hzr mcp config"));
+    }
+
+    #[test]
+    fn test_codex_audit_resolves_the_executable_bootstrap_contract() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let contract = directory.path().join("HZR.md");
+        let instructions = directory.path().join("AGENTS.md");
+        std::fs::write(&contract, "contract").expect("contract fixture");
+        std::fs::write(&instructions, compose("", Surface::Codex, &contract).0)
+            .expect("instruction fixture");
+
+        let report = super::audit(&instructions).expect("instruction audit");
+        assert_eq!(report.contract_path.as_deref(), Some(contract.as_path()));
+        assert!(report.contract_readable);
+        assert!(report.healthy());
     }
 
     #[test]

@@ -34,6 +34,7 @@ const VERSION_SURFACES: &[&str] = &[
 ];
 
 const CAVEMAN_PACKAGE_LOCK: &str = "integrations/caveman-code/package-lock.json";
+const CARGO_LOCK: &str = "Cargo.lock";
 
 const RUNTIME_DIGEST_SURFACES: &[(&str, &str)] = &[
     (
@@ -87,12 +88,17 @@ pub fn synchronize(repository: &Path, target: &str, dry_run: bool) -> Result<Ver
             if !before.contains(&previous) {
                 continue;
             }
-            let after = before.replace(&previous, target);
+            let after = if relative == Path::new("Cargo.toml") {
+                replace_cargo_manifest_version(&before, &previous, target)?
+            } else {
+                before.replace(&previous, target)
+            };
             if !dry_run {
                 atomic_replace(&path, after.as_bytes())?;
             }
             changed_files.push(relative);
         }
+        synchronize_cargo_lock(repository, &previous, target, dry_run, &mut changed_files)?;
         synchronize_caveman_package_lock(
             repository,
             &previous,
@@ -331,6 +337,73 @@ fn synchronize_caveman_package_lock(
     Ok(())
 }
 
+fn replace_cargo_manifest_version(before: &str, previous: &str, target: &str) -> Result<String> {
+    let mut document = before
+        .parse::<toml_edit::DocumentMut>()
+        .context("failed to parse Cargo.toml")?;
+    let version = document["workspace"]["package"]["version"]
+        .as_str()
+        .context("Cargo.toml is missing workspace.package.version")?;
+    if version != previous {
+        bail!(
+            "Cargo.toml workspace version is {version:?}, expected previous release {previous:?}"
+        );
+    }
+    document["workspace"]["package"]["version"] = toml_edit::value(target);
+    Ok(document.to_string())
+}
+
+fn synchronize_cargo_lock(
+    repository: &Path,
+    previous: &str,
+    target: &str,
+    dry_run: bool,
+    changed_files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let relative = PathBuf::from(CARGO_LOCK);
+    let path = repository.join(&relative);
+    let before = fs::read_to_string(&path).context("failed to read Cargo.lock")?;
+    let after = replace_cargo_lock_versions(&before, previous, target)?;
+    if after != before {
+        if !dry_run {
+            atomic_replace(&path, after.as_bytes())?;
+        }
+        changed_files.push(relative);
+    }
+    Ok(())
+}
+
+fn replace_cargo_lock_versions(before: &str, previous: &str, target: &str) -> Result<String> {
+    let mut document = before
+        .parse::<toml_edit::DocumentMut>()
+        .context("failed to parse Cargo.lock")?;
+    let packages = document["package"]
+        .as_array_of_tables_mut()
+        .context("Cargo.lock is missing its package array")?;
+    let mut updated = 0;
+    for package in packages.iter_mut() {
+        let Some(name) = package.get("name").and_then(toml_edit::Item::as_str) else {
+            continue;
+        };
+        if !name.starts_with("hzr-") || package.contains_key("source") {
+            continue;
+        }
+        let version = package
+            .get("version")
+            .and_then(toml_edit::Item::as_str)
+            .with_context(|| format!("Cargo.lock workspace package {name:?} has no version"))?;
+        if version != previous {
+            bail!("Cargo.lock workspace package {name:?} is {version:?}, expected {previous:?}");
+        }
+        package["version"] = toml_edit::value(target);
+        updated += 1;
+    }
+    if updated == 0 {
+        bail!("Cargo.lock contains no HZR workspace packages at version {previous}");
+    }
+    Ok(document.to_string())
+}
+
 fn replace_caveman_package_lock_versions(
     before: &str,
     previous: &str,
@@ -486,7 +559,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        is_version_surface, release_changelog, replace_caveman_package_lock_versions,
+        is_version_surface, release_changelog, replace_cargo_lock_versions,
+        replace_cargo_manifest_version, replace_caveman_package_lock_versions,
         replace_digest_after_marker, replace_digest_for_artifact, synchronize_release_line,
         validate_version,
     };
@@ -534,6 +608,40 @@ mod tests {
         assert_eq!(after.matches("\"version\": \"0.3.2\"").count(), 2);
         assert!(after.contains("\"dependency\": \"^0.3.0\""));
         assert!(after.contains("\"node_modules/dependency\": {\"version\": \"0.3.0\"}"));
+    }
+
+    #[test]
+    fn cargo_manifest_update_preserves_dependency_versions() {
+        let before = concat!(
+            "[workspace.package]\n",
+            "version = \"0.3.2\"\n\n",
+            "[workspace.dependencies]\n",
+            "tracing-subscriber = \"0.3.29\"\n",
+        );
+        let after =
+            replace_cargo_manifest_version(before, "0.3.2", "0.3.3").expect("Cargo.toml update");
+
+        assert!(after.contains("version = \"0.3.3\""));
+        assert!(after.contains("tracing-subscriber = \"0.3.29\""));
+    }
+
+    #[test]
+    fn cargo_lock_update_changes_only_workspace_package_versions() {
+        let before = concat!(
+            "version = 4\n\n",
+            "[[package]]\n",
+            "name = \"hzr-core\"\n",
+            "version = \"0.3.2\"\n\n",
+            "[[package]]\n",
+            "name = \"third-party\"\n",
+            "version = \"0.3.2\"\n",
+            "source = \"registry+https://example.invalid\"\n",
+        );
+        let after =
+            replace_cargo_lock_versions(before, "0.3.2", "0.3.3").expect("Cargo.lock update");
+
+        assert!(after.contains("name = \"hzr-core\"\nversion = \"0.3.3\""));
+        assert!(after.contains("name = \"third-party\"\nversion = \"0.3.2\""));
     }
 
     #[test]

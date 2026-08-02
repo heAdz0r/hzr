@@ -357,7 +357,7 @@ mod tests {
     fn test_service_definitions_use_stable_current_binary() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let executable = root.join("versions/v0.3.2-test/bin/hzr");
+        let executable = root.join("versions/v0.3.3-test/bin/hzr");
         fs::create_dir_all(executable.parent().expect("bin parent")).expect("bin directory");
         let stable = stable_service_binary(&executable).expect("stable path");
 
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn test_only_versioned_bundle_layout_is_a_production_install() {
         assert!(is_versioned_install(Path::new(
-            "/opt/hzr/versions/v0.3.2-test/bin/hzr"
+            "/opt/hzr/versions/v0.3.3-test/bin/hzr"
         )));
         assert!(is_versioned_install(Path::new("/opt/hzr/current/bin/hzr")));
         assert!(!is_versioned_install(Path::new(
@@ -400,11 +400,11 @@ mod tests {
     fn test_public_binary_symlink_resolves_back_to_stable_service() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let release_bin = root.join("versions/v0.3.2-test/bin");
+        let release_bin = root.join("versions/v0.3.3-test/bin");
         fs::create_dir_all(&release_bin).expect("release bin");
         fs::write(release_bin.join("hzr"), b"hzr").expect("HZR binary");
         fs::write(release_bin.join("hzrd"), b"hzrd").expect("daemon binary");
-        std::os::unix::fs::symlink(root.join("versions/v0.3.2-test"), root.join("current"))
+        std::os::unix::fs::symlink(root.join("versions/v0.3.3-test"), root.join("current"))
             .expect("current link");
         let public = root.join("bin/hzr");
         fs::create_dir_all(public.parent().expect("public bin")).expect("public directory");

@@ -356,44 +356,6 @@ pub fn get_filter(level: FilterLevel) -> Box<dyn FilterStrategy> {
     }
 }
 
-pub fn smart_truncate(content: &str, max_lines: usize, _lang: &Language) -> String {
-    let lines: Vec<&str> = content.lines().collect();
-    if lines.len() <= max_lines {
-        return content.to_string();
-    }
-
-    // upstream v0.41: removed inline "// ... N lines omitted" markers that AI agents
-    // treated as code — use a single unambiguous end-of-output marker instead
-    let mut result = Vec::with_capacity(max_lines + 1);
-    let mut kept_lines = 0;
-
-    for line in &lines {
-        let trimmed = line.trim();
-
-        // Always keep signatures and important structural elements
-        let is_important = FUNC_SIGNATURE.is_match(trimmed)
-            || IMPORT_PATTERN.is_match(trimmed)
-            || trimmed.starts_with("pub ")
-            || trimmed.starts_with("export ")
-            || trimmed == "}"
-            || trimmed == "{";
-
-        if is_important || kept_lines < max_lines / 2 {
-            result.push((*line).to_string());
-            kept_lines += 1;
-        }
-
-        if kept_lines >= max_lines - 1 {
-            break;
-        }
-    }
-
-    // upstream v0.41: single end marker — unambiguous, not mistakable for code
-    result.push(format!("[{} more lines]", lines.len() - kept_lines));
-
-    result.join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

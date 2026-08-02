@@ -431,7 +431,6 @@ impl ContextPlanner {
         })?;
         let mut args = vec![
             "rgai".into(),
-            request.query.clone(),
             "--path".into(),
             path_text.into(),
             "--max".into(),
@@ -466,6 +465,8 @@ impl ContextPlanner {
         if !request.include_content {
             args.push("--compact".into());
         }
+        args.push("--".into());
+        args.push(request.query.clone());
         let raw: ForkSearchOutput = self
             .run_fork_json(
                 args,

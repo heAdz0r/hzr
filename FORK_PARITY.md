@@ -1,7 +1,7 @@
-# HZR 0.3.2 — fork-core parity ledger
+# HZR 0.3.3 — fork-core parity ledger
 
 **Audit date:** 2026-08-01
-**Status:** HZR 0.3.2 development; G1–G7/adoption implemented, functional all-gates green
+**Status:** HZR 0.3.3; G1–G7/adoption implemented, functional all-gates green
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -56,7 +56,7 @@ ties, 0 HZR losses, with matching exit-code vectors in all 14 cases.
 |---|---|
 | ✅ |Implemented and locally tested in the specified area|
 | 🟡 |There is a working path, but an honestly described border remains|
-| ⚪ |Not knowingly included in 0.3.2; exact compatibility path is not affected|
+| ⚪ |Not knowingly included in 0.3.3; exact compatibility path is not affected|
 
 ## Capability and routing matrix
 
@@ -71,14 +71,14 @@ ties, 0 HZR losses, with matching exit-code vectors in all 14 cases.
 | Raw shell rewrite |The complete line is passed to fork `rewrite`| Pipes, redirects, heredoc, multiline, quoting, `&&/||`, xargs are covered by tests| ✅ |
 | Exit `0/1/2/3` | rewrite / raw / deny / one-time approval |Approval ID bounded, TTL and single-use; approve/deny CLI/API| ✅ |
 | Command filters/guards |Fork rewrite selects exact command, HZR transport executes it|Private PATH resolves `rtk` again in exact fork; no generic replacement table| ✅ |
-| Enhanced read | Agent `hzr_read` → allowlisted `/v1/fork/run` → fork `read` | Bounds/modes are checked; traversal and symlink escape are rejected; Markdown digests identify omitted content, include bounded semantic lead prose without HTML navigation/media noise, report source/section coverage and provide exact full/range recovery | ✅ |
+| Enhanced read | Agent `hzr_read` → allowlisted `/v1/fork/run` → fork `read` | Bounds/modes are checked; traversal and symlink escape are rejected; Markdown digests identify omitted content and provide exact recovery; Markdown outlines use ATX headings with source spans; numbered full/range/tail reads preserve source coordinates; max-lines is an exact head | ✅ |
 | Atomic edit/write | Agent edit/write → fork `write --output json patch|create` |Native Caveman file tools are not available; fork atomic semantics saved| ✅ |
-| `rgai` behavior | `/v1/search`, `hzr search|rgai`, agent search → exact fork `rgai --json` |Exact adds `--builtin`; semantic/auto uses managed grepai| ✅ |
+| `rgai` behavior | `/v1/search`, `hzr search|rgai`, agent search → exact fork `rgai --json` |Exact adds `--literal` and places the query after `--`, including leading-hyphen literals; semantic/auto uses managed grepai| ✅ |
 | One grepai store | Managed `.grepai` symlink → `<data>/workspaces/<repo>/<worktree>/index/grepai` |Real legacy, foreign link and nested duplicate fail closed| ✅ |
 | grepai lifecycle | `IndexCoordinator` owns init/generation/watcher; daemon owns coordinator | Patched 0.35 watcher, one worktree owner lock, one daemon per data root | ✅ |
 | Legacy index migration | Explicit `hzr migrate apply --workspace` | Full-SHA retained backup, prepared/applied manifests, idempotent replay | ✅ |
 | Fork IMG planner | Every context plan invokes fork `memory plan --format json` | `RTK_MEM_DB_PATH=<data>/fork/mem.db`; it remains derived cache | ✅ |
-| Central ICM | One HZR-supervised 0.10.61 DB/process; MCP store + typed JSON recall | Required workspace → repository topic/project namespace; strict post-filter blocks global/foreign records | ✅ |
+| Central ICM | One HZR-supervised 0.10.61 DB/process; MCP store + typed JSON recall | Required workspace → repository topic/project namespace; strict post-filter blocks global/foreign records and quarantines legacy imports without trustworthy provenance | ✅ |
 | Context composition | Fork plan + one ICM recall in parallel; one fork `rgai` only on empty planner | No unconditional second semantic pass; evidence estimates stay within hard limit | ✅ |
 | Context/code consumption | Plan returns bounded metadata/snippets/memory summaries; agent exact-reads chosen paths later |There is no false claim about eager reread of all selected files or final provider-token proof| ✅ |
 | Context exposure | `/v1/context/plan`, `hzr context plan`, `hzr_context`, bounded prefetch | Native pre-read hooks/repo map disabled | ✅ |
@@ -151,13 +151,13 @@ An external grepai process that does not respect HZR `hzr-owner.lock` cannot be 
 
 ## Caveman boundary
 
-Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.3.2 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
+Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.3.3 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
 
 Response density is set before generation by a short cache-stable contract. HZR Codec remains a separate explicit protected transform for CLI/API. Text quality is protected by instructions, native layer guards and raw exact tools; this is not a formal semantic equivalence proof.
 
 ## Release gates
 
-### Functional 0.3.2 gates
+### Functional 0.3.3 gates
 
 - [x] Exact dirty fork snapshot v2 imported and verified.
 - [x] Exact fork builds and its synthetic-Git suite passes.

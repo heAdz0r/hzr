@@ -209,10 +209,11 @@ pub fn run(
         );
     }
 
+    let input_line_count = content.lines().count();
     if let Some(tail) = tail_lines {
         filtered = keep_tail_lines(&filtered, tail); // fork: tail semantics (upstream v0.42.4)
     } else if let Some(max) = max_lines {
-        filtered = filter::smart_truncate(&filtered, max, &lang);
+        filtered = keep_head_lines(&filtered, max);
     }
 
     // PR-6: truncate long lines in minimal/aggressive modes
@@ -224,9 +225,15 @@ pub fn run(
     }
 
     let (raw, rtk_output) = if line_numbers {
+        let raw_start = from.unwrap_or(1);
+        let output_start = if tail_lines.is_some() {
+            raw_start.saturating_add(input_line_count.saturating_sub(filtered.lines().count()))
+        } else {
+            raw_start
+        };
         (
-            read_render::format_with_line_numbers(&content),
-            read_render::format_with_line_numbers(&filtered),
+            read_render::format_with_line_numbers_from(&content, raw_start),
+            read_render::format_with_line_numbers_from(&filtered, output_start),
         )
     } else {
         (content.clone(), filtered.clone())
@@ -306,7 +313,12 @@ pub fn run_symbols(file: &Path, mode: &ReadMode, verbose: u8) -> Result<()> {
     let symbols = extractor.extract(&content, &lang);
     let total_lines = content.lines().count();
 
+    let markdown = file
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "md" | "mdx"));
     let output = match mode {
+        ReadMode::Outline if markdown => crate::read_symbols::render_markdown_outline(&content),
         ReadMode::Outline => render_outline(&symbols, total_lines),
         ReadMode::Symbols => render_symbols_json(symbols, &lang, total_lines),
         _ => unreachable!("run_symbols called with non-symbol mode"),
@@ -393,16 +405,23 @@ pub fn run_stdin(
         );
     }
 
+    let input_line_count = content.lines().count();
     if let Some(tail) = tail_lines {
         filtered = keep_tail_lines(&filtered, tail); // fork: tail semantics (upstream v0.42.4)
     } else if let Some(max) = max_lines {
-        filtered = filter::smart_truncate(&filtered, max, &lang);
+        filtered = keep_head_lines(&filtered, max);
     }
 
     let (raw, rtk_output) = if line_numbers {
+        let raw_start = from.unwrap_or(1);
+        let output_start = if tail_lines.is_some() {
+            raw_start.saturating_add(input_line_count.saturating_sub(filtered.lines().count()))
+        } else {
+            raw_start
+        };
         (
-            read_render::format_with_line_numbers(&content),
-            read_render::format_with_line_numbers(&filtered),
+            read_render::format_with_line_numbers_from(&content, raw_start),
+            read_render::format_with_line_numbers_from(&filtered, output_start),
         )
     } else {
         (content.clone(), filtered.clone())
@@ -427,6 +446,10 @@ fn keep_tail_lines(content: &str, tail: usize) -> String {
         result.push('\n');
     }
     result
+}
+
+fn keep_head_lines(content: &str, max_lines: usize) -> String {
+    content.split_inclusive('\n').take(max_lines).collect()
 }
 
 #[cfg(test)]

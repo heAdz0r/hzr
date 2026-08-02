@@ -2,6 +2,50 @@
 
 All notable HZR changes are documented here. HZR follows semantic versioning while the public API is in `0.x` development.
 
+## [0.3.3] - 2026-08-02
+
+### Added
+
+- `read --outline` now recognizes Markdown and emits its ATX heading hierarchy with
+  original source spans. Supported code files continue to use their symbol extractor.
+- Exact search accepts literals beginning with `-` through the conventional `--`
+  separator, for example `hzr search --mode exact -- "--outline"`.
+
+### Changed
+
+- `read -n` defaults to exact content and preserves source coordinates for full,
+  ranged and tail reads instead of numbering filtered output from one.
+- `read --max-lines N` is an exact head operation; it no longer substitutes a smart
+  truncation marker for omitted lines.
+- Global managed agent instructions now define only HZR tool routing, include all five
+  MCP tools, and state the exact semantics of reads, per-file batch atomicity,
+  read-only `mcp config`, and direct-spawn `raw`.
+- Legacy imported memories remain available for explicit audit/migration but are
+  quarantined from automatic project recall because they carry no trustworthy
+  repository provenance.
+
+### Fixed
+
+- Release synchronization updates only `workspace.package.version` in `Cargo.toml`
+  and only source-free HZR workspace package entries in `Cargo.lock`. A dependency
+  whose version happens to contain the previous HZR version can no longer be changed,
+  and the subsequent `--locked` bundle build receives a synchronized lockfile.
+- The context planner passes fork-core search options before `--` and the query after
+  it, so exact terms such as `--outline` are never parsed as command options.
+- Installation migrates stale global directives that described exact search as regex,
+  batch writes as one all-files transaction, direct ICM MCP tools, or unconditional
+  Bash mandates.
+- Codex's managed bootstrap is executable without first assuming the contract it needs
+  to load: it names the exact `hzr rtk -- read ... --level none` command.
+- Instruction installation resolves the public binary symlink before locating bundle
+  assets, so Claude and Codex reference the upgrade-stable `current/share/hzr/HZR.md`.
+  `hzr doctor` now recognizes the executable Codex bootstrap and verifies that target.
+
+### Documentation
+
+- README, the canonical agent contract, Claude/Codex integration guides, fork docs and
+  the parity ledger now agree on the corrected behavior and scope.
+
 ## [0.3.2] - 2026-08-02
 
 ### Added
@@ -181,6 +225,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.3.3]: https://github.com/heAdz0r/hzr/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/heAdz0r/hzr/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/heAdz0r/hzr/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/heAdz0r/hzr/compare/v0.2.0...v0.3.0
