@@ -2,6 +2,41 @@
 
 All notable HZR changes are documented here. HZR follows semantic versioning while the public API is in `0.x` development.
 
+## [Unreleased]
+
+### Fixed
+
+- **The reported `relevance` was a rank-only fusion weight, not a relevance estimate.**
+  `BudgetPlanner::plan` scored every candidate as `source_weight / (60.0 + source_rank)` —
+  reciprocal rank fusion with the k=60 constant calibrated for TREC runs over thousands of
+  documents. Over HZR's lists of ten that pins the entire range between 1/61 and 1/70, so a
+  live plan reported 0.0123–0.0164 for its best and worst evidence alike while discarding
+  every engine's own magnitude. Scores are now normalized within their source, which is the
+  only scale on which they are comparable, and fused as a weighted sum. Measured on the same
+  question afterwards: 1.0000 / 0.7680 / 0.7477 / 0.4530.
+- **Selection rewarded brevity over relevance.** `utility` divided by `sqrt(tokens)`, and with
+  relevance pinned in a 15% band the expression degenerated into `source_boost / sqrt(tokens)`
+  — a 30-token `Cargo.toml` outscored a 3000-token file that answered the question by an order
+  of magnitude. That is the mechanism behind lockfiles and images being selected ahead of
+  code. Length is now only a budget constraint, applied when filling the budget. Verified: a
+  242-byte PNG that would have ranked near the top now ranks last.
+- **Memory competed with code for one budget.** A memory body is prose and routinely an order
+  of magnitude longer than a code candidate, so a single stale fact could consume the plan —
+  observed at 10.9k of 12k tokens with the answering file not selected at all. Memory now has
+  a minority share of the hard limit and is rejected with `memory_budget_share` beyond it.
+- **`coverage` and `confidence` were structural constants printed beside real measurements.**
+  `confidence` was `(exact + n*0.5)/n`, which is exactly 0.5 whenever no exact-mode candidate
+  is present; `coverage` was source-kinds-present/4. A plan that missed the answer entirely
+  still reported 0.50/0.50. `coverage` is now the share of selected evidence an agent can
+  actually open, and `confidence` is how far the top candidate separates from the field —
+  which is what distinguishes a pinpointed answer from a flat list of guesses.
+- A code candidate with no locatable span — a PNG, a lockfile, a binary — is demoted rather
+  than competing on equal footing, because it cannot answer a question about code. Memory is
+  exempt: a durable fact legitimately has no line span.
+- Candidates below a relevance floor are rejected with `relevance_floor` instead of padding the
+  pack. A floor was previously impossible to express: with every score pinned between 0.0123
+  and 0.0164 there was no threshold that separated signal from noise.
+
 ## [0.3.3] - 2026-08-02
 
 ### Fixed
