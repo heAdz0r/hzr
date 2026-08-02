@@ -33,6 +33,7 @@ Then prefer these tools — they reach the same single store and index as the CL
   *before* re-reading files analysed in an earlier session.
 - `hzr_memory_store` — persist a decision, resolved error, preference or finished
   work. Not for ephemeral session state.
+- `hzr_codec` — apply or shadow-measure protected response-density transforms.
 
 Inputs reject invalid types, enums, unknown fields and limits outside 1–50.
 Successful calls return typed `structuredContent` and a text copy for older

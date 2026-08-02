@@ -265,7 +265,7 @@ fn sibling_engine_directory(executable: &Path) -> Option<PathBuf> {
     }
     // Canonicalize to reject traversal, then translate the physical location back to the
     // upgrade-stable one. Storing the canonical path directly would pin the config to
-    // `versions/v0.3.2-<platform>/engines`, so after the next upgrade a new `hzr` would
+    // `versions/v0.3.3-<platform>/engines`, so after the next upgrade a new `hzr` would
     // keep launching the *previous* RTK/grepai/ICM/Node.
     let physical = std::fs::canonicalize(&directory).unwrap_or(directory);
     Some(stable_engine_directory(&physical))
@@ -456,7 +456,7 @@ mod tests {
     fn test_engine_directory_uses_upgrade_stable_current_path() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let release = versioned_bundle(root, "v0.3.2-darwin-arm64");
+        let release = versioned_bundle(root, "v0.3.3-darwin-arm64");
         point_current_at(root, &release);
 
         let resolved = stable_engine_directory(&release.join("engines"));
@@ -476,7 +476,7 @@ mod tests {
     fn test_pinned_engine_directory_is_migrated_on_load() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let release = versioned_bundle(root, "v0.3.2-darwin-arm64");
+        let release = versioned_bundle(root, "v0.3.3-darwin-arm64");
         point_current_at(root, &release);
 
         let config_path = root.join("config.toml");
@@ -498,12 +498,12 @@ mod tests {
     fn test_upgrade_switches_engines_through_current() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let old = versioned_bundle(root, "v0.3.2-darwin-arm64");
+        let old = versioned_bundle(root, "v0.3.3-darwin-arm64");
         point_current_at(root, &old);
         let stable = stable_engine_directory(&old.join("engines"));
 
         // Upgrade: a new release becomes current, exactly as install.sh repoints it.
-        let new = versioned_bundle(root, "v0.3.2-darwin-arm64");
+        let new = versioned_bundle(root, "v0.3.3-darwin-arm64");
         fs::write(new.join("engines").join("rtk"), b"new").expect("new engine bytes");
         point_current_at(root, &new);
 
@@ -519,7 +519,7 @@ mod tests {
     fn test_foreign_or_dangling_current_never_redirects_engines() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let release = versioned_bundle(root, "v0.3.2-darwin-arm64");
+        let release = versioned_bundle(root, "v0.3.3-darwin-arm64");
         let other = versioned_bundle(root, "v0.9.9-other");
 
         // `current` pointing at a different release must not capture this one.
@@ -584,7 +584,7 @@ mod tests {
     fn test_public_binary_symlink_discovers_private_bundle_engines() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path().join("install");
-        let release = versioned_bundle(&root, "v0.3.2-darwin-arm64");
+        let release = versioned_bundle(&root, "v0.3.3-darwin-arm64");
         point_current_at(&root, &release);
         let public = directory.path().join("bin/hzr");
         fs::create_dir_all(public.parent().expect("public parent")).expect("public directory");

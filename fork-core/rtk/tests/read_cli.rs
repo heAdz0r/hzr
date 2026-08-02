@@ -210,6 +210,47 @@ fn read_line_numbers() {
     assert!(stdout.contains("2 │ beta"), "line 2 numbered");
 }
 
+#[test]
+fn read_line_numbers_default_to_exact_source_lines() {
+    let content = b"// source line one\npub fn run() {}\n";
+    let f = write_temp(".rs", content);
+
+    let out = rtk_bin()
+        .args(["read", f.path().to_str().unwrap(), "-n"])
+        .output()
+        .expect("run rtk read with default line numbers");
+
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("1 │ // source line one"));
+    assert!(stdout.contains("2 │ pub fn run() {}"));
+}
+
+#[test]
+fn read_range_line_numbers_keep_source_coordinates() {
+    let content = b"one\ntwo\nthree\nfour\nfive\n";
+    let f = write_temp(".txt", content);
+
+    let out = rtk_bin()
+        .args([
+            "read",
+            f.path().to_str().unwrap(),
+            "--from",
+            "3",
+            "--to",
+            "4",
+            "-n",
+        ])
+        .output()
+        .expect("run ranged rtk read with line numbers");
+
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "3 │ three\n4 │ four\n"
+    );
+}
+
 // ── Binary detection ────────────────────────────────────────
 
 #[test]
@@ -424,12 +465,10 @@ fn read_max_lines_truncates() {
         .expect("run rtk read");
 
     assert!(out.status.success());
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let line_count = stdout.lines().count();
-    assert!(
-        line_count <= 5, // max-lines 3 + possible truncation message
-        "max-lines should limit output (got {} lines)",
-        line_count
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "line1\nline2\nline3\n",
+        "--max-lines is the exact head-equivalent promised by the CLI contract"
     );
 }
 
@@ -501,6 +540,24 @@ fn read_outline_typescript_file() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("User"), "outline shows interface");
     assert!(stdout.contains("run"), "outline shows function");
+}
+
+#[test]
+fn read_outline_markdown_file() {
+    let markdown = b"# Title\n\nIntro.\n\n## First\n\nBody.\n\n### Nested\n\nMore.\n\n## Second\n";
+    let f = write_temp(".md", markdown);
+
+    let out = rtk_bin()
+        .args(["read", f.path().to_str().unwrap(), "--outline"])
+        .output()
+        .expect("run rtk read --outline for Markdown");
+
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("1-13  # Title"));
+    assert!(stdout.contains("5-12    ## First"));
+    assert!(stdout.contains("9-12      ### Nested"));
+    assert!(stdout.contains("13-13    ## Second"));
 }
 
 #[test]

@@ -145,6 +145,69 @@ pub fn render_outline(symbols: &[Symbol], total_lines: usize) -> String {
     out
 }
 
+pub fn render_markdown_outline(content: &str) -> String {
+    let total_lines = content.lines().count();
+    let mut headings: Vec<(usize, usize, String)> = Vec::new();
+    let mut fence: Option<char> = None;
+
+    for (index, line) in content.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let fence_marker = if trimmed.starts_with("```") {
+            Some('`')
+        } else if trimmed.starts_with("~~~") {
+            Some('~')
+        } else {
+            None
+        };
+        if let Some(marker) = fence_marker {
+            if fence == Some(marker) {
+                fence = None;
+            } else if fence.is_none() {
+                fence = Some(marker);
+            }
+            continue;
+        }
+        if fence.is_some() {
+            continue;
+        }
+
+        let level = trimmed.bytes().take_while(|byte| *byte == b'#').count();
+        if !(1..=6).contains(&level)
+            || !trimmed
+                .as_bytes()
+                .get(level)
+                .is_none_or(u8::is_ascii_whitespace)
+        {
+            continue;
+        }
+        let title = trimmed[level..].trim().trim_end_matches('#').trim();
+        if !title.is_empty() {
+            headings.push((level, index + 1, title.to_owned()));
+        }
+    }
+
+    if headings.is_empty() {
+        return "(no headings found)\n".to_owned();
+    }
+
+    let width = total_lines.to_string().len();
+    let mut output = String::new();
+    for (index, (level, start, title)) in headings.iter().enumerate() {
+        let end = headings[index + 1..]
+            .iter()
+            .find(|(next_level, _, _)| next_level <= level)
+            .map_or(total_lines, |(_, next_start, _)| {
+                next_start.saturating_sub(1)
+            });
+        let indent = "  ".repeat(level.saturating_sub(1));
+        output.push_str(&format!(
+            "{start:>width$}-{end:<width$}  {indent}{} {title}\n",
+            "#".repeat(*level)
+        ));
+    }
+    output
+}
+
 /// Render symbols as versioned JSON.
 pub fn render_symbols_json(symbols: Vec<Symbol>, lang: &Language, total_lines: usize) -> String {
     let lang_name = lang_to_string(lang);

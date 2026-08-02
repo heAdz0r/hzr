@@ -257,7 +257,7 @@ rtk read file.rs
          ├── --level none      → Exact bytes (cat parity)
          ├── --level minimal   → Light filtering (default)
          ├── --level aggressive → Signatures only, bodies stripped
-         ├── --outline          → Structural map with line spans
+         ├── --outline          → Markdown headings or code symbols with source spans
          ├── --symbols          → JSON symbol index (versioned schema)
          ├── --changed          → Git working tree hunks only
          └── --since HEAD~3    → Diff hunks relative to revision

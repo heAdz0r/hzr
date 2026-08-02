@@ -173,11 +173,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         Ok(found) => checks.push(check(
             "client_mcp_ownership",
             CheckStatus::Error,
-            format!(
-                "direct ICM MCP registration bypasses HZR memory ownership in: {}; \
-                 replace it with `hzr mcp config --client <client>`",
-                found.join(", ")
-            ),
+            direct_icm_registration_detail(&found),
         )),
         Err(error) => checks.push(check("client_mcp_ownership", CheckStatus::Warning, error)),
     }
@@ -742,6 +738,15 @@ fn check(
     }
 }
 
+fn direct_icm_registration_detail(found: &[String]) -> String {
+    format!(
+        "direct ICM MCP registration bypasses HZR memory ownership in: {}; \
+         run `hzr install --dry-run`, then `hzr install --force` to replace it; \
+         `hzr mcp config --client <client>` only prints a manual snippet",
+        found.join(", ")
+    )
+}
+
 fn bounded(value: &str) -> &str {
     let mut boundary = value.len().min(512);
     while !value.is_char_boundary(boundary) {
@@ -787,7 +792,10 @@ mod tests {
     use hzr_core::Config;
     use sha2::{Digest, Sha256};
 
-    use super::{CheckStatus, attest_active_bundle, bounded, integration_layout};
+    use super::{
+        CheckStatus, attest_active_bundle, bounded, direct_icm_registration_detail,
+        integration_layout,
+    };
 
     #[test]
     fn test_bounded_diagnostic_respects_utf8_boundary() {
@@ -810,6 +818,14 @@ mod tests {
         config.engines.directory = Some(engines);
 
         assert_eq!(integration_layout(&config).root(), integration);
+    }
+
+    #[test]
+    fn test_direct_icm_repair_names_the_mutating_install_command() {
+        let detail = direct_icm_registration_detail(&["codex".to_owned()]);
+
+        assert!(detail.contains("`hzr install --force` to replace it"));
+        assert!(detail.contains("`hzr mcp config --client <client>` only prints"));
     }
 
     #[test]

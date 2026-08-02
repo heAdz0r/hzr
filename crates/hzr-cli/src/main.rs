@@ -574,11 +574,8 @@ struct InstallOptions {
 /// so the hook command and the `CLAUDE.md` contract both name a path that already
 /// exists, and so a `--dry-run` preview shows the same target the real run will use.
 fn run_install(options: InstallOptions, json: bool) -> Result<ExitCode> {
-    let source_dir = std::env::current_exe()
-        .context("cannot resolve the HZR executable")?
-        .parent()
-        .context("HZR executable has no parent directory")?
-        .to_path_buf();
+    let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
+    let source_dir = executable_source_directory(&executable)?;
 
     let prefix_dir = match options.prefix.clone() {
         Some(prefix) => prefix,
@@ -691,6 +688,15 @@ fn contract_asset_path(source_dir: &Path) -> PathBuf {
         }
     }
     source_dir.join("../share/hzr/HZR.md")
+}
+
+fn executable_source_directory(executable: &Path) -> Result<PathBuf> {
+    executable
+        .canonicalize()
+        .with_context(|| format!("cannot resolve HZR executable {}", executable.display()))?
+        .parent()
+        .map(Path::to_path_buf)
+        .context("HZR executable has no parent directory")
 }
 
 fn print_adoption_bundle(
@@ -1402,7 +1408,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{canonical_directory, contract_asset_path, payload_limit};
+    use super::{
+        canonical_directory, contract_asset_path, executable_source_directory, payload_limit,
+    };
 
     #[test]
     fn test_payload_limit_reserves_json_envelope_space() {
@@ -1423,7 +1431,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.2-test");
+        let release = directory.path().join("versions/v0.3.3-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -1443,7 +1451,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.2-test");
+        let release = directory.path().join("versions/v0.3.3-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))
@@ -1455,5 +1463,24 @@ mod tests {
         let stable = contract_asset_path(&current.join("bin"));
         assert_eq!(stable, current.join("share/hzr/HZR.md"));
         assert!(!stable.to_string_lossy().contains("/versions/"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn public_binary_symlink_resolves_to_the_versioned_source_directory() {
+        let directory = tempdir().expect("temporary directory");
+        let release_bin = directory.path().join("versions/v0.3.3-test/bin");
+        let release_binary = release_bin.join("hzr");
+        let public_bin = directory.path().join("bin");
+        std::fs::create_dir_all(&release_bin).expect("release bin");
+        std::fs::create_dir_all(&public_bin).expect("public bin");
+        std::fs::write(&release_binary, "binary").expect("binary fixture");
+        std::os::unix::fs::symlink(&release_binary, public_bin.join("hzr"))
+            .expect("public binary symlink");
+
+        assert_eq!(
+            executable_source_directory(&public_bin.join("hzr")).expect("source directory"),
+            release_bin.canonicalize().expect("canonical release bin")
+        );
     }
 }

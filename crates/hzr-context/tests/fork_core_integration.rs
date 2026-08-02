@@ -73,6 +73,20 @@ async fn test_search_and_context_use_managed_fork_core_commands() {
     assert_eq!(search.hits.len(), 1);
     assert_eq!(search.hits[0].path, "src/lib.rs");
 
+    let leading_hyphen = planner
+        .search(SearchRequest {
+            workspace: workspace.clone(),
+            query: "--outline".into(),
+            path: Some(PathBuf::from("src")),
+            limit: 5,
+            mode: SearchMode::Exact,
+            include_content: true,
+        })
+        .await
+        .expect("exact query beginning with a hyphen");
+    assert_eq!(leading_hyphen.query, "--outline");
+    assert_eq!(leading_hyphen.hits.len(), 1);
+
     let context = planner
         .plan(PlanRequest {
             workspace,
@@ -134,15 +148,22 @@ case "$1" in
     ;;
   rgai)
     literal_found=false
+    separator_found=false
+    query=""
     for argument in "$@"; do
       if [ "$argument" = "--literal" ]; then
         literal_found=true
+      elif [ "$argument" = "--" ]; then
+        separator_found=true
+      elif [ "$separator_found" = "true" ]; then
+        query="$argument"
+        separator_found=false
       fi
     done
-    if [ "$literal_found" != "true" ]; then
+    if [ "$literal_found" != "true" ] || [ -z "$query" ]; then
       exit 65
     fi
-    printf '%s\n' '{"query":"managed_fork_hit","path":"src","total_hits":1,"shown_hits":1,"scanned_files":1,"skipped_large":0,"skipped_binary":0,"hits":[{"path":"src/lib.rs","score":9.5,"matched_lines":1,"snippets":[{"lines":[{"line":1,"text":"pub fn managed_fork_hit() {}"}],"matched_terms":["managed_fork_hit"]}]}]}'
+    printf '%s\n' "{\"query\":\"$query\",\"path\":\"src\",\"total_hits\":1,\"shown_hits\":1,\"scanned_files\":1,\"skipped_large\":0,\"skipped_binary\":0,\"hits\":[{\"path\":\"src/lib.rs\",\"score\":9.5,\"matched_lines\":1,\"snippets\":[{\"lines\":[{\"line\":1,\"text\":\"pub fn managed_fork_hit() {}\"}],\"matched_terms\":[\"$query\"]}]}]}"
     ;;
   memory)
     if [ "$2" != "plan" ]; then

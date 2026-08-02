@@ -82,7 +82,7 @@ pub fn topic_belongs_to_project(topic: &str, project: &str) -> bool {
     topic
         .strip_suffix(project)
         .and_then(|prefix| prefix.strip_suffix('-'))
-        .is_some_and(|kind| validate_memory_kind(kind).is_ok())
+        .is_some_and(|kind| kind != "legacy-import" && validate_memory_kind(kind).is_ok())
 }
 
 pub fn isolate_project_memories(
@@ -221,6 +221,10 @@ mod tests {
             &format!("context-{PROJECT_A}-suffix"),
             PROJECT_A
         ));
+        assert!(
+            !topic_belongs_to_project(&format!("legacy-import-{PROJECT_A}"), PROJECT_A),
+            "unclassified legacy imports must stay quarantined from project recall"
+        );
     }
 
     #[test]

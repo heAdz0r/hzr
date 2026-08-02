@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- `read -n` defaults to exact content and preserves original source coordinates
+  for full, ranged and tail reads.
+- `read --max-lines N` returns the exact first N lines instead of a smart
+  truncation marker.
 - `cargo test` keeps bounded failing-test names, panic locations and assertion
   text in default compact output instead of returning only aggregate counts.
 - Captured `ls` output suppresses the interactive summary, matching upstream
@@ -15,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `find` uses the token-efficient ASCII count header.
 
 ### Fixed
+- `read --outline` emits an ATX heading tree with source spans for Markdown
+  instead of applying a code-symbol extractor and returning no symbols.
 - Non-JSON `cargo check` output is labelled `cargo check` and uses the child
   exit code instead of the generic build label.
 

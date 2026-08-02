@@ -80,12 +80,15 @@ read.rs (orchestrator)
 **Target read modes**:
 ```bash
 rtk read file.rs                      # Smart filtered read (default)
-rtk read file.rs --outline            # Structural map with line spans
+rtk read file.rs --outline            # Code symbols with source spans
+rtk read README.md --outline           # Markdown ATX heading tree with source spans
 rtk read file.rs --symbols            # Machine-readable JSON symbol index
 rtk read file.rs --changed            # Only modified hunks (git working tree)
 rtk read file.rs --since HEAD~3       # Changes relative to a revision
 rtk read file.rs -l aggressive        # Signatures only, bodies stripped
 rtk read file.rs --from 120 --to 220  # Exact line range
+rtk read file.rs -n                    # Exact content with source coordinates
+rtk read file.rs --max-lines 40        # Exact first 40 lines
 ```
 
 **Smart digests** auto-detect format and produce optimal summaries for:

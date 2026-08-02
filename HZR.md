@@ -55,12 +55,12 @@ Semantic -> hzr rgai "<intent>"
 Literal  -> hzr search "<pattern>" --mode exact [--path DIR ...]
 Ranked   -> hzr search "<terms>" --mode auto
 Read     -> hzr rtk -- read <file> [--from N --to M | --outline | --changed | -n]
-Write    -> hzr rtk -- write patch|replace|set ...
+Write    -> hzr rtk -- write patch|replace|set|create|batch ...
 Density  -> hzr codec compile --profile shadow|adaptive|compact
 Raw      -> hzr rtk -- raw <command...>   (escape hatch — see the cost below)
 TDD      -> hzr tdd                  (read before production changes)
 MCP      -> hzr mcp serve            (launched by a client, never by hand)
-Config   -> hzr mcp config --client codex|claude-desktop
+Config   -> hzr mcp config --client codex|claude-desktop  (prints a snippet)
 MCP state -> hzr mcp status
 Health   -> hzr doctor
 Gains    -> hzr stats
@@ -93,11 +93,19 @@ hzr rtk -- read <file> --max-lines N         # head(1)
 hzr rtk -- read <file> --tail-lines N        # tail(1)
 ```
 
+Markdown defaults to a bounded digest; use `--level none` for exact full content or
+`--from N --to M` for an exact range. `-n` defaults to exact content and prints original
+source coordinates, including for ranges and tails. `--max-lines N` returns exactly the
+first N lines. `--outline` emits ATX Markdown headings (`#` through `######`) with source
+spans, or heuristic symbols for supported Rust, Python, TypeScript, JavaScript, Go and Java
+files. It is not a generic symbol query for every file format.
+
 ## Search modes
 
 `--mode exact` is a **literal, case-sensitive** lookup. The query is matched verbatim;
 `hzr search "fn handle_request" --mode exact` returns the definition, not every `fn` in
-the repository. Use it for symbols, error strings, config keys and audits.
+the repository. Use it for symbols, error strings, config keys and audits. If the literal
+begins with `-`, terminate option parsing first: `hzr search --mode exact -- "--outline"`.
 
 `--mode semantic` and `--mode auto` use the ranked term model: the query is lowercased,
 split on non-alphanumeric characters, stripped of stop words and stemmed, and the surviving
@@ -107,7 +115,10 @@ terms are ranked. Use it to *locate* code you cannot name exactly.
 
 ## The cost of `raw`
 
-`hzr rtk -- raw <cmd>` hands the command to the shell unfiltered. It is recorded in the
+`hzr rtk -- raw <cmd> <args...>` directly spawns the first argument and forwards its argv
+unfiltered; it does not interpret pipes, redirects, globs or shell variables. Use an explicit
+shell such as `sh -c '...'` only when shell grammar is actually required. The invocation is
+recorded in the
 ledger as a bypass, delivers exactly as many tokens as it consumed, and receives **zero**
 savings credit. `hzr stats` reports the bypass share directly under the headline ratio,
 because a bypassed operation raises both sides of that ratio and cancels out instead of
@@ -138,6 +149,10 @@ Recall defaults to `project-and-global`, so standing preferences arrive alongsid
 project's history. Another repository's memory is never reachable from any scope — that
 isolation is enforced by a positive filter, not by omission. A store targets exactly one
 namespace; there is no "both" for writes.
+
+Legacy-import records lack trustworthy repository provenance. HZR retains them for audit and
+explicit migration, but excludes them from automatic project recall instead of assigning all
+of them to whichever repository happened to run the import.
 
 The installed Bash hook routes commands through the managed daemon and falls
 back to the same pinned HZR fork-core when the daemon is unavailable. A

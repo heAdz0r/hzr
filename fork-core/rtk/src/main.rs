@@ -132,7 +132,7 @@ enum Commands {
         args: Vec<String>,
     },
 
-    /// Read file with intelligent filtering (CSV/TSV auto-digest in filtered modes)
+    /// Read a file with intelligent filtering and format-aware digests
     Read {
         /// File to read
         file: PathBuf,
@@ -146,18 +146,18 @@ enum Commands {
         /// End line (1-based, inclusive)
         #[arg(long)]
         to: Option<usize>,
-        /// Max lines
+        /// Keep the exact first N lines (head semantics)
         #[arg(short, long, conflicts_with = "tail_lines")]
         max_lines: Option<usize>,
         /// Keep only last N lines (tail semantics) // fork: ported from upstream v0.42.4
         #[arg(long)]
         tail_lines: Option<usize>,
-        /// Show line numbers
+        /// Show source line numbers (defaults to exact content)
         #[arg(short = 'n', long)]
         line_numbers: bool,
 
         // ── Read mode flags (mutually exclusive) ──
-        /// Show structural outline with line spans
+        /// Show Markdown headings or supported code symbols with line spans
         #[arg(long, group = "read_mode")]
         outline: bool,
         /// Show machine-readable JSON symbol index
@@ -1965,6 +1965,7 @@ fn main() -> Result<()> {
                             || to.is_some()
                             || max_lines.is_some()
                             || tail_lines.is_some()
+                            || line_numbers
                         {
                             filter::FilterLevel::None // range = edit mode → full content
                         } else {

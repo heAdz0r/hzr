@@ -29,9 +29,10 @@ hzr mcp status                           # audits native registration and lifecy
 persistent HZR process is the single `hzrd` service.
 
 Tools: `hzr_context_plan`, `hzr_search`, `hzr_memory_recall`,
-`hzr_memory_store`. Plan first for unfamiliar or cross-cutting work, recall
+`hzr_memory_store`, `hzr_codec`. Plan first for unfamiliar or cross-cutting work, recall
 before re-reading files you already analysed, and store decisions and resolved
-errors rather than ephemeral session state. Inputs are strictly bounded and
+errors rather than ephemeral session state. Use `hzr_codec` to apply or shadow-measure
+protected response-density transforms. Inputs are strictly bounded and
 successful calls include typed `structuredContent`. `isError: true` means no
 success was confirmed and no fallback engine or store was used; recall before
 retrying an ambiguously completed store.

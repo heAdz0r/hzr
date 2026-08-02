@@ -2,12 +2,18 @@
 //! Extracted from read.rs (PR-2).
 
 /// Format text content with line numbers in "N │ line" format.
-pub fn format_with_line_numbers(content: &str) -> String {
+pub fn format_with_line_numbers_from(content: &str, start_line: usize) -> String {
     let lines: Vec<&str> = content.lines().collect();
-    let width = lines.len().to_string().len();
+    let last_line = start_line.saturating_add(lines.len().saturating_sub(1));
+    let width = last_line.to_string().len();
     let mut out = String::new();
     for (i, line) in lines.iter().enumerate() {
-        out.push_str(&format!("{:>width$} │ {}\n", i + 1, line, width = width));
+        out.push_str(&format!(
+            "{:>width$} │ {}\n",
+            start_line.saturating_add(i),
+            line,
+            width = width
+        ));
     }
     out
 }
@@ -68,7 +74,7 @@ mod tests {
 
     #[test]
     fn line_numbers_single_digit() {
-        let result = format_with_line_numbers("a\nb\nc");
+        let result = format_with_line_numbers_from("a\nb\nc", 1);
         assert_eq!(result, "1 │ a\n2 │ b\n3 │ c\n");
     }
 
@@ -78,15 +84,21 @@ mod tests {
             .map(|i| format!("line{i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let result = format_with_line_numbers(&input);
+        let result = format_with_line_numbers_from(&input, 1);
         assert!(result.starts_with(" 1 │ line1\n"));
         assert!(result.contains("12 │ line12\n"));
     }
 
     #[test]
     fn line_numbers_empty_content() {
-        let result = format_with_line_numbers("");
+        let result = format_with_line_numbers_from("", 1);
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn line_numbers_can_start_at_source_offset() {
+        let result = format_with_line_numbers_from("c\nd", 120);
+        assert_eq!(result, "120 │ c\n121 │ d\n");
     }
 
     // ── Dedup tests (PR-7) ──────────────────────────────────
