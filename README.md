@@ -87,15 +87,18 @@ Published artifacts:
 
 No Windows artifact is provided in 0.3.3. Release scripts build native artifacts rather than cross-compiling them.
 
-Download and inspect the installer before running it:
+Download the installer, review it, then run it:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
   https://raw.githubusercontent.com/heAdz0r/hzr/v0.3.3/install.sh \
   -o /tmp/hzr-install.sh
-less /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
+
+Open `/tmp/hzr-install.sh` in any editor or pager before the second command if you
+want to see what it does first. The installer reports each step, prints where every
+file was placed, and ends with the exact commands to run next.
 
 The installer downloads the platform artifact and `SHA256SUMS` from GitHub Releases, verifies the external checksum and internal bundle manifest, then creates:
 
