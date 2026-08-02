@@ -24,12 +24,50 @@ HZR_ARTIFACT="hzr-v${HZR_VERSION}-${HZR_PLATFORM}.tar.gz"
 HZR_RELEASE_URL="https://github.com/${HZR_REPOSITORY}/releases/download/v${HZR_VERSION}"
 HZR_INSTALL_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-install.XXXXXX")"
 
+# Progress output. A release bundle is a few hundred megabytes, so a silent
+# installer looks indistinguishable from a hung one. Steps are numbered and the
+# closing summary states what exists on disk and what to run next. Colour is
+# emitted only for an interactive terminal so logs and CI stay plain.
+if [ -t 1 ]; then
+  HZR_BOLD="$(printf '\033[1m')"
+  HZR_DIM="$(printf '\033[2m')"
+  HZR_GREEN="$(printf '\033[32m')"
+  HZR_RESET="$(printf '\033[0m')"
+else
+  HZR_BOLD=""
+  HZR_DIM=""
+  HZR_GREEN=""
+  HZR_RESET=""
+fi
+HZR_STEP_TOTAL=5
+HZR_STEP_NUMBER=0
+
+hzr_step() {
+  HZR_STEP_NUMBER=$((HZR_STEP_NUMBER + 1))
+  printf '%s[%d/%d]%s %s\n' \
+    "${HZR_DIM}" "${HZR_STEP_NUMBER}" "${HZR_STEP_TOTAL}" "${HZR_RESET}" "$1"
+}
+
+hzr_note() {
+  printf '      %s%s%s\n' "${HZR_DIM}" "$1" "${HZR_RESET}"
+}
+
 cleanup_hzr_install() {
   if [ -n "${HZR_INSTALL_TEMP:-}" ] && [ -d "${HZR_INSTALL_TEMP}" ]; then
     rm -rf -- "${HZR_INSTALL_TEMP}"
   fi
+  # The pending `current` symlink is created outside the temp directory, so a
+  # failure between its creation and the atomic swap would otherwise leave a
+  # dangling .current-<pid> entry in the install root.
+  if [ -n "${HZR_CURRENT_TEMP:-}" ] && [ -L "${HZR_CURRENT_TEMP}" ]; then
+    rm -f -- "${HZR_CURRENT_TEMP}"
+  fi
 }
 trap cleanup_hzr_install EXIT HUP INT TERM
+
+printf '\n%sInstalling HZR v%s%s %s(%s)%s\n\n' \
+  "${HZR_BOLD}" "${HZR_VERSION}" "${HZR_RESET}" \
+  "${HZR_DIM}" "${HZR_PLATFORM}" "${HZR_RESET}"
 
 # Atomically repoint a symlink without following it.
 #
@@ -60,15 +98,29 @@ replace_hzr_symlink() {
   exit 1
 }
 
+# A bundle download takes minutes on a slow link, so the large transfer shows a
+# progress bar on an interactive terminal. `HZR_SHOW_PROGRESS=1` opts in; the
+# small checksum manifest stays quiet.
 download_hzr_file() {
   HZR_DOWNLOAD_URL="$1"
   HZR_DOWNLOAD_DESTINATION="$2"
+  HZR_SHOW_PROGRESS="${3:-0}"
   if command -v curl >/dev/null 2>&1; then
-    curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-      "${HZR_DOWNLOAD_URL}" --output "${HZR_DOWNLOAD_DESTINATION}"
+    if [ "${HZR_SHOW_PROGRESS}" = "1" ] && [ -t 1 ]; then
+      curl --fail --progress-bar --show-error --location --proto '=https' --tlsv1.2 \
+        "${HZR_DOWNLOAD_URL}" --output "${HZR_DOWNLOAD_DESTINATION}"
+    else
+      curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+        "${HZR_DOWNLOAD_URL}" --output "${HZR_DOWNLOAD_DESTINATION}"
+    fi
   elif command -v wget >/dev/null 2>&1; then
-    wget --https-only --quiet --output-document="${HZR_DOWNLOAD_DESTINATION}" \
-      "${HZR_DOWNLOAD_URL}"
+    if [ "${HZR_SHOW_PROGRESS}" = "1" ] && [ -t 1 ]; then
+      wget --https-only --quiet --show-progress \
+        --output-document="${HZR_DOWNLOAD_DESTINATION}" "${HZR_DOWNLOAD_URL}"
+    else
+      wget --https-only --quiet --output-document="${HZR_DOWNLOAD_DESTINATION}" \
+        "${HZR_DOWNLOAD_URL}"
+    fi
   else
     echo "hzr: curl or wget is required to download the release bundle" >&2
     exit 1
@@ -148,25 +200,33 @@ verify_hzr_bundle_root() {
 HZR_ARCHIVE="${HZR_INSTALL_TEMP}/${HZR_ARTIFACT}"
 HZR_CHECKSUMS="${HZR_INSTALL_TEMP}/SHA256SUMS"
 if [ -n "${HZR_ARCHIVE_PATH:-}" ]; then
+  hzr_step "Using the local release archive"
+  hzr_note "${HZR_ARCHIVE_PATH}"
   cp -- "${HZR_ARCHIVE_PATH}" "${HZR_ARCHIVE}"
   cp -- "${HZR_CHECKSUMS_PATH:?HZR_CHECKSUMS_PATH is required with HZR_ARCHIVE_PATH}" \
     "${HZR_CHECKSUMS}"
 else
-  download_hzr_file "${HZR_RELEASE_URL}/${HZR_ARTIFACT}" "${HZR_ARCHIVE}"
+  hzr_step "Downloading ${HZR_ARTIFACT}"
+  hzr_note "a few hundred megabytes - the whole runtime ships in one bundle"
+  download_hzr_file "${HZR_RELEASE_URL}/${HZR_ARTIFACT}" "${HZR_ARCHIVE}" 1
   download_hzr_file "${HZR_RELEASE_URL}/SHA256SUMS" "${HZR_CHECKSUMS}"
 fi
 
+hzr_step "Verifying the download"
 HZR_EXPECTED_SHA256="$(awk -v artifact="${HZR_ARTIFACT}" '$2 == artifact { print $1 }' "${HZR_CHECKSUMS}")"
 if [ -z "${HZR_EXPECTED_SHA256}" ]; then
   echo "hzr: ${HZR_ARTIFACT} is absent from the release checksum manifest" >&2
   exit 1
 fi
 verify_hzr_sha256 "${HZR_EXPECTED_SHA256}" "${HZR_ARCHIVE}"
+hzr_note "checksum matches the published SHA256SUMS"
 
+hzr_step "Unpacking and checking the bundle contents"
 mkdir -p "${HZR_INSTALL_TEMP}/extract"
 tar -xzf "${HZR_ARCHIVE}" -C "${HZR_INSTALL_TEMP}/extract"
 HZR_EXTRACTED="${HZR_INSTALL_TEMP}/extract/hzr"
 verify_hzr_bundle_root "${HZR_EXTRACTED}"
+hzr_note "every file matches the internal bundle manifest"
 
 HZR_VERSION_ROOT="${HZR_INSTALL_ROOT}/versions/v${HZR_VERSION}-${HZR_PLATFORM}"
 mkdir -p "${HZR_INSTALL_ROOT}/versions" "${HZR_BIN_DIR}"
@@ -204,10 +264,14 @@ install_hzr_link() {
   mv -f -- "${HZR_LINK_TEMP}" "${HZR_LINK_PATH}"
 }
 
+hzr_step "Placing the files and command-line entry points"
 install_hzr_link hzr
 install_hzr_link hzrd
 install_hzr_link rtk
+hzr_note "${HZR_VERSION_ROOT}"
+hzr_note "hzr, hzrd, rtk -> ${HZR_BIN_DIR}"
 
+hzr_step "Registering this project and starting the background service"
 "${HZR_INSTALL_ROOT}/current/bin/hzr" init --if-needed --quiet --skip-service
 if [ "${HZR_INSTALL_HOOKS}" = "1" ]; then
   if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
@@ -223,5 +287,77 @@ if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
   "${HZR_INSTALL_ROOT}/current/bin/hzr" daemon service install
 fi
 
-echo "HZR v${HZR_VERSION} installed at ${HZR_INSTALL_ROOT}/current"
-echo "Add ${HZR_BIN_DIR} to PATH if it is not already present."
+# ---------------------------------------------------------------------------
+# Closing summary.
+#
+# Everything below is reporting only: what now exists on disk, whether the
+# commands are reachable, and the next thing to run. Someone who has never seen
+# HZR should be able to act on this without opening the README.
+# ---------------------------------------------------------------------------
+
+case ":${PATH}:" in
+  *":${HZR_BIN_DIR}:"*) HZR_BIN_DIR_ON_PATH=1 ;;
+  *) HZR_BIN_DIR_ON_PATH=0 ;;
+esac
+
+case "${SHELL:-}" in
+  */zsh)
+    HZR_SHELL_PROFILE="${HOME}/.zshrc"
+    HZR_SHELL_RELOAD="exec zsh -l"
+    ;;
+  */bash)
+    HZR_SHELL_PROFILE="${HOME}/.bashrc"
+    HZR_SHELL_RELOAD="exec bash -l"
+    ;;
+  *)
+    HZR_SHELL_PROFILE="${HOME}/.profile"
+    HZR_SHELL_RELOAD="open a new terminal"
+    ;;
+esac
+
+printf '\n%s%sHZR v%s is installed.%s\n\n' \
+  "${HZR_GREEN}" "${HZR_BOLD}" "${HZR_VERSION}" "${HZR_RESET}"
+
+printf '%sWhat went where%s\n' "${HZR_BOLD}" "${HZR_RESET}"
+printf '  Program files    %s\n' "${HZR_VERSION_ROOT}"
+printf '  Active version   %s -> the directory above\n' "${HZR_INSTALL_ROOT}/current"
+printf '  Commands         %s/{hzr,hzrd,rtk}\n' "${HZR_BIN_DIR}"
+printf '  Data and memory  %s\n' "${HZR_INSTALL_ROOT}"
+printf '  Nothing else on the system was modified.\n'
+
+if [ "${HZR_INSTALL_HOOKS}" = "1" ]; then
+  printf '\n%sAgent integration%s\n' "${HZR_BOLD}" "${HZR_RESET}"
+  printf '  Claude Code hooks and the HZR blocks in CLAUDE.md / AGENTS.md are configured.\n'
+  printf '  Existing files were backed up before being changed.\n'
+fi
+
+if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
+  printf '\n%sBackground service%s\n' "${HZR_BOLD}" "${HZR_RESET}"
+  printf '  hzrd runs as your own user service and listens only on this machine.\n'
+  printf '  Dashboard        http://127.0.0.1:47391/\n'
+  printf '  Stop or check    hzr daemon service stop | status\n'
+fi
+
+printf '\n%sNext steps%s\n' "${HZR_BOLD}" "${HZR_RESET}"
+HZR_NEXT_STEP=0
+if [ "${HZR_BIN_DIR_ON_PATH}" != "1" ]; then
+  HZR_NEXT_STEP=$((HZR_NEXT_STEP + 1))
+  printf '  %d. Make the commands reachable. %s is not on your PATH yet:\n' \
+    "${HZR_NEXT_STEP}" "${HZR_BIN_DIR}"
+  printf '\n       echo '\''export PATH="%s:$PATH"'\'' >> %s\n' \
+    "${HZR_BIN_DIR}" "${HZR_SHELL_PROFILE}"
+  printf '       %s\n\n' "${HZR_SHELL_RELOAD}"
+fi
+HZR_NEXT_STEP=$((HZR_NEXT_STEP + 1))
+printf '  %d. Confirm the install is healthy:\n' "${HZR_NEXT_STEP}"
+printf '\n       hzr doctor --workspace .\n\n'
+HZR_NEXT_STEP=$((HZR_NEXT_STEP + 1))
+printf '  %d. Open a project and use it. From inside any repository:\n' "${HZR_NEXT_STEP}"
+printf '\n       hzr search "where is the request timeout set"\n'
+printf '       hzr stats\n\n'
+
+printf '%sHelp%s\n' "${HZR_BOLD}" "${HZR_RESET}"
+printf '  Command list     hzr --help\n'
+printf '  Documentation    https://github.com/%s\n' "${HZR_REPOSITORY}"
+printf '  Remove HZR       hzr uninstall --force, then rm -rf %s and the commands above\n\n' \
+  "${HZR_INSTALL_ROOT}"
