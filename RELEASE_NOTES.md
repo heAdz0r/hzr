@@ -1,9 +1,10 @@
 # HZR 0.3.3 — Exact agent contracts
 
-HZR 0.3.3 fixes a class of failures that looked small in a terminal but were costly for an
-agent: a flag promised one shape of evidence while the runtime returned another. Markdown
-outlines, line coordinates, exact heads, leading-hyphen searches, memory provenance and the
-installed instructions now agree with their public contract.
+HZR 0.3.3 fixes a class of failures that looked small in a terminal or dashboard but were
+costly for an agent: a flag promised one shape of evidence while the runtime returned another,
+or a green tile had no useful drill-down behind it. Markdown outlines, line coordinates, exact
+heads, leading-hyphen searches, memory provenance, live observability and the installed
+instructions now agree with their public contract.
 
 No benchmark percentage changes in this release. The improvements below are deterministic
 behavioral contracts covered by focused regression tests.
@@ -52,6 +53,35 @@ could make another project's facts reachable there.
 HZR 0.3.3 keeps those records in the canonical store for audit and explicit migration, but
 quarantines them from automatic project recall. Current project and global memories are
 unchanged; no database rows are deleted or rewritten by the upgrade.
+
+## The live observatory is now an inspection surface
+
+Open the same daemon-owned loopback UI after installation:
+
+```text
+http://127.0.0.1:47391/
+```
+
+- ICM `Ready` is backed by a supervised probe and a positively repository-filtered snapshot.
+  Select a topic in the deterministic Cytoscape graph to load at most 100 bounded memory
+  records, then inspect one record's summary, importance, weight, timestamps, source,
+  keywords and opaque identifier. The database path and repository token never enter the API.
+- grepai `Ready` shows its HZR-owned watcher, generation and configuration fingerprints,
+  artifact freshness and a successful semantic-search canary with visible hits.
+- Every recent routed operation can be opened to see the requested command, routed command,
+  working directory, route, latency, estimate inputs, observed agent and optional session.
+  Historical rows without evidence stay `Unattributed`; recent ledger evidence is explicitly
+  not presented as proof that an agent process is still alive.
+- Five-second background synchronization is quiet. It preserves scroll, graph camera,
+  selected topic, open memory and operation detail; only a manual refresh changes the Refresh
+  control's busy state.
+- RAW receives zero savings credit in both project and global totals even if an imported or
+  malformed row contains unequal counters. Provider receipts remain separate from deterministic
+  UTF-8 estimates, and missing receipts still mean no data rather than zero usage.
+
+The graph has pan, zoom, fit and reset controls, synchronized Arrow/Home/End keyboard
+navigation, focus return, reduced-motion support and 44 px interaction targets. The public
+README captures are sanitized and use synthetic memory detail content.
 
 ## Installed agent instructions describe the real commands
 

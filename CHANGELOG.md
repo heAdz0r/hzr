@@ -6,6 +6,14 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ### Added
 
+- The loopback visualizer now has an operator-grade Cytoscape memory explorer with
+  deterministic layout, pan/zoom/fit controls, synchronized keyboard topic navigation,
+  and bounded topic-to-record drill-down through opaque project-scoped identifiers.
+- Recent HZR ledger activity exposes inspectable request evidence: the requested and routed
+  command, canonical working directory, route, latency, observed agent label and optional
+  session identifier. Missing historical attribution remains explicitly `Unattributed`.
+- A read-only `GET /v1/dashboard/memory/topics/{opaque_topic_id}` contract returns at most
+  100 positively repository-filtered records with independently bounded detail fields.
 - `read --outline` now recognizes Markdown and emits its ATX heading hierarchy with
   original source spans. Supported code files continue to use their symbol extractor.
 - Exact search accepts literals beginning with `-` through the conventional `--`
@@ -13,6 +21,12 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ### Changed
 
+- Dashboard synchronization runs quietly every five seconds while visible, permits only one
+  in-flight request, preserves the graph camera and open inspectors, and never animates or
+  disables the manual Refresh control during a background poll.
+- RAW rows now contribute baseline equal to delivered output and exactly zero avoided,
+  regression and net tokens in both global and project aggregates, even if a legacy or
+  malformed row stored unequal counts.
 - `read -n` defaults to exact content and preserves source coordinates for full,
   ranged and tail reads instead of numbering filtered output from one.
 - `read --max-lines N` is an exact head operation; it no longer substitutes a smart
@@ -26,6 +40,10 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ### Fixed
 
+- ICM and grepai health in the visualizer is backed by supervised probes, repository-scoped
+  snapshots, watcher ownership and a semantic canary instead of process-presence inference.
+- The memory graph no longer overlaps labels in a decorative orbital SVG, and background
+  refresh no longer resets selection, scroll, keyboard focus or graph viewport.
 - Release synchronization updates only `workspace.package.version` in `Cargo.toml`
   and only source-free HZR workspace package entries in `Cargo.lock`. A dependency
   whose version happens to contain the previous HZR version can no longer be changed,
@@ -43,6 +61,8 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ### Documentation
 
+- Added the 12-module Observatory 2.0 PRD, independent acceptance gate and sanitized public
+  screenshots of service health, memory drill-down and per-request evidence.
 - README, the canonical agent contract, Claude/Codex integration guides, fork docs and
   the parity ledger now agree on the corrected behavior and scope.
 
