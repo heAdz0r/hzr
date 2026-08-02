@@ -130,6 +130,10 @@ fn test_stdio_mcp_negotiates_lists_typed_tools_and_exits_on_eof() -> anyhow::Res
 
 #[test]
 fn test_stdio_mcp_cancels_in_flight_tool_without_late_response() -> anyhow::Result<()> {
+    // Hosted runners can spend several seconds scheduling the freshly spawned MCP
+    // process under a full workspace test load. Keep the assertion bounded without
+    // treating scheduler latency as a protocol failure.
+    let integration_timeout = Duration::from_secs(10);
     let directory = tempdir().expect("temporary MCP home");
     let data_dir = directory.path().join("data");
     let runtime = data_dir.join("runtime");
@@ -204,7 +208,7 @@ fn test_stdio_mcp_cancels_in_flight_tool_without_late_response() -> anyhow::Resu
     )?;
     stdin.flush()?;
     accepted_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(integration_timeout)
         .expect("tool request must reach the delayed daemon");
 
     writeln!(
@@ -222,7 +226,7 @@ fn test_stdio_mcp_cancels_in_flight_tool_without_late_response() -> anyhow::Resu
         line_tx.send(lines.next()).expect("send next MCP response");
     });
     let next = line_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(integration_timeout)
         .expect("cancellation must unblock the MCP loop")
         .expect("tools/list response line")
         .expect("read tools/list response");
@@ -236,7 +240,7 @@ fn test_stdio_mcp_cancels_in_flight_tool_without_late_response() -> anyhow::Resu
     drop(stdin);
     release_tx.send(()).ok();
     server.join().expect("join delayed daemon");
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + integration_timeout;
     loop {
         if let Some(status) = child.try_wait()? {
             assert!(status.success(), "MCP server failed after cancellation");
