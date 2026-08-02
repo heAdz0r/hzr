@@ -6,8 +6,16 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [0.3.4] - 2026-08-02
 
+### Added
+
+- The installer reports five bounded progress steps, shows interactive transfer progress for the
+  release bundle, and finishes with the installed locations, dashboard URL, conditional PATH
+  guidance, health command, and next-use examples.
+
 ### Fixed
 
+- Installer cleanup now removes a pending atomic `current` symlink if installation exits between
+  creating the temporary link and replacing the active-version pointer.
 - The grepai observatory no longer runs a hard-coded semantic canary and presents it as live user
   traffic. Index readiness now comes from managed watcher and artifact evidence; the routed-search
   card is populated only by a real optimized HZR search in the selected project's recent ledger,

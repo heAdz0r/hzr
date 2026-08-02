@@ -86,6 +86,17 @@ shown only when a real optimized HZR search exists in the selected project's led
 exact command, working directory, latency, and observed attribution. When no such request exists,
 the UI says so.
 
+## Installation reports progress and the resulting layout
+
+The self-contained bundle is large enough that a silent transfer can look stalled. The installer
+now reports five numbered steps, shows curl or wget transfer progress on an interactive terminal,
+and finishes with the version root, active-version pointer, command entry points, data directory,
+dashboard URL, health check, and concrete next-use commands. PATH guidance is printed only when the
+configured bin directory is absent from the current PATH.
+
+The atomic active-version swap also cleans up its pending `.current-<pid>` symlink if installation
+exits before the replacement completes.
+
 ## Upgrade impact
 
 The upgrade does not rewrite existing memory rows or project configuration. The new usage outbox is

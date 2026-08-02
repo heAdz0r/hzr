@@ -35,6 +35,7 @@ export XDG_DATA_HOME="${HOME}/.local/share"
 export XDG_CACHE_HOME="${HOME}/.cache"
 export XDG_STATE_HOME="${HOME}/.local/state"
 HZR_SERVICE_LOG="${HZR_SMOKE_TEMP}/service-manager.log"
+HZR_INSTALL_LOG="${HZR_SMOKE_TEMP}/install.log"
 HZR_SERVICE_STUB="${HZR_SMOKE_TEMP}/tools/service-manager"
 printf '%s\n' '#!/bin/sh' 'printf '\''%s\n'\'' "$*" >> "${HZR_SERVICE_LOG}"' 'exit 0' \
   >"${HZR_SERVICE_STUB}"
@@ -58,7 +59,23 @@ printf 'pub const SMOKE_MARKER: &str = "smoke_marker";\n' \
   HZR_SERVICE_LOG="${HZR_SERVICE_LOG}" \
   PATH="/usr/bin:/bin" \
     /bin/sh "${HZR_REPOSITORY_ROOT}/install.sh"
-)
+) | tee "${HZR_INSTALL_LOG}"
+
+for HZR_INSTALL_OUTPUT in \
+  '[1/5] Using the local release archive' \
+  '[2/5] Verifying the download' \
+  '[3/5] Unpacking and checking the bundle contents' \
+  '[4/5] Placing the files and command-line entry points' \
+  '[5/5] Registering this project and starting the background service' \
+  'HZR v0.3.4 is installed.' \
+  'What went where' \
+  'Next steps' \
+  'hzr doctor --workspace .'; do
+  if ! grep -F "${HZR_INSTALL_OUTPUT}" "${HZR_INSTALL_LOG}" >/dev/null; then
+    echo "installer summary is missing: ${HZR_INSTALL_OUTPUT}" >&2
+    exit 1
+  fi
+done
 
 HZR_INSTALLED_ROOT="${HZR_SMOKE_TEMP}/home/.local/share/hzr/current"
 HZR_INSTALLED_BIN="${HZR_SMOKE_TEMP}/home/.local/bin"

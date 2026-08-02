@@ -323,7 +323,6 @@ printf '  Program files    %s\n' "${HZR_VERSION_ROOT}"
 printf '  Active version   %s -> the directory above\n' "${HZR_INSTALL_ROOT}/current"
 printf '  Commands         %s/{hzr,hzrd,rtk}\n' "${HZR_BIN_DIR}"
 printf '  Data and memory  %s\n' "${HZR_INSTALL_ROOT}"
-printf '  Nothing else on the system was modified.\n'
 
 if [ "${HZR_INSTALL_HOOKS}" = "1" ]; then
   printf '\n%sAgent integration%s\n' "${HZR_BOLD}" "${HZR_RESET}"
