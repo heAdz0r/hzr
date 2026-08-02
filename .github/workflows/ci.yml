@@ -36,7 +36,7 @@ jobs:
           cache-dependency-path: integrations/caveman-code/package-lock.json
       - run: scripts/build-bundle.sh "$RUNNER_TEMP/hzr-dist"
       - run: scripts/package-release.sh "$RUNNER_TEMP/hzr-dist" "$RUNNER_TEMP/hzr-release"
-      - run: scripts/smoke-install.sh "$RUNNER_TEMP/hzr-release/hzr-v0.3.3-linux-x64.tar.gz" "$RUNNER_TEMP/hzr-release/SHA256SUMS"
+      - run: scripts/smoke-install.sh "$RUNNER_TEMP/hzr-release/hzr-v0.3.4-linux-x64.tar.gz" "$RUNNER_TEMP/hzr-release/SHA256SUMS"
 
   fork-core:
     runs-on: ubuntu-latest

@@ -155,7 +155,9 @@ The visualizer remains read-only. It never starts a second ICM, grepai, or fork-
 - Route: `GET /v1/dashboard/memory/topics/{opaque_topic_id}`.
 - Select the same registered project as `/v1/dashboard`.
 - Resolve the opaque ID only after positive repository filtering.
-- Return topic summary plus bounded memory records and `truncated` metadata.
+- Return topic summary plus bounded redacted record metadata and `truncated` metadata.
+- Keep summary, raw excerpt, keywords, and source data redacted on this public route; expose full
+  bounded details only through authenticated `GET /v1/memory/topics/{opaque_topic_id}`.
 - Reject malformed identifiers and unknown topics with explicit 4xx errors.
 
 ### FR-3 — Memory graph

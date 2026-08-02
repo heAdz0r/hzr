@@ -4,6 +4,8 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-02
+
 ### Fixed
 
 - The grepai observatory no longer runs a hard-coded semantic canary and presents it as live user
@@ -384,6 +386,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.3.4]: https://github.com/heAdz0r/hzr/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/heAdz0r/hzr/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/heAdz0r/hzr/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/heAdz0r/hzr/compare/v0.3.0...v0.3.1
