@@ -667,6 +667,45 @@ struct ForkBudgetReport {
     candidates_selected: usize,
 }
 
+/// Largest file HZR will re-read to complete a chunk-boundary fragment. Snippet lines are
+/// few and bounded, but the file they came from need not be, and a search must not turn into
+/// an unbounded read.
+const MAX_SNIPPET_REPAIR_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Complete a snippet line the semantic engine returned mid-token.
+///
+/// grepai chunks are byte windows, so the first line of a chunk can begin mid-identifier.
+/// Passing that through breaks HZR's own protocol — `SearchLine::text` means "the text of
+/// this line" — and hands the model source that looks real and does not parse.
+///
+/// Repair is deliberately provable rather than best-effort: the fragment is only completed
+/// when it genuinely occurs in the line the engine pointed at. An index older than the file
+/// therefore keeps the engine's text instead of having an unrelated line substituted for it,
+/// which would be a worse failure than the truncation.
+fn repair_snippet_line(fragment: &str, actual: Option<&str>) -> String {
+    let Some(actual) = actual else {
+        return fragment.to_owned();
+    };
+    let complete = actual.trim();
+    // An empty fragment matches every line, so it proves nothing about belonging to this one.
+    if fragment.is_empty() || fragment == complete || !complete.contains(fragment) {
+        return fragment.to_owned();
+    }
+    complete.to_owned()
+}
+
+/// Read a file's lines for snippet repair. A missing, oversized or non-UTF-8 file simply
+/// yields no repair material; search results must still be returned.
+fn repair_source(workspace: &Workspace, path: &Path) -> Option<Vec<String>> {
+    let absolute = workspace.identity.root.join(path);
+    let metadata = std::fs::metadata(&absolute).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_SNIPPET_REPAIR_BYTES {
+        return None;
+    }
+    let text = std::fs::read_to_string(&absolute).ok()?;
+    Some(text.lines().map(str::to_owned).collect())
+}
+
 fn normalize_search_hit(workspace: &Workspace, hit: ForkSearchHit) -> Result<SearchHit> {
     let path = workspace.normalize_result(Path::new(&hit.path))?;
     let path = path
@@ -676,6 +715,9 @@ fn normalize_search_hit(workspace: &Workspace, hit: ForkSearchHit) -> Result<Sea
             detail: "result path is not valid UTF-8".into(),
         })?
         .to_owned();
+    // Read once per hit, not once per line: a snippet has at most a handful of lines and they
+    // all come from the same file.
+    let source = repair_source(workspace, Path::new(&path));
     let snippets = hit
         .snippets
         .into_iter()
@@ -689,9 +731,16 @@ fn normalize_search_hit(workspace: &Workspace, hit: ForkSearchHit) -> Result<Sea
                             operation: "rgai search",
                             detail: "line number exceeds the protocol range".into(),
                         })?;
+                    // Line numbers are 1-based in every engine that produces them.
+                    let actual = source
+                        .as_ref()
+                        .and_then(|lines| {
+                            line.line.checked_sub(1).and_then(|index| lines.get(index))
+                        })
+                        .map(String::as_str);
                     Ok(SearchLine {
                         line: line_number,
-                        text: line.text,
+                        text: repair_snippet_line(&line.text, actual),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -969,7 +1018,7 @@ mod tests {
 
     use super::{
         MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, fork_search_args, fuse, push_warning,
-        validate_fork_search_config,
+        repair_snippet_line, validate_fork_search_config,
     };
     use crate::candidate::RetrievedCandidate;
 
@@ -1009,6 +1058,52 @@ mod tests {
                 "{mode:?} must keep the requested scope as the search path"
             );
         }
+    }
+
+    /// Semantic search returned source truncated mid-token. grepai chunks are byte windows,
+    /// so the first line of a chunk can begin mid-identifier, and that fragment was emitted
+    /// as a `SearchLine` — a field whose whole meaning is "the text of this line". Observed
+    /// live: line 194 of `hook_runner.rs` came back as `en(Value::as_str) else {`, the tail
+    /// of `.and_then(Value::as_str) else {`. Code that looks real and does not parse is worse
+    /// for a model than no code at all.
+    #[test]
+    fn test_a_chunk_boundary_fragment_is_completed_from_the_recorded_line() {
+        let actual = "    let Some(prompt) = input.pointer(\"/tool_input/prompt\").and_then(Value::as_str) else {";
+
+        assert_eq!(
+            repair_snippet_line("en(Value::as_str) else {", Some(actual)),
+            actual.trim(),
+            "a fragment of the recorded line must be completed to the whole line"
+        );
+    }
+
+    /// Repair must be provably safe. The index can be older than the file, so a fragment is
+    /// only completed when it really is part of the line the engine pointed at; otherwise the
+    /// engine's text is preserved rather than replaced with an unrelated line.
+    #[test]
+    fn test_repair_never_invents_a_line_it_cannot_verify() {
+        let actual = "    let total = compute(input);";
+
+        assert_eq!(
+            repair_snippet_line("fn something_else() {", Some(actual)),
+            "fn something_else() {",
+            "a fragment that is not part of the recorded line must be left untouched"
+        );
+        assert_eq!(
+            repair_snippet_line("let total = compute(input);", Some(actual)),
+            "let total = compute(input);",
+            "an already-complete line must not change"
+        );
+        assert_eq!(
+            repair_snippet_line("let total = compute(input);", None),
+            "let total = compute(input);",
+            "an unreadable file must not lose the engine's text"
+        );
+        assert_eq!(
+            repair_snippet_line("", Some(actual)),
+            "",
+            "an empty fragment carries no proof of belonging to this line"
+        );
     }
 
     /// The exact/ranked distinction must survive the fix: `--literal` is what makes exact
