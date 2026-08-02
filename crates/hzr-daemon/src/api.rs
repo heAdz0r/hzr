@@ -5,7 +5,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use axum::Json;
 use axum::extract::{Path as AxumPath, State};
 use hzr_context::{ContextError, PlanRequest, SearchRequest};
-use hzr_core::{Ledger, LedgerRecord, locked_engines};
+use hzr_core::{
+    Ledger, LedgerRecord, ProjectOperationRoute, ProjectOperationSummary, locked_engines,
+};
 use hzr_exec::{
     CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent, ExecutionEnvelope,
     ExecutionOutcome, ForkCoreInvocation, NotStarted, PINNED_RTK_VERSION, RewriteDecision,
@@ -29,17 +31,17 @@ use hzr_protocol::{
     DashboardMemoryObservatory, DashboardMemoryRetrieval, DashboardMemoryTopic,
     DashboardMemoryTopicDetails, DashboardObservedUsage, DashboardOperationRoute, DashboardProject,
     DashboardProjectArtifacts, DashboardProjectState, DashboardProviderReceiptState,
-    DashboardProviderReceipts, DashboardResponse, DashboardSemanticCanary, DashboardService,
+    DashboardProviderReceipts, DashboardResponse, DashboardSearchActivity, DashboardService,
     DashboardState, EngineHealth, EngineState, ExecApiRequest, ExecApprovalApiRequest,
     ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryImportance,
     MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest, MemoryWriteScope,
-    PROTOCOL_VERSION, SearchApiRequest, SearchApiResponse, SearchMode, SearchStrategy, TraceId,
-    UsageApiRequest, UsageApiResponse,
+    PROTOCOL_VERSION, SearchApiRequest, SearchApiResponse, TraceId, UsageApiRequest,
+    UsageApiResponse,
 };
 
 use crate::approval::PendingApproval;
 use crate::error::ApiError;
-use crate::state::{AppState, CachedSemanticCanary, MemoryStartState};
+use crate::state::{AppState, MemoryStartState};
 
 pub async fn health(State(state): State<AppState>) -> Result<Json<HealthResponse>, ApiError> {
     let (memory_health, _) = memory_engine_health(&state).await;
@@ -205,9 +207,10 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
         ),
     };
 
+    let search_activity = dashboard_search_activity(&activity.recent_operations);
     let (memory_observatory, index_observatory) = tokio::join!(
         dashboard_memory_observatory(&state, selected.as_ref(), &memory_health, memory_retrieval,),
-        dashboard_index_observatory(&state, selected.as_ref()),
+        dashboard_index_observatory(&state, selected.as_ref(), search_activity),
     );
 
     let mut services = Vec::with_capacity(4);
@@ -239,7 +242,12 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
     }
     if let Some(grepai) = services.iter_mut().find(|service| service.id == "grepai") {
         grepai.state = index_observatory.state;
-        grepai.detail = index_observatory.semantic.detail.clone();
+        grepai.detail = match index_observatory.state {
+            DashboardState::Ready => "Managed index artifacts and watcher are ready".into(),
+            DashboardState::Rebuilding => "Managed index artifacts are warming".into(),
+            DashboardState::Degraded => index_observatory.watcher.detail.clone(),
+            _ => "Managed index is waiting for its watcher".into(),
+        };
     }
     let overall_state = dashboard_overall_state(&services);
     let reduction_pct = signed_percentage(
@@ -248,7 +256,7 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
     );
     let mut notes = vec![
         "Provider-observed usage and UTF-8-byte estimates are displayed separately.".into(),
-        "The grepai semantic canary is cached for 30 seconds and never credits the usage ledger."
+        "grepai traffic is shown only when a real HZR-routed search exists in the project ledger."
             .into(),
         "The visualizer is local-only and exposes no engine lifecycle mutations.".into(),
     ];
@@ -589,6 +597,7 @@ fn empty_memory_observatory(
 async fn dashboard_index_observatory(
     state: &AppState,
     selected: Option<&WorkspaceRegistration>,
+    search_activity: DashboardSearchActivity,
 ) -> DashboardIndexObservatory {
     let observed_at_ms = now_ms().unwrap_or_default();
     let Some(registration) = selected else {
@@ -597,6 +606,7 @@ async fn dashboard_index_observatory(
             DashboardState::Standby,
             observed_at_ms,
             "No registered project is selected".into(),
+            search_activity,
         );
     };
     let initial = match state.context.index_status(&registration.root).await {
@@ -607,127 +617,18 @@ async fn dashboard_index_observatory(
                 DashboardState::Degraded,
                 observed_at_ms,
                 format!("grepai index status failed: {error}"),
+                search_activity,
             );
         }
     };
-    let generation = initial
-        .index
-        .generation
-        .as_ref()
-        .map(|generation| generation.generation.clone());
-    let semantic = semantic_canary(state, registration, generation.clone()).await;
-    index_snapshot_observatory(registration, observed_at_ms, initial, semantic)
-}
-
-async fn semantic_canary(
-    state: &AppState,
-    registration: &WorkspaceRegistration,
-    generation: Option<String>,
-) -> DashboardSemanticCanary {
-    const QUERY: &str = "repository architecture and main implementation";
-    const CANARY_TIMEOUT: Duration = Duration::from_secs(15);
-    const READY_CACHE_TTL: Duration = Duration::from_secs(30);
-    const RETRY_CACHE_TTL: Duration = Duration::from_secs(2);
-
-    let mut cache = state.semantic_canary.lock().await;
-    if let Some(cached) = cache.as_ref().filter(|cached| {
-        cached.generation == generation
-            && cached.checked_at.elapsed()
-                < if cached.snapshot.state == DashboardState::Ready {
-                    READY_CACHE_TTL
-                } else {
-                    RETRY_CACHE_TTL
-                }
-    }) {
-        return cached.snapshot.clone();
-    }
-    let checked_at_ms = now_ms().ok();
-    let started_at = Instant::now();
-    let result = tokio::time::timeout(
-        CANARY_TIMEOUT,
-        state.context.search_unaccounted(SearchRequest {
-            workspace: registration.root.clone(),
-            query: QUERY.into(),
-            path: None,
-            limit: 3,
-            mode: SearchMode::Semantic,
-            include_content: false,
-        }),
-    )
-    .await;
-    let snapshot = match result {
-        Ok(Ok(response)) => {
-            let adaptive = response.strategy == SearchStrategy::ForkRgaiAdaptive
-                && response.fallback_reason.is_none();
-            DashboardSemanticCanary {
-                state: if adaptive {
-                    DashboardState::Ready
-                } else {
-                    DashboardState::Degraded
-                },
-                checked_at_ms,
-                latency_ms: elapsed_ms(started_at),
-                query: QUERY.into(),
-                total_hits: response.total_hits,
-                shown_hits: response.shown_hits,
-                scanned_files: response.scanned_files,
-                strategy: Some(
-                    match response.strategy {
-                        SearchStrategy::ForkRgaiAdaptive => "fork_rgai_adaptive",
-                        SearchStrategy::ForkRgaiBuiltin => "fork_rgai_builtin",
-                    }
-                    .into(),
-                ),
-                backend: Some("grepai_semantic".into()),
-                generation: response.index_generation,
-                detail: response.fallback_reason.unwrap_or_else(|| {
-                    format!(
-                        "Semantic search executed successfully and returned {} visible hit(s)",
-                        response.shown_hits
-                    )
-                }),
-            }
-        }
-        Ok(Err(error)) => DashboardSemanticCanary {
-            state: DashboardState::Degraded,
-            checked_at_ms,
-            latency_ms: elapsed_ms(started_at),
-            query: QUERY.into(),
-            total_hits: 0,
-            shown_hits: 0,
-            scanned_files: 0,
-            strategy: None,
-            backend: None,
-            generation: generation.clone(),
-            detail: format!("Semantic canary failed: {error}"),
-        },
-        Err(_) => DashboardSemanticCanary {
-            state: DashboardState::Rebuilding,
-            checked_at_ms,
-            latency_ms: elapsed_ms(started_at),
-            query: QUERY.into(),
-            total_hits: 0,
-            shown_hits: 0,
-            scanned_files: 0,
-            strategy: None,
-            backend: None,
-            generation: generation.clone(),
-            detail: "Semantic canary exceeded its 15-second bounded observability budget".into(),
-        },
-    };
-    *cache = Some(CachedSemanticCanary {
-        generation,
-        checked_at: Instant::now(),
-        snapshot: snapshot.clone(),
-    });
-    snapshot
+    index_snapshot_observatory(registration, observed_at_ms, initial, search_activity)
 }
 
 fn index_snapshot_observatory(
     registration: &WorkspaceRegistration,
     observed_at_ms: u64,
     snapshot: IndexCoordinatorSnapshot,
-    semantic: DashboardSemanticCanary,
+    search_activity: DashboardSearchActivity,
 ) -> DashboardIndexObservatory {
     let watcher_state = match snapshot.watcher.state {
         IndexWatcherState::Live => DashboardState::Ready,
@@ -745,13 +646,9 @@ fn index_snapshot_observatory(
     };
     let artifact_ready =
         artifacts.initialized && artifacts.vectors_present && artifacts.symbols_present;
-    let state = if semantic.state == DashboardState::Degraded
-        || watcher_state == DashboardState::Degraded
-    {
+    let state = if watcher_state == DashboardState::Degraded {
         DashboardState::Degraded
-    } else if semantic.state == DashboardState::Rebuilding {
-        DashboardState::Rebuilding
-    } else if artifact_ready && semantic.state == DashboardState::Ready {
+    } else if artifact_ready && watcher_state == DashboardState::Ready {
         DashboardState::Ready
     } else {
         DashboardState::Rebuilding
@@ -782,7 +679,7 @@ fn index_snapshot_observatory(
                 IndexWatcherState::Failed => "Managed watcher exited unexpectedly".into(),
             },
         },
-        semantic,
+        search_activity,
         diagnostic_command: "hzr index status --workspace .".into(),
     }
 }
@@ -792,6 +689,7 @@ fn empty_index_observatory(
     state: DashboardState,
     observed_at_ms: u64,
     detail: String,
+    search_activity: DashboardSearchActivity,
 ) -> DashboardIndexObservatory {
     DashboardIndexObservatory {
         state,
@@ -808,20 +706,41 @@ fn empty_index_observatory(
             ready_marker_observed: false,
             detail: detail.clone(),
         },
-        semantic: DashboardSemanticCanary {
-            state,
-            checked_at_ms: None,
-            latency_ms: 0,
-            query: "repository architecture and main implementation".into(),
-            total_hits: 0,
-            shown_hits: 0,
-            scanned_files: 0,
-            strategy: None,
-            backend: None,
-            generation: None,
-            detail,
-        },
+        search_activity,
         diagnostic_command: "hzr index status --workspace .".into(),
+    }
+}
+
+fn dashboard_search_activity(operations: &[ProjectOperationSummary]) -> DashboardSearchActivity {
+    let Some(operation) = operations.iter().find(|operation| {
+        operation.route == ProjectOperationRoute::Optimized
+            && matches!(operation.operation.as_str(), "rgai" | "search")
+    }) else {
+        return DashboardSearchActivity {
+            state: DashboardState::Standby,
+            ledger_id: None,
+            observed_at: None,
+            command: None,
+            working_directory: None,
+            agent: None,
+            session_id: None,
+            route: None,
+            execution_ms: None,
+            detail: "No routed HZR search is present in the recent project ledger window".into(),
+        };
+    };
+
+    DashboardSearchActivity {
+        state: DashboardState::Ready,
+        ledger_id: Some(operation.ledger_id),
+        observed_at: Some(operation.timestamp.clone()),
+        command: Some(operation.original_command.clone()),
+        working_directory: Some(operation.working_directory.clone()),
+        agent: operation.agent.clone(),
+        session_id: operation.session_id.clone(),
+        route: Some(DashboardOperationRoute::Optimized),
+        execution_ms: Some(operation.execution_ms),
+        detail: "Observed from a real HZR-routed search recorded in the project ledger".into(),
     }
 }
 
@@ -1857,10 +1776,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        ManagedExecutionBudget, caveman_engine_health, memory_ready_state, overall_engine_state,
-        validate_managed_fork_tool,
+        ManagedExecutionBudget, caveman_engine_health, dashboard_search_activity,
+        memory_ready_state, overall_engine_state, validate_managed_fork_tool,
     };
-    use hzr_protocol::{EngineHealth, EngineState};
+    use hzr_core::{ProjectOperationRoute, ProjectOperationSummary};
+    use hzr_protocol::{DashboardOperationRoute, DashboardState, EngineHealth, EngineState};
 
     fn engine(name: &str, state: EngineState) -> EngineHealth {
         EngineHealth {
@@ -1956,6 +1876,69 @@ mod tests {
         assert_eq!(state, hzr_protocol::EngineState::Ready);
         assert!(detail.contains("FTS5"));
         assert!(detail.contains("embeddings are disabled"));
+    }
+
+    #[test]
+    fn index_observatory_reports_only_a_real_recorded_hzr_search() {
+        let operations = vec![
+            ProjectOperationSummary {
+                ledger_id: 42,
+                timestamp: "2026-08-02T16:00:00Z".into(),
+                operation: "read".into(),
+                route: ProjectOperationRoute::Optimized,
+                original_command: "read README.md".into(),
+                recorded_command: "rtk read".into(),
+                working_directory: "/work/hzr".into(),
+                agent: Some("codex".into()),
+                session_id: Some("task-42".into()),
+                baseline_tokens_estimated: 10,
+                delivered_tokens_estimated: 5,
+                net_avoided_tokens_estimated: 5,
+                execution_ms: 3,
+                replacement: None,
+                rationale: None,
+            },
+            ProjectOperationSummary {
+                ledger_id: 41,
+                timestamp: "2026-08-02T15:59:00Z".into(),
+                operation: "rgai".into(),
+                route: ProjectOperationRoute::Optimized,
+                original_command: "grepai search 'real routed query' .".into(),
+                recorded_command: "rtk rgai".into(),
+                working_directory: "/work/hzr".into(),
+                agent: Some("codex".into()),
+                session_id: Some("task-41".into()),
+                baseline_tokens_estimated: 120,
+                delivered_tokens_estimated: 30,
+                net_avoided_tokens_estimated: 90,
+                execution_ms: 17,
+                replacement: None,
+                rationale: None,
+            },
+        ];
+
+        let activity = dashboard_search_activity(&operations);
+
+        assert_eq!(activity.state, DashboardState::Ready);
+        assert_eq!(activity.ledger_id, Some(41));
+        assert_eq!(
+            activity.command.as_deref(),
+            Some("grepai search 'real routed query' .")
+        );
+        assert_eq!(activity.route, Some(DashboardOperationRoute::Optimized));
+        assert_eq!(activity.agent.as_deref(), Some("codex"));
+        assert_eq!(activity.session_id.as_deref(), Some("task-41"));
+        assert_eq!(activity.execution_ms, Some(17));
+    }
+
+    #[test]
+    fn index_observatory_does_not_invent_search_traffic() {
+        let activity = dashboard_search_activity(&[]);
+
+        assert_eq!(activity.state, DashboardState::Standby);
+        assert_eq!(activity.ledger_id, None);
+        assert_eq!(activity.command, None);
+        assert!(activity.detail.contains("No routed HZR search"));
     }
 
     #[test]

@@ -441,17 +441,16 @@ pub struct DashboardIndexWatcher {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct DashboardSemanticCanary {
+pub struct DashboardSearchActivity {
     pub state: DashboardState,
-    pub checked_at_ms: Option<u64>,
-    pub latency_ms: u64,
-    pub query: String,
-    pub total_hits: usize,
-    pub shown_hits: usize,
-    pub scanned_files: usize,
-    pub strategy: Option<String>,
-    pub backend: Option<String>,
-    pub generation: Option<String>,
+    pub ledger_id: Option<u64>,
+    pub observed_at: Option<String>,
+    pub command: Option<String>,
+    pub working_directory: Option<String>,
+    pub agent: Option<String>,
+    pub session_id: Option<String>,
+    pub route: Option<DashboardOperationRoute>,
+    pub execution_ms: Option<u64>,
     pub detail: String,
 }
 
@@ -464,7 +463,7 @@ pub struct DashboardIndexObservatory {
     pub config_fingerprint: Option<String>,
     pub artifacts: DashboardIndexArtifacts,
     pub watcher: DashboardIndexWatcher,
-    pub semantic: DashboardSemanticCanary,
+    pub search_activity: DashboardSearchActivity,
     pub diagnostic_command: String,
 }
 

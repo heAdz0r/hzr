@@ -257,7 +257,7 @@ onBeforeUnmount(() => {
             </div>
             <p>
               One persistent daemon supervises fork-core, ICM, and each project watcher.
-              Readiness comes from live protocol and canary evidence.
+              Readiness comes from live protocol, managed watcher, and artifact evidence.
             </p>
           </div>
           <div class="service-flow">
@@ -303,37 +303,43 @@ onBeforeUnmount(() => {
             <div class="observatory-head">
               <div>
                 <span class="eyebrow">grepai index observatory</span>
-                <h2>From files to semantic proof.</h2>
-                <p>{{ snapshot.index_observatory.semantic.detail }}</p>
+                <h2>Index health, without synthetic traffic.</h2>
+                <p>{{ snapshot.index_observatory.watcher.detail }}. Routed activity is ledger-backed only.</p>
               </div>
               <StatusChip :state="snapshot.index_observatory.state" />
             </div>
             <IndexPipeline :observatory="snapshot.index_observatory" />
-            <div class="canary-card">
-              <div class="canary-orb" :class="`canary-${snapshot.index_observatory.semantic.state}`">
+            <div class="search-activity-card">
+              <div class="search-activity-orb" :class="`search-activity-${snapshot.index_observatory.search_activity.state}`">
                 <AppIcon name="search" :size="24" />
               </div>
-              <div>
-                <span>Live semantic canary</span>
-                <strong>“{{ snapshot.index_observatory.semantic.query }}”</strong>
+              <div v-if="snapshot.index_observatory.search_activity.command">
+                <span>Latest routed HZR search · ledger #{{ snapshot.index_observatory.search_activity.ledger_id }}</span>
+                <strong :title="snapshot.index_observatory.search_activity.command">
+                  {{ snapshot.index_observatory.search_activity.command }}
+                </strong>
                 <small>
-                  {{ formatCount(snapshot.index_observatory.semantic.scanned_files) }} files scanned ·
-                  {{ formatCount(snapshot.index_observatory.semantic.total_hits) }} total hits ·
-                  {{ snapshot.index_observatory.semantic.backend ?? "backend unavailable" }} ·
-                  {{ snapshot.index_observatory.semantic.latency_ms }}ms
+                  {{ snapshot.index_observatory.search_activity.agent ?? "Unattributed agent" }} ·
+                  {{ snapshot.index_observatory.search_activity.working_directory ?? "Unknown directory" }} ·
+                  {{ snapshot.index_observatory.search_activity.execution_ms ?? 0 }}ms
                 </small>
+              </div>
+              <div v-else>
+                <span>No routed HZR search observed</span>
+                <strong>The dashboard does not generate probe queries.</strong>
+                <small>Waiting for a real search in this project's recent accounting ledger.</small>
               </div>
             </div>
             <dl class="index-evidence">
-              <div><dt>Generation</dt><dd :title="snapshot.index_observatory.generation ?? undefined">{{ snapshot.index_observatory.generation ?? "Unavailable" }}</dd></div>
+              <div><dt>Index status</dt><dd>{{ snapshot.index_observatory.artifacts.initialized ? "Initialized" : "Warming" }}</dd></div>
               <div><dt>Watcher</dt><dd>{{ snapshot.index_observatory.watcher.detail }}</dd></div>
               <div>
-                <dt>Last proof</dt>
-                <dd>{{ snapshot.index_observatory.semantic.checked_at_ms ? relativeTime(snapshot.index_observatory.semantic.checked_at_ms) : "Not checked" }}</dd>
+                <dt>Latest routed search</dt>
+                <dd>{{ snapshot.index_observatory.search_activity.observed_at ? relativeTime(Date.parse(snapshot.index_observatory.search_activity.observed_at)) : "None observed" }}</dd>
               </div>
               <div><dt>Artifacts</dt><dd>{{ formatBytes(snapshot.index_observatory.artifacts.size_bytes) }} · {{ snapshot.index_observatory.artifacts.modified_at_ms ? relativeTime(snapshot.index_observatory.artifacts.modified_at_ms) : "No files" }}</dd></div>
               <div><dt>Watcher age</dt><dd>{{ snapshot.index_observatory.watcher.uptime_ms !== null ? formatDuration(snapshot.index_observatory.watcher.uptime_ms) : "Standby" }}</dd></div>
-              <div><dt>Config fingerprint</dt><dd :title="snapshot.index_observatory.config_fingerprint ?? undefined">{{ snapshot.index_observatory.config_fingerprint ?? "Unavailable" }}</dd></div>
+              <div><dt>Ownership</dt><dd>{{ snapshot.index_observatory.watcher.owned_by_hzr ? "HZR managed" : "Not attached" }}</dd></div>
             </dl>
           </article>
         </section>

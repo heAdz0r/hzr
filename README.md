@@ -164,7 +164,7 @@ http://127.0.0.1:47391/
 The visualizer is a Bun-built Vue application shipped as static bundle assets and served
 by the existing `hzrd`; it is not a second service or control plane. It shows registered
 projects, HZR/RTK fork-core/ICM/grepai state, versions, an interactive Cytoscape memory
-explorer, grepai watcher and semantic-canary proof, live routed output activity, provider receipts,
+explorer, grepai artifact/watcher readiness and ledger-backed routed search activity, provider receipts,
 separately labeled estimates, and copyable diagnostic commands. Background synchronization is
 quiet: it preserves scroll, graph camera, topic selection, and expanded activity while the manual
 Refresh control stays under operator control. A topic expands into bounded project-scoped memory

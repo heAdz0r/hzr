@@ -2,6 +2,17 @@
 
 All notable HZR changes are documented here. HZR follows semantic versioning while the public API is in `0.x` development.
 
+## [Unreleased]
+
+### Fixed
+
+- The grepai observatory no longer runs a hard-coded semantic canary and presents it as live user
+  traffic. Index readiness now comes from managed watcher and artifact evidence; the routed-search
+  card is populated only by a real optimized HZR search in the selected project's recent ledger,
+  with exact command, directory, latency, and available attribution. When no such request exists,
+  the UI states that no routed search was observed. Volatile index generation and configuration
+  hashes are no longer shown as operator-facing activity.
+
 ## [0.3.3] - 2026-08-02
 
 ### Fixed
