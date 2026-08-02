@@ -20,7 +20,7 @@ results are accounted:
 | `hzr_search` | Find code by intent (`mode: "semantic"`) or by exact pattern (`mode: "exact"`). |
 | `hzr_memory_recall` | Recall durable facts, past decisions and resolved errors before re-reading earlier work. |
 | `hzr_memory_store` | Persist a decision, resolved error, user preference or finished handoff. Not ephemeral state or raw tool output. |
-| `hzr_codec` | Compress a long prose answer while provably preserving code, commands, paths, identifiers, errors and numbers. Use `profile: "shadow"` to measure the saving without changing the text. |
+| `hzr_codec` | Remove exact duplicate paragraphs from a long answer while provably preserving code, commands, paths, identifiers, errors and numbers. It does not reword or summarise prose, so text with no repetition comes back byte-identical. Use `profile: "shadow"` to measure the counterfactual without changing the text. |
 
 The gateway negotiates the latest stable MCP revision it supports
 (`2025-11-25`) while retaining compatible older revisions. Tools publish JSON
@@ -50,11 +50,12 @@ dies.
 
 ```text
 Context  -> hzr context plan "<intent>"
+Map      -> hzr rtk -- memory explore <dir>   (entry points, hot paths, API surface)
 Memory   -> hzr memory recall|store   (see scopes below)
 Semantic -> hzr rgai "<intent>"
-Literal  -> hzr search "<pattern>" --mode exact [--path DIR ...]
+Literal  -> hzr search "<pattern>" --mode exact [--path FILE|DIR ...]
 Ranked   -> hzr search "<terms>" --mode auto
-Read     -> hzr rtk -- read <file> [--from N --to M | --outline | --changed | -n]
+Read     -> hzr rtk -- read <file> [--from N --to M | --outline | --symbols | --changed | -n]
 Write    -> hzr rtk -- write patch|replace|set ...
 Density  -> hzr codec compile --profile shadow|adaptive|compact
 Raw      -> hzr rtk -- raw <command...>   (escape hatch — see the cost below)
@@ -87,6 +88,7 @@ source of avoidable output:
 hzr rtk -- read <file> --from 120 --to 180   # a line span  (instead of `sed -n 120,180p`)
 hzr rtk -- read <file> -n                    # with line numbers (instead of `nl -ba`)
 hzr rtk -- read <file> --outline             # structure only, ~98% smaller
+hzr rtk -- read <file> --symbols             # the same structure as JSON, with line spans
 hzr rtk -- read <file> --changed             # only the working-tree hunks
 hzr rtk -- read <file> --since HEAD~3        # only what changed since a revision
 hzr rtk -- read <file> --max-lines N         # head(1)
@@ -144,6 +146,18 @@ back to the same pinned HZR fork-core when the daemon is unavailable. A
 degraded rewrite preserves command policy but is absent from the managed usage
 ledger; `hzr doctor` and `hzr stats` report that incomplete accounting instead of
 hiding it.
+
+## What the hook covers, and what only you can
+
+The `PreToolUse` hook matches `Bash`, `Agent` and `Task`. It does **not** see your host's
+own file tools, so nothing mechanically redirects a native `Read`, `Grep`, `Edit`, `Write`
+or `Glob` — and nothing records one either. Those calls are absent from `hzr stats` on both
+sides of its ratio, so a session that reads files natively shows a high reduction over a
+small measured fraction of what it actually spent.
+
+That makes the table above your responsibility rather than the hook's. Reaching for a native
+file tool is not blocked and is sometimes right; it is simply invisible, so prefer the `hzr`
+command whenever one exists.
 
 Prefer the bounded HZR planner for discovery. Never create a second `.grepai` index,
 a second ICM database, or parallel RTK hooks.

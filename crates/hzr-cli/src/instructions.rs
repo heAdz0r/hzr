@@ -134,6 +134,12 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          falls back to the same pinned fork-core when the daemon is down. A degraded\n\
          rewrite keeps command policy but is absent from the usage ledger; `hzr doctor`\n\
          and `hzr stats` report that incomplete accounting rather than hiding it.\n\n\
+         The hook matches `Bash`, `Agent` and `Task` only. It does **not** see your host's\n\
+         own `Read`, `Grep`, `Edit`, `Write` or `Glob`, so nothing redirects those calls and\n\
+         nothing records them — they are absent from `hzr stats` entirely. The table above is\n\
+         therefore yours to follow, not something the hook enforces: a native file tool is\n\
+         allowed and sometimes right, but it is invisible, so prefer the `hzr` command\n\
+         whenever one exists.\n\n\
          {END}"
     )
 }

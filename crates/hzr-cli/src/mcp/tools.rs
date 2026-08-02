@@ -250,11 +250,13 @@ pub(super) fn tool_definitions() -> Vec<Value> {
         json!({
             "name": "hzr_codec",
             "title": "Compile an HZR Response-Density Contract",
-            "description": "Compress prose while provably preserving code, commands, paths, \
-        identifiers, errors, numbers and URLs. Use before emitting a long natural-language \
-        answer, or with profile \"shadow\" to measure what compression would have saved \
-        without changing the text. Protected spans are verified after the transform: if any \
-        of them changed, the call fails rather than returning altered technical content.",
+            "description": "Remove exact duplicate paragraphs from a long answer while provably \
+        preserving code, commands, paths, identifiers, errors, numbers and URLs. It is a \
+        structural transform, not a summariser: it never rewords prose, so text with no \
+        repeated paragraph comes back byte-identical and that is a correct result, not a \
+        failure. Use profile \"shadow\" to measure the counterfactual without changing the \
+        text. Protected spans are verified after the transform: if any of them changed, the \
+        call fails rather than returning altered technical content.",
             "inputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
