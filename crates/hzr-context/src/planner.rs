@@ -429,43 +429,30 @@ impl ContextPlanner {
             field: "path",
             reason: "path must be valid UTF-8".into(),
         })?;
-        let mut args = vec![
-            "rgai".into(),
-            request.query.clone(),
-            "--path".into(),
-            path_text.into(),
-            "--max".into(),
-            request.limit.to_string(),
-            "--json".into(),
-        ];
+        let root_text =
+            workspace
+                .identity
+                .root
+                .to_str()
+                .ok_or_else(|| ContextError::InvalidRequest {
+                    field: "workspace",
+                    reason: "workspace root must be valid UTF-8".into(),
+                })?;
         let strategy = if request.mode == SearchMode::Exact {
-            // `--literal` matches the query verbatim and case-sensitively, and implies
-            // `--builtin`. Sending only `--builtin` handed the query to the ranked term
-            // model, which lowercases it, splits it on non-alphanumerics, drops stop words
-            // and stems the rest — so "exact" returned every file containing any one of the
-            // surviving tokens, and agents learned to distrust the mode entirely.
-            args.push("--literal".into());
             SearchStrategy::ForkRgaiBuiltin
         } else {
             self.ensure_managed_fork_search_config(workspace, account_usage)
                 .await?;
-            args.push("--project-root".into());
-            args.push(
-                workspace
-                    .identity
-                    .root
-                    .to_str()
-                    .ok_or_else(|| ContextError::InvalidRequest {
-                        field: "workspace",
-                        reason: "workspace root must be valid UTF-8".into(),
-                    })?
-                    .into(),
-            );
             SearchStrategy::ForkRgaiAdaptive
         };
-        if !request.include_content {
-            args.push("--compact".into());
-        }
+        let args = fork_search_args(
+            &request.query,
+            Path::new(path_text),
+            Path::new(root_text),
+            request.mode,
+            request.limit,
+            request.include_content,
+        );
         let raw: ForkSearchOutput = self
             .run_fork_json(
                 args,
@@ -818,6 +805,46 @@ fn add_source(
     }
 }
 
+/// Build the fork-core `rgai` argument list.
+///
+/// `--project-root` is passed for every mode, not only the ranked ones. The fork treats
+/// `--path` as the project root when no root is given, so an exact search scoped to a
+/// single file failed with "project root is not a directory" — surfaced to the agent as
+/// an opaque HTTP 503 — while the identical semantic search worked. Scope and project
+/// identity are different things and are now always sent as different arguments.
+fn fork_search_args(
+    query: &str,
+    path: &Path,
+    workspace_root: &Path,
+    mode: SearchMode,
+    limit: usize,
+    include_content: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "rgai".into(),
+        query.to_owned(),
+        "--path".into(),
+        path.to_string_lossy().into_owned(),
+        "--project-root".into(),
+        workspace_root.to_string_lossy().into_owned(),
+        "--max".into(),
+        limit.to_string(),
+        "--json".into(),
+    ];
+    if mode == SearchMode::Exact {
+        // `--literal` matches the query verbatim and case-sensitively, and implies
+        // `--builtin`. Sending only `--builtin` handed the query to the ranked term
+        // model, which lowercases it, splits it on non-alphanumerics, drops stop words
+        // and stems the rest — so "exact" returned every file containing any one of the
+        // surviving tokens, and agents learned to distrust the mode entirely.
+        args.push("--literal".into());
+    }
+    if !include_content {
+        args.push("--compact".into());
+    }
+    args
+}
+
 fn fuse(
     hard_token_limit: u64,
     sources: Vec<(f32, Vec<RetrievedCandidate>)>,
@@ -937,14 +964,82 @@ mod tests {
 
     use hzr_protocol::{
         CandidateSource, ContextCandidate, ContextWarning, ContextWarningCode, Provenance,
-        TokenCount, TokenCountSource,
+        SearchMode, TokenCount, TokenCountSource,
     };
 
     use super::{
-        MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, fuse, push_warning,
+        MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, fork_search_args, fuse, push_warning,
         validate_fork_search_config,
     };
     use crate::candidate::RetrievedCandidate;
+
+    /// `--path` is how an agent narrows a search, and a single file is the most natural way
+    /// to narrow one — it is what the native Grep tool accepts. Exact mode passed the path
+    /// through as the fork's *project root*, so any file path failed with
+    /// "project root is not a directory" surfaced as an opaque HTTP 503, while the same
+    /// query in semantic mode worked because only that branch pinned the root.
+    #[test]
+    fn test_exact_search_scoped_to_a_single_file_pins_the_project_root() {
+        for mode in [SearchMode::Exact, SearchMode::Semantic, SearchMode::Auto] {
+            let args = fork_search_args(
+                "needle",
+                std::path::Path::new("crates/hzr-cli/src/mcp.rs"),
+                std::path::Path::new("/repo"),
+                mode,
+                10,
+                false,
+            );
+
+            let root = args
+                .iter()
+                .position(|argument| argument == "--project-root")
+                .map(|index| args[index + 1].as_str());
+            assert_eq!(
+                root,
+                Some("/repo"),
+                "{mode:?} must pin the workspace root so --path can be a file"
+            );
+            let path = args
+                .iter()
+                .position(|argument| argument == "--path")
+                .map(|index| args[index + 1].as_str());
+            assert_eq!(
+                path,
+                Some("crates/hzr-cli/src/mcp.rs"),
+                "{mode:?} must keep the requested scope as the search path"
+            );
+        }
+    }
+
+    /// The exact/ranked distinction must survive the fix: `--literal` is what makes exact
+    /// mode exact, and it must not leak into the ranked modes.
+    #[test]
+    fn test_only_exact_mode_asks_the_fork_for_a_literal_match() {
+        let exact = fork_search_args(
+            "fn handle_request",
+            std::path::Path::new("."),
+            std::path::Path::new("/repo"),
+            SearchMode::Exact,
+            10,
+            true,
+        );
+        assert!(exact.iter().any(|argument| argument == "--literal"));
+        assert!(
+            !exact.iter().any(|argument| argument == "--compact"),
+            "include_content must suppress --compact"
+        );
+
+        let ranked = fork_search_args(
+            "handle a request",
+            std::path::Path::new("."),
+            std::path::Path::new("/repo"),
+            SearchMode::Auto,
+            10,
+            false,
+        );
+        assert!(!ranked.iter().any(|argument| argument == "--literal"));
+        assert!(ranked.iter().any(|argument| argument == "--compact"));
+    }
 
     fn retrieved(
         id: &str,
