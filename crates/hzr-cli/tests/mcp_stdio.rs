@@ -130,11 +130,12 @@ fn test_stdio_mcp_negotiates_lists_typed_tools_and_exits_on_eof() -> anyhow::Res
 
 #[test]
 fn test_stdio_mcp_cancels_in_flight_tool_without_late_response() -> anyhow::Result<()> {
-    // Hosted runners can spend several seconds scheduling the freshly spawned MCP
-    // process under a full workspace test load. Keep the assertion bounded without
-    // treating scheduler latency as a protocol failure.
     let integration_timeout = Duration::from_secs(10);
     let directory = tempdir().expect("temporary MCP home");
+    let home_dir = directory.path().join("home");
+    let workspace_dir = directory.path().join("workspace");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&workspace_dir)?;
     let data_dir = directory.path().join("data");
     let runtime = data_dir.join("runtime");
     fs::create_dir_all(&runtime)?;
@@ -173,10 +174,10 @@ fn test_stdio_mcp_cancels_in_flight_tool_without_late_response() -> anyhow::Resu
             "mcp",
             "serve",
             "--workspace",
-            directory.path().to_str().expect("UTF-8 workspace path"),
+            workspace_dir.to_str().expect("UTF-8 workspace path"),
         ])
-        .env("HOME", directory.path())
-        .env("XDG_CONFIG_HOME", directory.path().join("xdg"))
+        .env("HOME", &home_dir)
+        .env("XDG_CONFIG_HOME", home_dir.join("xdg"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
