@@ -10,6 +10,9 @@ if [[ ! -f "${HZR_ARCHIVE}" || ! -f "${HZR_CHECKSUMS}" ]]; then
 fi
 
 HZR_SMOKE_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-install-smoke.XXXXXX")"
+# macOS exposes /var through /private/var. Match the installer's canonical paths so the
+# integration assertions test stable HZR locations instead of a lexical path alias.
+HZR_SMOKE_TEMP="$(cd -- "${HZR_SMOKE_TEMP}" && pwd -P)"
 cleanup_hzr_install_smoke() {
   if [[ -n "${HZR_SMOKE_DAEMON_PID:-}" ]]; then
     kill "${HZR_SMOKE_DAEMON_PID}" 2>/dev/null || true
