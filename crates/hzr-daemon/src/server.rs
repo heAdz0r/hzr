@@ -29,6 +29,13 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         .route("/v1/context/plan", post(api::context_plan))
         .route("/v1/memory/recall", post(api::memory_recall))
         .route("/v1/memory/store", post(api::memory_store))
+        .route("/v1/memory/forget", post(api::memory_forget))
+        .route("/v1/memory/update", post(api::memory_update))
+        .route("/v1/memory/prune", post(api::memory_prune))
+        .route(
+            "/v1/memory/topics/{topic_id}",
+            get(api::memory_topic_details),
+        )
         .route("/v1/exec/rewrite", post(api::exec_rewrite))
         .route("/v1/exec/run", post(api::exec_run))
         .route("/v1/exec/approval", post(api::exec_approval))
@@ -244,6 +251,23 @@ mod tests {
             .expect("response body");
         let payload: Value = serde_json::from_slice(&bytes).expect("valid JSON response");
         assert_eq!(payload["code"], "invalid_request");
+    }
+
+    #[tokio::test]
+    async fn test_full_memory_topic_details_require_bearer_authentication() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let response = test_router(&directory)
+            .await
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/memory/topics/{}", "a".repeat(64)))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

@@ -149,6 +149,20 @@ pub fn transform(
     })
 }
 
+pub fn transform_for_risk(
+    input: &str,
+    fidelity: FidelityClass,
+    profile: CodecProfile,
+    risk: RiskClass,
+) -> Result<Transform, CodecError> {
+    let effective_fidelity = if matches!(risk, RiskClass::High | RiskClass::Irreversible) {
+        FidelityClass::Exact
+    } else {
+        fidelity
+    };
+    transform(input, effective_fidelity, profile)
+}
+
 pub fn compact_catalog_description(input: &str) -> Result<Transform, CodecError> {
     transform(input, FidelityClass::LosslessStructural, CodecProfile::Safe)
 }
@@ -253,7 +267,7 @@ mod tests {
 
     use super::{
         Density, EconomicInput, choose_density, compact_catalog_description, protected_spans,
-        transform,
+        transform, transform_for_risk,
     };
 
     #[test]
@@ -350,6 +364,21 @@ mod tests {
             choose_density(CodecProfile::Compact, RiskClass::Irreversible, 2_000, true),
             Density::Normal
         );
+    }
+
+    #[test]
+    fn test_high_risk_content_is_never_changed() {
+        let input = "Step A must happen twice.\n\nStep A must happen twice.";
+        let result = transform_for_risk(
+            input,
+            FidelityClass::LosslessStructural,
+            CodecProfile::Compact,
+            RiskClass::High,
+        )
+        .expect("high-risk transform must succeed");
+
+        assert_eq!(result.content, input);
+        assert!(!result.changed);
     }
 
     #[test]

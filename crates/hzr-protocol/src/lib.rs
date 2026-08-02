@@ -16,8 +16,9 @@ pub use api::{
     DashboardProjectArtifacts, DashboardProjectState, DashboardProviderReceiptState,
     DashboardProviderReceipts, DashboardResponse, DashboardSearchActivity, DashboardService,
     DashboardState, ExecApiRequest, ExecApprovalApiRequest, ForkPlannerMetadata, ForkRunApiRequest,
-    ForkRunApiResponse, MemoryImportance, MemoryRecallApiRequest, MemoryScopeSelector,
-    MemoryStoreApiRequest, MemoryWriteScope, SearchApiRequest, SearchApiResponse, SearchHit,
+    ForkRunApiResponse, MemoryForgetApiRequest, MemoryImportance, MemoryMutationApiResponse,
+    MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest,
+    MemoryUpdateApiRequest, MemoryWriteScope, SearchApiRequest, SearchApiResponse, SearchHit,
     SearchLine, SearchMode, SearchSnippet, SearchStrategy, UsageApiRequest, UsageApiResponse,
 };
 

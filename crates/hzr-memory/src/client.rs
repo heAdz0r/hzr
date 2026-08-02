@@ -15,8 +15,8 @@ use crate::installation::{bounded_text, verify_installation};
 use crate::layout::IcmLayout;
 use crate::mcp::{self, SharedMcp};
 use crate::types::{
-    IcmTransport, MemoryRecord, MemoryStats, MemoryTransport, RecallRequest, ServiceHealth,
-    StoreReceipt, StoreRequest,
+    IcmTransport, Importance, MemoryRecord, MemoryStats, MemoryTransport, RecallRequest,
+    ServiceHealth, StoreReceipt, StoreRequest,
 };
 
 #[derive(Clone)]
@@ -224,6 +224,66 @@ impl IcmClient {
                 }
             }
         }
+    }
+
+    pub async fn list_all(&self) -> Result<Vec<MemoryRecord>> {
+        self.ensure_cli_verified().await?;
+        let mut command = self.cli_command();
+        command
+            .arg("list")
+            .arg("--all")
+            .arg("--limit")
+            .arg("10000")
+            .arg("--format")
+            .arg("json");
+        let output = self.run_cli("list", command).await?;
+        serde_json::from_slice(&output.stdout).map_err(|source| MemoryError::Protocol {
+            operation: "list CLI",
+            source,
+        })
+    }
+
+    pub async fn forget(&self, id: &str) -> Result<()> {
+        if id.trim().is_empty() {
+            return Err(MemoryError::InvalidRequest(
+                "memory id must not be empty".into(),
+            ));
+        }
+        self.ensure_cli_verified().await?;
+        let mut command = self.cli_command();
+        command.arg("forget").arg(id);
+        self.run_cli("forget", command).await?;
+        Ok(())
+    }
+
+    pub async fn update(
+        &self,
+        id: &str,
+        content: &str,
+        importance: Option<Importance>,
+        keywords: Option<&[String]>,
+    ) -> Result<()> {
+        if id.trim().is_empty() || content.trim().is_empty() {
+            return Err(MemoryError::InvalidRequest(
+                "memory id and content must not be empty".into(),
+            ));
+        }
+        if keywords.is_some_and(|values| values.iter().any(|value| value.contains(','))) {
+            return Err(MemoryError::InvalidRequest(
+                "ICM CLI cannot preserve a keyword containing a comma".into(),
+            ));
+        }
+        self.ensure_cli_verified().await?;
+        let mut command = self.cli_command();
+        command.arg("update").arg(id).arg("--content").arg(content);
+        if let Some(importance) = importance {
+            command.arg("--importance").arg(importance.to_string());
+        }
+        if let Some(keywords) = keywords {
+            command.arg("--keywords").arg(keywords.join(","));
+        }
+        self.run_cli("update", command).await?;
+        Ok(())
     }
 
     pub(crate) async fn disconnect_mcp(&self) {

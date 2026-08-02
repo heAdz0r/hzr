@@ -20,6 +20,9 @@ results are accounted:
 | `hzr_search` | Find code by intent (`mode: "semantic"`) or by exact pattern (`mode: "exact"`). |
 | `hzr_memory_recall` | Recall durable facts, past decisions and resolved errors before re-reading earlier work. |
 | `hzr_memory_store` | Persist a decision, resolved error, user preference or finished handoff. Not ephemeral state or raw tool output. |
+| `hzr_memory_update` | Replace a superseded memory after HZR verifies project/global namespace ownership. |
+| `hzr_memory_forget` | Delete one invalid memory after namespace verification. |
+| `hzr_memory_prune` | Preview or remove low-weight memories in one namespace; preview is the default. |
 | `hzr_codec` | Remove exact duplicate paragraphs from a long answer while provably preserving code, commands, paths, identifiers, errors and numbers. It does not reword or summarise prose, so text with no repetition comes back byte-identical. Use `profile: "shadow"` to measure the counterfactual without changing the text. |
 
 The gateway negotiates the latest stable MCP revision it supports
@@ -28,6 +31,11 @@ Schema 2020-12 inputs and outputs, reject unknown or invalid arguments, and retu
 both text and `structuredContent`. Arguments are bounded on purpose: limits are
 validated at 1–50. The workspace comes from the server's launch directory — you
 cannot pass it or widen scope to another repository.
+
+Long-running tool calls are concurrent and honor `notifications/cancelled`; a cancelled
+request stops work, releases its HTTP request, and emits no late response. Task-augmented
+requests are not advertised because HZR negotiates the stable base protocol rather than an
+experimental task extension.
 
 The MCP process is client-managed stdio. `hzr init` never starts it: Codex or
 Claude Desktop launches `hzr mcp serve` when opening a connection and closes it
@@ -51,7 +59,7 @@ dies.
 ```text
 Context  -> hzr context plan "<intent>"
 Map      -> hzr rtk -- memory explore <dir>   (entry points, hot paths, API surface)
-Memory   -> hzr memory recall|store   (see scopes below)
+Memory   -> hzr memory recall|store|update|forget|prune   (see scopes below)
 Semantic -> hzr rgai "<intent>"
 Literal  -> hzr search "<pattern>" --mode exact [--path FILE|DIR ...]
 Ranked   -> hzr search "<terms>" --mode auto
@@ -145,12 +153,22 @@ One store, two reachable namespaces. Choose deliberately:
 hzr memory store --scope global preferences "<a standing user preference>"
 hzr memory recall "<query>"                      # project + global (default)
 hzr memory recall --scope global "<query>"       # only user-wide facts
+hzr memory update <id> "<replacement>"           # project scope by default
+hzr memory forget <id>                            # project scope by default
+hzr memory prune --threshold 0.1                   # preview (default)
+hzr memory prune --threshold 0.1 --apply           # explicit deletion
 ```
 
 Recall defaults to `project-and-global`, so standing preferences arrive alongside this
 project's history. Another repository's memory is never reachable from any scope — that
 isolation is enforced by a positive filter, not by omission. A store targets exactly one
 namespace; there is no "both" for writes.
+
+Update, forget, and prune enumerate typed ICM records first and apply the same positive
+namespace filter as recall. A project command therefore cannot mutate another repository or
+user-global memory. `prune` defaults to preview in the API, MCP, and CLI; the CLI requires an
+explicit `--apply` for deletion. As in ICM's native lifecycle, high and critical memories are
+never selected by threshold pruning.
 
 Legacy-import records lack trustworthy repository provenance. HZR retains them for audit and
 explicit migration, but excludes them from automatic project recall instead of assigning all

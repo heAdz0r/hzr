@@ -11,6 +11,9 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{ContextError, Result};
 
+const MAX_MEMORY_CONTENT_BYTES: usize = 4 * 1024;
+const MEMORY_TRUNCATION_MARKER: &str = "\n\n[memory truncated]\n\n";
+
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct ForkPlanCandidate {
     pub rel_path: String,
@@ -264,7 +267,7 @@ pub(crate) fn normalize_memory(records: Vec<MemoryRecord>) -> NormalizedSource {
             MemoryScope::Project => "icm:project",
             MemoryScope::Org => "icm:org",
         };
-        let content = record.summary;
+        let content = bounded_memory_content(record.summary);
         let (content_ref, content_hash) = content_identity(&content);
         let rank = u32::try_from(index + 1).unwrap_or(u32::MAX);
         candidates.push(RetrievedCandidate {
@@ -299,6 +302,27 @@ pub(crate) fn normalize_memory(records: Vec<MemoryRecord>) -> NormalizedSource {
         candidates,
         warnings,
     }
+}
+
+fn bounded_memory_content(content: String) -> String {
+    if content.len() <= MAX_MEMORY_CONTENT_BYTES {
+        return content;
+    }
+    let available = MAX_MEMORY_CONTENT_BYTES - MEMORY_TRUNCATION_MARKER.len();
+    let mut head_end = available / 2;
+    while !content.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = content.len() - (available - head_end);
+    while !content.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    format!(
+        "{}{}{}",
+        &content[..head_end],
+        MEMORY_TRUNCATION_MARKER,
+        &content[tail_start..]
+    )
 }
 
 fn content_identity(content: &str) -> (String, String) {
@@ -426,5 +450,16 @@ mod tests {
         let normalized = normalize_memory(vec![memory_record("")]);
         assert!(normalized.candidates.is_empty());
         assert_eq!(normalized.warnings.len(), 1);
+    }
+
+    #[test]
+    fn test_long_memory_is_bounded_without_losing_its_latest_tail() {
+        let summary = format!("{}LATEST_DECISION", "x".repeat(10_000));
+        let normalized = normalize_memory(vec![memory_record(&summary)]);
+        let content = &normalized.candidates[0].content;
+
+        assert!(content.len() <= 4_200);
+        assert!(content.contains("[memory truncated]"));
+        assert!(content.ends_with("LATEST_DECISION"));
     }
 }

@@ -13,7 +13,7 @@ The visualizer remains read-only. It never starts a second ICM, grepai, or fork-
 ## Acceptance outcomes
 
 1. Automatic synchronization never changes the manual Refresh button label, disabled state, icon animation, selection, scroll position, or graph camera.
-2. A topic can be found, selected, expanded into bounded memory records, and inspected without leaving the dashboard.
+2. A topic can be found, selected, and expanded into bounded redacted record metadata without leaving the public dashboard; content inspection requires the authenticated API.
 3. The graph supports pan, zoom, fit, reset, keyboard selection, readable labels, stable layout, and a list fallback.
 4. Memory details come from a positive repository filter and an opaque topic identifier. Responses are bounded and do not expose the ICM database path or repository token.
 5. Recent routed operations expose the exact recorded command and working directory already present in the ledger. Agent and session fields are displayed only when they were observed; missing attribution is labeled `Unattributed`, never inferred as fact.
@@ -24,8 +24,8 @@ The visualizer remains read-only. It never starts a second ICM, grepai, or fork-
 ## Data and trust boundaries
 
 - `/v1/dashboard` stays a bounded public loopback snapshot. It may expose commands and paths that HZR already records locally, but never provider secrets, environment variables, stdin, or captured output bodies.
-- Topic details use a dedicated read-only endpoint and a server-side opaque-ID lookup. A caller cannot submit a raw ICM topic or repository token.
-- The detail endpoint returns at most 100 project records. Summary and raw excerpt fields are independently bounded; full canonical memory content is not returned.
+- Public topic details use a dedicated read-only endpoint and a server-side opaque-ID lookup. A caller cannot submit a raw ICM topic or repository token, and summary, raw excerpt, keywords, and source data are redacted.
+- Full bounded topic details use `/v1/memory/topics/{topic_id}` behind the daemon bearer token. The authenticated endpoint returns at most 100 positively project-filtered records and still never returns the canonical database path or repository token.
 - Agent attribution is evidence-based. The ledger stores an optional agent label and session identifier at record time. Historical rows remain unattributed.
 - Background failures keep the last successful snapshot and show a compact stale indicator. No zero-value fallback is substituted for unavailable data.
 
@@ -45,7 +45,7 @@ The visualizer remains read-only. It never starts a second ICM, grepai, or fork-
 2. Search filters a synchronized topic list and graph highlights.
 3. Selecting a topic centers it and opens its topic inspector.
 4. Expanding a topic fetches bounded record details and adds memory nodes to the graph.
-5. Selecting a memory opens summary, importance, weight, timestamps, access count, source, keywords, related record IDs, and a bounded raw excerpt when present.
+5. Selecting a memory on the public dashboard opens redacted metadata. Authenticated API clients may inspect summary, importance, weight, timestamps, access count, source, keywords, related record IDs, and a bounded raw excerpt when present.
 6. Back, fit, zoom, and reset controls do not refetch data.
 
 ### Activity explorer

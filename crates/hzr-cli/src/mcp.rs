@@ -23,23 +23,26 @@ mod arguments;
 mod tests;
 mod tools;
 
+use std::collections::HashMap;
 use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 use directories::BaseDirs;
 use hzr_core::Config;
 use hzr_protocol::{
-    CodecApiRequest, CodecProfile, ContextPlanApiRequest, FidelityClass, MemoryImportance,
-    MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest, MemoryWriteScope,
-    RiskClass, SearchApiRequest, SearchMode,
+    CodecApiRequest, CodecProfile, ContextPlanApiRequest, FidelityClass, MemoryForgetApiRequest,
+    MemoryImportance, MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector,
+    MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope, RiskClass, SearchApiRequest,
+    SearchMode,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::mpsc;
 
 use crate::cli::McpClientArg;
 use crate::client::DaemonClient;
 use arguments::{
-    bounded_usize, optional_bool, optional_enum, optional_string, parse_codec_profile,
+    bounded_f32, bounded_usize, optional_bool, optional_enum, optional_string, parse_codec_profile,
     parse_fidelity, parse_importance, parse_mode, parse_recall_scope, parse_risk,
     parse_write_scope, reject_unknown, required_string, string_array,
 };
@@ -183,27 +186,103 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
     let mut stdout = tokio::io::stdout();
     let mut session = SessionState::default();
 
-    // Reading until EOF is the whole anti-orphan mechanism: when the parent agent exits,
-    // the pipe closes, `next_line()` returns None, and this process ends with it.
-    while let Some(line) = lines
-        .next_line()
-        .await
-        .context("failed to read the MCP request stream")?
-    {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+    let (completed_tx, mut completed_rx) = mpsc::channel::<(String, Value)>(32);
+    let mut pending = HashMap::<String, tokio::task::AbortHandle>::new();
+
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                let Some(line) = line.context("failed to read the MCP request stream")? else {
+                    break;
+                };
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let parsed = serde_json::from_str::<Value>(line).ok();
+                if let Some(cancelled) = parsed.as_ref().and_then(cancelled_request_id) {
+                    if let Some(key) = request_id_key(&cancelled) {
+                        if let Some(handle) = pending.remove(&key) {
+                            handle.abort();
+                        }
+                    }
+                    continue;
+                }
+                if session.initialized {
+                    if let Some(request) = parsed.filter(|request| {
+                        request.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+                            && request.get("method").and_then(Value::as_str) == Some("tools/call")
+                    }) {
+                        if let Some(id) = request.get("id").cloned() {
+                            let Some(key) = request_id_key(&id) else {
+                                write_response(
+                                    &mut stdout,
+                                    &error_response(Value::Null, INVALID_REQUEST, "request id must be a string or number"),
+                                )
+                                .await?;
+                                continue;
+                            };
+                            if pending.contains_key(&key) {
+                                write_response(
+                                    &mut stdout,
+                                    &error_response(id, INVALID_REQUEST, "request id is already in progress"),
+                                )
+                                .await?;
+                                continue;
+                            }
+                            let task_config = config.clone();
+                            let task_binding = binding.clone();
+                            let sender = completed_tx.clone();
+                            let completed_key = key.clone();
+                            let handle = tokio::spawn(async move {
+                                let response = call_tool(&task_config, &task_binding, id, &request).await;
+                                let _ = sender.send((completed_key, response)).await;
+                            });
+                            pending.insert(key, handle.abort_handle());
+                            continue;
+                        }
+                    }
+                }
+                if let Some(response) = handle_line(config, &binding, &mut session, line).await {
+                    write_response(&mut stdout, &response).await?;
+                }
+            }
+            Some((key, response)) = completed_rx.recv(), if !pending.is_empty() => {
+                if pending.remove(&key).is_some() {
+                    write_response(&mut stdout, &response).await?;
+                }
+            }
         }
-        let Some(response) = handle_line(config, &binding, &mut session, line).await else {
-            // Notifications have no response by definition; staying silent is correct.
-            continue;
-        };
-        let mut encoded = serde_json::to_vec(&response)?;
-        encoded.push(b'\n');
-        stdout.write_all(&encoded).await?;
-        stdout.flush().await?;
     }
+    pending.into_values().for_each(|handle| handle.abort());
     Ok(())
+}
+
+async fn write_response(stdout: &mut tokio::io::Stdout, response: &Value) -> Result<()> {
+    let mut encoded = serde_json::to_vec(response)?;
+    encoded.push(b'\n');
+    stdout.write_all(&encoded).await?;
+    stdout.flush().await?;
+    Ok(())
+}
+
+fn request_id_key(id: &Value) -> Option<String> {
+    match id {
+        Value::String(value) => Some(format!("s:{value}")),
+        Value::Number(value) => Some(format!("n:{value}")),
+        _ => None,
+    }
+}
+
+fn cancelled_request_id(request: &Value) -> Option<Value> {
+    if request.get("jsonrpc").and_then(Value::as_str) != Some("2.0")
+        || request.get("method").and_then(Value::as_str) != Some("notifications/cancelled")
+        || request.get("id").is_some()
+    {
+        return None;
+    }
+    let id = request.pointer("/params/requestId")?;
+    request_id_key(id).map(|_| id.clone())
 }
 
 /// Returns `None` for notifications, which must never be answered.
@@ -342,7 +421,14 @@ async fn call_tool(
     };
     if !matches!(
         name,
-        "hzr_memory_recall" | "hzr_memory_store" | "hzr_search" | "hzr_context_plan" | "hzr_codec"
+        "hzr_memory_recall"
+            | "hzr_memory_store"
+            | "hzr_memory_forget"
+            | "hzr_memory_update"
+            | "hzr_memory_prune"
+            | "hzr_search"
+            | "hzr_context_plan"
+            | "hzr_codec"
     ) {
         return error_response(id, INVALID_PARAMS, &format!("unknown tool: {name}"));
     }
@@ -387,6 +473,9 @@ async fn call_tool(
     let outcome = match name {
         "hzr_memory_recall" => recall(&client, workspace, &arguments).await,
         "hzr_memory_store" => store(&client, workspace, &arguments).await,
+        "hzr_memory_forget" => forget(&client, workspace, &arguments).await,
+        "hzr_memory_update" => update(&client, workspace, &arguments).await,
+        "hzr_memory_prune" => prune(&client, workspace, &arguments).await,
         "hzr_search" => search(&client, workspace, &arguments).await,
         "hzr_context_plan" => context_plan(&client, workspace, &arguments).await,
         "hzr_codec" => codec(&client, &arguments).await,
@@ -397,14 +486,22 @@ async fn call_tool(
 
     match outcome {
         Ok(value) => success(id, tool_success(&value)),
-        Err(error) if name == "hzr_memory_store" => success(
-            id,
-            tool_error(&format!(
-                "{error:#}. The store did not report success and HZR did not use a fallback \
-                 store. If transport failed after dispatch, completion is unknown; recall the \
-                 fact before retrying. If the daemon is down, start it with `hzr daemon serve`."
-            )),
-        ),
+        Err(error)
+            if matches!(
+                name,
+                "hzr_memory_store" | "hzr_memory_update" | "hzr_memory_forget" | "hzr_memory_prune"
+            ) =>
+        {
+            success(
+                id,
+                tool_error(&format!(
+                    "{error:#}. The memory mutation did not report success and HZR did not use a \
+                 fallback store. If transport failed after dispatch, completion is unknown; \
+                 recall or list the target before retrying. If the daemon is down, start it with \
+                 `hzr daemon serve`."
+                )),
+            )
+        }
         Err(error) => success(
             id,
             tool_error(&format!(
@@ -498,6 +595,77 @@ async fn store(client: &DaemonClient, workspace: &str, arguments: &Value) -> Res
     };
     let response = client.memory_store(&request).await?;
     Ok(serde_json::to_value(response)?)
+}
+
+async fn forget(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    reject_unknown(arguments, &["id", "scope"])?;
+    let request = MemoryForgetApiRequest {
+        workspace: workspace.to_owned(),
+        id: required_string(arguments, "id")?,
+        scope: optional_enum(
+            arguments,
+            "scope",
+            MemoryWriteScope::default(),
+            parse_write_scope,
+            "project, global",
+        )?,
+    };
+    Ok(serde_json::to_value(client.memory_forget(&request).await?)?)
+}
+
+async fn update(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    reject_unknown(
+        arguments,
+        &["id", "content", "importance", "keywords", "scope"],
+    )?;
+    let keywords = if arguments.get("keywords").is_some() {
+        Some(string_array(arguments, "keywords", 32)?)
+    } else {
+        None
+    };
+    let request = MemoryUpdateApiRequest {
+        workspace: workspace.to_owned(),
+        id: required_string(arguments, "id")?,
+        content: required_string(arguments, "content")?,
+        importance: arguments
+            .get("importance")
+            .map(|_| {
+                optional_enum(
+                    arguments,
+                    "importance",
+                    MemoryImportance::default(),
+                    parse_importance,
+                    "critical, high, medium, low",
+                )
+            })
+            .transpose()?,
+        keywords,
+        scope: optional_enum(
+            arguments,
+            "scope",
+            MemoryWriteScope::default(),
+            parse_write_scope,
+            "project, global",
+        )?,
+    };
+    Ok(serde_json::to_value(client.memory_update(&request).await?)?)
+}
+
+async fn prune(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    reject_unknown(arguments, &["threshold", "dry_run", "scope"])?;
+    let request = MemoryPruneApiRequest {
+        workspace: workspace.to_owned(),
+        threshold: bounded_f32(arguments, "threshold", 0.1)?,
+        dry_run: optional_bool(arguments, "dry_run", true)?,
+        scope: optional_enum(
+            arguments,
+            "scope",
+            MemoryWriteScope::default(),
+            parse_write_scope,
+            "project, global",
+        )?,
+    };
+    Ok(serde_json::to_value(client.memory_prune(&request).await?)?)
 }
 
 async fn search(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {

@@ -122,6 +122,112 @@ pub(super) fn tool_definitions() -> Vec<Value> {
             },
         }),
         json!({
+            "name": "hzr_memory_forget",
+            "title": "Forget HZR Memory",
+            "description": "Delete one memory only after HZR verifies that it belongs to the selected project or global namespace.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "scope": {
+                        "type": "string",
+                        "enum": ["project", "global"],
+                        "default": "project"
+                    }
+                },
+                "required": ["id"]
+            },
+            "outputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "affected_ids": {"type": "array", "items": {"type": "string"}},
+                    "dry_run": {"type": "boolean"}
+                },
+                "required": ["affected_ids", "dry_run"]
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": false
+            }
+        }),
+        json!({
+            "name": "hzr_memory_update",
+            "title": "Update HZR Memory",
+            "description": "Replace one memory in place only after HZR verifies namespace ownership.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "content": {"type": "string", "minLength": 1},
+                    "importance": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                    "keywords": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1}},
+                    "scope": {
+                        "type": "string",
+                        "enum": ["project", "global"],
+                        "default": "project"
+                    }
+                },
+                "required": ["id", "content"]
+            },
+            "outputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "affected_ids": {"type": "array", "items": {"type": "string"}},
+                    "dry_run": {"type": "boolean"}
+                },
+                "required": ["affected_ids", "dry_run"]
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
+        }),
+        json!({
+            "name": "hzr_memory_prune",
+            "title": "Prune HZR Memory",
+            "description": "Preview or delete low-weight memories only inside the selected HZR namespace. Dry-run defaults to true.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "threshold": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.1},
+                    "dry_run": {"type": "boolean", "default": true},
+                    "scope": {
+                        "type": "string",
+                        "enum": ["project", "global"],
+                        "default": "project"
+                    }
+                },
+                "required": []
+            },
+            "outputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {
+                    "affected_ids": {"type": "array", "items": {"type": "string"}},
+                    "dry_run": {"type": "boolean"}
+                },
+                "required": ["affected_ids", "dry_run"]
+            },
+            "annotations": {
+                "readOnlyHint": false,
+                "destructiveHint": true,
+                "idempotentHint": false,
+                "openWorldHint": false
+            }
+        }),
+        json!({
             "name": "hzr_search",
             "title": "Search HZR Workspace",
             "description": "Find code in this repository through the one canonical HZR index. \

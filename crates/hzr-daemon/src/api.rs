@@ -18,10 +18,10 @@ use hzr_index::{
     registered_workspaces,
 };
 use hzr_memory::{
-    GLOBAL_SCOPE_TOKEN, Importance, MemoryNamespace, ProjectMemorySnapshot, RecallRequest,
-    ServiceStatus, StoreRequest, global_topic, isolate_memories, merge_memories, namespaced_topic,
-    read_project_snapshot, read_project_topic_details, recall_candidate_limit,
-    validate_memory_kind,
+    GLOBAL_SCOPE_TOKEN, Importance, MemoryNamespace, MemoryRecord, ProjectMemoryDetail,
+    ProjectMemorySnapshot, RecallRequest, ServiceStatus, StoreRequest, global_topic,
+    isolate_memories, merge_memories, namespaced_topic, read_project_snapshot,
+    read_project_topic_details, recall_candidate_limit, validate_memory_kind,
 };
 use hzr_protocol::{
     CodecApiRequest, CommandTermination, ContextPlanApiRequest, ContextPlanApiResponse,
@@ -33,8 +33,9 @@ use hzr_protocol::{
     DashboardProjectArtifacts, DashboardProjectState, DashboardProviderReceiptState,
     DashboardProviderReceipts, DashboardResponse, DashboardSearchActivity, DashboardService,
     DashboardState, EngineHealth, EngineState, ExecApiRequest, ExecApprovalApiRequest,
-    ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryImportance,
-    MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest, MemoryWriteScope,
+    ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryForgetApiRequest,
+    MemoryImportance, MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
+    MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope,
     PROTOCOL_VERSION, SearchApiRequest, SearchApiResponse, TraceId, UsageApiRequest,
     UsageApiResponse,
 };
@@ -368,6 +369,25 @@ pub async fn dashboard_memory_topic(
     State(state): State<AppState>,
     AxumPath(topic_id): AxumPath<String>,
 ) -> Result<Json<DashboardMemoryTopicDetails>, ApiError> {
+    memory_topic_response(&state, topic_id, true)
+        .await
+        .map(Json)
+}
+
+pub async fn memory_topic_details(
+    State(state): State<AppState>,
+    AxumPath(topic_id): AxumPath<String>,
+) -> Result<Json<DashboardMemoryTopicDetails>, ApiError> {
+    memory_topic_response(&state, topic_id, false)
+        .await
+        .map(Json)
+}
+
+async fn memory_topic_response(
+    state: &AppState,
+    topic_id: String,
+    redact_content: bool,
+) -> Result<DashboardMemoryTopicDetails, ApiError> {
     if topic_id.len() != 64 || !topic_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(ApiError::bad_request(
             "memory topic identifier must be 64 hexadecimal characters",
@@ -380,7 +400,7 @@ pub async fn dashboard_memory_topic(
         .ok_or_else(|| {
             ApiError::not_found("project_not_found", "no registered project selected")
         })?;
-    let (memory_health, _) = memory_engine_health(&state).await;
+    let (memory_health, _) = memory_engine_health(state).await;
     if memory_health.state != EngineState::Ready {
         return Err(ApiError::service(
             "memory_unavailable",
@@ -412,7 +432,7 @@ pub async fn dashboard_memory_topic(
         )
     })?;
 
-    Ok(Json(DashboardMemoryTopicDetails {
+    Ok(DashboardMemoryTopicDetails {
         id: details.id,
         label: details.label,
         memory_count: details.memory_count,
@@ -422,23 +442,46 @@ pub async fn dashboard_memory_topic(
         memories: details
             .memories
             .into_iter()
-            .map(|memory| DashboardMemoryDetail {
-                id: memory.id,
-                created_at: memory.created_at,
-                updated_at: memory.updated_at,
-                last_accessed: memory.last_accessed,
-                access_count: memory.access_count,
-                weight: memory.weight,
-                summary: memory.summary,
-                raw_excerpt: memory.raw_excerpt,
-                keywords: memory.keywords,
-                importance: memory.importance,
-                source_type: memory.source_type,
-                source_data: memory.source_data,
-                related_ids: memory.related_ids,
-            })
+            .map(|memory| dashboard_memory_detail(memory, redact_content))
             .collect(),
-    }))
+    })
+}
+
+fn dashboard_memory_detail(
+    memory: ProjectMemoryDetail,
+    redact_content: bool,
+) -> DashboardMemoryDetail {
+    DashboardMemoryDetail {
+        id: memory.id,
+        created_at: memory.created_at,
+        updated_at: memory.updated_at,
+        last_accessed: memory.last_accessed,
+        access_count: memory.access_count,
+        weight: memory.weight,
+        summary: if redact_content {
+            "Memory content is redacted on the public dashboard endpoint.".into()
+        } else {
+            memory.summary
+        },
+        raw_excerpt: if redact_content {
+            None
+        } else {
+            memory.raw_excerpt
+        },
+        keywords: if redact_content {
+            Vec::new()
+        } else {
+            memory.keywords
+        },
+        importance: memory.importance,
+        source_type: memory.source_type,
+        source_data: if redact_content {
+            None
+        } else {
+            memory.source_data
+        },
+        related_ids: memory.related_ids,
+    }
 }
 
 async fn dashboard_memory_observatory(
@@ -1114,12 +1157,7 @@ pub async fn memory_store(
     }
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let mut store = StoreRequest::new(topic, request.content);
-    store.importance = match request.importance {
-        MemoryImportance::Critical => Importance::Critical,
-        MemoryImportance::High => Importance::High,
-        MemoryImportance::Medium => Importance::Medium,
-        MemoryImportance::Low => Importance::Low,
-    };
+    store.importance = memory_importance(request.importance);
     store.keywords = request.keywords;
     store.raw = request.raw;
     state
@@ -1129,6 +1167,172 @@ pub async fn memory_store(
         .await
         .map(Json)
         .map_err(|error| ApiError::service("memory_unavailable", error.to_string(), true))
+}
+
+pub async fn memory_forget(
+    State(state): State<AppState>,
+    Json(request): Json<MemoryForgetApiRequest>,
+) -> Result<Json<MemoryMutationApiResponse>, ApiError> {
+    validate_memory_id(&request.id)?;
+    let records = scoped_memory_records(&state, &request.workspace, request.scope).await?;
+    if !records.iter().any(|record| record.id == request.id) {
+        return Err(ApiError::not_found(
+            "memory_not_found",
+            "memory does not exist in the requested namespace",
+        ));
+    }
+    state
+        .memory
+        .client()
+        .forget(&request.id)
+        .await
+        .map_err(memory_maintenance_error)?;
+    Ok(Json(MemoryMutationApiResponse {
+        affected_ids: vec![request.id],
+        dry_run: false,
+    }))
+}
+
+pub async fn memory_update(
+    State(state): State<AppState>,
+    Json(request): Json<MemoryUpdateApiRequest>,
+) -> Result<Json<MemoryMutationApiResponse>, ApiError> {
+    validate_memory_id(&request.id)?;
+    if request.content.trim().is_empty() {
+        return Err(ApiError::bad_request("memory content must not be empty"));
+    }
+    if request
+        .keywords
+        .as_ref()
+        .is_some_and(|keywords| keywords.len() > 32)
+    {
+        return Err(ApiError::bad_request(
+            "memory keywords must contain at most 32 entries",
+        ));
+    }
+    let records = scoped_memory_records(&state, &request.workspace, request.scope).await?;
+    if !records.iter().any(|record| record.id == request.id) {
+        return Err(ApiError::not_found(
+            "memory_not_found",
+            "memory does not exist in the requested namespace",
+        ));
+    }
+    state
+        .memory
+        .client()
+        .update(
+            &request.id,
+            &request.content,
+            request.importance.map(memory_importance),
+            request.keywords.as_deref(),
+        )
+        .await
+        .map_err(memory_maintenance_error)?;
+    Ok(Json(MemoryMutationApiResponse {
+        affected_ids: vec![request.id],
+        dry_run: false,
+    }))
+}
+
+pub async fn memory_prune(
+    State(state): State<AppState>,
+    Json(request): Json<MemoryPruneApiRequest>,
+) -> Result<Json<MemoryMutationApiResponse>, ApiError> {
+    if !request.threshold.is_finite() || !(0.0..=1.0).contains(&request.threshold) {
+        return Err(ApiError::bad_request(
+            "memory prune threshold must be finite and between 0 and 1",
+        ));
+    }
+    let records = scoped_memory_records(&state, &request.workspace, request.scope).await?;
+    let targets = records
+        .into_iter()
+        .filter(|record| memory_prunable(record, request.threshold))
+        .collect::<Vec<_>>();
+    let affected_ids = targets
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    if !request.dry_run {
+        for (index, id) in affected_ids.iter().enumerate() {
+            if let Err(error) = state.memory.client().forget(id).await {
+                return Err(ApiError::service(
+                    "memory_prune_partial",
+                    format!(
+                        "memory prune stopped after deleting {index} of {} selected records; \
+                         inspect the namespace before retrying: {error}",
+                        affected_ids.len()
+                    ),
+                    true,
+                ));
+            }
+        }
+    }
+    Ok(Json(MemoryMutationApiResponse {
+        affected_ids,
+        dry_run: request.dry_run,
+    }))
+}
+
+fn memory_importance(importance: MemoryImportance) -> Importance {
+    match importance {
+        MemoryImportance::Critical => Importance::Critical,
+        MemoryImportance::High => Importance::High,
+        MemoryImportance::Medium => Importance::Medium,
+        MemoryImportance::Low => Importance::Low,
+    }
+}
+
+fn validate_memory_id(id: &str) -> Result<(), ApiError> {
+    if id.is_empty()
+        || id.len() > 128
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err(ApiError::bad_request(
+            "memory id must contain 1..128 ASCII letters, digits, hyphens, or underscores",
+        ));
+    }
+    Ok(())
+}
+
+async fn scoped_memory_records(
+    state: &AppState,
+    workspace: &str,
+    scope: MemoryWriteScope,
+) -> Result<Vec<MemoryRecord>, ApiError> {
+    let project = memory_project(state, workspace).await?;
+    let records = state
+        .memory
+        .client()
+        .list_all()
+        .await
+        .map_err(memory_maintenance_error)?;
+    Ok(memory_mutation_targets(records, &project, scope, None))
+}
+
+fn memory_mutation_targets(
+    records: Vec<MemoryRecord>,
+    project: &str,
+    scope: MemoryWriteScope,
+    threshold: Option<f32>,
+) -> Vec<MemoryRecord> {
+    let namespace = match scope {
+        MemoryWriteScope::Project => MemoryNamespace::Project,
+        MemoryWriteScope::Global => MemoryNamespace::Global,
+    };
+    isolate_memories(records, project, namespace, None, usize::MAX)
+        .into_iter()
+        .filter(|record| threshold.is_none_or(|value| memory_prunable(record, value)))
+        .collect()
+}
+
+fn memory_prunable(record: &MemoryRecord, threshold: f32) -> bool {
+    record.weight < threshold && matches!(record.importance, Importance::Medium | Importance::Low)
+}
+
+fn memory_maintenance_error(error: hzr_memory::MemoryError) -> ApiError {
+    ApiError::service("memory_unavailable", error.to_string(), true)
 }
 
 pub async fn exec_run(
@@ -1323,8 +1527,13 @@ pub async fn codec_compile(
     Json(request): Json<CodecApiRequest>,
 ) -> Result<Json<hzr_codec::Transform>, ApiError> {
     let started = Instant::now();
-    let transform = hzr_codec::transform(&request.content, request.fidelity, request.profile)
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let transform = hzr_codec::transform_for_risk(
+        &request.content,
+        request.fidelity,
+        request.profile,
+        request.risk,
+    )
+    .map_err(|error| ApiError::bad_request(error.to_string()))?;
     record_codec_operation(&state, &request, &transform, started.elapsed()).await;
     Ok(Json(transform))
 }
@@ -1776,11 +1985,100 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        ManagedExecutionBudget, caveman_engine_health, dashboard_search_activity,
-        memory_ready_state, overall_engine_state, validate_managed_fork_tool,
+        ManagedExecutionBudget, caveman_engine_health, dashboard_memory_detail,
+        dashboard_search_activity, memory_mutation_targets, memory_ready_state,
+        overall_engine_state, validate_managed_fork_tool,
     };
     use hzr_core::{ProjectOperationRoute, ProjectOperationSummary};
-    use hzr_protocol::{DashboardOperationRoute, DashboardState, EngineHealth, EngineState};
+    use hzr_memory::{Importance, MemoryRecord, MemoryScope, MemorySource, ProjectMemoryDetail};
+    use hzr_protocol::{
+        DashboardOperationRoute, DashboardState, EngineHealth, EngineState, MemoryWriteScope,
+    };
+
+    const PROJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn memory(id: &str, topic: &str, weight: f32) -> MemoryRecord {
+        MemoryRecord {
+            score: None,
+            id: id.into(),
+            created_at: "2026-08-02T00:00:00Z".into(),
+            updated_at: "2026-08-02T00:00:00Z".into(),
+            last_accessed: "2026-08-02T00:00:00Z".into(),
+            access_count: 0,
+            weight,
+            topic: topic.into(),
+            summary: "fixture".into(),
+            raw_excerpt: None,
+            keywords: Vec::new(),
+            importance: Importance::Medium,
+            source: MemorySource::Manual,
+            related_ids: Vec::new(),
+            scope: MemoryScope::Project,
+        }
+    }
+
+    #[test]
+    fn memory_maintenance_never_targets_foreign_or_above_threshold_records() {
+        let records = vec![
+            memory("low", &format!("decision-{PROJECT}"), 0.05),
+            memory("high", &format!("decision-{PROJECT}"), 0.9),
+            MemoryRecord {
+                importance: Importance::Critical,
+                ..memory("critical-low-weight", &format!("decision-{PROJECT}"), 0.01)
+            },
+            MemoryRecord {
+                importance: Importance::High,
+                ..memory("important-low-weight", &format!("decision-{PROJECT}"), 0.01)
+            },
+            memory(
+                "foreign",
+                "decision-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                0.01,
+            ),
+        ];
+
+        let targets =
+            memory_mutation_targets(records, PROJECT, MemoryWriteScope::Project, Some(0.1));
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|record| record.id.as_str())
+                .collect::<Vec<_>>(),
+            ["low"]
+        );
+    }
+
+    #[test]
+    fn public_memory_detail_redacts_every_content_bearing_field() {
+        let detail = ProjectMemoryDetail {
+            id: "memory-1".into(),
+            created_at: "2026-08-02T00:00:00Z".into(),
+            updated_at: "2026-08-02T00:00:00Z".into(),
+            last_accessed: None,
+            access_count: 0,
+            weight: 1.0,
+            summary: "secret summary".into(),
+            raw_excerpt: Some("secret raw".into()),
+            keywords: vec!["secret-keyword".into()],
+            importance: "high".into(),
+            source_type: Some("manual".into()),
+            source_data: Some("secret source".into()),
+            related_ids: vec!["related".into()],
+        };
+
+        let public = dashboard_memory_detail(detail.clone(), true);
+        assert!(!public.summary.contains("secret"));
+        assert!(public.raw_excerpt.is_none());
+        assert!(public.keywords.is_empty());
+        assert!(public.source_data.is_none());
+
+        let authenticated = dashboard_memory_detail(detail, false);
+        assert_eq!(authenticated.summary, "secret summary");
+        assert_eq!(authenticated.raw_excerpt.as_deref(), Some("secret raw"));
+        assert_eq!(authenticated.keywords, ["secret-keyword"]);
+        assert_eq!(authenticated.source_data.as_deref(), Some("secret source"));
+    }
 
     fn engine(name: &str, state: EngineState) -> EngineHealth {
         EngineHealth {

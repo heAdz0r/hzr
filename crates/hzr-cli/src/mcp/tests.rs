@@ -6,9 +6,9 @@ use crate::cli::McpClientArg;
 
 use super::{
     INVALID_REQUEST, LATEST_MCP_PROTOCOL_VERSION, METHOD_NOT_FOUND, PARSE_ERROR, SessionState,
-    bounded_usize, classify_workspace_binding, handle_line, initialize_result, lifecycle_metadata,
-    optional_enum, parse_mode, registration_snippet, reject_unknown, tool_definitions, tool_error,
-    tool_success,
+    bounded_usize, cancelled_request_id, classify_workspace_binding, handle_line,
+    initialize_result, lifecycle_metadata, optional_enum, parse_mode, registration_snippet,
+    reject_unknown, tool_definitions, tool_error, tool_success,
 };
 
 /// Mirror of the notification rule in `handle_line`, which cannot be exercised
@@ -20,6 +20,20 @@ fn is_notification(request: &Value) -> bool {
 /// A normally-bound workspace, for the tests whose subject is not the binding itself.
 fn test_binding() -> super::WorkspaceBinding {
     classify_workspace_binding(std::path::Path::new("/Users/andrew/code/app"), None)
+}
+
+#[test]
+fn test_cancellation_notification_identifies_only_valid_request_ids() {
+    let valid = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/cancelled",
+        "params": {"requestId": "call-7", "reason": "user stopped it"}
+    });
+    assert_eq!(cancelled_request_id(&valid), Some(json!("call-7")));
+    assert_eq!(
+        cancelled_request_id(&json!({"method": "notifications/cancelled"})),
+        None
+    );
 }
 
 #[test]
@@ -72,7 +86,7 @@ fn test_initialize_requires_a_protocol_version() {
 #[test]
 fn test_every_tool_has_model_guidance_and_typed_schemas() {
     let tools = tool_definitions();
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 8);
     for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
         assert!(

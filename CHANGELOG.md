@@ -18,14 +18,14 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   documents. Over HZR's lists of ten that pins the entire range between 1/61 and 1/70, so a
   live plan reported 0.0123–0.0164 for its best and worst evidence alike while discarding
   every engine's own magnitude. Scores are now normalized within their source, which is the
-  only scale on which they are comparable, and fused as a weighted sum. Measured on the same
-  question afterwards: 1.0000 / 0.7680 / 0.7477 / 0.4530.
+  only scale on which they are comparable, and fused as a weighted sum. Deterministic tests
+  preserve large relevance gaps and reject the weak tail below the configured floor.
 - **Selection rewarded brevity over relevance.** `utility` divided by `sqrt(tokens)`, and with
   relevance pinned in a 15% band the expression degenerated into `source_boost / sqrt(tokens)`
   — a 30-token `Cargo.toml` outscored a 3000-token file that answered the question by an order
   of magnitude. That is the mechanism behind lockfiles and images being selected ahead of
-  code. Length is now only a budget constraint, applied when filling the budget. Verified: a
-  242-byte PNG that would have ranked near the top now ranks last.
+  code. Length is now only a budget constraint, applied when filling the budget; a deterministic
+  regression test requires relevant locatable code to outrank a similar-scoring opaque artifact.
 - **Memory competed with code for one budget.** A memory body is prose and routinely an order
   of magnitude longer than a code candidate, so a single stale fact could consume the plan —
   observed at 10.9k of 12k tokens with the answering file not selected at all. Memory now has
@@ -42,6 +42,23 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 - Candidates below a relevance floor are rejected with `relevance_floor` instead of padding the
   pack. A floor was previously impossible to express: with every score pinned between 0.0123
   and 0.0164 there was no threshold that separated signal from noise.
+- High and irreversible codec requests now force exact fidelity in the production daemon path;
+  the request risk field is no longer ignored.
+- Managed agents load bounded root `AGENTS.md` and `CLAUDE.md` instructions while keeping the
+  Caveman SDK's duplicate tools, hooks, memory, and repo map disabled. Prefetched context is a
+  compact, bounded evidence brief rather than raw JSON.
+- Context planning now reserves configured output and safety tokens, caps memory to a minority
+  budget share, bounds each long memory while preserving its latest tail, and adds exact symbol
+  search when the intent names an identifier.
+- `hzr memory update`, `forget`, and namespace-scoped `prune` are available through the CLI,
+  daemon API, MCP, and managed-agent bridge. Destructive selection uses the same positive
+  project/global namespace filter as recall; API, CLI, and MCP prune default to dry-run, and
+  threshold pruning preserves high and critical memories regardless of weight.
+- MCP tool calls run concurrently and honor `notifications/cancelled`. Managed provider-usage
+  receipts that cannot reach the daemon are persisted as private per-event outbox files and
+  replayed exactly once after the daemon recovers.
+- Public dashboard memory details redact content-bearing fields. Full bounded details moved to
+  a bearer-authenticated endpoint.
 
 ## [0.3.3] - 2026-08-02
 

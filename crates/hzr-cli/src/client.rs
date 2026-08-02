@@ -8,7 +8,8 @@ use hzr_exec::{ExecutionOutcome, RewriteDecision};
 use hzr_memory::{MemoryRecord, MemoryTransport};
 use hzr_protocol::{
     CodecApiRequest, ContextPlanApiRequest, ContextPlanApiResponse, ErrorResponse, ExecApiRequest,
-    ExecApprovalApiRequest, HealthResponse, MemoryRecallApiRequest, MemoryStoreApiRequest,
+    ExecApprovalApiRequest, HealthResponse, MemoryForgetApiRequest, MemoryMutationApiResponse,
+    MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryStoreApiRequest, MemoryUpdateApiRequest,
     SearchApiRequest, SearchApiResponse,
 };
 use reqwest::{Method, StatusCode};
@@ -91,6 +92,27 @@ impl DaemonClient {
         request: &MemoryStoreApiRequest,
     ) -> Result<MemoryStoreResponse, ClientError> {
         self.post("/v1/memory/store", request).await
+    }
+
+    pub async fn memory_forget(
+        &self,
+        request: &MemoryForgetApiRequest,
+    ) -> Result<MemoryMutationApiResponse, ClientError> {
+        self.post("/v1/memory/forget", request).await
+    }
+
+    pub async fn memory_update(
+        &self,
+        request: &MemoryUpdateApiRequest,
+    ) -> Result<MemoryMutationApiResponse, ClientError> {
+        self.post("/v1/memory/update", request).await
+    }
+
+    pub async fn memory_prune(
+        &self,
+        request: &MemoryPruneApiRequest,
+    ) -> Result<MemoryMutationApiResponse, ClientError> {
+        self.post("/v1/memory/prune", request).await
     }
 
     pub async fn exec_rewrite(

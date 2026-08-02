@@ -118,6 +118,20 @@ pub(super) fn bounded_usize(
     }
 }
 
+pub(super) fn bounded_f32(arguments: &Value, key: &str, default: f32) -> Result<f32> {
+    let value = match arguments.get(key) {
+        None => default,
+        Some(value) => value
+            .as_f64()
+            .with_context(|| format!("argument `{key}` must be a number"))?
+            as f32,
+    };
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        anyhow::bail!("argument `{key}` must be finite and between 0 and 1");
+    }
+    Ok(value)
+}
+
 pub(super) fn optional_enum<T: Copy>(
     arguments: &Value,
     key: &str,
