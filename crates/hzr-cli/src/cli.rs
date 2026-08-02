@@ -190,6 +190,11 @@ pub enum McpCommand {
     Config {
         #[arg(long, value_enum, default_value_t = McpClientArg::Codex)]
         client: McpClientArg,
+        /// Pin the project the server's memory is scoped to. Without it the namespace comes
+        /// from whatever directory the client launched from, which is `/` for the Claude
+        /// desktop app and a per-session directory for Codex.
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
     },
     #[command(about = "Report native client registrations and the client-managed stdio lifecycle")]
     Status,
