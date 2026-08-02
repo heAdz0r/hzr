@@ -128,6 +128,24 @@ HZR_CLAUDE_SETTINGS="${HZR_SMOKE_TEMP}/home/.claude/settings.json"
 HZR_CLAUDE_INSTRUCTIONS="${HZR_SMOKE_TEMP}/home/.claude/CLAUDE.md"
 HZR_CODEX_INSTRUCTIONS="${HZR_SMOKE_TEMP}/home/.codex/AGENTS.md"
 HZR_CODEX_CONFIG="${HZR_SMOKE_TEMP}/home/.codex/config.toml"
+integration_contains_stable_path() {
+  local integration_file="$1"
+  local stable_path="$2"
+  local macos_path_alias=""
+
+  if grep -F "${stable_path}" "${integration_file}" >/dev/null; then
+    return 0
+  fi
+  if [[ "$(uname -s)" != Darwin ]]; then
+    return 1
+  fi
+  case "${stable_path}" in
+    /var/*) macos_path_alias="/private${stable_path}" ;;
+    /private/var/*) macos_path_alias="${stable_path#/private}" ;;
+    *) return 1 ;;
+  esac
+  grep -F "${macos_path_alias}" "${integration_file}" >/dev/null
+}
 for HZR_INTEGRATION_FILE in \
   "${HZR_CLAUDE_SETTINGS}" \
   "${HZR_CLAUDE_INSTRUCTIONS}" \
@@ -138,10 +156,10 @@ for HZR_INTEGRATION_FILE in \
     exit 1
   fi
 done
-if ! grep -F "${HZR_INSTALLED_BIN}/hzr" "${HZR_CLAUDE_SETTINGS}" >/dev/null || \
-  ! grep -F "${HZR_INSTALLED_BIN}/hzr" "${HZR_CODEX_CONFIG}" >/dev/null || \
-  ! grep -F "${HZR_INSTALLED_ROOT}/share/hzr/HZR.md" "${HZR_CLAUDE_INSTRUCTIONS}" >/dev/null || \
-  ! grep -F "${HZR_INSTALLED_ROOT}/share/hzr/HZR.md" "${HZR_CODEX_INSTRUCTIONS}" >/dev/null; then
+if ! integration_contains_stable_path "${HZR_CLAUDE_SETTINGS}" "${HZR_INSTALLED_BIN}/hzr" || \
+  ! integration_contains_stable_path "${HZR_CODEX_CONFIG}" "${HZR_INSTALLED_BIN}/hzr" || \
+  ! integration_contains_stable_path "${HZR_CLAUDE_INSTRUCTIONS}" "${HZR_INSTALLED_ROOT}/share/hzr/HZR.md" || \
+  ! integration_contains_stable_path "${HZR_CODEX_INSTRUCTIONS}" "${HZR_INSTALLED_ROOT}/share/hzr/HZR.md"; then
   echo "integrations do not use HZR's stable binary and contract paths" >&2
   exit 1
 fi

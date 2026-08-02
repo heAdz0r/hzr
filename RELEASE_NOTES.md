@@ -225,6 +225,10 @@ whose version happens to resemble the previous HZR version, and it keeps the bun
 `cargo build --locked` input synchronized. This was found by the 0.3.3 clean release build;
 the lock was not bypassed or weakened.
 
+The macOS release smoke gate also recognizes `/var/...` and its canonical
+`/private/var/...` spelling as the same stable installation path. Immutable `/versions/`
+references remain rejected; only the operating system's path alias is normalized.
+
 ## Known gap
 
 `hzr memory` has no `forget` or `prune`. Legacy-imported rows are now quarantined from

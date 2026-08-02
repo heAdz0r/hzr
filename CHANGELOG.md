@@ -59,6 +59,10 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 - Instruction installation resolves the public binary symlink before locating bundle
   assets, so Claude and Codex reference the upgrade-stable `current/share/hzr/HZR.md`.
   `hzr doctor` now recognizes the executable Codex bootstrap and verifies that target.
+- The macOS release smoke gate treats `/var/...` and its canonical `/private/var/...`
+  spelling as the same stable installation path. It still rejects immutable `/versions/`
+  references, but no longer fails a valid clean install because the runner and Rust resolve
+  the system path alias differently.
 
 ### Added
 
