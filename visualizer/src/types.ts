@@ -95,17 +95,16 @@ export interface DashboardIndexObservatory {
     ready_marker_observed: boolean;
     detail: string;
   };
-  semantic: {
+  search_activity: {
     state: DashboardState;
-    checked_at_ms: number | null;
-    latency_ms: number;
-    query: string;
-    total_hits: number;
-    shown_hits: number;
-    scanned_files: number;
-    strategy: string | null;
-    backend: string | null;
-    generation: string | null;
+    ledger_id: number | null;
+    observed_at: string | null;
+    command: string | null;
+    working_directory: string | null;
+    agent: string | null;
+    session_id: string | null;
+    route: "optimized" | "raw" | null;
+    execution_ms: number | null;
     detail: string;
   };
   diagnostic_command: string;

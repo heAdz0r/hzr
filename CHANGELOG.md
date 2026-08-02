@@ -6,6 +6,12 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ### Fixed
 
+- The grepai observatory no longer runs a hard-coded semantic canary and presents it as live user
+  traffic. Index readiness now comes from managed watcher and artifact evidence; the routed-search
+  card is populated only by a real optimized HZR search in the selected project's recent ledger,
+  with exact command, directory, latency, and available attribution. When no such request exists,
+  the UI states that no routed search was observed. Volatile index generation and configuration
+  hashes are no longer shown as operator-facing activity.
 - **The reported `relevance` was a rank-only fusion weight, not a relevance estimate.**
   `BudgetPlanner::plan` scored every candidate as `source_weight / (60.0 + source_rank)` —
   reciprocal rank fusion with the k=60 constant calibrated for TREC runs over thousands of

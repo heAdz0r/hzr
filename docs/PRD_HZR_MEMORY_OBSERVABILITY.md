@@ -58,7 +58,7 @@ Missing provider data must never be presented as an observed zero.
 2. Project registry: selected worktree and index readiness.
 3. Control-plane topology: `hzrd`, RTK fork-core, ICM, grepai.
 4. ICM observatory: retrieval evidence, counts, topic graph, search, and selection.
-5. grepai observatory: artifacts, watcher, semantic canary, generation, fingerprint.
+5. grepai observatory: artifact and watcher readiness plus real ledger-backed routed searches.
 6. Project activity: optimized/RAW split and recent operations.
 7. Global estimated efficiency, explicitly outside the project accounting boundary.
 8. Provider receipts or an explicit no-receipts state.
@@ -94,12 +94,16 @@ Missing provider data must never be presented as an observed zero.
 
 ### FR-4 — grepai readiness
 
-- Evidence includes full generation, full configuration fingerprint, artifact size and mtime,
-  watcher state/PID/uptime, HZR ownership, and ready-marker observation.
-- A fixed semantic canary executes through the managed grepai engine.
-- `Ready` requires usable artifacts and a successful semantic query with visible hits.
-- The canary reports latency, backend, strategy, hit counts, and generation, but no hit content.
-- Canary results are briefly cached and excluded from the ledger to prevent self-credit.
+- Readiness evidence includes artifact presence, size and mtime, watcher state/PID/uptime, HZR
+  ownership, and ready-marker observation.
+- `Ready` requires usable artifacts and a live HZR-owned watcher. Search traffic is not a health
+  prerequisite and the dashboard never generates a synthetic query.
+- The routed-search card is populated only from an optimized `rgai` or `search` operation already
+  present in the selected project's accounting ledger.
+- A real observation reports the exact requested command, ledger identifier, timestamp, working
+  directory, measured execution time, and available agent/session attribution.
+- When no recent routed search exists, the card says so explicitly and remains `Standby`; it never
+  invents query text, hit counts, backend names, or activity timestamps.
 
 ### FR-5 — Live project activity and RAW accountability
 
@@ -138,8 +142,8 @@ Missing provider data must never be presented as an observed zero.
 - project-local activity and global estimates;
 - provider receipts, help, and accounting notes.
 
-Repeated polling must not mutate service state. Health probes have bounded timeouts and the
-semantic canary is cached so the monitor cannot become an uncontrolled workload.
+Repeated polling must not mutate service state. Health probes have bounded timeouts, and dashboard
+polling must never issue search traffic or write self-generated activity into the ledger.
 
 ## 7. State model
 
@@ -176,7 +180,8 @@ Overall state is derived from required service evidence. Text must explain every
 1. A clean install exposes the UI at the daemon address without a separate command.
 2. All four services show `Ready` when their evidence succeeds.
 3. ICM renders real project topic counts and relationships without memory contents.
-4. grepai shows an HZR-owned watcher and successful semantic canary with visible hits.
+4. grepai shows HZR-owned watcher/artifact readiness and either a real ledger-backed routed search
+   or an explicit no-observed-traffic state.
 5. Avoidable RAW reads/searches receive zero credit and an actionable replacement.
 6. Provider data is either attributable receipts or explicitly unavailable.
 7. Utility version, visualizer version, help, and diagnostics are visible.
@@ -189,7 +194,7 @@ Overall state is derived from required service evidence. Text must explain every
 - Time from load to a comprehensible health state.
 - Project optimized-route share and avoidable RAW share.
 - ICM probe latency and visible topic coverage.
-- grepai semantic canary success rate and latency.
+- grepai watcher readiness and latency of real routed searches when present.
 - Operator actions required to identify a degraded subsystem.
 
 These are operational measures, not marketing benchmarks. Output reduction may be reported only
@@ -205,7 +210,7 @@ with its estimator or provider receipt source attached.
 
 ## 13. Release checklist
 
-- Verify four live service probes, ICM graph privacy, grepai ownership, and semantic evidence.
+- Verify four live service probes, ICM graph privacy, grepai ownership, and ledger-backed search evidence.
 - Exercise optimized and avoidable RAW commands and confirm accounting semantics.
 - Run Rust, fork-core, and Vue gates.
 - Capture sanitized desktop, observatory, and mobile screenshots.

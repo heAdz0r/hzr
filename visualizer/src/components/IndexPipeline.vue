@@ -26,9 +26,11 @@ const stages = computed<Array<{ label: string; detail: string; state: DashboardS
     state: props.observatory.watcher.state,
   },
   {
-    label: "Semantic canary",
-    detail: `${props.observatory.semantic.shown_hits} hits`,
-    state: props.observatory.semantic.state,
+    label: "Routed traffic",
+    detail: props.observatory.search_activity.ledger_id
+      ? `ledger #${props.observatory.search_activity.ledger_id}`
+      : "none observed",
+    state: props.observatory.search_activity.state,
   },
 ]);
 </script>

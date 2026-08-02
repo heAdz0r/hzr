@@ -896,7 +896,7 @@ main {
   font-size: 11px;
 }
 
-.canary-card {
+.search-activity-card {
   position: relative;
   z-index: 1;
   display: flex;
@@ -909,7 +909,7 @@ main {
   background: linear-gradient(135deg, rgba(104, 169, 255, 0.07), rgba(13, 14, 16, 0.4));
 }
 
-.canary-orb {
+.search-activity-orb {
   display: grid;
   width: 48px;
   height: 48px;
@@ -921,23 +921,23 @@ main {
   box-shadow: inset 0 0 0 1px rgba(61, 220, 151, 0.16), 0 0 28px rgba(61, 220, 151, 0.08);
 }
 
-.canary-degraded { color: var(--warning); background: rgba(255, 180, 84, 0.08); }
-.canary-standby { color: var(--disabled); background: rgba(114, 119, 128, 0.08); }
+.search-activity-degraded { color: var(--warning); background: rgba(255, 180, 84, 0.08); }
+.search-activity-standby { color: var(--disabled); background: rgba(114, 119, 128, 0.08); }
 
-.canary-card > div:last-child {
+.search-activity-card > div:last-child {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 5px;
 }
 
-.canary-card span,
-.canary-card small {
+.search-activity-card span,
+.search-activity-card small {
   color: var(--text-tertiary);
   font-size: 11px;
 }
 
-.canary-card strong {
+.search-activity-card strong {
   overflow: hidden;
   font-size: 11px;
   text-overflow: ellipsis;

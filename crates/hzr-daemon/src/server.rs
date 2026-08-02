@@ -214,7 +214,11 @@ mod tests {
         );
         assert!(payload["index_observatory"]["observed_at_ms"].is_number());
         assert!(payload["index_observatory"]["artifacts"]["size_bytes"].is_number());
-        assert!(payload["index_observatory"]["semantic"]["latency_ms"].is_number());
+        assert_eq!(
+            payload["index_observatory"]["search_activity"]["state"],
+            "standby"
+        );
+        assert!(payload["index_observatory"]["search_activity"]["command"].is_null());
         assert!(payload.get("local_activity").is_some());
         assert!(payload.get("provider_receipts").is_some());
         assert!(payload.get("token").is_none());
