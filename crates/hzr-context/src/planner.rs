@@ -472,7 +472,7 @@ impl ContextPlanner {
             .hits
             .into_iter()
             .take(request.limit)
-            .map(|hit| normalize_search_hit(workspace, hit))
+            .map(|hit| normalize_search_hit(workspace, Path::new(path_text), hit))
             .collect::<Result<Vec<_>>>()?;
         Ok(SearchApiResponse {
             query: raw.query,
@@ -672,6 +672,23 @@ struct ForkBudgetReport {
 /// an unbounded read.
 const MAX_SNIPPET_REPAIR_BYTES: u64 = 4 * 1024 * 1024;
 
+/// Rebase a fork hit path onto the project root.
+///
+/// The fork reports hit paths relative to `--path`, not to the project root, so any scoped
+/// search corrupted the one field an agent must act on: scoping to `src` reported `lib.rs`,
+/// which does not exist at the root, and scoping to a single file reported the empty string.
+/// Joining is uniform because an unscoped search is sent as `--path .`, and joining onto `.`
+/// changes nothing.
+fn hit_relative_path(search_path: &Path, hit_path: &str) -> PathBuf {
+    if hit_path.is_empty() {
+        return search_path.to_path_buf();
+    }
+    if search_path == Path::new(".") {
+        return PathBuf::from(hit_path);
+    }
+    search_path.join(hit_path)
+}
+
 /// Complete a snippet line the semantic engine returned mid-token.
 ///
 /// grepai chunks are byte windows, so the first line of a chunk can begin mid-identifier.
@@ -706,8 +723,12 @@ fn repair_source(workspace: &Workspace, path: &Path) -> Option<Vec<String>> {
     Some(text.lines().map(str::to_owned).collect())
 }
 
-fn normalize_search_hit(workspace: &Workspace, hit: ForkSearchHit) -> Result<SearchHit> {
-    let path = workspace.normalize_result(Path::new(&hit.path))?;
+fn normalize_search_hit(
+    workspace: &Workspace,
+    search_path: &Path,
+    hit: ForkSearchHit,
+) -> Result<SearchHit> {
+    let path = workspace.normalize_result(&hit_relative_path(search_path, &hit.path))?;
     let path = path
         .to_str()
         .ok_or_else(|| ContextError::InvalidForkOutput {
@@ -1017,8 +1038,8 @@ mod tests {
     };
 
     use super::{
-        MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, fork_search_args, fuse, push_warning,
-        repair_snippet_line, validate_fork_search_config,
+        MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, fork_search_args, fuse, hit_relative_path,
+        push_warning, repair_snippet_line, validate_fork_search_config,
     };
     use crate::candidate::RetrievedCandidate;
 
@@ -1074,6 +1095,32 @@ mod tests {
             repair_snippet_line("en(Value::as_str) else {", Some(actual)),
             actual.trim(),
             "a fragment of the recorded line must be completed to the whole line"
+        );
+    }
+
+    /// The fork reports hit paths relative to `--path`, not to the project root, so scoping a
+    /// search silently corrupted the one field an agent has to act on: scoping to `src`
+    /// reported `lib.rs`, which does not exist at the root, and scoping to a single file
+    /// reported the empty string, which normalized to `.`. A hit an agent cannot open is not
+    /// a hit.
+    #[test]
+    fn test_a_scoped_hit_is_reported_relative_to_the_project_root() {
+        use std::path::Path;
+
+        assert_eq!(
+            hit_relative_path(Path::new("."), "crates/hzr-cli/src/mcp.rs"),
+            Path::new("crates/hzr-cli/src/mcp.rs"),
+            "an unscoped search already reports root-relative paths"
+        );
+        assert_eq!(
+            hit_relative_path(Path::new("src"), "lib.rs"),
+            Path::new("src/lib.rs"),
+            "a directory scope must keep its prefix"
+        );
+        assert_eq!(
+            hit_relative_path(Path::new("src/lib.rs"), ""),
+            Path::new("src/lib.rs"),
+            "a file scope reports no sub-path, and the file itself is the hit"
         );
     }
 
