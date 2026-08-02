@@ -9,8 +9,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use hzr_memory::{
-    IcmClient, IcmConfig, IcmLayout, IcmSupervisor, IcmTransport, MemoryTransport, RecallRequest,
-    StartOutcome, StopOutcome, StoreRequest, verify_installation,
+    IcmClient, IcmConfig, IcmLayout, IcmSupervisor, IcmTransport, Importance, MemoryTransport,
+    RecallRequest, StartOutcome, StopOutcome, StoreRequest, verify_installation,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -216,6 +216,33 @@ async fn test_cli_fallback_parses_json_recall_but_not_human_store_output() -> an
 
 #[cfg(unix)]
 #[tokio::test]
+async fn test_cli_memory_maintenance_uses_typed_list_before_mutation() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let executable = fake_icm_script(&temp, "0.10.61")?;
+    let (listener, address) = bind_loopback().await?;
+    drop(listener);
+    let client = IcmClient::from_config(config(
+        &temp,
+        executable.to_str().context("fake executable path")?,
+        address,
+    ))?;
+
+    let records = client.list_all().await?;
+    assert_eq!(records[0].id, "01HZRCLI");
+    client
+        .update(
+            "01HZRCLI",
+            "replacement",
+            Some(Importance::High),
+            Some(&["decision".into()]),
+        )
+        .await?;
+    client.forget("01HZRCLI").await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn test_supervisor_owns_one_process_and_second_instance_attaches() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let executable = fake_icm_script(&temp, "0.10.61")?;
@@ -396,7 +423,10 @@ fn fake_icm_script(temp: &TempDir, version: &str) -> anyhow::Result<std::path::P
          if [ \"$1\" = \"--version\" ]; then printf 'icm {version}\\n'; exit 0; fi\n\
          case \" $* \" in\n\
            *\" recall \"*) printf '%s\\n' '[{recall}]' ;;\n\
+           *\" list \"*) printf '%s\\n' '[{recall}]' ;;\n\
            *\" store \"*) printf 'Stored: HUMAN-ONLY-ID\\n' ;;\n\
+           *\" update \"*) printf 'Updated\\n' ;;\n\
+           *\" forget \"*) printf 'Forgotten\\n' ;;\n\
            *\" serve \"*) sleep 60 ;;\n\
            *) printf 'unexpected arguments\\n' >&2; exit 2 ;;\n\
          esac\n"

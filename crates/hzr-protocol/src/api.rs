@@ -202,6 +202,50 @@ pub struct MemoryStoreApiRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryForgetApiRequest {
+    pub workspace: String,
+    pub id: String,
+    #[serde(default)]
+    pub scope: MemoryWriteScope,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryUpdateApiRequest {
+    pub workspace: String,
+    pub id: String,
+    pub content: String,
+    #[serde(default)]
+    pub scope: MemoryWriteScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importance: Option<MemoryImportance>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryPruneApiRequest {
+    pub workspace: String,
+    pub threshold: f32,
+    #[serde(default = "default_true")]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub scope: MemoryWriteScope,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MemoryMutationApiResponse {
+    pub affected_ids: Vec<String>,
+    pub dry_run: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecApiRequest {
     pub cwd: String,
     pub command: String,
@@ -574,8 +618,8 @@ pub struct CodecApiRequest {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContextPlanApiRequest, MemoryImportance, MemoryRecallApiRequest, MemoryStoreApiRequest,
-        SearchApiRequest, SearchMode,
+        ContextPlanApiRequest, MemoryImportance, MemoryPruneApiRequest, MemoryRecallApiRequest,
+        MemoryStoreApiRequest, SearchApiRequest, SearchMode,
     };
 
     #[test]
@@ -617,5 +661,14 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn test_memory_prune_defaults_to_preview() {
+        let request: MemoryPruneApiRequest =
+            serde_json::from_str(r#"{"workspace":"/repo","threshold":0.1}"#)
+                .expect("memory prune request parses");
+
+        assert!(request.dry_run);
     }
 }

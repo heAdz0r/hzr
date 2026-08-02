@@ -1,8 +1,12 @@
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::net::TcpListener;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use hzr_core::Config;
 use serde_json::Value;
 use tempfile::tempdir;
 
@@ -97,7 +101,7 @@ fn test_stdio_mcp_negotiates_lists_typed_tools_and_exits_on_eof() -> anyhow::Res
     )
     .expect("parse tools/list response");
     let tools = list["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 5);
+    assert_eq!(tools.len(), 8);
     assert!(tools.iter().any(|tool| tool["name"] == "hzr_context_plan"));
     assert!(
         tools.iter().any(|tool| tool["name"] == "hzr_codec"),
@@ -118,6 +122,129 @@ fn test_stdio_mcp_negotiates_lists_typed_tools_and_exits_on_eof() -> anyhow::Res
         if Instant::now() >= deadline {
             child.kill()?;
             anyhow::bail!("MCP server did not exit after stdin EOF");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+#[test]
+fn test_stdio_mcp_cancels_in_flight_tool_without_late_response() -> anyhow::Result<()> {
+    let directory = tempdir().expect("temporary MCP home");
+    let data_dir = directory.path().join("data");
+    let runtime = data_dir.join("runtime");
+    fs::create_dir_all(&runtime)?;
+    let token_path = runtime.join("hzrd.token");
+    fs::write(&token_path, "a".repeat(64))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(&token_path, fs::Permissions::from_mode(0o600))?;
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (_stream, _) = listener.accept().expect("accept pending tool request");
+        accepted_tx.send(()).expect("report accepted request");
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+    });
+
+    let config_path = directory.path().join("config.toml");
+    let mut config = Config {
+        data_dir,
+        ..Config::default()
+    };
+    config.daemon.bind = address;
+    config.daemon.request_timeout_ms = 10_000;
+    config.write(&config_path)?;
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hzr"))
+        .args([
+            "--config",
+            config_path.to_str().expect("UTF-8 config path"),
+            "mcp",
+            "serve",
+            "--workspace",
+            directory.path().to_str().expect("UTF-8 workspace path"),
+        ])
+        .env("HOME", directory.path())
+        .env("XDG_CONFIG_HOME", directory.path().join("xdg"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdin = child.stdin.take().expect("MCP stdin");
+    let stdout = child.stdout.take().expect("MCP stdout");
+    let mut lines = BufReader::new(stdout).lines();
+
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-11-25","capabilities":{{}}}}}}"#
+    )?;
+    stdin.flush()?;
+    let initialized: Value = serde_json::from_str(
+        &lines
+            .next()
+            .expect("initialize response line")
+            .expect("read initialize response"),
+    )?;
+    assert_eq!(initialized["id"], 1);
+
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","method":"notifications/initialized"}}"#
+    )?;
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{{"name":"hzr_context_plan","arguments":{{"intent":"blocked request"}}}}}}"#
+    )?;
+    stdin.flush()?;
+    accepted_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("tool request must reach the delayed daemon");
+
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","method":"notifications/cancelled","params":{{"requestId":7}}}}"#
+    )?;
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":8,"method":"tools/list","params":{{}}}}"#
+    )?;
+    stdin.flush()?;
+
+    let (line_tx, line_rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        line_tx.send(lines.next()).expect("send next MCP response");
+    });
+    let next = line_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("cancellation must unblock the MCP loop")
+        .expect("tools/list response line")
+        .expect("read tools/list response");
+    let response: Value = serde_json::from_str(&next)?;
+    assert_eq!(
+        response["id"], 8,
+        "cancelled request emitted a late response"
+    );
+    reader.join().expect("join MCP response reader");
+
+    drop(stdin);
+    release_tx.send(()).ok();
+    server.join().expect("join delayed daemon");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            assert!(status.success(), "MCP server failed after cancellation");
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            anyhow::bail!("MCP server did not exit after cancellation and stdin EOF");
         }
         thread::sleep(Duration::from_millis(10));
     }

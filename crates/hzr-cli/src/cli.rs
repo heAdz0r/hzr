@@ -393,6 +393,44 @@ pub enum MemoryCommand {
         #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
         scope: StoreScopeArg,
     },
+    #[command(about = "Delete one memory after namespace ownership is verified")]
+    Forget {
+        id: String,
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
+        scope: StoreScopeArg,
+    },
+    #[command(about = "Replace one memory after namespace ownership is verified")]
+    Update {
+        id: String,
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+        #[arg(value_name = "CONTENT", conflicts_with = "file")]
+        content: Option<String>,
+        #[arg(long, value_name = "PATH", conflicts_with = "content")]
+        file: Option<PathBuf>,
+        #[arg(long, value_enum)]
+        importance: Option<ImportanceArg>,
+        #[arg(long = "keyword")]
+        keywords: Option<Vec<String>>,
+        #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
+        scope: StoreScopeArg,
+    },
+    #[command(about = "Delete low-weight memories only in the selected namespace")]
+    Prune {
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+        #[arg(long, default_value_t = 0.1)]
+        threshold: f32,
+        #[arg(
+            long,
+            help = "Delete selected records; without this flag prune only previews"
+        )]
+        apply: bool,
+        #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
+        scope: StoreScopeArg,
+    },
     #[command(about = "Show ICM state reported by hzrd")]
     Status,
 }
@@ -867,6 +905,27 @@ mod tests {
                     dry_run: false,
                     force: true
                 }
+            }
+        ));
+    }
+
+    #[test]
+    fn test_cli_memory_prune_requires_apply_for_deletion() {
+        let preview =
+            Cli::try_parse_from(["hzr", "memory", "prune"]).expect("memory prune preview");
+        let apply =
+            Cli::try_parse_from(["hzr", "memory", "prune", "--apply"]).expect("memory prune apply");
+
+        assert!(matches!(
+            preview.command,
+            Command::Memory {
+                command: super::MemoryCommand::Prune { apply: false, .. }
+            }
+        ));
+        assert!(matches!(
+            apply.command,
+            Command::Memory {
+                command: super::MemoryCommand::Prune { apply: true, .. }
             }
         ));
     }

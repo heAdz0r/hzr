@@ -122,7 +122,7 @@ impl ContextPlanner {
             fork,
             fork_unavailable,
             memory,
-            hard_token_limit: config.policy.context_token_limit,
+            hard_token_limit: config.policy.input_token_budget(),
             fork_timeout_ms: config
                 .daemon
                 .request_timeout_ms
@@ -329,14 +329,47 @@ impl ContextPlanner {
                 .take(request.search_limit)
                 .collect();
             let outlines = self.candidate_outlines(workspace, &selected).await;
+            let mut source = normalize_plan(
+                selected,
+                workspace,
+                &generation.generation,
+                plan.pipeline_version.as_deref(),
+                &outlines,
+            )?;
+            if let Some(identifier) = exact_identifier(&request.intent) {
+                let exact_request = SearchRequest {
+                    workspace: workspace.identity.root.clone(),
+                    query: identifier.to_owned(),
+                    path: request.path.clone(),
+                    limit: request.search_limit.min(5),
+                    mode: SearchMode::Exact,
+                    include_content: true,
+                };
+                match self
+                    .search_in(workspace, &generation, &exact_request, true)
+                    .await
+                {
+                    Ok(response) => {
+                        let exact = normalize_search(response, &generation.generation);
+                        source.candidates.extend(exact.candidates);
+                        exact
+                            .warnings
+                            .into_iter()
+                            .for_each(|warning| push_warning(&mut source.warnings, warning));
+                    }
+                    Err(error) => push_warning(
+                        &mut warnings,
+                        ContextWarning {
+                            code: ContextWarningCode::SearchUnavailable,
+                            message: format!(
+                                "exact identifier search for {identifier} was unavailable: {error}"
+                            ),
+                        },
+                    ),
+                }
+            }
             return Ok(CodePlanResult {
-                source: Some(normalize_plan(
-                    selected,
-                    workspace,
-                    &generation.generation,
-                    plan.pipeline_version.as_deref(),
-                    &outlines,
-                )?),
+                source: Some(source),
                 warnings,
                 planner,
             });
@@ -927,6 +960,26 @@ fn add_source(
 /// single file failed with "project root is not a directory" — surfaced to the agent as
 /// an opaque HTTP 503 — while the identical semantic search worked. Scope and project
 /// identity are different things and are now always sent as different arguments.
+fn exact_identifier(intent: &str) -> Option<&str> {
+    intent
+        .split_whitespace()
+        .map(|token| {
+            token.trim_matches(|character: char| {
+                !character.is_ascii_alphanumeric() && character != '_' && character != ':'
+            })
+        })
+        .filter(|token| (3..=256).contains(&token.len()))
+        .filter(|token| {
+            token.contains('_')
+                || token.contains("::")
+                || token
+                    .as_bytes()
+                    .windows(2)
+                    .any(|pair| pair[0].is_ascii_lowercase() && pair[1].is_ascii_uppercase())
+        })
+        .max_by_key(|token| token.len())
+}
+
 fn fork_search_args(
     query: &str,
     path: &Path,
@@ -1086,10 +1139,22 @@ mod tests {
     };
 
     use super::{
-        MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, fork_search_args, fuse, hit_relative_path,
-        push_warning, repair_snippet_line, validate_fork_search_config,
+        MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, exact_identifier, fork_search_args, fuse,
+        hit_relative_path, push_warning, repair_snippet_line, validate_fork_search_config,
     };
     use crate::candidate::RetrievedCandidate;
+
+    #[test]
+    fn test_exact_identifier_routes_symbol_shaped_intent() {
+        assert_eq!(
+            exact_identifier("inspect classify_workspace_binding before editing"),
+            Some("classify_workspace_binding")
+        );
+        assert_eq!(
+            exact_identifier("explain how workspace binding works"),
+            None
+        );
+    }
 
     /// `--path` is how an agent narrows a search, and a single file is the most natural way
     /// to narrow one — it is what the native Grep tool accepts. Exact mode passed the path

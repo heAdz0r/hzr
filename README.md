@@ -167,8 +167,9 @@ projects, HZR/RTK fork-core/ICM/grepai state, versions, an interactive Cytoscape
 explorer, grepai watcher and semantic-canary proof, live routed output activity, provider receipts,
 separately labeled estimates, and copyable diagnostic commands. Background synchronization is
 quiet: it preserves scroll, graph camera, topic selection, and expanded activity while the manual
-Refresh control stays under operator control. A topic expands into bounded project-scoped memory
-records; an operation expands into the exact ledger command, route, working directory, latency,
+Refresh control stays under operator control. The public loopback dashboard exposes bounded,
+redacted project-scoped memory topology; full record content is available only from the
+bearer-authenticated memory-detail API. An operation expands into the exact ledger command, route, working directory, latency,
 and observed agent/session attribution. Historical attribution remains explicitly `Unattributed`.
 RAW operations are visible, receive zero savings credit, and show a first-class HZR replacement
 when one exists. `hzr init` refreshes

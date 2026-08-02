@@ -2,6 +2,55 @@
 
 All notable HZR changes are documented here. HZR follows semantic versioning while the public API is in `0.x` development.
 
+## [Unreleased]
+
+### Fixed
+
+- **The reported `relevance` was a rank-only fusion weight, not a relevance estimate.**
+  `BudgetPlanner::plan` scored every candidate as `source_weight / (60.0 + source_rank)` —
+  reciprocal rank fusion with the k=60 constant calibrated for TREC runs over thousands of
+  documents. Over HZR's lists of ten that pins the entire range between 1/61 and 1/70, so a
+  live plan reported 0.0123–0.0164 for its best and worst evidence alike while discarding
+  every engine's own magnitude. Scores are now normalized within their source, which is the
+  only scale on which they are comparable, and fused as a weighted sum. Deterministic tests
+  preserve large relevance gaps and reject the weak tail below the configured floor.
+- **Selection rewarded brevity over relevance.** `utility` divided by `sqrt(tokens)`, and with
+  relevance pinned in a 15% band the expression degenerated into `source_boost / sqrt(tokens)`
+  — a 30-token `Cargo.toml` outscored a 3000-token file that answered the question by an order
+  of magnitude. That is the mechanism behind lockfiles and images being selected ahead of
+  code. Length is now only a budget constraint, applied when filling the budget; a deterministic
+  regression test requires relevant locatable code to outrank a similar-scoring opaque artifact.
+- **Memory competed with code for one budget.** A memory body is prose and routinely an order
+  of magnitude longer than a code candidate, so a single stale fact could consume the plan —
+  observed at 10.9k of 12k tokens with the answering file not selected at all. Memory now has
+  a minority share of the hard limit and is rejected with `memory_budget_share` beyond it.
+- **`coverage` and `confidence` were structural constants printed beside real measurements.**
+  `confidence` was `(exact + n*0.5)/n`, which is exactly 0.5 whenever no exact-mode candidate
+  is present; `coverage` was source-kinds-present/4. A plan that missed the answer entirely
+  still reported 0.50/0.50. `coverage` is now the share of selected evidence an agent can
+  actually open, and `confidence` is how far the top candidate separates from the field —
+  which is what distinguishes a pinpointed answer from a flat list of guesses.
+- A code candidate with no locatable span — a PNG, a lockfile, a binary — is demoted rather
+  than competing on equal footing, because it cannot answer a question about code. Memory is
+  exempt: a durable fact legitimately has no line span.
+- High and irreversible codec requests now force exact fidelity in the production daemon path;
+  the request risk field is no longer ignored.
+- Managed agents load bounded root `AGENTS.md` and `CLAUDE.md` instructions while keeping the
+  Caveman SDK's duplicate tools, hooks, memory, and repo map disabled. Prefetched context is a
+  compact, bounded evidence brief rather than raw JSON.
+- Context planning now reserves configured output and safety tokens, caps memory to a minority
+  budget share, bounds each long memory while preserving its latest tail, and adds exact symbol
+  search when the intent names an identifier.
+- `hzr memory update`, `forget`, and namespace-scoped `prune` are available through the CLI,
+  daemon API, MCP, and managed-agent bridge. Destructive selection uses the same positive
+  project/global namespace filter as recall; API, CLI, and MCP prune default to dry-run, and
+  threshold pruning preserves high and critical memories regardless of weight.
+- MCP tool calls run concurrently and honor `notifications/cancelled`. Managed provider-usage
+  receipts that cannot reach the daemon are persisted as private per-event outbox files and
+  replayed exactly once after the daemon recovers.
+- Public dashboard memory details redact content-bearing fields. Full bounded details moved to
+  a bearer-authenticated endpoint.
+
 ## [0.3.3] - 2026-08-02
 
 ### Fixed

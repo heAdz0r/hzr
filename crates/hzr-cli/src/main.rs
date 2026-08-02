@@ -39,8 +39,9 @@ use hzr_index::{
 };
 use hzr_protocol::{
     CodecApiRequest, ContextPlanApiRequest, ExecApiRequest, ExecApprovalApiRequest,
-    MemoryRecallApiRequest, MemoryStoreApiRequest, PROTOCOL_VERSION, SearchApiRequest,
-    SearchApiResponse, SearchMode, SessionId,
+    MemoryForgetApiRequest, MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryStoreApiRequest,
+    MemoryUpdateApiRequest, PROTOCOL_VERSION, SearchApiRequest, SearchApiResponse, SearchMode,
+    SessionId,
 };
 
 use crate::cli::{
@@ -1235,6 +1236,65 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
                     importance: importance.into(),
                     keywords,
                     raw,
+                    scope: scope.into(),
+                })
+                .await?;
+            print_json(&response)?;
+        }
+        MemoryCommand::Forget {
+            id,
+            workspace,
+            scope,
+        } => {
+            let workspace = canonical_directory(workspace.as_deref())?;
+            let response = client
+                .memory_forget(&MemoryForgetApiRequest {
+                    workspace: path_text(&workspace, "memory workspace")?,
+                    id,
+                    scope: scope.into(),
+                })
+                .await?;
+            print_json(&response)?;
+        }
+        MemoryCommand::Update {
+            id,
+            workspace,
+            content,
+            file,
+            importance,
+            keywords,
+            scope,
+        } => {
+            let workspace = canonical_directory(workspace.as_deref())?;
+            let content = read_text(
+                content,
+                file.as_deref(),
+                payload_limit(config.daemon.request_limit_bytes),
+            )?;
+            let response = client
+                .memory_update(&MemoryUpdateApiRequest {
+                    workspace: path_text(&workspace, "memory workspace")?,
+                    id,
+                    content,
+                    scope: scope.into(),
+                    importance: importance.map(Into::into),
+                    keywords,
+                })
+                .await?;
+            print_json(&response)?;
+        }
+        MemoryCommand::Prune {
+            workspace,
+            threshold,
+            apply,
+            scope,
+        } => {
+            let workspace = canonical_directory(workspace.as_deref())?;
+            let response = client
+                .memory_prune(&MemoryPruneApiRequest {
+                    workspace: path_text(&workspace, "memory workspace")?,
+                    threshold,
+                    dry_run: !apply,
                     scope: scope.into(),
                 })
                 .await?;

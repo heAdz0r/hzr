@@ -149,6 +149,9 @@ impl Config {
         if self.daemon.request_limit_bytes == 0 {
             return Err(ConfigError::InvalidRequestLimit);
         }
+        if self.policy.input_token_budget() == 0 {
+            return Err(ConfigError::InvalidPolicyBudget);
+        }
         Ok(())
     }
 }
@@ -330,6 +333,14 @@ impl Default for PolicyConfig {
     }
 }
 
+impl PolicyConfig {
+    pub fn input_token_budget(&self) -> u64 {
+        self.context_token_limit
+            .saturating_sub(self.output_reserve)
+            .saturating_sub(self.safety_margin)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PrivacyConfig {
@@ -370,6 +381,8 @@ pub enum ConfigError {
     NonLoopbackBind(std::net::SocketAddr),
     #[error("daemon request limit must be greater than zero")]
     InvalidRequestLimit,
+    #[error("context token limit must exceed output reserve plus safety margin")]
+    InvalidPolicyBudget,
 }
 
 #[cfg(unix)]
@@ -425,7 +438,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        Config, ConfigError, EngineConfig, discover_bundle_engine_directory,
+        Config, ConfigError, EngineConfig, PolicyConfig, discover_bundle_engine_directory,
         sibling_engine_directory, stable_engine_directory,
     };
 
@@ -649,5 +662,30 @@ mod tests {
         assert_eq!(engines.binary("node"), Path::new("/opt/hzr/engines/node"));
         assert_eq!(engines.binary("git"), Path::new("git"));
         assert_eq!(engines.binary("rg"), Path::new("rg"));
+    }
+
+    #[test]
+    fn test_policy_context_budget_reserves_output_and_safety_margin() {
+        let policy = PolicyConfig {
+            context_token_limit: 16_000,
+            output_reserve: 2_000,
+            safety_margin: 1_000,
+            ..PolicyConfig::default()
+        };
+
+        assert_eq!(policy.input_token_budget(), 13_000);
+    }
+
+    #[test]
+    fn test_config_rejects_policy_without_input_budget() {
+        let mut config = Config::default();
+        config.policy.context_token_limit = 3_000;
+        config.policy.output_reserve = 2_000;
+        config.policy.safety_margin = 1_000;
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidPolicyBudget)
+        ));
     }
 }
