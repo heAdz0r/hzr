@@ -177,6 +177,12 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         )),
         Err(error) => checks.push(check("client_mcp_ownership", CheckStatus::Warning, error)),
     }
+    // Ownership is not enough: a server HZR owns can still be bound to a directory that is
+    // not the project, which is invisible until a recall comes back empty.
+    match client_config::status_all() {
+        Ok(statuses) => checks.push(workspace_binding_check(&statuses)),
+        Err(error) => checks.push(check("client_mcp_workspace", CheckStatus::Warning, error)),
+    }
     // Neither host exposes a global request/response interception point. Keep that
     // boundary machine-visible so an MCP/tool migration cannot be mistaken for codec
     // coverage or credited as delivered token savings.
@@ -726,6 +732,42 @@ fn strict_status(config: &Config) -> CheckStatus {
     }
 }
 
+/// Report registered MCP servers whose project namespace is decided by the client's working
+/// directory rather than pinned.
+///
+/// A registration used to be judged only on existing, which hid the worst binding failure
+/// there is: the Claude desktop app launches MCP servers from `/`, so an unpinned server
+/// wrote every memory into the namespace of the filesystem root while looking healthy. This
+/// is a warning and not an error because an unpinned server bound to a real repository still
+/// works — it is the *silence* that was wrong, not the configuration in every case.
+fn workspace_binding_check(statuses: &[client_config::ClientMcpStatus]) -> DoctorCheck {
+    let unpinned: Vec<&str> = statuses
+        .iter()
+        .filter(|status| status.registered && status.pinned_workspace.is_none())
+        .map(|status| status.client.as_str())
+        .collect();
+
+    if unpinned.is_empty() {
+        return check(
+            "client_mcp_workspace",
+            CheckStatus::Pass,
+            "every registered MCP server pins its project workspace",
+        );
+    }
+
+    check(
+        "client_mcp_workspace",
+        CheckStatus::Warning,
+        format!(
+            "{} registered without `--workspace`, so the memory namespace comes from the \
+             directory the client launches from; the desktop app uses `/` and Codex uses a \
+             per-session directory, and stores made there are unreachable from the project. \
+             Re-register with `hzr mcp config --client <client> --workspace <dir>`",
+            unpinned.join(", ")
+        ),
+    )
+}
+
 fn check(
     name: impl Into<String>,
     status: CheckStatus,
@@ -738,12 +780,13 @@ fn check(
     }
 }
 
+/// Each entry already carries the remediation for its own client, because they differ: HZR
+/// rewrites Codex and the desktop app, and must never rewrite Claude Code's own state file.
+/// A single generic instruction here would be wrong for whichever client it did not fit.
 fn direct_icm_registration_detail(found: &[String]) -> String {
     format!(
-        "direct ICM MCP registration bypasses HZR memory ownership in: {}; \
-         run `hzr install --dry-run`, then `hzr install --force` to replace it; \
-         `hzr mcp config --client <client>` only prints a manual snippet",
-        found.join(", ")
+        "direct ICM MCP registration bypasses HZR memory ownership in: {}",
+        found.join("; ")
     )
 }
 
@@ -792,10 +835,67 @@ mod tests {
     use hzr_core::Config;
     use sha2::{Digest, Sha256};
 
+    use crate::client_config::{Client, ClientMcpStatus};
+
     use super::{
         CheckStatus, attest_active_bundle, bounded, direct_icm_registration_detail,
-        integration_layout,
+        integration_layout, workspace_binding_check,
     };
+
+    fn registration(client: Client, pinned: Option<&str>) -> ClientMcpStatus {
+        ClientMcpStatus {
+            client,
+            path: std::path::PathBuf::from("/tmp/config"),
+            config_exists: true,
+            registered: true,
+            command: Some("/opt/hzr/bin/hzr".into()),
+            args: vec!["mcp".into(), "serve".into()],
+            direct_icm_registrations: 0,
+            pinned_workspace: pinned.map(str::to_owned),
+            lifecycle: "client_managed_stdio",
+            started_by_init: false,
+        }
+    }
+
+    /// An unpinned registration means the memory namespace is whatever directory the client
+    /// launched from. That produced the worst observed failure — the desktop app launches
+    /// from `/`, so its stores were unreachable from the repository they described — and
+    /// nothing reported it, because a registration was judged only on being present.
+    #[test]
+    fn test_doctor_reports_an_unpinned_client_workspace() {
+        let pinned = workspace_binding_check(&[registration(
+            Client::ClaudeDesktop,
+            Some("/Users/andrew/code/app"),
+        )]);
+        assert_eq!(pinned.status, CheckStatus::Pass);
+
+        let unpinned = workspace_binding_check(&[registration(Client::ClaudeDesktop, None)]);
+        assert_eq!(unpinned.status, CheckStatus::Warning);
+        assert!(
+            unpinned.detail.contains("--workspace"),
+            "the warning must name the fix, got: {}",
+            unpinned.detail
+        );
+        assert!(
+            unpinned.detail.contains("claude-desktop"),
+            "the warning must name the client, got: {}",
+            unpinned.detail
+        );
+    }
+
+    /// A client with no `hzr` registration at all is not an unpinned one; reporting it here
+    /// would duplicate the ownership check and bury the real signal.
+    #[test]
+    fn test_an_unregistered_client_is_not_reported_as_unpinned() {
+        let mut status = registration(Client::Codex, None);
+        status.registered = false;
+
+        assert_eq!(
+            workspace_binding_check(&[status]).status,
+            CheckStatus::Pass,
+            "only registered servers can have a workspace binding"
+        );
+    }
 
     #[test]
     fn test_bounded_diagnostic_respects_utf8_boundary() {
@@ -820,12 +920,42 @@ mod tests {
         assert_eq!(integration_layout(&config).root(), integration);
     }
 
+    /// The repair instruction must be the one that actually mutates the file, not the one that
+    /// prints a snippet — and it differs by client, because HZR rewrites Codex and the desktop
+    /// app but must never rewrite Claude Code's own state file. A single generic instruction
+    /// was wrong for whichever client it did not fit, so each entry now carries its own and
+    /// the detail line only joins them.
     #[test]
-    fn test_direct_icm_repair_names_the_mutating_install_command() {
-        let detail = direct_icm_registration_detail(&["codex".to_owned()]);
+    fn test_direct_icm_repair_names_the_command_that_fits_each_client() {
+        assert!(
+            Client::Codex
+                .direct_icm_remediation()
+                .contains("`hzr install --force`")
+        );
+        assert!(
+            Client::Codex
+                .direct_icm_remediation()
+                .contains("only prints a snippet")
+        );
+        assert!(
+            Client::ClaudeCode
+                .direct_icm_remediation()
+                .contains("claude mcp remove icm"),
+            "HZR never writes this file, so `hzr install` cannot be the fix"
+        );
 
-        assert!(detail.contains("`hzr install --force` to replace it"));
-        assert!(detail.contains("`hzr mcp config --client <client>` only prints"));
+        let detail = direct_icm_registration_detail(&[
+            format!(
+                "codex (/x, 1 registration(s) — {})",
+                Client::Codex.direct_icm_remediation()
+            ),
+            format!(
+                "claude-code (/y, 1 registration(s) — {})",
+                Client::ClaudeCode.direct_icm_remediation()
+            ),
+        ]);
+        assert!(detail.contains("`hzr install --force`"));
+        assert!(detail.contains("claude mcp remove icm"));
     }
 
     #[test]

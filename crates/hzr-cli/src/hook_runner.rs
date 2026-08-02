@@ -221,7 +221,7 @@ async fn task(config: &Config, input: &Value) -> Result<()> {
         Ok(Ok(response)) => response,
         _ => return Ok(()),
     };
-    let context = serde_json::to_string(&response)?;
+    let context = context_brief(&serde_json::to_value(&response)?);
     let mut tool_input = input
         .get("tool_input")
         .cloned()
@@ -237,6 +237,63 @@ async fn task(config: &Config, input: &Value) -> Result<()> {
             "updatedInput": tool_input,
         }
     }))
+}
+
+/// Largest number of leads to put in front of a subagent. A plan is a starting point, not a
+/// reading list; past a handful the brief competes with the task it was meant to serve.
+const MAX_BRIEF_LEADS: usize = 12;
+
+/// Render a context plan as a brief a subagent can act on.
+///
+/// The plan used to be prepended as a minified JSON envelope with no explanation — no
+/// glossary, no statement of what the entries are, no instruction on what to do with them. A
+/// subagent that cannot tell what the block is will either ignore it and re-derive everything,
+/// or treat it as established fact. The second failure is the worse one: a plan candidate is a
+/// ranked guess, so the brief has to say that out loud.
+fn context_brief(plan: &Value) -> String {
+    let leads: Vec<String> = plan
+        .pointer("/pack/selected")
+        .and_then(Value::as_array)
+        .map(|selected| {
+            selected
+                .iter()
+                .filter(|candidate| {
+                    candidate.get("source").and_then(Value::as_str) != Some("memory")
+                })
+                .filter_map(|candidate| {
+                    let path = candidate.get("path").and_then(Value::as_str)?;
+                    let span = match (
+                        candidate.get("line_start").and_then(Value::as_u64),
+                        candidate.get("line_end").and_then(Value::as_u64),
+                    ) {
+                        (Some(start), Some(end)) => format!(":{start}-{end}"),
+                        _ => String::new(),
+                    };
+                    let symbol = candidate
+                        .get("symbol")
+                        .and_then(Value::as_str)
+                        .map(|symbol| format!(" ({symbol})"))
+                        .unwrap_or_default();
+                    Some(format!("- {path}{span}{symbol}"))
+                })
+                .take(MAX_BRIEF_LEADS)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if leads.is_empty() {
+        return "HZR planned this task and found no code leads for it. Start from the task \
+                itself; there is nothing here to confirm or rule out."
+            .to_owned();
+    }
+
+    format!(
+        "HZR ranked these as the most likely relevant places for the task below. They are \
+         unverified leads, not findings: confirm each one before relying on it, and ignore any \
+         that do not fit. Read them with `hzr rtk -- read <path> --from N --to M`, and search \
+         with `hzr search \"<pattern>\" --mode exact` when a lead is wrong.\n\n{}",
+        leads.join("\n")
+    )
 }
 
 fn write_hook_json(value: Value) -> Result<()> {
@@ -370,12 +427,60 @@ mod tests {
     use hzr_exec::{CanonicalCommand, RewriteDecision, RewriteSource};
 
     use super::{
-        clear_reconciled_rewrites, degraded_rewrite_coverage, record_degraded_rewrite_at,
-        steer_to_first_class,
+        clear_reconciled_rewrites, context_brief, degraded_rewrite_coverage,
+        record_degraded_rewrite_at, steer_to_first_class,
     };
 
     fn allow_raw() -> RewriteDecision {
         RewriteDecision::allow_raw("no rule matched")
+    }
+
+    /// The plan was prepended to a subagent's prompt as a minified JSON blob with no
+    /// explanation: no glossary, no statement that the paths are unverified leads, and no
+    /// instruction on what to do with them. A subagent that cannot tell what the block is will
+    /// either ignore it and re-derive everything or trust it as fact — and the second failure
+    /// is worse, because a plan candidate is a ranked guess, not a finding.
+    #[test]
+    fn test_the_injected_brief_tells_a_subagent_what_the_evidence_is() {
+        let plan = serde_json::json!({
+            "pack": {
+                "selected": [{
+                    "source": "context",
+                    "path": "crates/hzr-cli/src/hook_runner.rs",
+                    "line_start": 45,
+                    "line_end": 79,
+                    "relevance": 0.42,
+                }],
+            },
+        });
+
+        let brief = context_brief(&plan);
+
+        assert!(
+            brief.contains("crates/hzr-cli/src/hook_runner.rs:45-79"),
+            "a lead must be citable as a path and span, got: {brief}"
+        );
+        assert!(
+            brief.contains("unverified"),
+            "the brief must say the leads are unverified, got: {brief}"
+        );
+        assert!(
+            !brief.contains("\"pack\""),
+            "the raw envelope is noise for a subagent, got: {brief}"
+        );
+    }
+
+    /// An empty plan must say so rather than prepending an empty block that reads like a
+    /// finding of "nothing relevant exists".
+    #[test]
+    fn test_an_empty_plan_states_that_it_found_nothing() {
+        let brief = context_brief(&serde_json::json!({"pack": {"selected": []}}));
+
+        assert!(
+            brief.contains("no"),
+            "an empty plan must be stated, got: {brief}"
+        );
+        assert!(!brief.contains("unverified leads:"));
     }
 
     fn proposed(decision: &RewriteDecision) -> Option<String> {
