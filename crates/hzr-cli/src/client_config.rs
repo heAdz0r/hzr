@@ -13,6 +13,29 @@ use crate::adoption::{atomic_write, backup_path, commit, read_optional, sha256};
 pub enum Client {
     Codex,
     ClaudeDesktop,
+    /// Claude Code's own state file. Audited for ownership, never written by HZR: it holds
+    /// far more than MCP registrations, so rewriting it would put HZR in charge of the
+    /// user's session state.
+    ClaudeCode,
+}
+
+impl Client {
+    /// How the user removes a direct `icm` server for this client. It differs by client
+    /// because HZR rewrites two of these configurations and must never rewrite the third —
+    /// pointing every client at `hzr mcp config` told Claude Code users to run a command
+    /// that would not touch their file.
+    pub fn direct_icm_remediation(self) -> &'static str {
+        match self {
+            Self::Codex | Self::ClaudeDesktop => {
+                "replace it with the snippet from `hzr mcp config --client <client> \
+                 --workspace <dir>`"
+            }
+            Self::ClaudeCode => {
+                "HZR never writes this file: remove the server with `claude mcp remove icm`, \
+                 then add HZR with `claude mcp add hzr -- hzr mcp serve --workspace <dir>`"
+            }
+        }
+    }
 }
 
 impl Client {
@@ -20,7 +43,13 @@ impl Client {
         match self {
             Self::Codex => "codex",
             Self::ClaudeDesktop => "claude-desktop",
+            Self::ClaudeCode => "claude-code",
         }
+    }
+
+    /// Whether `hzr install` may rewrite this client's configuration.
+    fn is_writable(self) -> bool {
+        !matches!(self, Self::ClaudeCode)
     }
 }
 
@@ -45,6 +74,10 @@ pub struct ClientMcpStatus {
     pub command: Option<String>,
     pub args: Vec<String>,
     pub direct_icm_registrations: usize,
+    /// The project pinned with `--workspace`, when the registration pins one. Unpinned means
+    /// the memory namespace is decided by whatever directory the client launches from, which
+    /// is `/` for the Claude desktop app and a per-session directory for Codex.
+    pub pinned_workspace: Option<String>,
     pub lifecycle: &'static str,
     pub started_by_init: bool,
 }
@@ -56,22 +89,50 @@ struct Registration {
 }
 
 impl Registration {
+    /// `mcp serve` must be matched as a prefix, not an exact argument list: the recommended
+    /// registration also carries `--workspace <dir>`, and an exact comparison reported those
+    /// correctly-configured clients as unregistered.
+    fn serves_mcp(&self) -> bool {
+        self.args.len() >= 2 && self.args[0] == "mcp" && self.args[1] == "serve"
+    }
+
     fn is_native_hzr(&self) -> bool {
         Path::new(&self.command)
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name == "hzr")
-            && self.args == ["mcp", "serve"]
+            && self.serves_mcp()
     }
 
     fn matches(&self, binary: &Path) -> bool {
-        self.command == binary.to_string_lossy() && self.args == ["mcp", "serve"]
+        self.command == binary.to_string_lossy() && self.serves_mcp()
+    }
+
+    /// The value passed to `--workspace`, if any.
+    fn pinned_workspace(&self) -> Option<String> {
+        self.args
+            .iter()
+            .position(|argument| argument == "--workspace")
+            .and_then(|index| self.args.get(index + 1))
+            .cloned()
     }
 }
 
 pub const MCP_LIFECYCLE: &str = "client_managed_stdio";
 
+/// Clients whose configuration `hzr install` may write.
 pub fn default_paths() -> Result<Vec<(Client, PathBuf)>> {
+    Ok(audit_paths()?
+        .into_iter()
+        .filter(|(client, _)| client.is_writable())
+        .collect())
+}
+
+/// Every client configuration HZR reads when auditing memory ownership, including the ones
+/// it must never write. A registration HZR cannot fix is still a registration that creates a
+/// second memory writer, so leaving it unread is what let a direct `icm` server in
+/// `~/.claude.json` pass the ownership check for an entire release.
+pub fn audit_paths() -> Result<Vec<(Client, PathBuf)>> {
     let base = BaseDirs::new().context("cannot determine the user home directory")?;
     let home = base.home_dir();
     let codex = std::env::var_os("CODEX_HOME")
@@ -87,6 +148,12 @@ pub fn default_paths() -> Result<Vec<(Client, PathBuf)>> {
             home.join("Library/Application Support/Claude/claude_desktop_config.json"),
         ));
     }
+    paths.push((
+        Client::ClaudeCode,
+        std::env::var_os("CLAUDE_CONFIG_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".claude.json")),
+    ));
     Ok(paths)
 }
 
@@ -102,7 +169,7 @@ pub fn install_all(
 }
 
 pub fn status_all() -> Result<Vec<ClientMcpStatus>> {
-    default_paths()?
+    audit_paths()?
         .into_iter()
         .map(|(client, path)| status(client, &path))
         .collect()
@@ -127,7 +194,7 @@ pub fn status(client: Client, path: &Path) -> Result<ClientMcpStatus> {
                 codex_direct_icm_count(&document),
             )
         }
-        Client::ClaudeDesktop => {
+        Client::ClaudeDesktop | Client::ClaudeCode => {
             let document = if bytes.is_empty() {
                 json!({})
             } else {
@@ -143,6 +210,9 @@ pub fn status(client: Client, path: &Path) -> Result<ClientMcpStatus> {
     let registered = registration
         .as_ref()
         .is_some_and(Registration::is_native_hzr);
+    let pinned_workspace = registration
+        .as_ref()
+        .and_then(Registration::pinned_workspace);
     let (command, args) = registration
         .map(|registration| (Some(registration.command), registration.args))
         .unwrap_or_default();
@@ -155,6 +225,7 @@ pub fn status(client: Client, path: &Path) -> Result<ClientMcpStatus> {
         command,
         args,
         direct_icm_registrations,
+        pinned_workspace,
         lifecycle: MCP_LIFECYCLE,
         started_by_init: false,
     })
@@ -162,7 +233,7 @@ pub fn status(client: Client, path: &Path) -> Result<ClientMcpStatus> {
 
 pub fn direct_icm_registrations() -> Result<Vec<String>> {
     let mut found = Vec::new();
-    for (client, path) in default_paths()? {
+    for (client, path) in audit_paths()? {
         let bytes = read_optional(&path)?;
         if bytes.is_empty() {
             continue;
@@ -176,7 +247,7 @@ pub fn direct_icm_registrations() -> Result<Vec<String>> {
                     .with_context(|| format!("failed to parse {}", path.display()))?;
                 codex_direct_icm_count(&document)
             }
-            Client::ClaudeDesktop => {
+            Client::ClaudeDesktop | Client::ClaudeCode => {
                 let document: Value = serde_json::from_slice(&bytes)
                     .with_context(|| format!("failed to parse {}", path.display()))?;
                 json_direct_icm_count(&document)
@@ -184,10 +255,11 @@ pub fn direct_icm_registrations() -> Result<Vec<String>> {
         };
         if count > 0 {
             found.push(format!(
-                "{} ({}, {} registration(s))",
+                "{} ({}, {} registration(s) — {})",
                 client.as_str(),
                 path.display(),
-                count
+                count,
+                client.direct_icm_remediation()
             ));
         }
     }
@@ -205,6 +277,15 @@ pub fn install(
     let (after, direct_icm_removed, hzr_registered) = match client {
         Client::Codex => migrate_codex(path, &before, binary)?,
         Client::ClaudeDesktop => migrate_claude_desktop(path, &before, binary)?,
+        // Claude Code's state file is audit-only. Refusing here rather than silently
+        // skipping keeps the "HZR owns its own files" rule a checked invariant instead of a
+        // convention that a future caller can quietly break.
+        Client::ClaudeCode => anyhow::bail!(
+            "{} is Claude Code's own state file and is audited, never written by HZR; \
+             remove a direct icm server yourself, or register hzr with \
+             `claude mcp add`",
+            path.display()
+        ),
     };
     let changed = before != after.as_bytes();
     let backup = (changed && !before.is_empty()).then(|| backup_path(path, &before));
@@ -336,8 +417,8 @@ fn json_servers(document: &Value) -> Option<&Map<String, Value>> {
     document.get("mcpServers").and_then(Value::as_object)
 }
 
-fn json_direct_icm_count(document: &Value) -> usize {
-    json_servers(document)
+fn count_direct_icm(servers: Option<&Map<String, Value>>) -> usize {
+    servers
         .map(|servers| {
             servers
                 .values()
@@ -350,6 +431,26 @@ fn json_direct_icm_count(document: &Value) -> usize {
                 .count()
         })
         .unwrap_or(0)
+}
+
+/// Count direct `icm` servers in a JSON client configuration.
+///
+/// Claude Code additionally keeps per-project registrations under
+/// `projects.<path>.mcpServers`, and a second writer registered there is exactly as harmful
+/// as one at the top level, so both scopes are counted.
+fn json_direct_icm_count(document: &Value) -> usize {
+    let top_level = count_direct_icm(json_servers(document));
+    let per_project: usize = document
+        .get("projects")
+        .and_then(Value::as_object)
+        .map(|projects| {
+            projects
+                .values()
+                .map(|project| count_direct_icm(json_servers(project)))
+                .sum()
+        })
+        .unwrap_or(0);
+    top_level + per_project
 }
 
 fn json_hzr_registration(document: &Value) -> Option<Registration> {
@@ -434,10 +535,108 @@ mod tests {
     use tempfile::tempdir;
     use toml_edit::DocumentMut;
 
-    use super::{Client, MCP_LIFECYCLE, install, status};
+    use super::{Client, MCP_LIFECYCLE, audit_paths, default_paths, install, status};
 
     fn binary() -> &'static Path {
         Path::new("/opt/hzr/current/bin/hzr")
+    }
+
+    /// A registration that pins its workspace is the recommended form, so recognition must
+    /// not depend on the argument list being exactly `["mcp", "serve"]`. Before this, adding
+    /// `--workspace` made `hzr mcp status` report the server as unregistered and doctor
+    /// treated a correctly-configured client as a missing one.
+    #[test]
+    fn test_a_workspace_pinned_registration_is_still_recognised_and_reported() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            "[mcp_servers.hzr]\ncommand = '/opt/hzr/current/bin/hzr'\n\
+             args = ['mcp', 'serve', '--workspace', '/Users/andrew/code/app']\n",
+        )
+        .expect("fixture");
+
+        let status = status(Client::Codex, &path).expect("native MCP status");
+
+        assert!(
+            status.registered,
+            "pinning the workspace must not look like a missing registration"
+        );
+        assert_eq!(
+            status.pinned_workspace.as_deref(),
+            Some("/Users/andrew/code/app"),
+            "the pinned project must be reported so a wrong binding is visible"
+        );
+    }
+
+    /// Claude Code stores its MCP servers in `~/.claude.json`, under a top-level
+    /// `mcpServers` map and per-project maps. Nothing read that file, so a direct `icm`
+    /// registration there — the exact thing the contract forbids — passed the ownership
+    /// audit while spawning a second memory writer on every session start. Doctor saw only
+    /// the resulting orphan processes and told the user to stop processes the client
+    /// immediately respawns.
+    #[test]
+    fn test_a_direct_icm_registration_in_claude_code_is_audited() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join(".claude.json");
+        fs::write(
+            &path,
+            r#"{
+                 "mcpServers": {"icm": {"command": "/Users/andrew/.local/bin/icm", "args": ["serve"]}},
+                 "projects": {
+                   "/Users/andrew/code/app": {
+                     "mcpServers": {"icm": {"command": "/opt/icm", "args": ["serve"]}}
+                   }
+                 }
+               }"#,
+        )
+        .expect("fixture");
+
+        let status = status(Client::ClaudeCode, &path).expect("claude code status");
+
+        assert_eq!(
+            status.direct_icm_registrations, 2,
+            "both the user-scope and the project-scope registration must be counted"
+        );
+        assert!(!status.registered, "no hzr server is registered here");
+    }
+
+    /// Claude Code's configuration is a large user state file that HZR must never rewrite,
+    /// so it belongs to the audit set and not to the set `hzr install` writes.
+    #[test]
+    fn test_claude_code_is_audited_but_never_written() {
+        let writable = default_paths().expect("writable client paths");
+        assert!(
+            !writable
+                .iter()
+                .any(|(client, _)| *client == Client::ClaudeCode),
+            "hzr install must not write Claude Code's own state file"
+        );
+        let audited = audit_paths().expect("audited client paths");
+        assert!(
+            audited
+                .iter()
+                .any(|(client, _)| *client == Client::ClaudeCode),
+            "the ownership audit must still read it"
+        );
+    }
+
+    /// The unpinned form still registers, but must be reported as unpinned so `doctor` can
+    /// say that the namespace is decided by whatever directory the client launches from.
+    #[test]
+    fn test_an_unpinned_registration_reports_no_workspace() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            "[mcp_servers.hzr]\ncommand = '/opt/hzr/current/bin/hzr'\nargs = ['mcp', 'serve']\n",
+        )
+        .expect("fixture");
+
+        let status = status(Client::Codex, &path).expect("native MCP status");
+
+        assert!(status.registered);
+        assert!(status.pinned_workspace.is_none());
     }
 
     #[test]
