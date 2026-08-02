@@ -5,7 +5,7 @@
 //! capability that cannot be measured cannot be justified, and one that is never called is
 //! indistinguishable from one that does not work.
 
-use hzr_core::{Ledger, OperationSubsystem, classify_operation};
+use hzr_core::{Ledger, OperationContext, OperationSubsystem, classify_operation};
 use tempfile::tempdir;
 
 #[test]
@@ -74,4 +74,82 @@ fn test_a_recorded_operation_is_scoped_to_its_project() {
     assert_eq!(activity.operations, 1);
     assert_eq!(activity.optimized_operations, 1);
     assert_eq!(activity.raw_operations, 0);
+}
+
+#[test]
+fn test_recent_activity_preserves_inspectable_request_context() {
+    let directory = tempdir().expect("temp directory");
+    let path = directory.path().join("hzr.sqlite");
+    let ledger = Ledger::open(&path).expect("ledger open");
+
+    ledger
+        .record_operation_with_context(
+            "rg --files visualizer/src",
+            "hzr rtk -- raw rg --files visualizer/src",
+            120,
+            120,
+            7,
+            OperationContext {
+                project_path: "/work/project/visualizer",
+                agent: Some("codex"),
+                session_id: Some("thread-123"),
+            },
+        )
+        .expect("record attributed operation");
+
+    let activity = ledger
+        .project_activity("/work/project")
+        .expect("project activity");
+    let operation = activity
+        .recent_operations
+        .first()
+        .expect("recent operation");
+
+    assert!(operation.ledger_id > 0);
+    assert_eq!(operation.original_command, "rg --files visualizer/src");
+    assert_eq!(
+        operation.recorded_command,
+        "hzr rtk -- raw rg --files visualizer/src"
+    );
+    assert_eq!(operation.working_directory, "/work/project/visualizer");
+    assert_eq!(operation.agent.as_deref(), Some("codex"));
+    assert_eq!(operation.session_id.as_deref(), Some("thread-123"));
+}
+
+#[test]
+fn test_raw_routes_receive_zero_credit_even_when_recorded_counts_differ() {
+    let directory = tempdir().expect("temp directory");
+    let ledger = Ledger::open(&directory.path().join("hzr.sqlite")).expect("ledger open");
+
+    ledger
+        .record_operation("cat useful", "read useful", 100, 20, 2, "/work/project")
+        .expect("optimized operation");
+    ledger
+        .record_operation(
+            "rg noisy",
+            "hzr rtk -- raw rg noisy",
+            100,
+            1,
+            3,
+            "/work/project",
+        )
+        .expect("raw operation");
+
+    let summary = ledger.efficiency_summary().expect("efficiency summary");
+    assert_eq!(summary.baseline_tokens_estimated, 101);
+    assert_eq!(summary.delivered_tokens_estimated, 21);
+    assert_eq!(summary.gross_avoided_tokens_estimated, 80);
+    assert_eq!(summary.regression_tokens_estimated, 0);
+    assert_eq!(summary.net_avoided_tokens_estimated, 80);
+
+    let raw = summary
+        .by_command
+        .iter()
+        .find(|command| command.command.contains("-- raw"))
+        .expect("raw command summary");
+    assert_eq!(raw.baseline_tokens_estimated, 1);
+    assert_eq!(raw.delivered_tokens_estimated, 1);
+    assert_eq!(raw.gross_avoided_tokens_estimated, 0);
+    assert_eq!(raw.regression_tokens_estimated, 0);
+    assert_eq!(raw.net_avoided_tokens_estimated, 0);
 }

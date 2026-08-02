@@ -17,11 +17,10 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 141
-# Recomputed on the merged tree. The warning set is unchanged in kind: 141 hits, no new
-# lint codes. Only recorded line positions moved, because the read-digest, tracking and
-# rgai-literal edits shifted them. Extracting the rows with and without the rgai literal
-# change produced byte-identical lists, so this refresh hides no new defect.
-EXPECTED_SHA256 = "1c87938c876e704b7c6721fd9180635b742b29265d1f471588bad896b6d406ae"
+# Recomputed after adding evidence-only agent/session columns to tracking. The inherited
+# warning set remains 141 hits with no new lint codes; only recorded line positions in
+# tracking.rs moved. The ratchet therefore continues to reject every future warning change.
+EXPECTED_SHA256 = "96c1caf8658e0f908ebdebf6c6c977133b08b42c8bcadf1e0e32ec19fc5dcd40"
 
 
 def main() -> int:

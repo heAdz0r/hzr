@@ -56,6 +56,47 @@ fn current_project_path_string() -> &'static str {
         .as_str()
 }
 
+fn current_agent_context() -> (Option<String>, Option<String>) {
+    infer_agent_context(|name| std::env::var(name).ok())
+}
+
+fn infer_agent_context(
+    mut value: impl FnMut(&str) -> Option<String>,
+) -> (Option<String>, Option<String>) {
+    if let Some(client) = value("HZR_CLIENT").filter(|client| !client.trim().is_empty()) {
+        return (
+            Some(bounded_identifier(&client, 64)),
+            value("HZR_SESSION_ID").map(|session| bounded_identifier(&session, 128)),
+        );
+    }
+    if let Some(session) = value("CODEX_THREAD_ID").filter(|session| !session.trim().is_empty()) {
+        return (
+            Some("codex".to_string()),
+            Some(bounded_identifier(&session, 128)),
+        );
+    }
+    if let Some(session) = value("CLAUDE_SESSION_ID").filter(|session| !session.trim().is_empty()) {
+        return (
+            Some("claude-code".to_string()),
+            Some(bounded_identifier(&session, 128)),
+        );
+    }
+    if value("CLAUDECODE").is_some() {
+        return (Some("claude-code".to_string()), None);
+    }
+    if let Some(session) = value("CURSOR_TRACE_ID").filter(|session| !session.trim().is_empty()) {
+        return (
+            Some("cursor".to_string()),
+            Some(bounded_identifier(&session, 128)),
+        );
+    }
+    (None, None)
+}
+
+fn bounded_identifier(value: &str, max_chars: usize) -> String {
+    value.trim().chars().take(max_chars).collect()
+}
+
 /// Build SQL filter params for project-scoped queries.
 /// Returns (exact_match, glob_prefix) for WHERE clause.
 /// Uses GLOB instead of LIKE to avoid `_` and `%` in paths acting as wildcards. // changed: GLOB
@@ -336,6 +377,8 @@ impl Tracker {
             "ALTER TABLE commands ADD COLUMN project_path TEXT DEFAULT ''",
             [],
         );
+        let _ = conn.execute("ALTER TABLE commands ADD COLUMN agent TEXT", []);
+        let _ = conn.execute("ALTER TABLE commands ADD COLUMN session_id TEXT", []);
         // One-time migration: normalize NULLs from pre-default schema // changed: guarded with EXISTS
         let has_nulls: bool = conn
             .query_row(
@@ -413,15 +456,20 @@ impl Tracker {
         };
 
         let project_path = current_project_path_string(); // added: record cwd
+        let (agent, session_id) = current_agent_context();
 
         self.conn.execute(
-            "INSERT INTO commands (timestamp, original_cmd, rtk_cmd, project_path, input_tokens, output_tokens, saved_tokens, savings_pct, exec_time_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", // added: project_path
+            "INSERT INTO commands (
+                timestamp, original_cmd, rtk_cmd, project_path, agent, session_id,
+                input_tokens, output_tokens, saved_tokens, savings_pct, exec_time_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 Utc::now().to_rfc3339(),
                 original_cmd,
                 rtk_cmd,
                 project_path, // added
+                agent,
+                session_id,
                 input_tokens as i64,
                 output_tokens as i64,
                 saved as i64,
@@ -1484,6 +1532,25 @@ mod tests {
         assert!(tracking_disabled_value(Some(OsStr::new("true"))));
         assert!(!tracking_disabled_value(None));
         assert!(!tracking_disabled_value(Some(OsStr::new("0"))));
+    }
+
+    #[test]
+    fn test_agent_context_prefers_explicit_hzr_attribution_and_detects_codex() {
+        let explicit = std::collections::BTreeMap::from([
+            ("HZR_CLIENT", "claude-code"),
+            ("HZR_SESSION_ID", "session-7"),
+            ("CODEX_THREAD_ID", "thread-ignored"),
+        ]);
+        assert_eq!(
+            infer_agent_context(|name| explicit.get(name).map(|value| (*value).to_string())),
+            (Some("claude-code".into()), Some("session-7".into()))
+        );
+
+        let codex = std::collections::BTreeMap::from([("CODEX_THREAD_ID", "thread-123")]);
+        assert_eq!(
+            infer_agent_context(|name| codex.get(name).map(|value| (*value).to_string())),
+            (Some("codex".into()), Some("thread-123".into()))
+        );
     }
 
     // 8. get_db_path falls back to default when no custom config

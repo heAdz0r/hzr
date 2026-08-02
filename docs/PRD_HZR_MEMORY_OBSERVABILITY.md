@@ -6,6 +6,10 @@
 
 **Default URL:** `http://127.0.0.1:47391/`
 
+> Historical 0.3.1 requirements. The interactive record drill-down, quiet synchronization,
+> and request-evidence requirements introduced for 0.3.3 are specified in
+> [`PRD_HZR_SOTA_OBSERVATORY.md`](PRD_HZR_SOTA_OBSERVATORY.md).
+
 ## 1. Product intent
 
 HZR needs one trustworthy view of the control plane it owns. In under ten seconds an

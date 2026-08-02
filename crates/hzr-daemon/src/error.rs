@@ -43,6 +43,15 @@ impl ApiError {
         }
     }
 
+    pub fn not_found(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            code,
+            message: message.into(),
+            recoverable: true,
+        }
+    }
+
     pub fn service(code: &'static str, message: impl Into<String>, recoverable: bool) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,

@@ -11,6 +11,8 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@types/cytoscape": "3.31.0",
+    "cytoscape": "3.34.0",
     "vue": "3.5.40"
   },
   "devDependencies": {

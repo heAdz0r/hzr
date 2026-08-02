@@ -16,13 +16,21 @@ const BYPASS_MARKERS: [&str; 2] = ["raw", "proxy"];
 ///
 /// Both the Rust classifier and the SQL predicate are generated from these, so the
 /// terminal, the dashboard and the ledger cannot drift apart again.
-const BYPASS_PREFIXES: [&str; 6] = [
+const BYPASS_PREFIXES: [&str; 14] = [
     "raw",
     "proxy",
     "rtk raw",
     "rtk proxy",
     "hzr raw",
     "hzr proxy",
+    "rtk -- raw",
+    "rtk -- proxy",
+    "hzr -- raw",
+    "hzr -- proxy",
+    "hzr rtk raw",
+    "hzr rtk proxy",
+    "hzr rtk -- raw",
+    "hzr rtk -- proxy",
 ];
 
 /// Prefixes recorded when the pinned engine degraded into a shell fallback. These are

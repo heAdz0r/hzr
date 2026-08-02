@@ -36,7 +36,12 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         .route("/v1/codec/compile", post(api::codec_compile))
         .route("/v1/usage", post(api::usage))
         .route_layer(middleware::from_fn_with_state(token, authorize));
-    let public = Router::new().route("/v1/dashboard", get(api::dashboard));
+    let public = Router::new()
+        .route("/v1/dashboard", get(api::dashboard))
+        .route(
+            "/v1/dashboard/memory/topics/{topic_id}",
+            get(api::dashboard_memory_topic),
+        );
     let router = public.merge(authenticated);
     let router = if let Some(directory) = visualizer::assets_directory() {
         router.fallback_service(ServeDir::new(directory).append_index_html_on_directories(true))
@@ -213,6 +218,28 @@ mod tests {
         assert!(payload.get("local_activity").is_some());
         assert!(payload.get("provider_receipts").is_some());
         assert!(payload.get("token").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_memory_topic_rejects_non_opaque_identifiers() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let response = test_router(&directory)
+            .await
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/dashboard/memory/topics/release-project-token")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let bytes = to_bytes(response.into_body(), 1_048_576)
+            .await
+            .expect("response body");
+        let payload: Value = serde_json::from_slice(&bytes).expect("valid JSON response");
+        assert_eq!(payload["code"], "invalid_request");
     }
 
     #[tokio::test]

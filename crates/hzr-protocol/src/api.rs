@@ -392,6 +392,34 @@ pub struct DashboardMemoryObservatory {
     pub detail: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DashboardMemoryTopicDetails {
+    pub id: String,
+    pub label: String,
+    pub memory_count: usize,
+    pub visible_memory_count: usize,
+    pub hidden_memory_count: usize,
+    pub truncated: bool,
+    pub memories: Vec<DashboardMemoryDetail>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DashboardMemoryDetail {
+    pub id: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_accessed: Option<String>,
+    pub access_count: u64,
+    pub weight: f64,
+    pub summary: String,
+    pub raw_excerpt: Option<String>,
+    pub keywords: Vec<String>,
+    pub importance: String,
+    pub source_type: Option<String>,
+    pub source_data: Option<String>,
+    pub related_ids: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DashboardIndexArtifacts {
     pub initialized: bool,
@@ -468,9 +496,15 @@ pub enum DashboardOperationRoute {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DashboardLocalOperation {
+    pub ledger_id: u64,
     pub timestamp: String,
     pub operation: String,
     pub route: DashboardOperationRoute,
+    pub original_command: String,
+    pub recorded_command: String,
+    pub working_directory: String,
+    pub agent: Option<String>,
+    pub session_id: Option<String>,
     pub baseline_tokens_estimated: u64,
     pub delivered_tokens_estimated: u64,
     pub net_avoided_tokens_estimated: i64,

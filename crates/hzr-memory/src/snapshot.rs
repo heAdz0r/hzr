@@ -12,6 +12,11 @@ use crate::{MemoryError, Result, topic_belongs_to_project};
 const MAX_MEMORIES: usize = 256;
 const MAX_TOPICS: usize = 64;
 const MAX_EDGES: usize = 256;
+const MAX_TOPIC_MEMORIES: usize = 100;
+const MAX_SUMMARY_CHARS: usize = 4_000;
+const MAX_EXCERPT_CHARS: usize = 2_000;
+const MAX_SOURCE_DATA_CHARS: usize = 1_000;
+const MAX_KEYWORDS: usize = 24;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProjectMemorySnapshot {
@@ -39,11 +44,55 @@ pub struct MemoryTopicEdge {
     pub relationship_count: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectTopicDetails {
+    pub id: String,
+    pub label: String,
+    pub memory_count: usize,
+    pub visible_memory_count: usize,
+    pub hidden_memory_count: usize,
+    pub truncated: bool,
+    pub memories: Vec<ProjectMemoryDetail>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectMemoryDetail {
+    pub id: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_accessed: Option<String>,
+    pub access_count: u64,
+    pub weight: f64,
+    pub summary: String,
+    pub raw_excerpt: Option<String>,
+    pub keywords: Vec<String>,
+    pub importance: String,
+    pub source_type: Option<String>,
+    pub source_data: Option<String>,
+    pub related_ids: Vec<String>,
+}
+
 struct MemoryRow {
     id: String,
     topic: String,
     updated_at: String,
     weight: f64,
+    related_ids: Vec<String>,
+}
+
+struct MemoryDetailRow {
+    id: String,
+    created_at: String,
+    updated_at: String,
+    last_accessed: Option<String>,
+    access_count: u64,
+    weight: f64,
+    summary: String,
+    raw_excerpt: Option<String>,
+    keywords: Vec<String>,
+    importance: String,
+    source_type: Option<String>,
+    source_data: Option<String>,
     related_ids: Vec<String>,
 }
 
@@ -187,6 +236,130 @@ pub fn read_project_snapshot(path: &Path, repository_id: &str) -> Result<Project
         edges,
         truncated,
     })
+}
+
+/// Resolve one opaque topic identifier into a bounded, read-only project detail response.
+///
+/// Topic and memory identifiers are hashed before they leave this crate. The raw topic is first
+/// positively filtered to the requested repository, so an opaque identifier observed in another
+/// project cannot be used to cross the repository boundary.
+pub fn read_project_topic_details(
+    path: &Path,
+    repository_id: &str,
+    topic_id: &str,
+) -> Result<Option<ProjectTopicDetails>> {
+    if !path.is_file() {
+        return Err(MemoryError::SnapshotUnavailable);
+    }
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.busy_timeout(Duration::from_millis(250))?;
+
+    let mut topic_statement = connection.prepare(
+        "SELECT DISTINCT topic
+         FROM memories
+         WHERE substr(topic, -65) = '-' || ?1
+         ORDER BY topic ASC",
+    )?;
+    let topics = topic_statement
+        .query_map([repository_id], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let Some(topic) = topics.into_iter().find(|topic| {
+        topic_belongs_to_project(topic, repository_id) && opaque_id(topic) == topic_id
+    }) else {
+        return Ok(None);
+    };
+
+    let memory_count = connection.query_row(
+        "SELECT COUNT(*) FROM memories WHERE topic = ?1",
+        [&topic],
+        |row| row.get::<_, usize>(0),
+    )?;
+    let mut detail_statement = connection.prepare(
+        "SELECT id, created_at, updated_at, last_accessed, access_count, weight,
+                summary, raw_excerpt, keywords, importance, source_type, source_data, related_ids
+         FROM memories
+         WHERE topic = ?1
+         ORDER BY updated_at DESC, id ASC
+         LIMIT ?2",
+    )?;
+    let rows = detail_statement
+        .query_map(params![topic, (MAX_TOPIC_MEMORIES + 1) as u64], |row| {
+            let keywords_json: String = row.get(8)?;
+            let related_json: String = row.get(12)?;
+            Ok(MemoryDetailRow {
+                id: row.get(0)?,
+                created_at: row.get(1)?,
+                updated_at: row.get(2)?,
+                last_accessed: row.get(3)?,
+                access_count: row.get(4)?,
+                weight: row.get(5)?,
+                summary: row.get(6)?,
+                raw_excerpt: row.get(7)?,
+                keywords: serde_json::from_str(&keywords_json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(8, Type::Text, Box::new(error))
+                })?,
+                importance: row.get(9)?,
+                source_type: row.get(10)?,
+                source_data: row.get(11)?,
+                related_ids: serde_json::from_str(&related_json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(12, Type::Text, Box::new(error))
+                })?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let truncated = rows.len() > MAX_TOPIC_MEMORIES || memory_count > MAX_TOPIC_MEMORIES;
+    let memories = rows
+        .into_iter()
+        .take(MAX_TOPIC_MEMORIES)
+        .map(|row| ProjectMemoryDetail {
+            id: opaque_id(&row.id),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            last_accessed: row.last_accessed,
+            access_count: row.access_count,
+            weight: row.weight,
+            summary: bounded_text(&row.summary, MAX_SUMMARY_CHARS),
+            raw_excerpt: row
+                .raw_excerpt
+                .map(|value| bounded_text(&value, MAX_EXCERPT_CHARS)),
+            keywords: row
+                .keywords
+                .into_iter()
+                .take(MAX_KEYWORDS)
+                .map(|value| bounded_text(&value, 128))
+                .collect(),
+            importance: bounded_text(&row.importance, 32),
+            source_type: row.source_type.map(|value| bounded_text(&value, 64)),
+            source_data: row
+                .source_data
+                .map(|value| bounded_text(&value, MAX_SOURCE_DATA_CHARS)),
+            related_ids: row
+                .related_ids
+                .into_iter()
+                .take(MAX_TOPIC_MEMORIES)
+                .map(|value| opaque_id(&value))
+                .collect(),
+        })
+        .collect::<Vec<_>>();
+    let visible_memory_count = memories.len();
+
+    Ok(Some(ProjectTopicDetails {
+        id: topic_id.to_owned(),
+        label: topic
+            .strip_suffix(repository_id)
+            .and_then(|prefix| prefix.strip_suffix('-'))
+            .unwrap_or("topic")
+            .to_owned(),
+        memory_count,
+        visible_memory_count,
+        hidden_memory_count: memory_count.saturating_sub(visible_memory_count),
+        truncated,
+        memories,
+    }))
+}
+
+fn bounded_text(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 fn opaque_id(value: &str) -> String {

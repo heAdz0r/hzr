@@ -47,6 +47,32 @@ export interface DashboardMemoryObservatory {
   detail: string;
 }
 
+export interface DashboardMemoryTopicDetails {
+  id: string;
+  label: string;
+  memory_count: number;
+  visible_memory_count: number;
+  hidden_memory_count: number;
+  truncated: boolean;
+  memories: DashboardMemoryDetail[];
+}
+
+export interface DashboardMemoryDetail {
+  id: string;
+  created_at: string;
+  updated_at: string;
+  last_accessed: string | null;
+  access_count: number;
+  weight: number;
+  summary: string;
+  raw_excerpt: string | null;
+  keywords: string[];
+  importance: string;
+  source_type: string | null;
+  source_data: string | null;
+  related_ids: string[];
+}
+
 export interface DashboardIndexObservatory {
   state: DashboardState;
   project: string | null;
@@ -104,9 +130,15 @@ export interface DashboardLocalActivity {
 }
 
 export interface DashboardLocalOperation {
+  ledger_id: number;
   timestamp: string;
   operation: string;
   route: "optimized" | "raw";
+  original_command: string;
+  recorded_command: string;
+  working_directory: string;
+  agent: string | null;
+  session_id: string | null;
   baseline_tokens_estimated: number;
   delivered_tokens_estimated: number;
   net_avoided_tokens_estimated: number;

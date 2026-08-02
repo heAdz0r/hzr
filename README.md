@@ -130,7 +130,7 @@ Available installer overrides: `HZR_INSTALL_ROOT`, `HZR_BIN_DIR`, `HZR_INSTALL_H
 
 | Component | Pin | Distribution role |
 |---|---:|---|
-| HZR | 0.3.2 | public CLI + daemon |
+| HZR | 0.3.3 | public CLI + daemon |
 | HZR fork-core RTK | 0.44.1-fork.1 | private native engine; complete inherited surface |
 | grepai | 0.35.0 + ownership patch | private native engine |
 | ICM | 0.10.61 + lockfile patch | private native engine |
@@ -163,24 +163,30 @@ http://127.0.0.1:47391/
 
 The visualizer is a Bun-built Vue application shipped as static bundle assets and served
 by the existing `hzrd`; it is not a second service or control plane. It shows registered
-projects, HZR/RTK fork-core/ICM/grepai state, versions, an interactive current-project memory
-graph, grepai watcher and semantic-canary proof, live routed output activity, provider receipts,
-separately labeled estimates, and copyable diagnostic commands. RAW operations are visible,
-receive zero savings credit, and show a first-class HZR replacement when one exists. `hzr init` refreshes
+projects, HZR/RTK fork-core/ICM/grepai state, versions, an interactive Cytoscape memory
+explorer, grepai watcher and semantic-canary proof, live routed output activity, provider receipts,
+separately labeled estimates, and copyable diagnostic commands. Background synchronization is
+quiet: it preserves scroll, graph camera, topic selection, and expanded activity while the manual
+Refresh control stays under operator control. A topic expands into bounded project-scoped memory
+records; an operation expands into the exact ledger command, route, working directory, latency,
+and observed agent/session attribution. Historical attribution remains explicitly `Unattributed`.
+RAW operations are visible, receive zero savings credit, and show a first-class HZR replacement
+when one exists. `hzr init` refreshes
 the current project's private `workspace.json` registration and ensures the production
 service is running when invoked from an installed bundle. Source builds never install a
 user service implicitly; use `hzr daemon serve`. `HZR_INSTALL_SERVICE=0` remains the explicit
 opt-out for release installation.
 
-![HZR visualizer overview with live service topology](docs/screenshots/hzr-visualizer-overview.png)
+![HZR visualizer overview with live service topology](docs/screenshots/hzr-visualizer-overview-v2.png)
 
 <p align="center">
-  <img src="docs/screenshots/hzr-visualizer-projects.png" width="68%" alt="HZR visualizer project registry with ready, warming, and registered projects">
-  <img src="docs/screenshots/hzr-visualizer-mobile.png" width="24%" alt="HZR visualizer responsive mobile view">
+  <img src="docs/screenshots/hzr-visualizer-memory-v2.png" width="49%" alt="HZR memory explorer with topic graph and a selected memory record">
+  <img src="docs/screenshots/hzr-visualizer-activity-v2.png" width="49%" alt="HZR recent activity with agent, working directory, and request evidence">
 </p>
 
-The screenshots are sanitized captures from a live HZR project. Repository paths,
-memory contents, and provider records are intentionally excluded from the public assets.
+The screenshots use sanitized project paths and synthetic memory detail content against a live
+HZR dashboard contract. Provider records, secrets, captured output, and canonical memory bodies
+are intentionally excluded from the public assets.
 
 ```bash
 hzr index status --workspace .

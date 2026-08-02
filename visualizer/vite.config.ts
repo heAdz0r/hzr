@@ -1,6 +1,8 @@
 import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vite";
 
+const dashboardTarget = process.env.HZR_VISUALIZER_PROXY ?? "http://127.0.0.1:47391";
+
 export default defineConfig({
   plugins: [vue()],
   publicDir: "public",
@@ -9,7 +11,7 @@ export default defineConfig({
     port: 47392,
     strictPort: true,
     proxy: {
-      "/v1/dashboard": "http://127.0.0.1:47391",
+      "/v1/dashboard": dashboardTarget,
     },
   },
   build: {

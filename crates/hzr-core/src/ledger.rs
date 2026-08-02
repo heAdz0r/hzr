@@ -89,15 +89,28 @@ pub enum ProjectOperationRoute {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProjectOperationSummary {
+    pub ledger_id: u64,
     pub timestamp: String,
     pub operation: String,
     pub route: ProjectOperationRoute,
+    pub original_command: String,
+    pub recorded_command: String,
+    pub working_directory: String,
+    pub agent: Option<String>,
+    pub session_id: Option<String>,
     pub baseline_tokens_estimated: u64,
     pub delivered_tokens_estimated: u64,
     pub net_avoided_tokens_estimated: i64,
     pub execution_ms: u64,
     pub replacement: Option<String>,
     pub rationale: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OperationContext<'a> {
+    pub project_path: &'a str,
+    pub agent: Option<&'a str>,
+    pub session_id: Option<&'a str>,
 }
 
 /// Operations that never reached the optimizer, split out of the reduction ratio they
@@ -280,7 +293,9 @@ impl Ledger {
                     saved_tokens INTEGER NOT NULL,
                     savings_pct REAL NOT NULL,
                     exec_time_ms INTEGER DEFAULT 0,
-                    project_path TEXT DEFAULT ''
+                    project_path TEXT DEFAULT '',
+                    agent TEXT,
+                    session_id TEXT
                  );
                  CREATE INDEX IF NOT EXISTS idx_timestamp ON commands(timestamp);
                  CREATE INDEX IF NOT EXISTS idx_project_path_timestamp
@@ -313,6 +328,8 @@ impl Ledger {
                  );",
             )
             .map_err(LedgerError::Database)?;
+        let _ = connection.execute("ALTER TABLE commands ADD COLUMN agent TEXT", []);
+        let _ = connection.execute("ALTER TABLE commands ADD COLUMN session_id TEXT", []);
         migrate_legacy_ledgers(&connection, path)?;
         Ok(Self { connection })
     }
@@ -427,53 +444,59 @@ impl Ledger {
     }
 
     pub fn efficiency_summary(&self) -> Result<EfficiencySummary, LedgerError> {
+        let raw_predicate = raw_route_sql_predicate("rtk_cmd");
+        let totals_query = format!(
+            "SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                                  THEN output_tokens ELSE input_tokens END), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND input_tokens > output_tokens
+                                  THEN input_tokens - output_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND output_tokens > input_tokens
+                                  THEN output_tokens - input_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                                  THEN 0 ELSE input_tokens - output_tokens END), 0),
+                COALESCE(SUM(exec_time_ms), 0)
+             FROM commands"
+        );
         let mut summary = self
             .connection
-            .query_row(
-                "SELECT
-                    COUNT(*),
-                    COALESCE(SUM(input_tokens), 0),
-                    COALESCE(SUM(output_tokens), 0),
-                    COALESCE(SUM(CASE WHEN input_tokens > output_tokens
-                                      THEN input_tokens - output_tokens ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN output_tokens > input_tokens
-                                      THEN output_tokens - input_tokens ELSE 0 END), 0),
-                    COALESCE(SUM(input_tokens - output_tokens), 0),
-                    COALESCE(SUM(exec_time_ms), 0)
-                 FROM commands",
-                [],
-                |row| {
-                    Ok(EfficiencySummary {
-                        operations: row.get(0)?,
-                        baseline_tokens_estimated: row.get(1)?,
-                        delivered_tokens_estimated: row.get(2)?,
-                        gross_avoided_tokens_estimated: row.get(3)?,
-                        regression_tokens_estimated: row.get(4)?,
-                        net_avoided_tokens_estimated: row.get(5)?,
-                        total_execution_ms: row.get(6)?,
-                        by_command: Vec::new(),
-                    })
-                },
-            )
+            .query_row(&totals_query, [], |row| {
+                Ok(EfficiencySummary {
+                    operations: row.get(0)?,
+                    baseline_tokens_estimated: row.get(1)?,
+                    delivered_tokens_estimated: row.get(2)?,
+                    gross_avoided_tokens_estimated: row.get(3)?,
+                    regression_tokens_estimated: row.get(4)?,
+                    net_avoided_tokens_estimated: row.get(5)?,
+                    total_execution_ms: row.get(6)?,
+                    by_command: Vec::new(),
+                })
+            })
             .map_err(LedgerError::Database)?;
+        let by_command_query = format!(
+            "SELECT
+                rtk_cmd,
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                                  THEN output_tokens ELSE input_tokens END), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND input_tokens > output_tokens
+                                  THEN input_tokens - output_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND output_tokens > input_tokens
+                                  THEN output_tokens - input_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                                  THEN 0 ELSE input_tokens - output_tokens END), 0),
+                COALESCE(AVG(exec_time_ms), 0)
+             FROM commands
+             GROUP BY rtk_cmd
+             ORDER BY SUM(CASE WHEN ({raw_predicate})
+                               THEN 0 ELSE input_tokens - output_tokens END) DESC"
+        );
         let mut statement = self
             .connection
-            .prepare_cached(
-                "SELECT
-                    rtk_cmd,
-                    COUNT(*),
-                    COALESCE(SUM(input_tokens), 0),
-                    COALESCE(SUM(output_tokens), 0),
-                    COALESCE(SUM(CASE WHEN input_tokens > output_tokens
-                                      THEN input_tokens - output_tokens ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN output_tokens > input_tokens
-                                      THEN output_tokens - input_tokens ELSE 0 END), 0),
-                    COALESCE(SUM(input_tokens - output_tokens), 0),
-                    COALESCE(AVG(exec_time_ms), 0)
-                 FROM commands
-                 GROUP BY rtk_cmd
-                 ORDER BY SUM(input_tokens - output_tokens) DESC",
-            )
+            .prepare_cached(&by_command_query)
             .map_err(LedgerError::Database)?;
         summary.by_command = statement
             .query_map([], |row| {
@@ -510,6 +533,29 @@ impl Ledger {
         execution_ms: u64,
         project_path: &str,
     ) -> Result<(), LedgerError> {
+        self.record_operation_with_context(
+            original_command,
+            recorded_command,
+            input_tokens,
+            output_tokens,
+            execution_ms,
+            OperationContext {
+                project_path,
+                agent: None,
+                session_id: None,
+            },
+        )
+    }
+
+    pub fn record_operation_with_context(
+        &self,
+        original_command: &str,
+        recorded_command: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        execution_ms: u64,
+        context: OperationContext<'_>,
+    ) -> Result<(), LedgerError> {
         let saved = input_tokens.saturating_sub(output_tokens);
         let savings_pct = if input_tokens == 0 {
             0.0
@@ -520,8 +566,8 @@ impl Ledger {
             .execute(
                 "INSERT INTO commands (
                     timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
-                    saved_tokens, savings_pct, exec_time_ms, project_path
-                 ) VALUES (datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    saved_tokens, savings_pct, exec_time_ms, project_path, agent, session_id
+                 ) VALUES (datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     original_command,
                     recorded_command,
@@ -530,7 +576,9 @@ impl Ledger {
                     saved,
                     savings_pct,
                     execution_ms,
-                    project_path,
+                    context.project_path,
+                    context.agent,
+                    context.session_id,
                 ],
             )
             .map_err(LedgerError::Database)?;
@@ -636,24 +684,30 @@ impl Ledger {
         &self,
         project_path: &str,
     ) -> Result<ProjectActivitySummary, LedgerError> {
+        let raw_predicate = raw_route_sql_predicate("rtk_cmd");
+        let activity_query = format!(
+            "SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                                  THEN output_tokens ELSE input_tokens END), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND input_tokens > output_tokens
+                                  THEN input_tokens - output_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND output_tokens > input_tokens
+                                  THEN output_tokens - input_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                                  THEN 0 ELSE input_tokens - output_tokens END), 0),
+                COALESCE(SUM(exec_time_ms), 0),
+                MIN(timestamp),
+                MAX(timestamp)
+             FROM commands
+             WHERE project_path = ?1
+                OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2"
+        );
         let mut summary = self
             .connection
             .query_row(
-                "SELECT
-                    COUNT(*),
-                    COALESCE(SUM(input_tokens), 0),
-                    COALESCE(SUM(output_tokens), 0),
-                    COALESCE(SUM(CASE WHEN input_tokens > output_tokens
-                                      THEN input_tokens - output_tokens ELSE 0 END), 0),
-                    COALESCE(SUM(CASE WHEN output_tokens > input_tokens
-                                      THEN output_tokens - input_tokens ELSE 0 END), 0),
-                    COALESCE(SUM(input_tokens - output_tokens), 0),
-                    COALESCE(SUM(exec_time_ms), 0),
-                    MIN(timestamp),
-                    MAX(timestamp)
-                 FROM commands
-                 WHERE project_path = ?1
-                    OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2",
+                &activity_query,
                 params![project_path, std::path::MAIN_SEPARATOR.to_string()],
                 |row| {
                     Ok(ProjectActivitySummary {
@@ -701,8 +755,8 @@ impl Ledger {
         let mut statement = self
             .connection
             .prepare_cached(
-                "SELECT timestamp, rtk_cmd, input_tokens, output_tokens,
-                        input_tokens - output_tokens, exec_time_ms
+                "SELECT id, timestamp, original_cmd, rtk_cmd, project_path, agent, session_id,
+                        input_tokens, output_tokens, input_tokens - output_tokens, exec_time_ms
                  FROM commands
                  WHERE project_path = ?1
                     OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2
@@ -714,16 +768,27 @@ impl Ledger {
             .query_map(
                 params![project_path, std::path::MAIN_SEPARATOR.to_string()],
                 |row| {
-                    let command: String = row.get(1)?;
+                    let command: String = row.get(3)?;
                     let (operation, route, replacement, rationale) = operation_identity(&command);
+                    let delivered_tokens_estimated = row.get(8)?;
+                    let (baseline_tokens_estimated, net_avoided_tokens_estimated) = match route {
+                        ProjectOperationRoute::Optimized => (row.get(7)?, row.get(9)?),
+                        ProjectOperationRoute::Raw => (delivered_tokens_estimated, 0),
+                    };
                     Ok(ProjectOperationSummary {
-                        timestamp: row.get(0)?,
+                        ledger_id: row.get(0)?,
+                        timestamp: row.get(1)?,
                         operation,
                         route,
-                        baseline_tokens_estimated: row.get(2)?,
-                        delivered_tokens_estimated: row.get(3)?,
-                        net_avoided_tokens_estimated: row.get(4)?,
-                        execution_ms: row.get(5)?,
+                        original_command: row.get(2)?,
+                        recorded_command: command,
+                        working_directory: row.get(4)?,
+                        agent: row.get(5)?,
+                        session_id: row.get(6)?,
+                        baseline_tokens_estimated,
+                        delivered_tokens_estimated,
+                        net_avoided_tokens_estimated,
+                        execution_ms: row.get(10)?,
                         replacement,
                         rationale,
                     })
@@ -1253,7 +1318,7 @@ mod tests {
                     ('2026-08-01T10:00:00Z', 'cat a', 'read', 100, 20, 80, 80.0, 5, '/work/a'),
                     ('2026-08-01T10:01:00Z', 'cat b', 'read', 70, 10, 60, 85.7, 7, '/work/b'),
                     ('2026-08-01T10:02:00Z', 'cat x', 'read', 50, 10, 40, 80.0, 3, ''),
-                    ('2026-08-01T10:03:00Z', 'sed a', 'rtk proxy sed', 40, 40, 0, 0.0, 4, '/work/a'),
+                    ('2026-08-01T10:03:00Z', 'sed a', 'rtk proxy sed', 40, 5, 35, 87.5, 4, '/work/a'),
                     ('2026-08-01T10:04:00Z', 'read nested', 'read', 30, 10, 20, 66.7, 2, '/work/a/sub'),
                     ('2026-08-01T10:05:00Z', 'read sibling', 'read', 100, 0, 100, 100.0, 1, '/work/ab');",
             )
@@ -1266,8 +1331,8 @@ mod tests {
         assert_eq!(activity.operations, 3);
         assert_eq!(activity.optimized_operations, 2);
         assert_eq!(activity.raw_operations, 1);
-        assert_eq!(activity.baseline_tokens_estimated, 170);
-        assert_eq!(activity.delivered_tokens_estimated, 70);
+        assert_eq!(activity.baseline_tokens_estimated, 135);
+        assert_eq!(activity.delivered_tokens_estimated, 35);
         assert_eq!(activity.net_avoided_tokens_estimated, 100);
         assert_eq!(activity.total_execution_ms, 11);
         assert_eq!(activity.unscoped_operations, 1);
@@ -1276,8 +1341,8 @@ mod tests {
             activity.recent_operations[1].route,
             ProjectOperationRoute::Raw
         );
-        assert_eq!(activity.recent_operations[1].baseline_tokens_estimated, 40);
-        assert_eq!(activity.recent_operations[1].delivered_tokens_estimated, 40);
+        assert_eq!(activity.recent_operations[1].baseline_tokens_estimated, 5);
+        assert_eq!(activity.recent_operations[1].delivered_tokens_estimated, 5);
         assert_eq!(
             activity.recent_operations[1].net_avoided_tokens_estimated,
             0

@@ -10,6 +10,7 @@ defineProps<{
     | "cpu"
     | "database"
     | "folder"
+    | "focus"
     | "git"
     | "help"
     | "memory"
@@ -65,6 +66,10 @@ defineProps<{
     </template>
     <template v-else-if="name === 'folder'">
       <path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" />
+    </template>
+    <template v-else-if="name === 'focus'">
+      <path d="M8 4H4v4m12-4h4v4M8 20H4v-4m12 4h4v-4" />
+      <circle cx="12" cy="12" r="3" />
     </template>
     <template v-else-if="name === 'git'">
       <circle cx="7" cy="5" r="2" /><circle cx="17" cy="7" r="2" /><circle cx="7" cy="19" r="2" />

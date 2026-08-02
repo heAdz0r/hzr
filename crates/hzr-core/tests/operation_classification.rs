@@ -55,6 +55,7 @@ fn test_proxy_and_raw_prefixes_are_classified_as_bypassed() {
         "rtk proxy sed -n 1,5p src/lib.rs",
         "rtk raw rg -n needle",
         "hzr proxy cargo test",
+        "hzr rtk -- raw rg -n needle",
         "rtk fallback: grep -rn needle",
     ] {
         let classification = classify_operation(command);
@@ -154,6 +155,7 @@ fn test_sql_predicate_matches_the_rust_classifier() {
     let predicate = raw_route_sql_predicate("rtk_cmd");
 
     assert!(predicate.contains("rtk_cmd LIKE 'rtk proxy %'"));
+    assert!(predicate.contains("rtk_cmd LIKE 'hzr rtk -- raw %'"));
     assert!(predicate.contains("rtk_cmd LIKE 'raw %'"));
     assert!(predicate.contains("rtk_cmd LIKE 'rtk fallback%'"));
 }

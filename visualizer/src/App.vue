@@ -24,17 +24,20 @@ import {
   relativeTime,
 } from "./utils";
 
-const REFRESH_INTERVAL_MS = 2_000;
+const REFRESH_INTERVAL_MS = 5_000;
 
 const snapshot = ref<DashboardResponse | null>(null);
 const error = ref<string | null>(null);
-const refreshing = ref(false);
+const manualRefreshing = ref(false);
 const query = ref("");
 const projectFilter = ref<ProjectState | "all">("all");
 const toast = ref<string | null>(null);
 const liveMessage = ref("");
 let refreshTimer: number | undefined;
 let toastTimer: number | undefined;
+let refreshPromise: Promise<void> | null = null;
+let refreshController: AbortController | null = null;
+let mounted = false;
 
 const projectFilters: Array<ProjectState | "all"> = [
   "all",
@@ -65,30 +68,43 @@ const localReduction = computed(() => {
 });
 
 async function refresh(manual = false): Promise<void> {
-  if (refreshing.value) return;
-  refreshing.value = true;
-  try {
-    const response = await fetch("/v1/dashboard", {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) {
-      throw new Error(`Dashboard returned HTTP ${response.status}`);
+  if (refreshPromise) {
+    if (manual) {
+      await refreshPromise;
+      if (mounted) await refresh(true);
     }
-    const next = (await response.json()) as DashboardResponse;
-    const previousState = snapshot.value?.overall_state;
-    snapshot.value = next;
-    error.value = null;
-    if (manual) liveMessage.value = "Dashboard refreshed";
-    if (previousState && previousState !== next.overall_state) {
-      liveMessage.value = `System state changed to ${dashboardStateLabel[next.overall_state]}`;
-    }
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : "Dashboard refresh failed";
-    liveMessage.value = refreshFailureAnnouncement(snapshot.value !== null);
-  } finally {
-    refreshing.value = false;
+    return;
   }
+  refreshController = new AbortController();
+  if (manual) manualRefreshing.value = true;
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch("/v1/dashboard", {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: refreshController?.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Dashboard returned HTTP ${response.status}`);
+      }
+      const next = (await response.json()) as DashboardResponse;
+      const previousState = snapshot.value?.overall_state;
+      snapshot.value = next;
+      error.value = null;
+      if (manual) liveMessage.value = "Dashboard refreshed";
+      if (previousState && previousState !== next.overall_state) {
+        liveMessage.value = `System state changed to ${dashboardStateLabel[next.overall_state]}`;
+      }
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === "AbortError") return;
+      error.value = cause instanceof Error ? cause.message : "Dashboard refresh failed";
+      liveMessage.value = refreshFailureAnnouncement(snapshot.value !== null);
+    } finally {
+      manualRefreshing.value = false;
+      refreshPromise = null;
+    }
+  })();
+  await refreshPromise;
 }
 
 function scheduleRefresh(): void {
@@ -133,12 +149,15 @@ function filterCount(filter: ProjectState | "all"): number {
 }
 
 onMounted(() => {
+  mounted = true;
   void refresh();
   scheduleRefresh();
   document.addEventListener("visibilitychange", handleVisibility);
 });
 
 onBeforeUnmount(() => {
+  mounted = false;
+  refreshController?.abort();
   window.clearInterval(refreshTimer);
   window.clearTimeout(toastTimer);
   document.removeEventListener("visibilitychange", handleVisibility);
@@ -188,13 +207,13 @@ onBeforeUnmount(() => {
             <span><AppIcon name="clock" :size="16" /> Uptime {{ formatDuration(snapshot.uptime_ms) }}</span>
             <button
               class="refresh-action"
-              :class="{ 'is-loading': refreshing }"
+              :class="{ 'is-loading': manualRefreshing }"
               type="button"
-              :disabled="refreshing"
+              :disabled="manualRefreshing"
               @click="refresh(true)"
             >
               <AppIcon name="refresh" :size="18" />
-              <span>{{ refreshing ? "Refreshing" : "Refresh" }}</span>
+              <span>{{ manualRefreshing ? "Refreshing" : "Refresh" }}</span>
             </button>
           </div>
         </div>
@@ -208,7 +227,7 @@ onBeforeUnmount(() => {
           <strong>Live refresh paused</strong>
           <span>{{ error }}. Showing the last successful snapshot from {{ relativeTime(snapshot.generated_at_ms) }}.</span>
         </div>
-        <button type="button" :disabled="refreshing" @click="refresh(true)">Try again</button>
+        <button type="button" :disabled="manualRefreshing" @click="refresh(true)">Try again</button>
       </div>
 
       <section v-if="!snapshot && !error" class="loading-layout" aria-label="Loading dashboard">
@@ -224,7 +243,7 @@ onBeforeUnmount(() => {
         <span class="eyebrow">Visualizer unavailable</span>
         <h2>HZR did not return a dashboard snapshot.</h2>
         <p>{{ error }}</p>
-        <button class="primary-action" type="button" :disabled="refreshing" @click="refresh(true)">
+        <button class="primary-action" type="button" :disabled="manualRefreshing" @click="refresh(true)">
           <AppIcon name="refresh" :size="18" /> Try again
         </button>
       </section>
@@ -252,7 +271,7 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section class="observatory-grid" aria-label="Project memory and index observatories">
+        <section id="memory-observatory" class="observatory-grid" aria-label="Project memory and index observatories">
           <article class="observatory-panel memory-panel">
             <div class="observatory-head">
               <div>
@@ -275,7 +294,7 @@ onBeforeUnmount(() => {
             <div class="evidence-strip">
               <span><AppIcon name="check" :size="15" /> Positive repository filter</span>
               <span><AppIcon name="check" :size="15" /> Read-only snapshot</span>
-              <span><AppIcon name="check" :size="15" /> No memory content exposed</span>
+              <span><AppIcon name="check" :size="15" /> Details load on explicit topic selection</span>
               <span><AppIcon name="clock" :size="15" /> {{ snapshot.memory_observatory.latency_ms }}ms · {{ relativeTime(snapshot.memory_observatory.observed_at_ms) }}</span>
             </div>
           </article>
@@ -319,7 +338,7 @@ onBeforeUnmount(() => {
           </article>
         </section>
 
-        <section class="metrics-section" aria-labelledby="metrics-title">
+        <section id="activity-observatory" class="metrics-section" aria-labelledby="metrics-title">
           <div class="section-heading metrics-heading">
             <div>
               <span class="eyebrow">Verifiable accounting</span>
@@ -375,6 +394,7 @@ onBeforeUnmount(() => {
               :operations="snapshot.local_activity.recent_operations"
               :optimized-count="snapshot.local_activity.optimized_operations"
               :raw-count="snapshot.local_activity.raw_operations"
+              :measurement="snapshot.local_activity.measurement"
             />
           </div>
 

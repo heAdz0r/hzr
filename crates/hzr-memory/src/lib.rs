@@ -27,7 +27,8 @@ pub use namespace::{
 };
 pub use release::{ICM_COMMIT, ICM_MCP_SERVER_VERSION, ICM_TAG, ICM_VERSION, IcmInstallation};
 pub use snapshot::{
-    MemoryTopicEdge, MemoryTopicSnapshot, ProjectMemorySnapshot, read_project_snapshot,
+    MemoryTopicEdge, MemoryTopicSnapshot, ProjectMemoryDetail, ProjectMemorySnapshot,
+    ProjectTopicDetails, read_project_snapshot, read_project_topic_details,
 };
 pub use supervisor::{IcmSupervisor, ServiceStatus, StartOutcome, StopOutcome};
 pub use types::{

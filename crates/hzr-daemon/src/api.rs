@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Path as AxumPath, State};
 use hzr_context::{ContextError, PlanRequest, SearchRequest};
 use hzr_core::{Ledger, LedgerRecord, locked_engines};
 use hzr_exec::{
@@ -18,21 +18,23 @@ use hzr_index::{
 use hzr_memory::{
     GLOBAL_SCOPE_TOKEN, Importance, MemoryNamespace, ProjectMemorySnapshot, RecallRequest,
     ServiceStatus, StoreRequest, global_topic, isolate_memories, merge_memories, namespaced_topic,
-    read_project_snapshot, recall_candidate_limit, validate_memory_kind,
+    read_project_snapshot, read_project_topic_details, recall_candidate_limit,
+    validate_memory_kind,
 };
 use hzr_protocol::{
     CodecApiRequest, CommandTermination, ContextPlanApiRequest, ContextPlanApiResponse,
     DashboardEstimatedEfficiency, DashboardHelpCommand, DashboardIndexArtifacts,
     DashboardIndexObservatory, DashboardIndexWatcher, DashboardLocalActivity,
-    DashboardLocalOperation, DashboardMemoryEdge, DashboardMemoryObservatory,
-    DashboardMemoryRetrieval, DashboardMemoryTopic, DashboardObservedUsage,
-    DashboardOperationRoute, DashboardProject, DashboardProjectArtifacts, DashboardProjectState,
-    DashboardProviderReceiptState, DashboardProviderReceipts, DashboardResponse,
-    DashboardSemanticCanary, DashboardService, DashboardState, EngineHealth, EngineState,
-    ExecApiRequest, ExecApprovalApiRequest, ForkRunApiRequest, ForkRunApiResponse, HealthResponse,
-    MemoryImportance, MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest,
-    MemoryWriteScope, PROTOCOL_VERSION, SearchApiRequest, SearchApiResponse, SearchMode,
-    SearchStrategy, TraceId, UsageApiRequest, UsageApiResponse,
+    DashboardLocalOperation, DashboardMemoryDetail, DashboardMemoryEdge,
+    DashboardMemoryObservatory, DashboardMemoryRetrieval, DashboardMemoryTopic,
+    DashboardMemoryTopicDetails, DashboardObservedUsage, DashboardOperationRoute, DashboardProject,
+    DashboardProjectArtifacts, DashboardProjectState, DashboardProviderReceiptState,
+    DashboardProviderReceipts, DashboardResponse, DashboardSemanticCanary, DashboardService,
+    DashboardState, EngineHealth, EngineState, ExecApiRequest, ExecApprovalApiRequest,
+    ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryImportance,
+    MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest, MemoryWriteScope,
+    PROTOCOL_VERSION, SearchApiRequest, SearchApiResponse, SearchMode, SearchStrategy, TraceId,
+    UsageApiRequest, UsageApiResponse,
 };
 
 use crate::approval::PendingApproval;
@@ -308,6 +310,7 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
                 .recent_operations
                 .into_iter()
                 .map(|operation| DashboardLocalOperation {
+                    ledger_id: operation.ledger_id,
                     timestamp: operation.timestamp,
                     operation: operation.operation,
                     route: match operation.route {
@@ -316,6 +319,11 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
                         }
                         hzr_core::ProjectOperationRoute::Raw => DashboardOperationRoute::Raw,
                     },
+                    original_command: operation.original_command,
+                    recorded_command: operation.recorded_command,
+                    working_directory: operation.working_directory,
+                    agent: operation.agent,
+                    session_id: operation.session_id,
                     baseline_tokens_estimated: operation.baseline_tokens_estimated,
                     delivered_tokens_estimated: operation.delivered_tokens_estimated,
                     net_avoided_tokens_estimated: operation.net_avoided_tokens_estimated,
@@ -345,6 +353,83 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
         },
         help: dashboard_help(),
         notes,
+    }))
+}
+
+pub async fn dashboard_memory_topic(
+    State(state): State<AppState>,
+    AxumPath(topic_id): AxumPath<String>,
+) -> Result<Json<DashboardMemoryTopicDetails>, ApiError> {
+    if topic_id.len() != 64 || !topic_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request(
+            "memory topic identifier must be 64 hexadecimal characters",
+        ));
+    }
+    let registration = registered_workspaces(&state.config.data_dir)
+        .registrations
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            ApiError::not_found("project_not_found", "no registered project selected")
+        })?;
+    let (memory_health, _) = memory_engine_health(&state).await;
+    if memory_health.state != EngineState::Ready {
+        return Err(ApiError::service(
+            "memory_unavailable",
+            memory_health
+                .detail
+                .unwrap_or_else(|| "ICM is not ready".into()),
+            true,
+        ));
+    }
+    let database = state.memory.layout().database.clone();
+    let repository_id = registration.repository_id;
+    let requested_id = topic_id.clone();
+    let details = tokio::task::spawn_blocking(move || {
+        read_project_topic_details(&database, &repository_id, &requested_id)
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("memory topic task failed: {error}")))?
+    .map_err(|error| {
+        ApiError::service(
+            "memory_topic_unavailable",
+            format!("failed to read the project memory topic: {error}"),
+            true,
+        )
+    })?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "memory_topic_not_found",
+            "memory topic does not exist in the selected project",
+        )
+    })?;
+
+    Ok(Json(DashboardMemoryTopicDetails {
+        id: details.id,
+        label: details.label,
+        memory_count: details.memory_count,
+        visible_memory_count: details.visible_memory_count,
+        hidden_memory_count: details.hidden_memory_count,
+        truncated: details.truncated,
+        memories: details
+            .memories
+            .into_iter()
+            .map(|memory| DashboardMemoryDetail {
+                id: memory.id,
+                created_at: memory.created_at,
+                updated_at: memory.updated_at,
+                last_accessed: memory.last_accessed,
+                access_count: memory.access_count,
+                weight: memory.weight,
+                summary: memory.summary,
+                raw_excerpt: memory.raw_excerpt,
+                keywords: memory.keywords,
+                importance: memory.importance,
+                source_type: memory.source_type,
+                source_data: memory.source_data,
+                related_ids: memory.related_ids,
+            })
+            .collect(),
     }))
 }
 
