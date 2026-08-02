@@ -20,6 +20,32 @@ pub(crate) struct ForkPlanCandidate {
     pub estimated_tokens: u32,
 }
 
+/// One symbol from the fork's machine-readable symbol index (`rtk read <file> --symbols`).
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct ForkSymbol {
+    pub name: String,
+    pub kind: String,
+    pub span: ForkSymbolSpan,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct ForkSymbolSpan {
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// The fork's symbol index for one file.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(crate) struct ForkSymbolIndex {
+    #[serde(default)]
+    pub symbols: Vec<ForkSymbol>,
+}
+
+/// Symbols per candidate. A plan is a bounded set of leads, so its outline must be bounded
+/// too: without a cap a single generated file could spend the whole plan budget on its own
+/// symbol list, which is the cost the planner exists to avoid.
+const MAX_CANDIDATE_SYMBOLS: usize = 24;
+
 pub(crate) struct RetrievedCandidate {
     pub candidate: ContextCandidate,
     pub content: String,
@@ -30,11 +56,56 @@ pub(crate) struct NormalizedSource {
     pub warnings: Vec<ContextWarning>,
 }
 
+/// Render one plan candidate's evidence.
+///
+/// A candidate used to carry only `{path, score, sources, estimated_tokens}` — nothing an
+/// agent could not have got from `ls`, so it opened every file anyway. The symbol outline
+/// with line spans is what turns a path into a lead it can act on directly, and it is what
+/// the protocol's `symbol`/`line_start`/`line_end` fields were declared for.
+fn normalize_plan_evidence(
+    path: &str,
+    score: f32,
+    sources: &[String],
+    estimated_tokens: u32,
+    outline: &[ForkSymbol],
+) -> String {
+    let shown: Vec<serde_json::Value> = outline
+        .iter()
+        .take(MAX_CANDIDATE_SYMBOLS)
+        .map(|symbol| {
+            serde_json::json!({
+                "symbol": symbol.name,
+                "kind": symbol.kind,
+                "line_start": symbol.span.start_line,
+                "line_end": symbol.span.end_line,
+            })
+        })
+        .collect();
+    let omitted = outline.len().saturating_sub(shown.len());
+
+    let mut evidence = serde_json::json!({
+        "path": path,
+        "score": score,
+        "sources": sources,
+        "estimated_tokens": estimated_tokens,
+        "outline": shown,
+    });
+    if omitted > 0 {
+        evidence["outline_omitted"] = serde_json::json!(omitted);
+        evidence["outline_recovery"] = serde_json::json!(format!(
+            "{omitted} further symbols omitted; run `hzr rtk -- read {path} --outline` for all of them"
+        ));
+    }
+    // A plan is delivered as text, so a stable, compact encoding is what the model reads.
+    evidence.to_string()
+}
+
 pub(crate) fn normalize_plan(
     selected: Vec<ForkPlanCandidate>,
     workspace: &Workspace,
     generation: &str,
     pipeline_version: Option<&str>,
+    outlines: &std::collections::BTreeMap<String, ForkSymbolIndex>,
 ) -> Result<NormalizedSource> {
     let mut candidates = Vec::with_capacity(selected.len());
     for (index, candidate) in selected.into_iter().enumerate() {
@@ -46,16 +117,21 @@ pub(crate) fn normalize_plan(
                 detail: "candidate path is not valid UTF-8".into(),
             })?
             .to_owned();
-        let content = serde_json::to_string(&serde_json::json!({
-            "path": path,
-            "score": candidate.score,
-            "sources": candidate.sources,
-            "estimated_tokens": candidate.estimated_tokens,
-        }))
-        .map_err(|error| ContextError::InvalidForkOutput {
-            operation: "memory plan",
-            detail: error.to_string(),
-        })?;
+        let outline = outlines
+            .get(&path)
+            .map(|index| index.symbols.as_slice())
+            .unwrap_or_default();
+        let content = normalize_plan_evidence(
+            &path,
+            candidate.score,
+            &candidate.sources,
+            candidate.estimated_tokens,
+            outline,
+        );
+        // A whole-file candidate spans the file, so report the range the outline covers rather
+        // than inventing a single symbol for it; `symbol` stays unset because none is selected.
+        let line_start = outline.iter().map(|symbol| symbol.span.start_line).min();
+        let line_end = outline.iter().map(|symbol| symbol.span.end_line).max();
         let (content_ref, content_hash) = content_identity(&content);
         let rank = u32::try_from(index + 1).unwrap_or(u32::MAX);
         let evidence_tokens = estimate_tokens(&content).value;
@@ -66,8 +142,8 @@ pub(crate) fn normalize_plan(
                 content_ref,
                 path: Some(path.clone()),
                 symbol: None,
-                line_start: None,
-                line_end: None,
+                line_start,
+                line_end,
                 source_rank: rank,
                 relevance: finite_score(candidate.score),
                 tokens: TokenCount::estimate(
@@ -243,7 +319,20 @@ fn finite_score(score: f32) -> f32 {
 mod tests {
     use hzr_memory::{Importance, MemoryRecord, MemoryScope, MemorySource};
 
-    use super::{content_identity, normalize_memory};
+    use super::{
+        ForkSymbol, ForkSymbolSpan, content_identity, normalize_memory, normalize_plan_evidence,
+    };
+
+    fn symbol(name: &str, kind: &str, start_line: u32, end_line: u32) -> ForkSymbol {
+        ForkSymbol {
+            name: name.into(),
+            kind: kind.into(),
+            span: ForkSymbolSpan {
+                start_line,
+                end_line,
+            },
+        }
+    }
 
     fn memory_record(summary: &str) -> MemoryRecord {
         MemoryRecord {
@@ -263,6 +352,63 @@ mod tests {
             related_ids: Vec::new(),
             scope: MemoryScope::Project,
         }
+    }
+
+    /// A plan candidate used to carry no code at all — only `{path, score, sources,
+    /// estimated_tokens}`. An agent given that has learned nothing it could not have got from
+    /// `ls`, so it opens every file anyway and the plan's whole budget is spent on prose from
+    /// memory. Measured on the intent "how does the bash hook decide to rewrite a command":
+    /// 11809/16000 tokens, and the file that actually answered it was not even selected.
+    ///
+    /// The protocol has declared `symbol`, `line_start` and `line_end` since the first
+    /// release and the planner never filled them in.
+    #[test]
+    fn test_a_plan_candidate_carries_the_symbols_an_agent_can_jump_to() {
+        let outline = vec![
+            symbol("rewrite", "fn", 45, 79),
+            symbol("steer_to_first_class", "fn", 88, 103),
+        ];
+        let normalized = normalize_plan_evidence(
+            "crates/hzr-cli/src/hook_runner.rs",
+            0.42,
+            &["tier_a".into()],
+            240,
+            &outline,
+        );
+
+        assert!(
+            normalized.contains("steer_to_first_class"),
+            "the outline must reach the agent, got: {normalized}"
+        );
+        assert!(
+            normalized.contains("45") && normalized.contains("79"),
+            "a symbol without its line span cannot be read directly, got: {normalized}"
+        );
+    }
+
+    /// The outline is evidence, not a dump: a large file must not spend the plan's budget on
+    /// its own symbol list, and the agent must be told when it was cut.
+    #[test]
+    fn test_a_long_outline_is_bounded_and_says_so() {
+        let outline: Vec<_> = (0..200)
+            .map(|index| symbol(&format!("symbol_{index}"), "fn", index * 2, index * 2 + 1))
+            .collect();
+
+        let normalized =
+            normalize_plan_evidence("src/huge.rs", 0.1, &["tier_a".into()], 9000, &outline);
+
+        assert!(
+            normalized.contains("symbol_0"),
+            "the first symbols must survive truncation"
+        );
+        assert!(
+            !normalized.contains("symbol_199"),
+            "an unbounded outline would reintroduce the cost the planner exists to avoid"
+        );
+        assert!(
+            normalized.contains("omitted"),
+            "a truncated outline must say so, got: {normalized}"
+        );
     }
 
     #[test]

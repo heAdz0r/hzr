@@ -26,6 +26,7 @@ mod tools;
 use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
+use directories::BaseDirs;
 use hzr_core::Config;
 use hzr_protocol::{
     CodecApiRequest, CodecProfile, ContextPlanApiRequest, FidelityClass, MemoryImportance,
@@ -75,6 +76,90 @@ struct SessionState {
     initialized: bool,
 }
 
+/// Whether the directory the client launched this server from can own a project memory
+/// namespace.
+///
+/// The project namespace is derived from the launch directory, which the *client* picks —
+/// and clients pick badly. Claude Desktop launches from `/`, so a store that looked
+/// successful actually landed in the namespace of the filesystem root, where no CLI recall
+/// from inside a repository will ever find it again. That is the exact "fake success" this
+/// adapter was written to prevent, arriving through the one input the adapter does not
+/// control. Classify the binding up front so an unusable one is refused by name instead of
+/// being hashed into a namespace nobody reads.
+#[derive(Clone, Debug)]
+pub(crate) enum WorkspaceBinding {
+    /// A directory that can plausibly be a project, including one not yet `git init`-ed.
+    Project(std::path::PathBuf),
+    /// A directory that can never be a project, with the remediation the agent must report.
+    Refused {
+        path: std::path::PathBuf,
+        reason: String,
+    },
+}
+
+impl WorkspaceBinding {
+    pub(crate) fn project_root(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Project(root) => Some(root.as_path()),
+            Self::Refused { .. } => None,
+        }
+    }
+
+    pub(crate) fn refusal(&self) -> Option<&str> {
+        match self {
+            Self::Project(_) => None,
+            Self::Refused { reason, .. } => Some(reason.as_str()),
+        }
+    }
+
+    /// The directory the client actually launched from, reportable whether or not it bound.
+    pub(crate) fn resolved_path(&self) -> &std::path::Path {
+        match self {
+            Self::Project(root) => root.as_path(),
+            Self::Refused { path, .. } => path.as_path(),
+        }
+    }
+
+    /// The workspace string to send to `hzrd`, or the empty string when refused. Callers
+    /// must check [`Self::refusal`] first; this exists so the happy path stays a one-liner.
+    pub(crate) fn as_request_value(&self) -> String {
+        self.project_root()
+            .map(|root| root.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+}
+
+/// Classify a resolved launch directory. `home` is passed in rather than looked up so the
+/// rule is testable without depending on the machine running the test.
+pub(crate) fn classify_workspace_binding(
+    resolved: &std::path::Path,
+    home: Option<&std::path::Path>,
+) -> WorkspaceBinding {
+    let refuse = |what: &str| WorkspaceBinding::Refused {
+        path: resolved.to_path_buf(),
+        reason: format!(
+            "`hzr mcp serve` was launched from {}, which is {what} and cannot own a project \
+             memory namespace. Nothing was read or written. Register the server with an \
+             explicit `--workspace <project directory>` (see `hzr mcp config --client \
+             <client> --workspace <dir>`), then retry.",
+            resolved.display()
+        ),
+    };
+
+    if resolved.parent().is_none() {
+        return refuse("the filesystem root");
+    }
+    if let Some(home) = home {
+        if resolved == home {
+            return refuse("your home directory");
+        }
+        if home.starts_with(resolved) {
+            return refuse("an ancestor of your home directory");
+        }
+    }
+    WorkspaceBinding::Project(resolved.to_path_buf())
+}
+
 pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
     // A terminal stdin means a human ran this by hand; an MCP server would then hang
     // forever looking like a wedged session. Fail fast and say what it is for.
@@ -85,7 +170,14 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
         );
     }
 
-    let workspace = workspace.to_string_lossy().to_string();
+    // Classify the client-chosen launch directory once, before any tool can use it. A
+    // refused binding still serves: `hzr_codec` is a pure text transform and stays usable,
+    // while the project-scoped tools report the refusal instead of writing to a namespace
+    // no CLI recall will ever read.
+    let binding = classify_workspace_binding(
+        workspace,
+        BaseDirs::new().as_ref().map(|base| base.home_dir()),
+    );
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
     let mut stdout = tokio::io::stdout();
@@ -102,7 +194,7 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
         if line.is_empty() {
             continue;
         }
-        let Some(response) = handle_line(config, &workspace, &mut session, line).await else {
+        let Some(response) = handle_line(config, &binding, &mut session, line).await else {
             // Notifications have no response by definition; staying silent is correct.
             continue;
         };
@@ -117,7 +209,7 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
 /// Returns `None` for notifications, which must never be answered.
 async fn handle_line(
     config: &Config,
-    workspace: &str,
+    binding: &WorkspaceBinding,
     session: &mut SessionState,
     line: &str,
 ) -> Option<Value> {
@@ -159,7 +251,7 @@ async fn handle_line(
             INVALID_REQUEST,
             "MCP session is already initialized",
         )),
-        "initialize" => match initialize_result(&request) {
+        "initialize" => match initialize_result(&request, binding) {
             Ok(result) => {
                 session.initialized = true;
                 Some(success(id, result))
@@ -170,9 +262,7 @@ async fn handle_line(
         "tools/list" if session.initialized => {
             Some(success(id, json!({"tools": tool_definitions()})))
         }
-        "tools/call" if session.initialized => {
-            Some(call_tool(config, workspace, id, &request).await)
-        }
+        "tools/call" if session.initialized => Some(call_tool(config, binding, id, &request).await),
         "tools/list" | "tools/call" => Some(error_response(
             id,
             INVALID_REQUEST,
@@ -186,7 +276,7 @@ async fn handle_line(
     }
 }
 
-fn initialize_result(request: &Value) -> Result<Value> {
+fn initialize_result(request: &Value, binding: &WorkspaceBinding) -> Result<Value> {
     let requested = request
         .pointer("/params/protocolVersion")
         .and_then(Value::as_str)
@@ -199,6 +289,31 @@ fn initialize_result(request: &Value) -> Result<Value> {
         LATEST_MCP_PROTOCOL_VERSION
     };
 
+    // Naming the binding in the handshake is the only way an agent can tell which project
+    // its memory belongs to. Without it, a session bound to the wrong directory looks
+    // identical to a correct one until a recall silently comes back empty.
+    let workspace = json!({
+        "bound": binding.refusal().is_none(),
+        "project": binding.project_root().map(|root| root.to_string_lossy()),
+        "resolved_from": binding.resolved_path().to_string_lossy(),
+        "note": "The project memory namespace is derived from this directory. It is fixed at \
+                 registration and cannot be changed per call.",
+    });
+
+    const GUIDANCE: &str = "Use hzr_context_plan first for unfamiliar or cross-cutting work, \
+    hzr_search for targeted code discovery, hzr_memory_recall before re-reading prior work, \
+    hzr_memory_store only for durable decisions or resolved errors, and `hzr tdd` before \
+    production changes. HZR owns the single \
+    context planner, semantic index and memory store; never launch icm, grepai or rtk directly.";
+
+    let instructions = match binding.refusal() {
+        Some(reason) => format!(
+            "{reason}\n\nUntil that is fixed, only hzr_codec works in this session; every \
+             project-scoped tool will return isError with this same reason. {GUIDANCE}"
+        ),
+        None => GUIDANCE.to_owned(),
+    };
+
     Ok(json!({
         "protocolVersion": negotiated,
         "capabilities": {"tools": {"listChanged": false}},
@@ -207,16 +322,18 @@ fn initialize_result(request: &Value) -> Result<Value> {
             "title": "HZR Zero-Redundancy Gateway",
             "version": env!("CARGO_PKG_VERSION"),
             "description": "Local stdio gateway to the single HZR context, index and memory owners.",
+            "workspace": workspace,
         },
-        "instructions": "Use hzr_context_plan first for unfamiliar or cross-cutting work, \
-    hzr_search for targeted code discovery, hzr_memory_recall before re-reading prior work, \
-    hzr_memory_store only for durable decisions or resolved errors, and `hzr tdd` before \
-    production changes. HZR owns the single \
-    context planner, semantic index and memory store; never launch icm, grepai or rtk directly.",
+        "instructions": instructions,
     }))
 }
 
-async fn call_tool(config: &Config, workspace: &str, id: Value, request: &Value) -> Value {
+async fn call_tool(
+    config: &Config,
+    binding: &WorkspaceBinding,
+    id: Value,
+    request: &Value,
+) -> Value {
     let Some(params) = request.get("params").and_then(Value::as_object) else {
         return error_response(id, INVALID_PARAMS, "tools/call requires object params");
     };
@@ -254,6 +371,18 @@ async fn call_tool(config: &Config, workspace: &str, id: Value, request: &Value)
             );
         }
     };
+
+    // Every tool except the codec is scoped to a project, so a refused binding must stop
+    // them here. Reporting the refusal per call rather than refusing to start keeps the
+    // workspace-independent tool usable and puts the remediation in front of the agent that
+    // can act on it.
+    if name != "hzr_codec" {
+        if let Some(reason) = binding.refusal() {
+            return success(id, tool_error(reason));
+        }
+    }
+    let workspace = binding.as_request_value();
+    let workspace = workspace.as_str();
 
     let outcome = match name {
         "hzr_memory_recall" => recall(&client, workspace, &arguments).await,
@@ -424,20 +553,65 @@ fn error_response(id: Value, code: i64, message: &str) -> Value {
 /// Emitted as text instead of written directly: `settings.json` and `CLAUDE.md` are files
 /// HZR owns, but a third-party agent's own config is not, and silently rewriting it would
 /// be the same overreach HZR refuses elsewhere.
-pub fn registration_snippet(client: McpClientArg, binary: &std::path::Path) -> String {
+/// Print the registration a user pastes into their client configuration.
+///
+/// `workspace` pins the project the server's memory is scoped to. It matters because the
+/// fallback is the client's own working directory, and clients choose it badly: the Claude
+/// desktop app launches from `/`, so an unpinned registration binds the namespace of the
+/// filesystem root and every store there is unreachable from the repository it describes.
+/// Pinning it here is the only fix that happens before the first bad write.
+pub fn registration_snippet(
+    client: McpClientArg,
+    binary: &std::path::Path,
+    workspace: Option<&std::path::Path>,
+) -> String {
     let binary = binary.display();
+    let (toml_args, json_args) = match workspace {
+        Some(path) => {
+            let path = path.display();
+            (
+                format!("[\"mcp\", \"serve\", \"--workspace\", \"{path}\"]"),
+                format!("[\"mcp\", \"serve\", \"--workspace\", \"{path}\"]"),
+            )
+        }
+        None => (
+            "[\"mcp\", \"serve\"]".to_owned(),
+            "[\"mcp\", \"serve\"]".to_owned(),
+        ),
+    };
+    let unpinned_warning = workspace.is_none();
+
     match client {
-        McpClientArg::Codex => format!(
-            "# ~/.codex/config.toml — replace the [mcp_servers.icm] block with this.\n\
-             # Routing through hzr keeps one store and one supervised ICM; a direct\n\
-             # `icm serve` entry spawns a second writer per session and leaks orphans.\n\
-             [mcp_servers.hzr]\n\
-             command = \"{binary}\"\n\
-             args = [\"mcp\", \"serve\"]\n"
-        ),
-        McpClientArg::ClaudeDesktop => format!(
-            "// claude_desktop_config.json — replace the \"icm\" server with this.\n{{\n  \"mcpServers\": {{\n    \"hzr\": {{\n      \"command\": \"{binary}\",\n      \"args\": [\"mcp\", \"serve\"]\n    }}\n  }}\n}}\n"
-        ),
+        McpClientArg::Codex => {
+            let hint = if unpinned_warning {
+                "# Without `--workspace <dir>` the project namespace comes from the directory\n\
+                 # Codex launched from, which is a per-session scratch directory — memory then\n\
+                 # never accumulates for the repository. Re-run with `--workspace <dir>`.\n"
+            } else {
+                ""
+            };
+            format!(
+                "# ~/.codex/config.toml — replace the [mcp_servers.icm] block with this.\n\
+                 # Routing through hzr keeps one store and one supervised ICM; a direct\n\
+                 # `icm serve` entry spawns a second writer per session and leaks orphans.\n\
+                 {hint}\
+                 [mcp_servers.hzr]\n\
+                 command = \"{binary}\"\n\
+                 args = {toml_args}\n"
+            )
+        }
+        McpClientArg::ClaudeDesktop => {
+            let hint = if unpinned_warning {
+                "// The desktop app launches MCP servers from `/`, which can never be a project.\n\
+                 // Re-run with `--workspace <dir>` or the project-scoped tools will refuse.\n"
+            } else {
+                ""
+            };
+            format!(
+                "// claude_desktop_config.json — replace the \"icm\" server with this.\n\
+                 {hint}{{\n  \"mcpServers\": {{\n    \"hzr\": {{\n      \"command\": \"{binary}\",\n      \"args\": {json_args}\n    }}\n  }}\n}}\n"
+            )
+        }
     }
 }
 

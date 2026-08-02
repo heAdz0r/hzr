@@ -71,6 +71,9 @@ async fn test_search_and_context_use_managed_fork_core_commands() {
     // behaviour that made `hzr search "fn handle_request" --mode exact` return every `fn`.
     assert_eq!(search.strategy, SearchStrategy::ForkRgaiBuiltin);
     assert_eq!(search.hits.len(), 1);
+    // The engine reported `lib.rs` relative to the `src` scope; an agent needs the path it
+    // can actually open, so HZR must rebase it onto the project root. The fake engine exits
+    // 67 when `--project-root` is missing, which is what made a file-scoped exact search fail.
     assert_eq!(search.hits[0].path, "src/lib.rs");
 
     let leading_hyphen = planner
@@ -163,7 +166,19 @@ case "$1" in
     if [ "$literal_found" != "true" ] || [ -z "$query" ]; then
       exit 65
     fi
-    printf '%s\n' "{\"query\":\"$query\",\"path\":\"src\",\"total_hits\":1,\"shown_hits\":1,\"scanned_files\":1,\"skipped_large\":0,\"skipped_binary\":0,\"hits\":[{\"path\":\"src/lib.rs\",\"score\":9.5,\"matched_lines\":1,\"snippets\":[{\"lines\":[{\"line\":1,\"text\":\"pub fn managed_fork_hit() {}\"}],\"matched_terms\":[\"$query\"]}]}]}"
+    root_found=false
+    for argument in "$@"; do
+      if [ "$argument" = "--project-root" ]; then
+        root_found=true
+      fi
+    done
+    if [ "$root_found" != "true" ]; then
+      exit 67
+    fi
+    # Hit paths are relative to `--path`, not to the project root: searching `src` reports
+    # `lib.rs`. This fixture used to report `src/lib.rs`, which the real engine never returns,
+    # so it hid the rebasing HZR has to do to give an agent a path it can open.
+    printf '%s\n' "{\"query\":\"$query\",\"path\":\"src\",\"total_hits\":1,\"shown_hits\":1,\"scanned_files\":1,\"skipped_large\":0,\"skipped_binary\":0,\"hits\":[{\"path\":\"lib.rs\",\"score\":9.5,\"matched_lines\":1,\"snippets\":[{\"lines\":[{\"line\":1,\"text\":\"pub fn managed_fork_hit() {}\"}],\"matched_terms\":[\"$query\"]}]}]}"
     ;;
   memory)
     if [ "$2" != "plan" ]; then

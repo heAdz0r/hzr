@@ -2,10 +2,13 @@ use hzr_core::Config;
 use hzr_protocol::SearchMode;
 use serde_json::{Value, json};
 
+use crate::cli::McpClientArg;
+
 use super::{
     INVALID_REQUEST, LATEST_MCP_PROTOCOL_VERSION, METHOD_NOT_FOUND, PARSE_ERROR, SessionState,
-    bounded_usize, handle_line, initialize_result, lifecycle_metadata, optional_enum, parse_mode,
-    reject_unknown, tool_definitions, tool_error, tool_success,
+    bounded_usize, classify_workspace_binding, handle_line, initialize_result, lifecycle_metadata,
+    optional_enum, parse_mode, registration_snippet, reject_unknown, tool_definitions, tool_error,
+    tool_success,
 };
 
 /// Mirror of the notification rule in `handle_line`, which cannot be exercised
@@ -14,13 +17,18 @@ fn is_notification(request: &Value) -> bool {
     request.get("id").is_none()
 }
 
+/// A normally-bound workspace, for the tests whose subject is not the binding itself.
+fn test_binding() -> super::WorkspaceBinding {
+    classify_workspace_binding(std::path::Path::new("/Users/andrew/code/app"), None)
+}
+
 #[test]
 fn test_initialize_negotiates_latest_stable_for_unknown_revision() {
     let request = json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "3000-01-01"}
     });
-    let result = initialize_result(&request).expect("initialize succeeds");
+    let result = initialize_result(&request, &test_binding()).expect("initialize succeeds");
     assert_eq!(result["protocolVersion"], LATEST_MCP_PROTOCOL_VERSION);
     assert!(result["capabilities"]["tools"].is_object());
     assert_eq!(result["serverInfo"]["name"], "hzr");
@@ -39,7 +47,7 @@ fn test_initialize_preserves_a_supported_client_revision() {
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
         "params": {"protocolVersion": "2024-11-05"}
     });
-    let result = initialize_result(&request).expect("initialize succeeds");
+    let result = initialize_result(&request, &test_binding()).expect("initialize succeeds");
     assert_eq!(result["protocolVersion"], "2024-11-05");
 }
 
@@ -58,7 +66,7 @@ fn test_initialize_requires_a_protocol_version() {
     let request = json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}
     });
-    assert!(initialize_result(&request).is_err());
+    assert!(initialize_result(&request, &test_binding()).is_err());
 }
 
 #[test]
@@ -148,7 +156,7 @@ async fn test_tools_are_rejected_before_initialization() {
     let mut session = SessionState::default();
     let response = handle_line(
         &Config::default(),
-        "/repo",
+        &classify_workspace_binding(std::path::Path::new("/repo"), None),
         &mut session,
         r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
     )
@@ -194,4 +202,105 @@ fn test_unavailable_backend_reports_an_error_not_a_fake_success() {
 fn test_error_codes_are_standard_json_rpc() {
     assert_eq!(METHOD_NOT_FOUND, -32601);
     assert_eq!(PARSE_ERROR, -32700);
+}
+
+/// A client that launches `hzr mcp serve` from its own working directory decides the
+/// project namespace by accident. Claude Desktop launches from `/`, so every memory it
+/// stored landed in the namespace of the filesystem root instead of the repository the
+/// user was discussing — and a CLI recall from inside that repository could never see it.
+/// The binding must be classified before it is used, so the unusable cases are named
+/// rather than silently hashed into a namespace nobody reads.
+#[test]
+fn test_a_client_launch_directory_that_cannot_be_a_project_is_refused() {
+    let home = std::path::Path::new("/Users/andrew");
+
+    for unusable in [
+        std::path::Path::new("/"),
+        home,
+        std::path::Path::new("/Users"),
+    ] {
+        let binding = classify_workspace_binding(unusable, Some(home));
+        assert!(
+            binding.project_root().is_none(),
+            "{} must never own a project namespace",
+            unusable.display()
+        );
+        let reason = binding.refusal().expect("a refusal explains itself");
+        assert!(
+            reason.contains("--workspace"),
+            "the refusal must name the flag that fixes it, got: {reason}"
+        );
+    }
+}
+
+/// An agent cannot reason about which project its memory belongs to unless it is told.
+/// The handshake is the only place every client reads, so the resolved binding — and a
+/// refusal — must be stated there rather than inferred from a namespace hash.
+#[test]
+fn test_initialize_states_the_resolved_workspace_binding() {
+    let request = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25"}
+    });
+
+    let bound = classify_workspace_binding(std::path::Path::new("/Users/andrew/code/app"), None);
+    let result = initialize_result(&request, &bound).expect("initialize succeeds");
+    assert_eq!(
+        result["serverInfo"]["workspace"]["project"],
+        "/Users/andrew/code/app"
+    );
+    assert_eq!(result["serverInfo"]["workspace"]["bound"], true);
+
+    let refused = classify_workspace_binding(
+        std::path::Path::new("/"),
+        Some(std::path::Path::new("/Users/andrew")),
+    );
+    let result = initialize_result(&request, &refused).expect("initialize still succeeds");
+    assert_eq!(result["serverInfo"]["workspace"]["bound"], false);
+    assert!(
+        result["instructions"]
+            .as_str()
+            .expect("instructions")
+            .contains("--workspace"),
+        "a refused session must say how to fix itself in the text every client reads"
+    );
+}
+
+/// The registration snippet is what a user actually pastes, so it is the only place that
+/// can prevent the bad binding rather than diagnose it afterwards. Claude Desktop launches
+/// from `/` and can never bind by cwd, so its snippet must carry `--workspace`.
+#[test]
+fn test_the_registration_snippet_pins_the_workspace() {
+    let binary = std::path::Path::new("/Users/andrew/.local/bin/hzr");
+    let project = std::path::Path::new("/Users/andrew/code/app");
+
+    for client in [McpClientArg::Codex, McpClientArg::ClaudeDesktop] {
+        let pinned = registration_snippet(client, binary, Some(project));
+        assert!(
+            pinned.contains("--workspace") && pinned.contains("/Users/andrew/code/app"),
+            "a pinned snippet must carry the workspace: {pinned}"
+        );
+    }
+
+    // Without an explicit workspace the snippet must still warn, because a Claude Desktop
+    // registration that relies on cwd silently binds the filesystem root.
+    let unpinned = registration_snippet(McpClientArg::ClaudeDesktop, binary, None);
+    assert!(
+        unpinned.contains("--workspace"),
+        "an unpinned desktop snippet must still name the flag it needs: {unpinned}"
+    );
+}
+
+/// The converse: a real repository path must still bind, including one that has not been
+/// `git init`-ed yet, because HZR supports those projects everywhere else.
+#[test]
+fn test_a_real_project_directory_still_binds() {
+    let home = std::path::Path::new("/Users/andrew");
+    let binding =
+        classify_workspace_binding(std::path::Path::new("/Users/andrew/code/app"), Some(home));
+    assert_eq!(
+        binding.project_root(),
+        Some(std::path::Path::new("/Users/andrew/code/app"))
+    );
+    assert!(binding.refusal().is_none());
 }

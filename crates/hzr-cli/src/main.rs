@@ -318,12 +318,19 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 mcp::serve(&config, &workspace).await?;
                 Ok(ExitCode::SUCCESS)
             }
-            McpCommand::Config { client } => {
+            McpCommand::Config { client, workspace } => {
                 // Printing the snippet rather than editing the agent's config keeps the
                 // one-writer rule: HZR owns its own files, and a third-party MCP config
                 // stays the user's to change.
                 let binary = prefix::default_prefix()?.join("hzr");
-                print!("{}", mcp::registration_snippet(client, &binary));
+                let workspace = match workspace {
+                    Some(path) => Some(canonical_directory(Some(&path))?),
+                    None => None,
+                };
+                print!(
+                    "{}",
+                    mcp::registration_snippet(client, &binary, workspace.as_deref())
+                );
                 Ok(ExitCode::SUCCESS)
             }
             McpCommand::Status => {

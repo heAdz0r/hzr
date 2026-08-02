@@ -24,8 +24,8 @@ use serde::de::DeserializeOwned;
 use tokio::sync::OnceCell;
 
 use crate::candidate::{
-    ForkPlanCandidate, NormalizedSource, RetrievedCandidate, normalize_memory, normalize_plan,
-    normalize_search,
+    ForkPlanCandidate, ForkSymbolIndex, NormalizedSource, RetrievedCandidate, normalize_memory,
+    normalize_plan, normalize_search,
 };
 use crate::error::{ContextError, Result};
 
@@ -35,6 +35,8 @@ const MAX_WARNINGS: usize = 8;
 const MAX_WARNING_BYTES: usize = 512;
 const SEARCH_CAPTURE_BYTES: usize = 2 * 1024 * 1024;
 const PLAN_CAPTURE_BYTES: usize = 8 * 1024 * 1024;
+/// A symbol index is a list of names and line spans, so it is small even for a large file.
+const OUTLINE_CAPTURE_BYTES: usize = 512 * 1024;
 const FORK_TIMEOUT_MARGIN_MS: u64 = 500;
 
 /// Share of the request budget a cold semantic index may consume before the request
@@ -321,15 +323,19 @@ impl ContextPlanner {
         let plan = self.run_memory_plan(workspace, request).await?;
         let planner = Some(plan.metadata());
         if !plan.selected.is_empty() {
+            let selected: Vec<_> = plan
+                .selected
+                .into_iter()
+                .take(request.search_limit)
+                .collect();
+            let outlines = self.candidate_outlines(workspace, &selected).await;
             return Ok(CodePlanResult {
                 source: Some(normalize_plan(
-                    plan.selected
-                        .into_iter()
-                        .take(request.search_limit)
-                        .collect(),
+                    selected,
                     workspace,
                     &generation.generation,
                     plan.pipeline_version.as_deref(),
+                    &outlines,
                 )?),
                 warnings,
                 planner,
@@ -377,6 +383,45 @@ impl ContextPlanner {
             warnings,
             planner,
         })
+    }
+
+    /// Fetch the symbol outline for each plan candidate.
+    ///
+    /// Without this a candidate is a bare path, so an agent has to open every file just to find
+    /// out whether it is relevant — the work the plan exists to save. The fork already has the
+    /// extractor (`rtk read <file> --symbols`), so this delegates to it rather than growing a
+    /// second, weaker one inside HZR.
+    ///
+    /// Outlines are best-effort by design. A file that is unreadable, generated, binary or in an
+    /// unsupported language contributes no outline and its candidate degrades to exactly the
+    /// path it was before; a plan must not fail because one lead could not be summarised.
+    async fn candidate_outlines(
+        &self,
+        workspace: &Workspace,
+        selected: &[ForkPlanCandidate],
+    ) -> BTreeMap<String, ForkSymbolIndex> {
+        let mut outlines = BTreeMap::new();
+        for candidate in selected {
+            let Ok(path) = workspace.normalize_result(Path::new(&candidate.rel_path)) else {
+                continue;
+            };
+            let Some(path) = path.to_str() else { continue };
+            let index: std::result::Result<ForkSymbolIndex, _> = self
+                .run_fork_json(
+                    vec!["read".into(), path.to_owned(), "--symbols".into()],
+                    &workspace.identity.root,
+                    OUTLINE_CAPTURE_BYTES,
+                    "read symbols",
+                    // Outline assembly happens inside one plan the ledger already accounts
+                    // for; charging it again would double-count that plan.
+                    false,
+                )
+                .await;
+            if let Ok(index) = index {
+                outlines.insert(path.to_owned(), index);
+            }
+        }
+        outlines
     }
 
     async fn run_memory_plan(
@@ -429,44 +474,30 @@ impl ContextPlanner {
             field: "path",
             reason: "path must be valid UTF-8".into(),
         })?;
-        let mut args = vec![
-            "rgai".into(),
-            "--path".into(),
-            path_text.into(),
-            "--max".into(),
-            request.limit.to_string(),
-            "--json".into(),
-        ];
+        let root_text =
+            workspace
+                .identity
+                .root
+                .to_str()
+                .ok_or_else(|| ContextError::InvalidRequest {
+                    field: "workspace",
+                    reason: "workspace root must be valid UTF-8".into(),
+                })?;
         let strategy = if request.mode == SearchMode::Exact {
-            // `--literal` matches the query verbatim and case-sensitively, and implies
-            // `--builtin`. Sending only `--builtin` handed the query to the ranked term
-            // model, which lowercases it, splits it on non-alphanumerics, drops stop words
-            // and stems the rest — so "exact" returned every file containing any one of the
-            // surviving tokens, and agents learned to distrust the mode entirely.
-            args.push("--literal".into());
             SearchStrategy::ForkRgaiBuiltin
         } else {
             self.ensure_managed_fork_search_config(workspace, account_usage)
                 .await?;
-            args.push("--project-root".into());
-            args.push(
-                workspace
-                    .identity
-                    .root
-                    .to_str()
-                    .ok_or_else(|| ContextError::InvalidRequest {
-                        field: "workspace",
-                        reason: "workspace root must be valid UTF-8".into(),
-                    })?
-                    .into(),
-            );
             SearchStrategy::ForkRgaiAdaptive
         };
-        if !request.include_content {
-            args.push("--compact".into());
-        }
-        args.push("--".into());
-        args.push(request.query.clone());
+        let args = fork_search_args(
+            &request.query,
+            Path::new(path_text),
+            Path::new(root_text),
+            request.mode,
+            request.limit,
+            request.include_content,
+        );
         let raw: ForkSearchOutput = self
             .run_fork_json(
                 args,
@@ -486,7 +517,7 @@ impl ContextPlanner {
             .hits
             .into_iter()
             .take(request.limit)
-            .map(|hit| normalize_search_hit(workspace, hit))
+            .map(|hit| normalize_search_hit(workspace, Path::new(path_text), hit))
             .collect::<Result<Vec<_>>>()?;
         Ok(SearchApiResponse {
             query: raw.query,
@@ -681,8 +712,68 @@ struct ForkBudgetReport {
     candidates_selected: usize,
 }
 
-fn normalize_search_hit(workspace: &Workspace, hit: ForkSearchHit) -> Result<SearchHit> {
-    let path = workspace.normalize_result(Path::new(&hit.path))?;
+/// Largest file HZR will re-read to complete a chunk-boundary fragment. Snippet lines are
+/// few and bounded, but the file they came from need not be, and a search must not turn into
+/// an unbounded read.
+const MAX_SNIPPET_REPAIR_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Rebase a fork hit path onto the project root.
+///
+/// The fork reports hit paths relative to `--path`, not to the project root, so any scoped
+/// search corrupted the one field an agent must act on: scoping to `src` reported `lib.rs`,
+/// which does not exist at the root, and scoping to a single file reported the empty string.
+/// Joining is uniform because an unscoped search is sent as `--path .`, and joining onto `.`
+/// changes nothing.
+fn hit_relative_path(search_path: &Path, hit_path: &str) -> PathBuf {
+    if hit_path.is_empty() {
+        return search_path.to_path_buf();
+    }
+    if search_path == Path::new(".") {
+        return PathBuf::from(hit_path);
+    }
+    search_path.join(hit_path)
+}
+
+/// Complete a snippet line the semantic engine returned mid-token.
+///
+/// grepai chunks are byte windows, so the first line of a chunk can begin mid-identifier.
+/// Passing that through breaks HZR's own protocol — `SearchLine::text` means "the text of
+/// this line" — and hands the model source that looks real and does not parse.
+///
+/// Repair is deliberately provable rather than best-effort: the fragment is only completed
+/// when it genuinely occurs in the line the engine pointed at. An index older than the file
+/// therefore keeps the engine's text instead of having an unrelated line substituted for it,
+/// which would be a worse failure than the truncation.
+fn repair_snippet_line(fragment: &str, actual: Option<&str>) -> String {
+    let Some(actual) = actual else {
+        return fragment.to_owned();
+    };
+    let complete = actual.trim();
+    // An empty fragment matches every line, so it proves nothing about belonging to this one.
+    if fragment.is_empty() || fragment == complete || !complete.contains(fragment) {
+        return fragment.to_owned();
+    }
+    complete.to_owned()
+}
+
+/// Read a file's lines for snippet repair. A missing, oversized or non-UTF-8 file simply
+/// yields no repair material; search results must still be returned.
+fn repair_source(workspace: &Workspace, path: &Path) -> Option<Vec<String>> {
+    let absolute = workspace.identity.root.join(path);
+    let metadata = std::fs::metadata(&absolute).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_SNIPPET_REPAIR_BYTES {
+        return None;
+    }
+    let text = std::fs::read_to_string(&absolute).ok()?;
+    Some(text.lines().map(str::to_owned).collect())
+}
+
+fn normalize_search_hit(
+    workspace: &Workspace,
+    search_path: &Path,
+    hit: ForkSearchHit,
+) -> Result<SearchHit> {
+    let path = workspace.normalize_result(&hit_relative_path(search_path, &hit.path))?;
     let path = path
         .to_str()
         .ok_or_else(|| ContextError::InvalidForkOutput {
@@ -690,6 +781,9 @@ fn normalize_search_hit(workspace: &Workspace, hit: ForkSearchHit) -> Result<Sea
             detail: "result path is not valid UTF-8".into(),
         })?
         .to_owned();
+    // Read once per hit, not once per line: a snippet has at most a handful of lines and they
+    // all come from the same file.
+    let source = repair_source(workspace, Path::new(&path));
     let snippets = hit
         .snippets
         .into_iter()
@@ -703,9 +797,16 @@ fn normalize_search_hit(workspace: &Workspace, hit: ForkSearchHit) -> Result<Sea
                             operation: "rgai search",
                             detail: "line number exceeds the protocol range".into(),
                         })?;
+                    // Line numbers are 1-based in every engine that produces them.
+                    let actual = source
+                        .as_ref()
+                        .and_then(|lines| {
+                            line.line.checked_sub(1).and_then(|index| lines.get(index))
+                        })
+                        .map(String::as_str);
                     Ok(SearchLine {
                         line: line_number,
-                        text: line.text,
+                        text: repair_snippet_line(&line.text, actual),
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -817,6 +918,49 @@ fn add_source(
     if !normalized.candidates.is_empty() {
         sources.push((weight, normalized.candidates));
     }
+}
+
+/// Build the fork-core `rgai` argument list.
+///
+/// `--project-root` is passed for every mode, not only the ranked ones. The fork treats
+/// `--path` as the project root when no root is given, so an exact search scoped to a
+/// single file failed with "project root is not a directory" — surfaced to the agent as
+/// an opaque HTTP 503 — while the identical semantic search worked. Scope and project
+/// identity are different things and are now always sent as different arguments.
+fn fork_search_args(
+    query: &str,
+    path: &Path,
+    workspace_root: &Path,
+    mode: SearchMode,
+    limit: usize,
+    include_content: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "rgai".into(),
+        "--path".into(),
+        path.to_string_lossy().into_owned(),
+        "--project-root".into(),
+        workspace_root.to_string_lossy().into_owned(),
+        "--max".into(),
+        limit.to_string(),
+        "--json".into(),
+    ];
+    if mode == SearchMode::Exact {
+        // `--literal` matches the query verbatim and case-sensitively, and implies
+        // `--builtin`. Sending only `--builtin` handed the query to the ranked term
+        // model, which lowercases it, splits it on non-alphanumerics, drops stop words
+        // and stems the rest — so "exact" returned every file containing any one of the
+        // surviving tokens, and agents learned to distrust the mode entirely.
+        args.push("--literal".into());
+    }
+    if !include_content {
+        args.push("--compact".into());
+    }
+    // The query goes last, behind `--`, so a pattern that begins with a dash is matched
+    // rather than parsed as a flag.
+    args.push("--".into());
+    args.push(query.to_owned());
+    args
 }
 
 fn fuse(
@@ -938,14 +1082,154 @@ mod tests {
 
     use hzr_protocol::{
         CandidateSource, ContextCandidate, ContextWarning, ContextWarningCode, Provenance,
-        TokenCount, TokenCountSource,
+        SearchMode, TokenCount, TokenCountSource,
     };
 
     use super::{
-        MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, fuse, push_warning,
-        validate_fork_search_config,
+        MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, fork_search_args, fuse, hit_relative_path,
+        push_warning, repair_snippet_line, validate_fork_search_config,
     };
     use crate::candidate::RetrievedCandidate;
+
+    /// `--path` is how an agent narrows a search, and a single file is the most natural way
+    /// to narrow one — it is what the native Grep tool accepts. Exact mode passed the path
+    /// through as the fork's *project root*, so any file path failed with
+    /// "project root is not a directory" surfaced as an opaque HTTP 503, while the same
+    /// query in semantic mode worked because only that branch pinned the root.
+    #[test]
+    fn test_exact_search_scoped_to_a_single_file_pins_the_project_root() {
+        for mode in [SearchMode::Exact, SearchMode::Semantic, SearchMode::Auto] {
+            let args = fork_search_args(
+                "needle",
+                std::path::Path::new("crates/hzr-cli/src/mcp.rs"),
+                std::path::Path::new("/repo"),
+                mode,
+                10,
+                false,
+            );
+
+            let root = args
+                .iter()
+                .position(|argument| argument == "--project-root")
+                .map(|index| args[index + 1].as_str());
+            assert_eq!(
+                root,
+                Some("/repo"),
+                "{mode:?} must pin the workspace root so --path can be a file"
+            );
+            let path = args
+                .iter()
+                .position(|argument| argument == "--path")
+                .map(|index| args[index + 1].as_str());
+            assert_eq!(
+                path,
+                Some("crates/hzr-cli/src/mcp.rs"),
+                "{mode:?} must keep the requested scope as the search path"
+            );
+        }
+    }
+
+    /// Semantic search returned source truncated mid-token. grepai chunks are byte windows,
+    /// so the first line of a chunk can begin mid-identifier, and that fragment was emitted
+    /// as a `SearchLine` — a field whose whole meaning is "the text of this line". Observed
+    /// live: line 194 of `hook_runner.rs` came back as `en(Value::as_str) else {`, the tail
+    /// of `.and_then(Value::as_str) else {`. Code that looks real and does not parse is worse
+    /// for a model than no code at all.
+    #[test]
+    fn test_a_chunk_boundary_fragment_is_completed_from_the_recorded_line() {
+        let actual = "    let Some(prompt) = input.pointer(\"/tool_input/prompt\").and_then(Value::as_str) else {";
+
+        assert_eq!(
+            repair_snippet_line("en(Value::as_str) else {", Some(actual)),
+            actual.trim(),
+            "a fragment of the recorded line must be completed to the whole line"
+        );
+    }
+
+    /// The fork reports hit paths relative to `--path`, not to the project root, so scoping a
+    /// search silently corrupted the one field an agent has to act on: scoping to `src`
+    /// reported `lib.rs`, which does not exist at the root, and scoping to a single file
+    /// reported the empty string, which normalized to `.`. A hit an agent cannot open is not
+    /// a hit.
+    #[test]
+    fn test_a_scoped_hit_is_reported_relative_to_the_project_root() {
+        use std::path::Path;
+
+        assert_eq!(
+            hit_relative_path(Path::new("."), "crates/hzr-cli/src/mcp.rs"),
+            Path::new("crates/hzr-cli/src/mcp.rs"),
+            "an unscoped search already reports root-relative paths"
+        );
+        assert_eq!(
+            hit_relative_path(Path::new("src"), "lib.rs"),
+            Path::new("src/lib.rs"),
+            "a directory scope must keep its prefix"
+        );
+        assert_eq!(
+            hit_relative_path(Path::new("src/lib.rs"), ""),
+            Path::new("src/lib.rs"),
+            "a file scope reports no sub-path, and the file itself is the hit"
+        );
+    }
+
+    /// Repair must be provably safe. The index can be older than the file, so a fragment is
+    /// only completed when it really is part of the line the engine pointed at; otherwise the
+    /// engine's text is preserved rather than replaced with an unrelated line.
+    #[test]
+    fn test_repair_never_invents_a_line_it_cannot_verify() {
+        let actual = "    let total = compute(input);";
+
+        assert_eq!(
+            repair_snippet_line("fn something_else() {", Some(actual)),
+            "fn something_else() {",
+            "a fragment that is not part of the recorded line must be left untouched"
+        );
+        assert_eq!(
+            repair_snippet_line("let total = compute(input);", Some(actual)),
+            "let total = compute(input);",
+            "an already-complete line must not change"
+        );
+        assert_eq!(
+            repair_snippet_line("let total = compute(input);", None),
+            "let total = compute(input);",
+            "an unreadable file must not lose the engine's text"
+        );
+        assert_eq!(
+            repair_snippet_line("", Some(actual)),
+            "",
+            "an empty fragment carries no proof of belonging to this line"
+        );
+    }
+
+    /// The exact/ranked distinction must survive the fix: `--literal` is what makes exact
+    /// mode exact, and it must not leak into the ranked modes.
+    #[test]
+    fn test_only_exact_mode_asks_the_fork_for_a_literal_match() {
+        let exact = fork_search_args(
+            "fn handle_request",
+            std::path::Path::new("."),
+            std::path::Path::new("/repo"),
+            SearchMode::Exact,
+            10,
+            true,
+        );
+        assert!(exact.iter().any(|argument| argument == "--literal"));
+        assert!(
+            !exact.iter().any(|argument| argument == "--compact"),
+            "include_content must suppress --compact"
+        );
+
+        let ranked = fork_search_args(
+            "handle a request",
+            std::path::Path::new("."),
+            std::path::Path::new("/repo"),
+            SearchMode::Auto,
+            10,
+            false,
+        );
+        assert!(!ranked.iter().any(|argument| argument == "--literal"));
+        assert!(ranked.iter().any(|argument| argument == "--compact"));
+    }
 
     fn retrieved(
         id: &str,

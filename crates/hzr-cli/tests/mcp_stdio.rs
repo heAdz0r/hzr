@@ -28,7 +28,13 @@ fn test_mcp_status_reports_native_client_managed_lifecycle() -> anyhow::Result<(
     assert_eq!(status["lifecycle"]["mode"], "client_managed_stdio");
     assert_eq!(status["lifecycle"]["started_by_init"], false);
     let clients = status["clients"].as_array().expect("client status array");
-    assert_eq!(clients.len(), 2);
+    // Claude Code is audited alongside the two writable clients: its `~/.claude.json` can
+    // hold a direct `icm` server, and leaving it unread hid exactly that for a release.
+    let audited: Vec<&str> = clients
+        .iter()
+        .map(|client| client["client"].as_str().expect("client name"))
+        .collect();
+    assert_eq!(audited, ["codex", "claude-desktop", "claude-code"]);
     assert!(clients.iter().all(|client| client["registered"] == false));
     Ok(())
 }

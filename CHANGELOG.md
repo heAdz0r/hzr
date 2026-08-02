@@ -4,42 +4,43 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [0.3.3] - 2026-08-02
 
-### Added
-
-- The loopback visualizer now has an operator-grade Cytoscape memory explorer with
-  deterministic layout, pan/zoom/fit controls, synchronized keyboard topic navigation,
-  and bounded topic-to-record drill-down through opaque project-scoped identifiers.
-- Recent HZR ledger activity exposes inspectable request evidence: the requested and routed
-  command, canonical working directory, route, latency, observed agent label and optional
-  session identifier. Missing historical attribution remains explicitly `Unattributed`.
-- A read-only `GET /v1/dashboard/memory/topics/{opaque_topic_id}` contract returns at most
-  100 positively repository-filtered records with independently bounded detail fields.
-- `read --outline` now recognizes Markdown and emits its ATX heading hierarchy with
-  original source spans. Supported code files continue to use their symbol extractor.
-- Exact search accepts literals beginning with `-` through the conventional `--`
-  separator, for example `hzr search --mode exact -- "--outline"`.
-
-### Changed
-
-- Dashboard synchronization runs quietly every five seconds while visible, permits only one
-  in-flight request, preserves the graph camera and open inspectors, and never animates or
-  disables the manual Refresh control during a background poll.
-- RAW rows now contribute baseline equal to delivered output and exactly zero avoided,
-  regression and net tokens in both global and project aggregates, even if a legacy or
-  malformed row stored unequal counts.
-- `read -n` defaults to exact content and preserves source coordinates for full,
-  ranged and tail reads instead of numbering filtered output from one.
-- `read --max-lines N` is an exact head operation; it no longer substitutes a smart
-  truncation marker for omitted lines.
-- Global managed agent instructions now define only HZR tool routing, include all five
-  MCP tools, and state the exact semantics of reads, per-file batch atomicity,
-  read-only `mcp config`, and direct-spawn `raw`.
-- Legacy imported memories remain available for explicit audit/migration but are
-  quarantined from automatic project recall because they carry no trustworthy
-  repository provenance.
-
 ### Fixed
 
+- **The MCP surface and the CLI wrote to two different memory namespaces in the same
+  repository.** The project namespace is derived from the directory the MCP *client*
+  launched `hzr mcp serve` from, and clients choose it badly: the Claude desktop app
+  launches from `/`, so every store through MCP landed in the namespace of the filesystem
+  root while a CLI recall looked in the repository's namespace and found nothing. Both
+  surfaces reported success. Reproduced symmetrically on a real machine — a sentinel stored
+  over MCP was invisible to `hzr memory recall`, and one stored over the CLI was invisible
+  to `hzr_memory_recall`. HZR now classifies the binding before using it: the filesystem
+  root, the home directory and any ancestor of it can never own a project namespace, and a
+  refused binding returns `isError` with the remediation instead of writing where nothing
+  will read. `hzr_codec` needs no workspace and keeps working. The resolved binding is
+  stated in the `initialize` handshake, and `hzr mcp config --workspace <dir>` pins it in
+  the snippet the user pastes.
+- **`hzr doctor` never read Claude Code's registrations.** Only Codex's `config.toml` and
+  the desktop app's `claude_desktop_config.json` were audited, so a direct `icm` server in
+  `~/.claude.json` — the one thing the contract forbids — passed `client_mcp_ownership`
+  while spawning a second memory writer on every session start. Doctor reported only the
+  resulting orphan processes and told the user to stop processes the client immediately
+  respawns, so the ERROR named the symptom and never the cause. Claude Code is now audited
+  (including per-project `projects.<path>.mcpServers`) and never written, and each client
+  gets the remediation that actually applies to it.
+- **An exact search could not be scoped to a single file.** `--path` never sent
+  `--project-root` in exact mode, so the fork treated the search path as the project root
+  and any file path failed with "project root is not a directory", surfaced as an opaque
+  HTTP 503. The identical query in semantic mode worked, which made the failure look like a
+  mode quirk rather than a missing argument.
+- **A scoped search reported paths an agent could not open.** The fork reports hit paths
+  relative to `--path`, so scoping to `src` reported `lib.rs`, which does not exist at the
+  root, and scoping to a file reported the empty string, which normalized to `.`. Hits are
+  now rebased onto the project root.
+- **Semantic search emitted source truncated mid-token.** grepai chunks are byte windows,
+  so a chunk's first line can begin mid-identifier; line 194 of `hook_runner.rs` came back
+  as `en(Value::as_str) else {`. A fragment is now completed from the recorded line, and
+  only when it provably occurs there, so an index older than the file keeps the engine's
+  text rather than having an unrelated line substituted for it.
 - ICM and grepai health in the visualizer is backed by supervised probes, repository-scoped
   snapshots, watcher ownership and a semantic canary instead of process-presence inference.
 - The memory graph no longer overlaps labels in a decorative orbital SVG, and background
@@ -59,12 +60,88 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   assets, so Claude and Codex reference the upgrade-stable `current/share/hzr/HZR.md`.
   `hzr doctor` now recognizes the executable Codex bootstrap and verifies that target.
 
+### Added
+
+- The loopback visualizer now has an operator-grade Cytoscape memory explorer with
+  deterministic layout, pan/zoom/fit controls, synchronized keyboard topic navigation,
+  and bounded topic-to-record drill-down through opaque project-scoped identifiers.
+- Recent HZR ledger activity exposes inspectable request evidence: the requested and routed
+  command, canonical working directory, route, latency, observed agent label and optional
+  session identifier. Missing historical attribution remains explicitly `Unattributed`.
+- A read-only `GET /v1/dashboard/memory/topics/{opaque_topic_id}` contract returns at most
+  100 positively repository-filtered records with independently bounded detail fields.
+- **Plan candidates carry the symbols an agent can jump to.** A candidate used to be
+  `{path, score, sources, estimated_tokens}` — nothing that could not be had from `ls` — so
+  an agent opened every file anyway, which is the work the plan exists to save, while the
+  budget went to memory bodies. `symbol`, `line_start` and `line_end` have been declared in
+  the protocol since the first release and were never filled in. Each candidate now carries
+  its symbol outline with line spans from the fork's own extractor
+  (`rtk read <file> --symbols`), bounded to 24 symbols with the omitted count and the
+  command that shows the rest. Outlines are best-effort: an unsummarisable file degrades to
+  the path it was before rather than failing the plan.
+- **`client_mcp_workspace` doctor check.** A registered MCP server with no `--workspace`
+  takes its namespace from the client's launch directory. That is the cause of the split
+  namespace above and was previously silent.
+- `hzr mcp config --workspace <dir>` pins the project in the printed registration.
+
+- `read --outline` now recognizes Markdown and emits its ATX heading hierarchy with
+  original source spans. Supported code files continue to use their symbol extractor.
+- Exact search accepts literals beginning with `-` through the conventional `--`
+  separator, for example `hzr search --mode exact -- "--outline"`.
+
+### Changed
+
+- Dashboard synchronization runs quietly every five seconds while visible, permits only one
+  in-flight request, preserves the graph camera and open inspectors, and never animates or
+  disables the manual Refresh control during a background poll.
+- RAW rows now contribute baseline equal to delivered output and exactly zero avoided,
+  regression and net tokens in both global and project aggregates, even if a legacy or
+  malformed row stored unequal counts.
+- A subagent receives a brief instead of a JSON dump. The plan was prepended as a minified
+  `ContextPlanApiResponse` with no glossary and no statement of what the entries were, so a
+  subagent either ignored it or treated ranked guesses as findings. Leads are now named as
+  `path:start-end` with their symbol, declared unverified, and paired with the commands that
+  confirm them; an empty plan says it found nothing.
+- The contract states what the hook covers. The `PreToolUse` matcher is `Bash|Agent|Task`,
+  so nothing redirects a native `Read`, `Grep`, `Edit`, `Write` or `Glob` and nothing records
+  one — those calls are absent from `hzr stats` on both sides of its ratio. The preference
+  table is the agent's to follow, not something the hook enforces.
+- The codec is described as what it is: removal of exact duplicate paragraphs under verified
+  protected spans, not prose compression. Verified on 4 KB of deliberately verbose
+  single-paragraph prose, which comes back byte-identical — a correct result, not a failure.
+- `hzr rtk -- memory explore <dir>` and `read --symbols` are documented in the command
+  table. The Explore-deny hook already pointed agents at `memory explore` while the contract
+  omitted it.
+- `mcp serve` is matched as an argument prefix in client configurations, so pinning a
+  workspace no longer makes a correct registration report as unregistered.
+- The fork-core integration fixture reports hit paths the way the real engine does, and fails
+  when `--project-root` is absent. It previously modelled behaviour the engine never had,
+  which is what let the file-scoping defect survive.
+
+- `read -n` defaults to exact content and preserves source coordinates for full,
+  ranged and tail reads instead of numbering filtered output from one.
+- `read --max-lines N` is an exact head operation; it no longer substitutes a smart
+  truncation marker for omitted lines.
+- Global managed agent instructions now define only HZR tool routing, include all five
+  MCP tools, and state the exact semantics of reads, per-file batch atomicity,
+  read-only `mcp config`, and direct-spawn `raw`.
+- Legacy imported memories remain available for explicit audit/migration but are
+  quarantined from automatic project recall because they carry no trustworthy
+  repository provenance.
+
 ### Documentation
 
 - Added the 12-module Observatory 2.0 PRD, independent acceptance gate and sanitized public
   screenshots of service health, memory drill-down and per-request evidence.
 - README, the canonical agent contract, Claude/Codex integration guides, fork docs and
   the parity ledger now agree on the corrected behavior and scope.
+
+### Known gaps
+
+- `hzr memory` still has no `forget` or `prune`, so cross-project rows written into a
+  project namespace by the legacy import cannot be removed through the sanctioned control
+  plane. The engine supports it; the HZR path does not exist yet.
+
 
 ## [0.3.2] - 2026-08-02
 
