@@ -4,6 +4,11 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Fixed
+
+- The dashboard reports a ready on-disk index with its on-demand watcher at rest as `Standby`
+  instead of claiming that a rebuild is active indefinitely after a daemon restart.
+
 ## [0.3.4] - 2026-08-02
 
 ### Added

@@ -689,13 +689,7 @@ fn index_snapshot_observatory(
     };
     let artifact_ready =
         artifacts.initialized && artifacts.vectors_present && artifacts.symbols_present;
-    let state = if watcher_state == DashboardState::Degraded {
-        DashboardState::Degraded
-    } else if artifact_ready && watcher_state == DashboardState::Ready {
-        DashboardState::Ready
-    } else {
-        DashboardState::Rebuilding
-    };
+    let state = dashboard_index_state(artifact_ready, snapshot.watcher.state);
     DashboardIndexObservatory {
         state,
         project: Some(registration_name(registration)),
@@ -724,6 +718,15 @@ fn index_snapshot_observatory(
         },
         search_activity,
         diagnostic_command: "hzr index status --workspace .".into(),
+    }
+}
+
+fn dashboard_index_state(artifact_ready: bool, watcher_state: IndexWatcherState) -> DashboardState {
+    match watcher_state {
+        IndexWatcherState::Failed => DashboardState::Degraded,
+        IndexWatcherState::Live if artifact_ready => DashboardState::Ready,
+        IndexWatcherState::Live => DashboardState::Rebuilding,
+        IndexWatcherState::Standby => DashboardState::Standby,
     }
 }
 
@@ -1985,14 +1988,17 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        ManagedExecutionBudget, caveman_engine_health, dashboard_memory_detail,
-        dashboard_search_activity, memory_mutation_targets, memory_ready_state,
-        overall_engine_state, validate_managed_fork_tool,
+        ManagedExecutionBudget, caveman_engine_health, dashboard_index_state,
+        dashboard_memory_detail, dashboard_overall_state, dashboard_search_activity,
+        memory_mutation_targets, memory_ready_state, overall_engine_state,
+        validate_managed_fork_tool,
     };
     use hzr_core::{ProjectOperationRoute, ProjectOperationSummary};
+    use hzr_index::IndexWatcherState;
     use hzr_memory::{Importance, MemoryRecord, MemoryScope, MemorySource, ProjectMemoryDetail};
     use hzr_protocol::{
-        DashboardOperationRoute, DashboardState, EngineHealth, EngineState, MemoryWriteScope,
+        DashboardOperationRoute, DashboardService, DashboardState, EngineHealth, EngineState,
+        MemoryWriteScope,
     };
 
     const PROJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -2102,6 +2108,35 @@ mod tests {
         ];
 
         assert_eq!(overall_engine_state(&engines), EngineState::Ready);
+    }
+
+    #[test]
+    fn index_state_distinguishes_standby_from_active_rebuild() {
+        let standby = dashboard_index_state(true, IndexWatcherState::Standby);
+        assert_eq!(
+            dashboard_overall_state(&[DashboardService {
+                id: "grepai".into(),
+                name: "grepai index".into(),
+                version: None,
+                state: standby,
+                detail: "on demand".into(),
+                command: None,
+            }]),
+            DashboardState::Ready
+        );
+        assert_eq!(standby, DashboardState::Standby);
+        assert_eq!(
+            dashboard_index_state(false, IndexWatcherState::Live),
+            DashboardState::Rebuilding
+        );
+        assert_eq!(
+            dashboard_index_state(true, IndexWatcherState::Live),
+            DashboardState::Ready
+        );
+        assert_eq!(
+            dashboard_index_state(true, IndexWatcherState::Failed),
+            DashboardState::Degraded
+        );
     }
 
     #[test]
