@@ -145,7 +145,7 @@ pub(crate) fn classify_workspace_binding(
             "`hzr mcp serve` was launched from {}, which is {what} and cannot own a project \
              memory namespace. Nothing was read or written. Register the server with an \
              explicit `--workspace <project directory>` (see `hzr mcp config --client \
-             <client> --workspace <dir>`), then retry.",
+             <client> --workspace <dir> --apply`), then retry.",
             resolved.display()
         ),
     };
@@ -203,7 +203,7 @@ async fn apply_workspace_policy(config: &Config, binding: WorkspaceBinding) -> W
             reason: format!(
                 "{} is not an initialized HZR workspace. Nothing was read or written. Run \
                  `cd {}` followed by `hzr init --if-needed`, or pin an initialized project with \
-                 `hzr mcp config --client <client> --workspace <dir>`.",
+                 `hzr mcp config --client <client> --workspace <dir> --apply`.",
                 workspace.identity.root.display(),
                 workspace.identity.root.display()
             ),
@@ -841,12 +841,11 @@ fn error_response(id: Value, code: i64, message: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 }
 
-/// Registration snippet for an external agent's MCP configuration.
-///
-/// Emitted as text instead of written directly: `settings.json` and `CLAUDE.md` are files
-/// HZR owns, but a third-party agent's own config is not, and silently rewriting it would
-/// be the same overreach HZR refuses elsewhere.
 /// Print the registration a user pastes into their client configuration.
+///
+/// For a write path use `hzr mcp config --apply` (or `hzr install`), which owns Codex and
+/// Claude Desktop registrations the same way install does. Print mode remains for paste
+/// workflows and clients HZR must not rewrite.
 ///
 /// `workspace` pins the project the server's memory is scoped to. It matters because the
 /// fallback is the client's own working directory, and clients choose it badly: the Claude

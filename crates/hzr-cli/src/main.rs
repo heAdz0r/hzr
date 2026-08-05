@@ -102,6 +102,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             skip_instructions,
             skip_service,
             project_only,
+            workspace,
         } => {
             return run_install(
                 InstallOptions {
@@ -114,6 +115,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     wire_instructions: !*skip_instructions,
                     start_service: !*skip_service,
                     project_only: *project_only,
+                    workspace: workspace.clone(),
                 },
                 &config_path,
                 cli.json,
@@ -386,19 +388,41 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 mcp::serve(&config, &workspace).await?;
                 Ok(ExitCode::SUCCESS)
             }
-            McpCommand::Config { client, workspace } => {
-                // Printing the snippet rather than editing the agent's config keeps the
-                // one-writer rule: HZR owns its own files, and a third-party MCP config
-                // stays the user's to change.
+            McpCommand::Config {
+                client,
+                workspace,
+                apply,
+            } => {
                 let binary = prefix::default_prefix()?.join("hzr");
-                let workspace = match workspace {
-                    Some(path) => Some(canonical_directory(Some(&path))?),
-                    None => None,
-                };
-                print!(
-                    "{}",
-                    mcp::registration_snippet(client, &binary, workspace.as_deref())
-                );
+                if apply {
+                    // `--apply` uses the same write path as `hzr install`: Codex/Desktop are
+                    // HZR-owned registrations. Default pin is cwd when `--workspace` is omitted.
+                    let workspace = canonical_directory(workspace.as_deref())?;
+                    let report =
+                        client_config::apply(client.into(), &binary, &workspace, false, true)?;
+                    if cli.json {
+                        print_json(&report)?;
+                    } else {
+                        println!(
+                            "client-mcp {} {} changed={} direct-icm-removed={} hzr-registered={} pinned={}",
+                            report.client.as_str(),
+                            report.path.display(),
+                            report.changed,
+                            report.direct_icm_removed,
+                            report.hzr_registered,
+                            workspace.display()
+                        );
+                    }
+                } else {
+                    let workspace = match workspace {
+                        Some(path) => Some(canonical_directory(Some(&path))?),
+                        None => None,
+                    };
+                    print!(
+                        "{}",
+                        mcp::registration_snippet(client, &binary, workspace.as_deref())
+                    );
+                }
                 Ok(ExitCode::SUCCESS)
             }
             McpCommand::Status => {
@@ -644,6 +668,7 @@ struct InstallOptions {
     wire_instructions: bool,
     start_service: bool,
     project_only: bool,
+    workspace: Option<PathBuf>,
 }
 
 /// Full adoption in one confirmed operation: durable binaries on PATH, one hook
@@ -668,7 +693,8 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     if !options.dry_run {
         config.ensure_layout()?;
     }
-    let workspace_root = canonical_directory(None)?;
+    // Пин MCP и корень активации: явный `--workspace`, иначе cwd, откуда запущен install.
+    let workspace_root = canonical_directory(options.workspace.as_deref())?;
     let workspace = if options.project_only && !options.dry_run {
         let (workspace, _, _, _, _) = initialize_workspace_at(&config, &workspace_root).await?;
         Some(workspace)
@@ -775,7 +801,12 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     let client_reports = if options.project_only {
         client_config::uninstall_all(options.dry_run, options.force)?
     } else {
-        client_config::install_all(&hook_binary, options.dry_run, options.force)?
+        client_config::install_all(
+            &hook_binary,
+            &workspace_root,
+            options.dry_run,
+            options.force,
+        )?
     };
 
     let foreign_report = foreign::scan(&ConfigPaths::discover().data_dir).ok();

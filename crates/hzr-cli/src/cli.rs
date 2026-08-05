@@ -106,6 +106,11 @@ pub enum Command {
         /// Enable HZR only for the current workspace; hooks become no-ops elsewhere
         #[arg(long)]
         project_only: bool,
+        /// Pin Codex/Claude Desktop MCP registrations to this project (default: install cwd).
+        /// Those clients keep one global MCP entry, so only one project can be pinned at a time;
+        /// re-run install or `hzr mcp config --apply --workspace <dir>` to retarget.
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
     },
     #[command(about = "Remove HZR adoption hooks")]
     Uninstall {
@@ -242,16 +247,24 @@ pub enum McpCommand {
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
-    #[command(about = "Print the MCP server registration snippet for an agent configuration")]
+    #[command(
+        about = "Print or apply an MCP server registration; pin --workspace so memory is not bound to the client cwd"
+    )]
     Config {
         /// Target agent client for the registration snippet
         #[arg(long, value_enum, default_value_t = McpClientArg::Codex)]
         client: McpClientArg,
-        /// Pin the project the server's memory is scoped to. Without it the namespace comes
-        /// from whatever directory the client launched from, which is `/` for the Claude
-        /// desktop app and a per-session directory for Codex.
+        /// Pin the project the server's memory is scoped to. Without it (print mode) the
+        /// namespace comes from whatever directory the client launched from, which is `/` for
+        /// the Claude desktop app and a per-session directory for Codex. With `--apply`,
+        /// defaults to the current directory.
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Write the registration into the client's config instead of printing a paste snippet.
+        /// Codex and Claude Desktop store one global MCP entry, so this pins memory to one
+        /// project — re-run with another `--workspace` to retarget.
+        #[arg(long)]
+        apply: bool,
     },
     #[command(about = "Report native client registrations and the client-managed stdio lifecycle")]
     Status,
@@ -261,6 +274,15 @@ pub enum McpCommand {
 pub enum McpClientArg {
     Codex,
     ClaudeDesktop,
+}
+
+impl From<McpClientArg> for crate::client_config::Client {
+    fn from(value: McpClientArg) -> Self {
+        match value {
+            McpClientArg::Codex => Self::Codex,
+            McpClientArg::ClaudeDesktop => Self::ClaudeDesktop,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -764,7 +786,7 @@ mod tests {
 
     use super::{
         Cli, Command, ContextCommand, DaemonCommand, ExecCommand, HooksCommand, IndexCommand,
-        McpCommand, MigrateCommand, ServiceCommand,
+        McpClientArg, McpCommand, MigrateCommand, ServiceCommand,
     };
 
     fn root_help() -> String {
@@ -1101,6 +1123,34 @@ mod tests {
             Command::Mcp {
                 command: McpCommand::Status
             }
+        ));
+    }
+
+    /// `--apply` is the write path for a pinned registration; without it `mcp config` stays
+    /// print-only so pasting a snippet remains available.
+    #[test]
+    fn test_cli_parses_mcp_config_apply_with_workspace() {
+        let cli = Cli::try_parse_from([
+            "hzr",
+            "mcp",
+            "config",
+            "--client",
+            "claude-desktop",
+            "--workspace",
+            "/Users/andrew/code/app",
+            "--apply",
+        ])
+        .expect("mcp config apply");
+
+        assert!(matches!(
+            cli.command,
+            Command::Mcp {
+                command: McpCommand::Config {
+                    client: McpClientArg::ClaudeDesktop,
+                    apply: true,
+                    workspace: Some(ref path),
+                }
+            } if path == std::path::Path::new("/Users/andrew/code/app")
         ));
     }
 
