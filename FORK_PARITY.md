@@ -1,7 +1,7 @@
-# HZR 0.3.6 — fork-core parity ledger
+# HZR 0.3.7 — fork-core parity ledger
 
-**Audit date:** 2026-08-01
-**Status:** HZR 0.3.6; G1–G7/adoption implemented, functional all-gates green
+**Audit date:** 2026-08-05
+**Status:** HZR 0.3.7 honest-accounting and bounded-output delta; full deterministic gate green
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -37,6 +37,10 @@ Snapshot v2 includes ordered path, entry type, Git-portable mode, size and conte
 
 Baseline identity immutable. `fork-core/rtk` after `v0.1.0` develops directly into HZR: each delta is required to preserve the inherited capability surface, update the current-engine identity/parity and go through a full regression suite. The old `/Users/andrew/Programming/rtk` is not changed.
 
+The 0.3.7 gate verified current engine manifest
+`b2aa3d298ee1ef4c60a5fe0cf9f4439e83fa74dca2bdae3c8ba12da6dfceb847`, 1717 passed tests,
+one intentionally ignored test, and the reviewed 141-warning inherited Clippy ratchet.
+
 ### Current command-output parity delta
 
 The controlled RAW / upstream RTK v0.44.1 / HZR run, methodology and replayable
@@ -56,7 +60,7 @@ ties, 0 HZR losses, with matching exit-code vectors in all 14 cases.
 |---|---|
 | ✅ |Implemented and locally tested in the specified area|
 | 🟡 |There is a working path, but an honestly described border remains|
-| ⚪ |Not knowingly included in 0.3.6; exact compatibility path is not affected|
+| ⚪ |Not knowingly included in 0.3.7; exact compatibility path is not affected|
 
 ## Capability and routing matrix
 
@@ -71,9 +75,9 @@ ties, 0 HZR losses, with matching exit-code vectors in all 14 cases.
 | Raw shell rewrite |The complete line is passed to fork `rewrite`| Pipes, redirects, heredoc, multiline, quoting, `&&/||`, xargs are covered by tests| ✅ |
 | Exit `0/1/2/3` | rewrite / raw / deny / one-time approval |Approval ID bounded, TTL and single-use; approve/deny CLI/API| ✅ |
 | Command filters/guards |Fork rewrite selects exact command, HZR transport executes it|Private PATH resolves `rtk` again in exact fork; no generic replacement table| ✅ |
-| Enhanced read | Agent `hzr_read` → allowlisted `/v1/fork/run` → fork `read` | Bounds/modes are checked; traversal and symlink escape are rejected; Markdown digests identify omitted content and provide exact recovery; Markdown outlines use ATX headings with source spans; numbered full/range/tail reads preserve source coordinates; max-lines is an exact head | ✅ |
+| Enhanced read | Agent `hzr_read` → allowlisted `/v1/fork/run` → fork `read` | Bounds/modes are checked; traversal and symlink escape are rejected; digests, ranges, long lines, head/tail windows and memory-list caps identify omissions and provide shell-safe recovery; Markdown outlines use ATX headings with source spans; numbered reads preserve source coordinates | ✅ |
 | Atomic edit/write | Agent edit/write → fork `write --output json patch|create` |Native Caveman file tools are not available; fork atomic semantics saved| ✅ |
-| `rgai` behavior | `/v1/search`, `hzr search|rgai`, agent search → exact fork `rgai --json` |Exact adds `--literal` and places the query after `--`, including leading-hyphen literals; semantic/auto uses managed grepai| ✅ |
+| `rgai` behavior | `/v1/search`, `hzr search|rgai`, agent search → exact fork `rgai --json` |Exact adds `--literal`, places the query after `--`, and preserves case plus leading/trailing whitespace; semantic/auto uses managed grepai| ✅ |
 | One grepai store | Managed `.grepai` symlink → `<data>/workspaces/<repo>/<worktree>/index/grepai` |Real legacy, foreign link and nested duplicate fail closed| ✅ |
 | grepai lifecycle | `IndexCoordinator` owns init/generation/watcher; daemon owns coordinator | Patched 0.35 watcher, one worktree owner lock, one daemon per data root | ✅ |
 | Legacy index migration | Explicit `hzr migrate apply --workspace` | Full-SHA retained backup, prepared/applied manifests, idempotent replay | ✅ |
@@ -87,7 +91,7 @@ ties, 0 HZR losses, with matching exit-code vectors in all 14 cases.
 | Caveman response density | Short stable contract injected before generation | No post-hoc lossy rewrite; strict JSON parses, empty output fails | ✅ |
 | Explicit codec | Exact duplicate-paragraph transform + protected spans/raw guard | Shadow returns original with counterfactual bytes; trailing newline preserved | ✅ |
 | Caveman tool boundary | Exact HZR custom-tool allowlist; native layers/resources disabled and repeatedly asserted | SDK still makes inactive `cavemem --version` probe at session construction | 🟡 |
-| Usage ledger | Bridge finalizer posts one terminal outcome; daemon separates actual/estimated | `SIGKILL` can bypass finalizer; `accepted` requires external/user label | 🟡 |
+| Usage ledger | Bridge finalizer posts one terminal outcome; fork rows declare channel, measurement and route; inherited-stdio passthrough is explicitly unmeasured | `SIGKILL` can bypass finalizer; `accepted` requires external/user label | 🟡 |
 | Daemon ownership | Filesystem singleton lock acquired before services | Symlink/non-regular lock targets rejected; RAII release | ✅ |
 | Assembled bundle | Public `bin/hzr`, compatibility `bin/rtk`, private `engines/*`, managed npm runtime | Local-platform build/smoke; real provider run needs credentials and is not a release build step | ✅ |
 | Hook installer | `install/uninstall/hooks status`, one combined dispatcher, SessionStart init | Full-SHA backup, CAS lock, atomic write, RTK replacement, ICM/unknown preservation | ✅ |
@@ -151,13 +155,13 @@ An external grepai process that does not respect HZR `hzr-owner.lock` cannot be 
 
 ## Caveman boundary
 
-Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.3.6 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
+Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.3.7 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
 
 Response density is set before generation by a short cache-stable contract. HZR Codec remains a separate explicit protected transform for CLI/API. Text quality is protected by instructions, native layer guards and raw exact tools; this is not a formal semantic equivalence proof.
 
 ## Release gates
 
-### Functional 0.3.6 gates
+### Functional 0.3.7 gates
 
 - [x] Exact dirty fork snapshot v2 imported and verified.
 - [x] Exact fork builds and its synthetic-Git suite passes.

@@ -1,6 +1,9 @@
 use std::path::Path;
 
-use hzr_core::{Ledger, LedgerError, LedgerRecord};
+use hzr_core::{
+    Ledger, LedgerError, LedgerRecord, OperationAttribution, OperationChannel,
+    OperationMeasurement, OperationRoute,
+};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
@@ -32,6 +35,9 @@ pub struct OperationRecord {
     pub output_tokens: u64,
     pub execution_ms: u64,
     pub project_path: String,
+    pub channel: OperationChannel,
+    pub measurement: OperationMeasurement,
+    pub route: OperationRoute,
 }
 
 #[derive(Debug, Error)]
@@ -57,13 +63,20 @@ impl LedgerWriter {
                             let _ = reply.send(ledger.record(&record));
                         }
                         WriteCommand::Operation { record, reply } => {
-                            let _ = reply.send(ledger.record_operation(
+                            let _ = reply.send(ledger.record_operation_attributed(
                                 &record.original_command,
                                 &record.recorded_command,
                                 record.input_tokens,
                                 record.output_tokens,
                                 record.execution_ms,
-                                &record.project_path,
+                                OperationAttribution {
+                                    project_path: &record.project_path,
+                                    agent: None,
+                                    session_id: None,
+                                    channel: record.channel,
+                                    measurement: record.measurement,
+                                    route: record.route,
+                                },
                             ));
                         }
                     }

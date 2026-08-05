@@ -144,8 +144,9 @@ hzr rtk -- read <file> --tail-lines N        # tail(1)
 
 Markdown defaults to a bounded digest; use `--level none` for exact full content or
 `--from N --to M` for an exact range. `-n` defaults to exact content and prints original
-source coordinates, including for ranges and tails. `--max-lines N` returns exactly the
-first N lines. `--outline` emits ATX Markdown headings (`#` through `######`) with source
+source coordinates, including for ranges and tails. `--max-lines N` returns the first N
+lines followed by the file total, omitted count, and an exact recovery command; tails and
+explicit ranges carry the same bound evidence. `--outline` emits ATX Markdown headings (`#` through `######`) with source
 spans, or heuristic symbols for supported Rust, Python, TypeScript, JavaScript, Go and Java
 files. It is not a generic symbol query for every file format.
 
@@ -155,6 +156,7 @@ files. It is not a generic symbol query for every file format.
 `hzr search "fn handle_request" --mode exact` returns the definition, not every `fn` in
 the repository. Use it for symbols, error strings, config keys and audits. If the literal
 begins with `-`, terminate option parsing first: `hzr search --mode exact -- "--outline"`.
+Literal matching is per source line; a multi-line signature is not one literal match.
 
 `--mode semantic` and `--mode auto` use the ranked term model: the query is lowercased,
 split on non-alphanumeric characters, stripped of stop words and stemmed, and the surviving
@@ -168,10 +170,10 @@ terms are ranked. Use it to *locate* code you cannot name exactly.
 unfiltered; it does not interpret pipes, redirects, globs or shell variables. Use an explicit
 shell such as `sh -c '...'` only when shell grammar is actually required. The invocation is
 recorded in the
-ledger as a bypass, delivers exactly as many tokens as it consumed, and receives **zero**
-savings credit. `hzr stats` reports the bypass share directly under the headline ratio,
-because a bypassed operation raises both sides of that ratio and cancels out instead of
-lowering it.
+ledger as a bypass and receives **zero** savings credit. Captured output contributes equal
+baseline and delivered estimates. Inherited stdio that cannot be captured is marked
+`unmeasured`, never invented as zero output, and reduces the coverage share shown by
+`hzr stats`.
 
 Raw is correct for checksums, parsers, generated files, complete logs and machine-readable
 data. It is *not* correct for reading a file, searching for a symbol, or numbering lines —
@@ -219,17 +221,16 @@ degraded rewrite preserves command policy but is absent from the managed usage
 ledger; `hzr doctor` and `hzr stats` report that incomplete accounting instead of
 hiding it.
 
-## What the hook covers, and what only you can
+## What the hooks cover, and what only you can
 
-The `PreToolUse` hook matches `Bash`, `Agent` and `Task`. It does **not** see your host's
-own file tools, so nothing mechanically redirects a native `Read`, `Grep`, `Edit`, `Write`
-or `Glob` — and nothing records one either. Those calls are absent from `hzr stats` on both
-sides of its ratio, so a session that reads files natively shows a high reduction over a
-small measured fraction of what it actually spent.
+The `PreToolUse` hook matches `Bash`, `Agent` and `Task`. It does **not** redirect the host's
+own `Read`, `Grep`, `Edit`, `Write` or `Glob` calls. A failure-silent `PostToolUse` observer
+records only their route and response-size estimate; it never stores tool content, mutates a
+result, blocks a call, or grants savings credit. `hzr stats` therefore reports the fraction
+of observed traffic covered by its reduction ratio instead of leaving native calls invisible.
 
-That makes the table above your responsibility rather than the hook's. Reaching for a native
-file tool is not blocked and is sometimes right; it is simply invisible, so prefer the `hzr`
-command whenever one exists.
+Reaching for a native file tool is not blocked and is sometimes right. Prefer the `hzr`
+command whenever one exists; the coverage share will show the cost of routing around it.
 
 Prefer the bounded HZR planner for discovery. Never create a second `.grepai` index,
 a second ICM database, or parallel RTK hooks.
@@ -246,6 +247,7 @@ Four numbers, in the order they must be read:
 3. **PROVIDER USAGE** — actual, billed. Populated by `hzr agent run`, which reports real
    token counts through the managed bridge. Empty means no provider-billed task has run,
    not that the cost was zero.
-4. **ACCOUNTING COVERAGE** — `COMPLETE` unless rewrites happened while the daemon was
-   down. The gap closes by itself on the next managed rewrite; the lifetime count of past
-   gaps stays visible so closing one never looks like erasing it.
+4. **ACCOUNTING COVERAGE** — the measured share beside native-observed and explicitly
+   unmeasured operations, split by CLI/hook, MCP, and native-host channels. It is
+   `COMPLETE` only when no operation row or degraded rewrite was lost while the daemon was
+   down. Rewrite gaps close on the next managed rewrite; historical gap counts remain visible.

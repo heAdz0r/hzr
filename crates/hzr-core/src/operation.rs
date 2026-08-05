@@ -50,6 +50,53 @@ pub enum OperationRoute {
     /// already speak it.
     #[serde(rename = "raw")]
     Bypassed,
+    /// A host-native tool was observed after execution. It contributes to coverage but
+    /// never to the optimizer reduction ratio because HZR did not transform its output.
+    NativeUnaccounted,
+}
+
+impl OperationRoute {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Optimized => "optimized",
+            Self::Bypassed => "bypassed",
+            Self::NativeUnaccounted => "native_unaccounted",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationChannel {
+    HookCli,
+    Mcp,
+    NativeHost,
+}
+
+impl OperationChannel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::HookCli => "hook_cli",
+            Self::Mcp => "mcp",
+            Self::NativeHost => "native_host",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationMeasurement {
+    Estimated,
+    Unmeasured,
+}
+
+impl OperationMeasurement {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Estimated => "estimated",
+            Self::Unmeasured => "unmeasured",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -109,6 +156,7 @@ pub fn classify_operation(command: &str) -> OperationClassification {
     let payload = match route {
         OperationRoute::Bypassed => payload,
         OperationRoute::Optimized => strip_wrappers(payload),
+        OperationRoute::NativeUnaccounted => payload,
     };
     let head = payload.first().map(String::as_str).unwrap_or_default();
     let operation = operation_identity(head);
@@ -125,6 +173,7 @@ pub fn classify_operation(command: &str) -> OperationClassification {
             operation,
             replacement: None,
         },
+        OperationRoute::NativeUnaccounted => unreachable!("command classification is not native"),
     }
 }
 
@@ -139,6 +188,7 @@ pub fn first_class_replacement(command: &str) -> Option<RawReplacement> {
     let payload = match route {
         OperationRoute::Bypassed => payload,
         OperationRoute::Optimized => strip_wrappers(payload),
+        OperationRoute::NativeUnaccounted => payload,
     };
     let head = payload.first().map(String::as_str)?;
     replacement_for(head, &payload[1..])

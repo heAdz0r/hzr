@@ -42,6 +42,7 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         .route("/v1/fork/run", post(api::fork_run))
         .route("/v1/codec/compile", post(api::codec_compile))
         .route("/v1/usage", post(api::usage))
+        .route("/v1/operations", post(api::operation))
         .route_layer(middleware::from_fn_with_state(token, authorize));
     let public = Router::new()
         .route("/v1/dashboard", get(api::dashboard))
@@ -112,6 +113,8 @@ where
     let listener = tokio::net::TcpListener::bind(config.daemon.bind)
         .await
         .map_err(DaemonError::Io)?;
+    let address = listener.local_addr().map_err(DaemonError::Io)?;
+    eprintln!("hzrd listening on {address}; index coordinators start on demand");
     let state = AppState::initialize(config).await?;
     let memory = state.memory.clone();
     let context = state.context.clone();

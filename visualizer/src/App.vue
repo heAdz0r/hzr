@@ -400,6 +400,8 @@ onBeforeUnmount(() => {
               :operations="snapshot.local_activity.recent_operations"
               :optimized-count="snapshot.local_activity.optimized_operations"
               :raw-count="snapshot.local_activity.raw_operations"
+              :native-count="snapshot.local_activity.native_unaccounted_operations"
+              :unmeasured-count="snapshot.local_activity.unmeasured_bypass_operations"
               :measurement="snapshot.local_activity.measurement"
             />
           </div>

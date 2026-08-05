@@ -223,7 +223,17 @@ struct MemoryResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     delta: Option<DeltaPayload>,
     context: ContextSlice,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    bounds: Vec<BoundNotice>,
     graph: GraphSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct BoundNotice {
+    section: String,
+    shown: usize,
+    total: usize,
+    recovery: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -1083,10 +1093,59 @@ version = "0.1.0"
                 dep_manifest: None,
                 test_map: vec![], // L5
             },
+            bounds: vec![],
             graph: GraphSummary { nodes: 1, edges: 0 },
         };
         let text = render_text(&response);
         assert!(!text.contains("delta +"), "delta section should be hidden");
+    }
+
+    #[test]
+    fn render_text_states_exact_bounds_and_recovery_detail() {
+        let mut response = MemoryResponse {
+            command: "explore".to_string(),
+            project_root: "/tmp/p".to_string(),
+            project_id: "pid".to_string(),
+            artifact_version: ARTIFACT_VERSION,
+            detail: DetailLevel::Compact,
+            cache_status: CacheStatus::Hit,
+            cache_hit: true,
+            freshness: "fresh",
+            stats: ProjectStats {
+                file_count: 20,
+                total_bytes: 20,
+                reused_entries: 20,
+                rehashed_entries: 0,
+                scanned_files: 0,
+            },
+            delta: None,
+            context: ContextSlice {
+                entry_points: vec![],
+                hot_paths: vec![],
+                top_imports: vec![],
+                api_surface: vec![],
+                module_index: vec![],
+                type_graph: vec![],
+                dep_manifest: None,
+                test_map: vec![],
+            },
+            bounds: vec![],
+            graph: GraphSummary {
+                nodes: 20,
+                edges: 0,
+            },
+        };
+        response.bounds.push(BoundNotice {
+            section: "module_index".to_string(),
+            shown: 10,
+            total: 20,
+            recovery: "--detail verbose",
+        });
+
+        let text = render_text(&response);
+
+        assert!(text.contains("bounds module_index: 10 of 20 shown"));
+        assert!(text.contains("recovery: --detail verbose"));
     }
 
     // E6.3: compute_gain_stats tests (RED phase)
@@ -1369,6 +1428,7 @@ version = "0.1.0"
                 dep_manifest: None,
                 test_map: vec![],
             },
+            bounds: vec![],
             graph: GraphSummary { nodes: 1, edges: 0 },
         };
         let text = render_text(&response);
@@ -1822,6 +1882,7 @@ version = "0.1.0"
                 dep_manifest: None,
                 test_map: vec![],
             },
+            bounds: vec![],
             graph: GraphSummary { nodes: 1, edges: 0 },
         };
 
@@ -1909,6 +1970,7 @@ version = "0.1.0"
                 dep_manifest: None,
                 test_map: vec![],
             },
+            bounds: vec![],
             graph: GraphSummary { nodes: 2, edges: 0 },
         };
 

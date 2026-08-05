@@ -7,10 +7,11 @@ use uuid::Uuid;
 mod api;
 
 pub use api::{
-    CodecApiRequest, CommandTermination, ContextPlanApiRequest, ContextPlanApiResponse,
-    ContextWarning, ContextWarningCode, DashboardEstimatedEfficiency, DashboardHelpCommand,
-    DashboardIndexArtifacts, DashboardIndexObservatory, DashboardIndexWatcher,
-    DashboardLocalActivity, DashboardLocalOperation, DashboardMemoryDetail, DashboardMemoryEdge,
+    AccountingChannel, AccountingMeasurement, AccountingRoute, CodecApiRequest, CommandTermination,
+    ContextPlanApiRequest, ContextPlanApiResponse, ContextWarning, ContextWarningCode,
+    DashboardEstimatedEfficiency, DashboardHelpCommand, DashboardIndexArtifacts,
+    DashboardIndexObservatory, DashboardIndexWatcher, DashboardLocalActivity,
+    DashboardLocalOperation, DashboardMemoryDetail, DashboardMemoryEdge,
     DashboardMemoryObservatory, DashboardMemoryRetrieval, DashboardMemoryTopic,
     DashboardMemoryTopicDetails, DashboardObservedUsage, DashboardOperationRoute, DashboardProject,
     DashboardProjectArtifacts, DashboardProjectState, DashboardProviderReceiptState,
@@ -18,8 +19,9 @@ pub use api::{
     DashboardState, ExecApiRequest, ExecApprovalApiRequest, ForkPlannerMetadata, ForkRunApiRequest,
     ForkRunApiResponse, MemoryForgetApiRequest, MemoryImportance, MemoryMutationApiResponse,
     MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest,
-    MemoryUpdateApiRequest, MemoryWriteScope, SearchApiRequest, SearchApiResponse, SearchHit,
-    SearchLine, SearchMode, SearchSnippet, SearchStrategy, UsageApiRequest, UsageApiResponse,
+    MemoryUpdateApiRequest, MemoryWriteScope, OperationApiRequest, OperationApiResponse,
+    SearchApiRequest, SearchApiResponse, SearchHit, SearchLine, SearchMode, SearchSnippet,
+    SearchStrategy, UsageApiRequest, UsageApiResponse,
 };
 
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -148,22 +150,6 @@ impl TokenCount {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TokenBudget {
-    pub input_limit: u64,
-    pub output_reserve: u64,
-    pub safety_margin: u64,
-}
-
-impl TokenBudget {
-    pub fn available_for_dynamic_input(&self, fixed_input: u64) -> u64 {
-        self.input_limit
-            .saturating_sub(self.output_reserve)
-            .saturating_sub(self.safety_margin)
-            .saturating_sub(fixed_input)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Provenance {
     pub source: String,
     pub content_hash: String,
@@ -179,56 +165,6 @@ pub struct ProtectedSpan {
     pub kind: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Envelope<T> {
-    pub protocol_version: u16,
-    pub request_id: RequestId,
-    pub trace_id: TraceId,
-    pub session_id: SessionId,
-    pub workspace_id: String,
-    pub worktree_id: String,
-    pub deadline_ms: u64,
-    pub model_id: Option<String>,
-    pub tokenizer_id: Option<String>,
-    pub privacy: PrivacyClass,
-    pub fidelity: FidelityClass,
-    pub risk: RiskClass,
-    pub budget: TokenBudget,
-    pub provenance: Vec<Provenance>,
-    pub payload: T,
-}
-
-impl<T> Envelope<T> {
-    pub fn new(workspace_id: String, worktree_id: String, budget: TokenBudget, payload: T) -> Self {
-        Self {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: RequestId::new(),
-            trace_id: TraceId::new(),
-            session_id: SessionId::new(),
-            workspace_id,
-            worktree_id,
-            deadline_ms: 30_000,
-            model_id: None,
-            tokenizer_id: None,
-            privacy: PrivacyClass::default(),
-            fidelity: FidelityClass::default(),
-            risk: RiskClass::default(),
-            budget,
-            provenance: Vec::new(),
-            payload,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Intent {
-    pub raw: String,
-    pub normalized: Option<String>,
-    pub retrieval_variant: Option<String>,
-    pub explicit_paths: Vec<String>,
-    pub symbols: Vec<String>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CandidateSource {
@@ -238,6 +174,15 @@ pub enum CandidateSource {
     Memory,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolUnavailableReason {
+    WholeFileCandidate,
+    OutlineUnavailable,
+    NoEnclosingSymbol,
+    NotApplicable,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContextCandidate {
     pub id: String,
@@ -245,6 +190,8 @@ pub struct ContextCandidate {
     pub content_ref: String,
     pub path: Option<String>,
     pub symbol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_unavailable_reason: Option<SymbolUnavailableReason>,
     pub line_start: Option<u32>,
     pub line_end: Option<u32>,
     pub source_rank: u32,
@@ -332,18 +279,7 @@ pub struct ErrorResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActualUsage, Envelope, EstimatedUsage, Intent, TokenBudget, TokenCount, Usage};
-
-    #[test]
-    fn test_budget_never_underflows() {
-        let budget = TokenBudget {
-            input_limit: 1_000,
-            output_reserve: 400,
-            safety_margin: 200,
-        };
-
-        assert_eq!(budget.available_for_dynamic_input(600), 0);
-    }
+    use super::{ActualUsage, EstimatedUsage, TokenCount, Usage};
 
     #[test]
     fn test_usage_keeps_actual_and_estimated_separate() {
@@ -364,26 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn test_envelope_serialization_preserves_protocol_version() {
-        let envelope = Envelope::new(
-            "workspace".into(),
-            "worktree".into(),
-            TokenBudget {
-                input_limit: 8_000,
-                output_reserve: 1_000,
-                safety_margin: 500,
-            },
-            Intent {
-                raw: "find authentication".into(),
-                normalized: None,
-                retrieval_variant: None,
-                explicit_paths: Vec::new(),
-                symbols: Vec::new(),
-            },
-        );
-
-        let json = serde_json::to_string(&envelope).expect("envelope must serialize");
-        assert!(json.contains("\"protocol_version\":1"));
+    fn test_token_count_tracks_measurement_source() {
         assert!(TokenCount::provider(5).is_actual());
         assert!(!TokenCount::estimate(5).is_actual());
     }

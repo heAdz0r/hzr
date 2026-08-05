@@ -305,6 +305,8 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
             operations: activity.operations,
             optimized_operations: activity.optimized_operations,
             raw_operations: activity.raw_operations,
+            native_unaccounted_operations: activity.native_unaccounted_operations,
+            unmeasured_bypass_operations: activity.unmeasured_bypass_operations,
             baseline_tokens_estimated: activity.baseline_tokens_estimated,
             delivered_tokens_estimated: activity.delivered_tokens_estimated,
             gross_avoided_tokens_estimated: activity.gross_avoided_tokens_estimated,
@@ -327,6 +329,9 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
                             DashboardOperationRoute::Optimized
                         }
                         hzr_core::ProjectOperationRoute::Raw => DashboardOperationRoute::Raw,
+                        hzr_core::ProjectOperationRoute::NativeUnaccounted => {
+                            DashboardOperationRoute::NativeUnaccounted
+                        }
                     },
                     original_command: operation.original_command,
                     recorded_command: operation.recorded_command,
@@ -1058,7 +1063,7 @@ pub async fn context_plan(
 pub async fn memory_recall(
     State(state): State<AppState>,
     Json(request): Json<MemoryRecallApiRequest>,
-) -> Result<Json<Vec<hzr_memory::MemoryRecord>>, ApiError> {
+) -> Result<Json<hzr_memory::MemoryRecallResponse>, ApiError> {
     if request.query.trim().is_empty() {
         return Err(ApiError::bad_request("memory query must not be empty"));
     }
@@ -1101,14 +1106,14 @@ pub async fn memory_recall(
             &project,
             MemoryNamespace::Project,
             project_topic.as_deref(),
-            request.limit,
+            candidate_limit,
         ),
         MemoryScopeSelector::Global => isolate_memories(
             client.recall(&global_recall).await.map_err(unavailable)?,
             &project,
             MemoryNamespace::Global,
             global_topic.as_deref(),
-            request.limit,
+            candidate_limit,
         ),
         MemoryScopeSelector::ProjectAndGlobal => {
             let (project_records, global_records) = tokio::try_join!(
@@ -1130,10 +1135,16 @@ pub async fn memory_recall(
                 global_topic.as_deref(),
                 candidate_limit,
             );
-            merge_memories(project_records, global_records, request.limit)
+            merge_memories(project_records, global_records, candidate_limit)
         }
     };
-    Ok(Json(records))
+    let total_matches = records.len();
+    let memories = records.into_iter().take(request.limit).collect::<Vec<_>>();
+    Ok(Json(hzr_memory::MemoryRecallResponse {
+        count: memories.len(),
+        total_matches,
+        memories,
+    }))
 }
 
 pub async fn memory_store(
@@ -1512,6 +1523,46 @@ pub async fn usage(
     Ok(Json(UsageApiResponse { recorded: true }))
 }
 
+pub async fn operation(
+    State(state): State<AppState>,
+    Json(request): Json<hzr_protocol::OperationApiRequest>,
+) -> Result<Json<hzr_protocol::OperationApiResponse>, ApiError> {
+    let channel = match request.channel {
+        hzr_protocol::AccountingChannel::HookCli => hzr_core::OperationChannel::HookCli,
+        hzr_protocol::AccountingChannel::Mcp => hzr_core::OperationChannel::Mcp,
+        hzr_protocol::AccountingChannel::NativeHost => hzr_core::OperationChannel::NativeHost,
+    };
+    let measurement = match request.measurement {
+        hzr_protocol::AccountingMeasurement::Estimated => hzr_core::OperationMeasurement::Estimated,
+        hzr_protocol::AccountingMeasurement::Unmeasured => {
+            hzr_core::OperationMeasurement::Unmeasured
+        }
+    };
+    let route = match request.route {
+        hzr_protocol::AccountingRoute::Optimized => hzr_core::OperationRoute::Optimized,
+        hzr_protocol::AccountingRoute::Bypassed => hzr_core::OperationRoute::Bypassed,
+        hzr_protocol::AccountingRoute::NativeUnaccounted => {
+            hzr_core::OperationRoute::NativeUnaccounted
+        }
+    };
+    state
+        .ledger
+        .record_operation(crate::ledger_writer::OperationRecord {
+            original_command: request.original_command,
+            recorded_command: request.recorded_command,
+            input_tokens: request.baseline_tokens_estimated,
+            output_tokens: request.delivered_tokens_estimated,
+            execution_ms: request.execution_ms,
+            project_path: request.project_path,
+            channel,
+            measurement,
+            route,
+        })
+        .await
+        .map_err(|error| ApiError::internal(format!("operation ledger write failed: {error}")))?;
+    Ok(Json(hzr_protocol::OperationApiResponse { recorded: true }))
+}
+
 pub async fn exec_rewrite(
     State(state): State<AppState>,
     Json(request): Json<ExecApiRequest>,
@@ -1567,6 +1618,17 @@ async fn record_codec_operation(
             output_tokens: estimated_tokens(delivered),
             execution_ms: elapsed.as_millis() as u64,
             project_path: String::new(),
+            channel: match request.channel {
+                Some(hzr_protocol::AccountingChannel::Mcp) => hzr_core::OperationChannel::Mcp,
+                Some(hzr_protocol::AccountingChannel::NativeHost) => {
+                    hzr_core::OperationChannel::NativeHost
+                }
+                Some(hzr_protocol::AccountingChannel::HookCli) | None => {
+                    hzr_core::OperationChannel::HookCli
+                }
+            },
+            measurement: hzr_core::OperationMeasurement::Estimated,
+            route: hzr_core::OperationRoute::Optimized,
         })
         .await;
 }

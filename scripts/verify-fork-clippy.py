@@ -17,10 +17,11 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 141
-# Recomputed after adding evidence-only agent/session columns to tracking. The inherited
-# warning set remains 141 hits with no new lint codes; only recorded line positions in
-# tracking.rs moved. The ratchet therefore continues to reject every future warning change.
-EXPECTED_SHA256 = "96c1caf8658e0f908ebdebf6c6c977133b08b42c8bcadf1e0e32ec19fc5dcd40"
+# Recomputed for the 0.3.7 accounting and bounded-read delta. The inherited warning set
+# remains 141 hits with no new lint codes; only recorded line positions in tracking.rs,
+# read.rs, read_digest.rs, rgai_cmd.rs, and memory_layer moved. The ratchet still rejects
+# later drift.
+EXPECTED_SHA256 = "1acd4d83614e70c681f1c2975196c16fc4abe0c198e5a98dfdd6f1fe24e7bab1"
 
 
 def main() -> int:

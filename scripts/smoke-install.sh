@@ -67,7 +67,7 @@ for HZR_INSTALL_OUTPUT in \
   '[3/5] Unpacking and checking the bundle contents' \
   '[4/5] Placing the files and command-line entry points' \
   '[5/5] Registering this project and starting the background service' \
-  'HZR v0.3.6 is installed.' \
+  'HZR v0.3.7 is installed.' \
   'What went where' \
   'Next steps' \
   'hzr doctor --workspace .'; do
@@ -117,7 +117,7 @@ run_hzr() {
   PATH="${HZR_INSTALLED_BIN}:${HZR_SMOKE_TEMP}/tools:/usr/bin:/bin" \
     "${HZR_INSTALLED_BIN}/hzr" "$@"
 }
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.3.6" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.3.7" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/grepai" version | grep -F "0.35.0" >/dev/null
@@ -325,6 +325,11 @@ run_hzr stats --workspace "${HZR_SMOKE_TEMP}/workspace" --json \
   cd "${HZR_SMOKE_TEMP}/workspace"
   run_hzr install --force --skip-service --json >/dev/null
 )
+if [[ ! -L "${HZR_INSTALLED_BIN}/hzr" ]] || \
+  [[ "$(readlink "${HZR_INSTALLED_BIN}/hzr")" != *"/current/bin/hzr" ]]; then
+  echo "hzr install --force replaced the public current-based symlink" >&2
+  exit 1
+fi
 if ! grep -F "init --if-needed --quiet --session-start-hook" "${HZR_CLAUDE_SETTINGS}" >/dev/null || \
   ! grep -F "managed agent contract" "${HZR_CLAUDE_INSTRUCTIONS}" >/dev/null || \
   ! grep -F "[mcp_servers.hzr]" "${HZR_CODEX_CONFIG}" >/dev/null; then
@@ -434,7 +439,7 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) HZR_SMOKE_PLATFORM="linux-x64" ;;
   *) echo "unsupported upgrade-smoke platform" >&2; exit 1 ;;
 esac
-HZR_UPGRADE_VERSION="0.3.6-upgrade-smoke"
+HZR_UPGRADE_VERSION="0.3.7-upgrade-smoke"
 HZR_UPGRADE_ARTIFACT="hzr-v${HZR_UPGRADE_VERSION}-${HZR_SMOKE_PLATFORM}.tar.gz"
 HZR_UPGRADE_CHECKSUMS="${HZR_SMOKE_TEMP}/SHA256SUMS.upgrade"
 awk -v artifact="${HZR_UPGRADE_ARTIFACT}" \
@@ -467,7 +472,7 @@ if [[ "${HZR_RESOLVED_ENGINES}" != "${HZR_EXPECTED_ENGINES}" ]]; then
   exit 1
 fi
 
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.3.6" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.3.7" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_CURRENT_LINK}/engines/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null

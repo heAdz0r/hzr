@@ -1353,7 +1353,7 @@ fn score_line(line_idx: usize, line: &str, query: &QueryModel, ext: &str) -> Opt
     // fork: literal mode is a containment test, not a score. A partial or differently-cased
     // match is a miss, because a caller asking for an exact lookup cannot filter noise.
     if let Some(literal) = &query.literal {
-        if !trimmed.contains(literal.as_str()) {
+        if !line.contains(literal.as_str()) {
             return None;
         }
         return Some(LineCandidate {
@@ -1467,7 +1467,7 @@ fn build_query_model(query: &str) -> QueryModel {
 
 /// fork: build a model that matches the query verbatim and case-sensitively.
 fn build_literal_query_model(query: &str) -> QueryModel {
-    let literal = query.trim().to_string();
+    let literal = query.to_string();
     QueryModel {
         phrase: literal.to_lowercase(),
         terms: vec![literal.clone()],
@@ -2335,6 +2335,15 @@ pub fn log_info(msg: &str) {
 
         // Assert: this is the exact noise the ranked model returns for the same query
         assert!(partial.is_none());
+    }
+
+    #[test]
+    fn literal_scoring_preserves_significant_trailing_whitespace() {
+        let model = build_literal_query_model("foo ");
+
+        assert!(score_line(0, "foo bar", &model, "txt").is_some());
+        assert!(score_line(0, "foobar", &model, "txt").is_none());
+        assert_eq!(model.literal.as_deref(), Some("foo "));
     }
 
     #[test]

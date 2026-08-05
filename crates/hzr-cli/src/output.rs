@@ -102,19 +102,26 @@ pub fn print_search(response: &SearchApiResponse) -> io::Result<()> {
     }
     if response.hits.is_empty() {
         writeln!(output, "no matches")?;
-    } else {
-        write!(
-            output,
-            "shown={}/{} scanned={} skipped={}",
-            response.shown_hits,
-            response.total_hits,
-            response.scanned_files,
-            response.skipped_large + response.skipped_binary
-        )?;
-        if let Some(generation) = &response.index_generation {
-            write!(output, " generation={generation}")?;
-        }
-        writeln!(output)?;
+    }
+    write!(
+        output,
+        "mode={:?} shown={}/{} scanned={} skipped_large={} skipped_binary={}",
+        response.effective_mode,
+        response.shown_hits,
+        response.total_hits,
+        response.scanned_files,
+        response.skipped_large,
+        response.skipped_binary
+    )?;
+    if let Some(generation) = &response.index_generation {
+        write!(output, " generation={generation}")?;
+    }
+    if let Some(reason) = &response.fallback_reason {
+        write!(output, " fallback={reason}")?;
+    }
+    writeln!(output)?;
+    if let Some(next) = &response.next_step {
+        writeln!(output, "next: {next}")?;
     }
     Ok(())
 }

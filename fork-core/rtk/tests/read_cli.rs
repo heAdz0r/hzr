@@ -465,11 +465,11 @@ fn read_max_lines_truncates() {
         .expect("run rtk read");
 
     assert!(out.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
-        "line1\nline2\nline3\n",
-        "--max-lines is the exact head-equivalent promised by the CLI contract"
-    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("line1\nline2\nline3\n"));
+    assert!(stdout.contains("showing 3 bounded lines from file of 10"));
+    assert!(stdout.contains("7 omitted from requested range"));
+    assert!(stdout.contains("--from 4 --to 10 --level none"));
 }
 
 // ── Empty file ──────────────────────────────────────────────

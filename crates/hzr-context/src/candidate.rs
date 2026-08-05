@@ -4,7 +4,7 @@ use hzr_index::Workspace;
 use hzr_memory::{MemoryRecord, MemoryScope, MemorySource};
 use hzr_protocol::{
     CandidateSource, ContextCandidate, ContextWarning, ContextWarningCode, Provenance,
-    SearchApiResponse, SearchStrategy, TokenCount,
+    SearchApiResponse, SearchStrategy, SymbolUnavailableReason, TokenCount,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -12,7 +12,6 @@ use sha2::{Digest, Sha256};
 use crate::error::{ContextError, Result};
 
 const MAX_MEMORY_CONTENT_BYTES: usize = 4 * 1024;
-const MEMORY_TRUNCATION_MARKER: &str = "\n\n[memory truncated]\n\n";
 
 #[derive(Clone, Debug, Deserialize)]
 pub(crate) struct ForkPlanCandidate {
@@ -145,6 +144,11 @@ pub(crate) fn normalize_plan(
                 content_ref,
                 path: Some(path.clone()),
                 symbol: None,
+                symbol_unavailable_reason: Some(if outline.is_empty() {
+                    SymbolUnavailableReason::OutlineUnavailable
+                } else {
+                    SymbolUnavailableReason::WholeFileCandidate
+                }),
                 line_start,
                 line_end,
                 source_rank: rank,
@@ -171,7 +175,11 @@ pub(crate) fn normalize_plan(
     })
 }
 
-pub(crate) fn normalize_search(response: SearchApiResponse, generation: &str) -> NormalizedSource {
+pub(crate) fn normalize_search(
+    response: SearchApiResponse,
+    generation: &str,
+    outlines: &std::collections::BTreeMap<String, ForkSymbolIndex>,
+) -> NormalizedSource {
     let source = match response.strategy {
         SearchStrategy::ForkRgaiAdaptive => CandidateSource::Index,
         SearchStrategy::ForkRgaiBuiltin => CandidateSource::Exact,
@@ -211,13 +219,30 @@ pub(crate) fn normalize_search(response: SearchApiResponse, generation: &str) ->
             .flat_map(|snippet| &snippet.lines)
             .map(|line| line.line)
             .max();
+        let outline = outlines.get(&hit.path);
+        let symbol = line_start.zip(line_end).and_then(|(start, end)| {
+            outline.and_then(|index| {
+                index
+                    .symbols
+                    .iter()
+                    .filter(|symbol| symbol.span.start_line <= start && symbol.span.end_line >= end)
+                    .min_by_key(|symbol| symbol.span.end_line - symbol.span.start_line)
+                    .map(|symbol| symbol.name.clone())
+            })
+        });
+        let symbol_unavailable_reason = symbol.is_none().then_some(if outline.is_some() {
+            SymbolUnavailableReason::NoEnclosingSymbol
+        } else {
+            SymbolUnavailableReason::OutlineUnavailable
+        });
         candidates.push(RetrievedCandidate {
             candidate: ContextCandidate {
                 id: format!("fork-rgai:{content_hash}"),
                 source,
                 content_ref,
                 path: Some(hit.path.clone()),
-                symbol: None,
+                symbol,
+                symbol_unavailable_reason,
                 line_start,
                 line_end,
                 source_rank: rank,
@@ -267,7 +292,7 @@ pub(crate) fn normalize_memory(records: Vec<MemoryRecord>) -> NormalizedSource {
             MemoryScope::Project => "icm:project",
             MemoryScope::Org => "icm:org",
         };
-        let content = bounded_memory_content(record.summary);
+        let content = bounded_memory_content(record.summary, &record.id);
         let (content_ref, content_hash) = content_identity(&content);
         let rank = u32::try_from(index + 1).unwrap_or(u32::MAX);
         candidates.push(RetrievedCandidate {
@@ -277,6 +302,7 @@ pub(crate) fn normalize_memory(records: Vec<MemoryRecord>) -> NormalizedSource {
                 content_ref,
                 path,
                 symbol: None,
+                symbol_unavailable_reason: Some(SymbolUnavailableReason::NotApplicable),
                 line_start: None,
                 line_end: None,
                 source_rank: rank,
@@ -304,11 +330,15 @@ pub(crate) fn normalize_memory(records: Vec<MemoryRecord>) -> NormalizedSource {
     }
 }
 
-fn bounded_memory_content(content: String) -> String {
+fn bounded_memory_content(content: String, memory_id: &str) -> String {
     if content.len() <= MAX_MEMORY_CONTENT_BYTES {
         return content;
     }
-    let available = MAX_MEMORY_CONTENT_BYTES - MEMORY_TRUNCATION_MARKER.len();
+    let marker_budget = format!(
+        "\n\n[memory content bounded; {} bytes omitted; fetch full memory id {memory_id} with `hzr memory show {memory_id}`]\n\n",
+        content.len()
+    );
+    let available = MAX_MEMORY_CONTENT_BYTES.saturating_sub(marker_budget.len());
     let mut head_end = available / 2;
     while !content.is_char_boundary(head_end) {
         head_end -= 1;
@@ -317,10 +347,14 @@ fn bounded_memory_content(content: String) -> String {
     while !content.is_char_boundary(tail_start) {
         tail_start += 1;
     }
+    let marker = format!(
+        "\n\n[memory content bounded; {} bytes omitted; fetch full memory id {memory_id} with `hzr memory show {memory_id}`]\n\n",
+        tail_start.saturating_sub(head_end)
+    );
     format!(
         "{}{}{}",
         &content[..head_end],
-        MEMORY_TRUNCATION_MARKER,
+        marker,
         &content[tail_start..]
     )
 }
@@ -342,9 +376,13 @@ fn finite_score(score: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use hzr_memory::{Importance, MemoryRecord, MemoryScope, MemorySource};
+    use hzr_protocol::{
+        SearchApiResponse, SearchHit, SearchLine, SearchMode, SearchSnippet, SearchStrategy,
+    };
 
     use super::{
-        ForkSymbol, ForkSymbolSpan, content_identity, normalize_memory, normalize_plan_evidence,
+        ForkSymbol, ForkSymbolIndex, ForkSymbolSpan, MAX_MEMORY_CONTENT_BYTES, content_identity,
+        normalize_memory, normalize_plan_evidence, normalize_search,
     };
 
     fn symbol(name: &str, kind: &str, start_line: u32, end_line: u32) -> ForkSymbol {
@@ -458,8 +496,54 @@ mod tests {
         let normalized = normalize_memory(vec![memory_record(&summary)]);
         let content = &normalized.candidates[0].content;
 
-        assert!(content.len() <= 4_200);
-        assert!(content.contains("[memory truncated]"));
+        assert!(content.len() <= MAX_MEMORY_CONTENT_BYTES);
+        assert!(content.contains("bytes omitted"));
+        assert!(content.contains("hzr memory show memory-1"));
         assert!(content.ends_with("LATEST_DECISION"));
+    }
+
+    #[test]
+    fn test_search_candidate_resolves_the_smallest_enclosing_symbol() {
+        let response = SearchApiResponse {
+            query: "record_operation".into(),
+            path: "crates".into(),
+            total_hits: 1,
+            shown_hits: 1,
+            scanned_files: 1,
+            skipped_large: 0,
+            skipped_binary: 0,
+            hits: vec![SearchHit {
+                path: "src/ledger.rs".into(),
+                score: 1.0,
+                matched_lines: 1,
+                snippets: vec![SearchSnippet {
+                    lines: vec![SearchLine {
+                        line: 55,
+                        text: "fn record_operation()".into(),
+                    }],
+                    matched_terms: vec!["record_operation".into()],
+                }],
+            }],
+            effective_mode: SearchMode::Exact,
+            strategy: SearchStrategy::ForkRgaiBuiltin,
+            index_generation: Some("generation-1".into()),
+            fallback_reason: None,
+            next_step: None,
+        };
+        let outlines = std::collections::BTreeMap::from([(
+            "src/ledger.rs".into(),
+            ForkSymbolIndex {
+                symbols: vec![
+                    symbol("impl Ledger", "impl", 1, 100),
+                    symbol("record_operation", "fn", 50, 60),
+                ],
+            },
+        )]);
+
+        let normalized = normalize_search(response, "generation-1", &outlines);
+        let candidate = &normalized.candidates[0].candidate;
+
+        assert_eq!(candidate.symbol.as_deref(), Some("record_operation"));
+        assert!(candidate.symbol_unavailable_reason.is_none());
     }
 }

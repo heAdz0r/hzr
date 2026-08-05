@@ -15,6 +15,18 @@ use std::path::Path;
 // Re-export ReadMode from read_types for backward compat with main.rs
 pub use crate::read_types::ReadMode;
 
+fn shell_quote_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_+-./".contains(&byte))
+    {
+        return value.into_owned();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
 #[allow(clippy::too_many_arguments)] // changed: file read params bundle naturally together
 pub fn run(
     file: &Path,
@@ -86,6 +98,26 @@ pub fn run(
 
     // ── Read file content ───────────────────────────────────
     let content_bytes = read_source::read_file_bytes(file, from, to)?;
+    let full_line_count = if to.is_some() || max_lines.is_some() || tail_lines.is_some() {
+        std::fs::read(file).ok().map(|full| {
+            full.iter().filter(|byte| **byte == b'\n').count()
+                + usize::from(!full.is_empty() && !full.ends_with(b"\n"))
+        })
+    } else {
+        None
+    };
+
+    if let Some(end) = to {
+        if let Some(total) = full_line_count {
+            if end < total {
+                eprintln!(
+                    "Range ends at line {end} of {total}; recovery: `hzr rtk -- read {} --from {} --to {total} --level none`",
+                    shell_quote_path(file),
+                    end + 1
+                );
+            }
+        }
+    }
 
     // ── Binary detection ────────────────────────────────────
     if read_source::looks_binary(&content_bytes) {
@@ -192,8 +224,38 @@ pub fn run(
         eprintln!("Detected language: {:?}", lang);
     }
 
+    let input_line_count = content.lines().count();
+    let range_start = from.unwrap_or(1);
+    let range_end = range_start.saturating_add(input_line_count.saturating_sub(1));
+    let file_line_count = full_line_count.unwrap_or(input_line_count);
+    let (bounded_content, bound_notice) = if let Some(tail) = tail_lines {
+        let shown = input_line_count.min(tail);
+        let omitted = input_line_count.saturating_sub(shown);
+        let notice = (omitted > 0).then(|| {
+            format!(
+                "[showing {shown} bounded lines from file of {file_line_count}; {omitted} omitted from requested range; recovery: `hzr rtk -- read {} --from {range_start} --to {} --level none`]",
+                shell_quote_path(file),
+                range_start.saturating_add(omitted).saturating_sub(1)
+            )
+        });
+        (keep_tail_lines(&content, tail), notice)
+    } else if let Some(max) = max_lines {
+        let shown = input_line_count.min(max);
+        let omitted = input_line_count.saturating_sub(shown);
+        let notice = (omitted > 0).then(|| {
+            format!(
+                "[showing {shown} bounded lines from file of {file_line_count}; {omitted} omitted from requested range; recovery: `hzr rtk -- read {} --from {} --to {range_end} --level none`]",
+                shell_quote_path(file),
+                range_start.saturating_add(shown)
+            )
+        });
+        (keep_head_lines(&content, max), notice)
+    } else {
+        (content.clone(), None)
+    };
+
     let filter = filter::get_filter(level);
-    let mut filtered = filter.filter(&content, &lang);
+    let mut filtered = filter.filter(&bounded_content, &lang);
 
     if verbose > 0 {
         let original_lines = content.lines().count();
@@ -207,13 +269,6 @@ pub fn run(
             "Lines: {} -> {} ({:.1}% reduction)",
             original_lines, filtered_lines, reduction
         );
-    }
-
-    let input_line_count = content.lines().count();
-    if let Some(tail) = tail_lines {
-        filtered = keep_tail_lines(&filtered, tail); // fork: tail semantics (upstream v0.42.4)
-    } else if let Some(max) = max_lines {
-        filtered = keep_head_lines(&filtered, max);
     }
 
     // PR-6: truncate long lines in minimal/aggressive modes
@@ -232,18 +287,29 @@ pub fn run(
             raw_start
         };
         (
-            read_render::format_with_line_numbers_from(&content, raw_start),
+            read_render::format_with_line_numbers_from(&bounded_content, raw_start),
             read_render::format_with_line_numbers_from(&filtered, output_start),
         )
     } else {
-        (content.clone(), filtered.clone())
+        (bounded_content.clone(), filtered.clone())
     };
     let shown = crate::guard::never_worse(&raw, &rtk_output).to_string();
     if let Some(key) = cache_key.as_deref() {
         read_cache::store_read_cache(key, &shown);
     }
     print!("{shown}");
-    timer.track(&format!("cat {}", file.display()), "rtk read", &raw, &shown);
+    if let Some(notice) = bound_notice {
+        if !shown.ends_with('\n') {
+            println!();
+        }
+        println!("{notice}");
+    }
+    timer.track(
+        &format!("cat {}", file.display()),
+        "rtk read",
+        &content,
+        &shown,
+    );
     Ok(())
 }
 
@@ -472,6 +538,14 @@ mod tests {
     #[test]
     fn test_keep_tail_lines_zero() {
         assert_eq!(keep_tail_lines("a\nb", 0), "");
+    }
+
+    #[test]
+    fn test_recovery_path_is_shell_safe() {
+        assert_eq!(
+            shell_quote_path(Path::new("dir with space/it's.rs")),
+            "'dir with space/it'\"'\"'s.rs'"
+        );
     }
 
     #[test]

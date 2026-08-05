@@ -4,6 +4,47 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-08-05
+
+### Added
+
+- Operation accounting now records typed `channel`, `measurement`, and `route` dimensions. MCP,
+  hook/CLI, and native-host traffic are reported separately; successful MCP tools contribute one
+  neutral coverage row without receiving unmeasured savings credit.
+- Claude installs a failure-silent `PostToolUse` observer for native `Read`, `Grep`, `Glob`,
+  `Edit`, and `Write` calls. It records response-size estimates and attribution, never tool
+  content, and never mutates or blocks a host result.
+- Context candidates expose a typed reason when no symbol can be resolved; search candidates use
+  their symbol outline and line span to select the smallest enclosing symbol.
+- Long MCP search/context calls emit progress notifications, foreground `hzrd` announces startup,
+  and long `hzr agent run` calls emit periodic liveness heartbeats.
+
+### Changed
+
+- `hzr stats` computes reduction only from measured non-native rows and prints the observed
+  coverage share, explicitly unmeasured bypass count, daemon-unavailable gaps, and channel split.
+  Estimated output reduction remains separate from provider-billed usage.
+- Bounded reads, ranged reads, long-line shortening, memory exploration, memory recall and search
+  now state totals or omitted volume and name the exact recovery command or detail level.
+- MCP output schemas declare nested properties and required fields for every emitted structured
+  result; representative outputs are checked against those contracts.
+- The dashboard distinguishes optimized, measured RAW, native-observed, and unmeasured traffic so
+  operations outside the reduction ratio cannot look optimized.
+- Installer and bundle assembly show non-TTY transfer/stage progress and bound downloads with an
+  overall timeout.
+
+### Fixed
+
+- Inherited-stdio passthrough no longer writes a misleading `0/0` token row. It is explicitly
+  unmeasured and cannot carry invented token counts; captured RAW output remains neutral with
+  equal baseline and delivered estimates.
+- Exact search preserves leading/trailing whitespace and reports its effective mode, fallback,
+  scan diagnostics, and next step even when it finds no matches.
+- Public symlink swaps use the portable replacement helper, and an identical
+  `hzr install --force` preserves bundle entry-point symlinks.
+- `hzr doctor` recognizes the canonical three-hook installation, including the default-on
+  `PostToolUse` observer, instead of reporting a clean install as conflicting.
+
 ## [0.3.6] - 2026-08-05
 
 ### Fixed
@@ -439,6 +480,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.3.7]: https://github.com/heAdz0r/hzr/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/heAdz0r/hzr/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/heAdz0r/hzr/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/heAdz0r/hzr/compare/v0.3.3...v0.3.4

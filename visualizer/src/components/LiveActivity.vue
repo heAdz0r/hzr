@@ -8,6 +8,8 @@ const props = defineProps<{
   operations: DashboardLocalOperation[];
   optimizedCount: number;
   rawCount: number;
+  nativeCount: number;
+  unmeasuredCount: number;
   measurement: string;
 }>();
 const selectedKey = ref<string | null>(null);
@@ -15,9 +17,19 @@ const copiedKey = ref<string | null>(null);
 const maxTokens = computed(() =>
   Math.max(1, ...props.operations.map((operation) => operation.baseline_tokens_estimated)),
 );
-const totalCount = computed(() => props.optimizedCount + props.rawCount);
+const totalCount = computed(
+  () => props.optimizedCount + props.rawCount + props.nativeCount + props.unmeasuredCount,
+);
+const optimizedShare = computed(() =>
+  totalCount.value === 0 ? 0 : (props.optimizedCount * 100) / totalCount.value,
+);
 const rawShare = computed(() =>
   totalCount.value === 0 ? 0 : (props.rawCount * 100) / totalCount.value,
+);
+const gapShare = computed(() =>
+  totalCount.value === 0
+    ? 0
+    : ((props.nativeCount + props.unmeasuredCount) * 100) / totalCount.value,
 );
 const recentAgents = computed(() => {
   const groups = new Map<string, { count: number; directories: Set<string>; last: string }>();
@@ -76,7 +88,13 @@ function shortSession(session: string | null): string {
 }
 
 function creditedSaving(operation: DashboardLocalOperation): number {
-  return operation.route === "raw" ? 0 : operation.net_avoided_tokens_estimated;
+  return operation.route === "optimized" ? operation.net_avoided_tokens_estimated : 0;
+}
+
+function routeDetail(operation: DashboardLocalOperation): string {
+  if (operation.route === "raw") return "RAW · zero savings credit";
+  if (operation.route === "native_unaccounted") return "Native observed · outside ratio";
+  return "Optimized";
 }
 
 async function copyCommand(key: string, command: string): Promise<void> {
@@ -119,12 +137,14 @@ async function copyCommand(key: string, command: string): Promise<void> {
     </div>
 
     <div class="route-summary">
-      <div class="route-summary-bar" aria-label="Optimized and raw operation share">
-        <span class="route-summary-optimized" :style="{ width: `${100 - rawShare}%` }"></span>
+      <div class="route-summary-bar" aria-label="Measured and uncovered operation share">
+        <span class="route-summary-optimized" :style="{ width: `${optimizedShare}%` }"></span>
         <span class="route-summary-raw" :style="{ width: `${rawShare}%` }"></span>
+        <span class="route-summary-gap" :style="{ width: `${gapShare}%` }"></span>
       </div>
       <span><strong>{{ formatCount(optimizedCount) }}</strong> optimized</span>
       <span><strong>{{ formatCount(rawCount) }}</strong> RAW · {{ rawShare.toFixed(1) }}%</span>
+      <span><strong>{{ formatCount(nativeCount + unmeasuredCount) }}</strong> outside ratio · {{ gapShare.toFixed(1) }}%</span>
       <span class="raw-credit">RAW savings credit: 0</span>
     </div>
 
@@ -166,7 +186,7 @@ async function copyCommand(key: string, command: string): Promise<void> {
             <div class="wide"><dt>Working directory</dt><dd><code>{{ operation.working_directory || "Not recorded" }}</code></dd></div>
             <div><dt>Agent</dt><dd>{{ operation.agent ?? "Unattributed" }}</dd></div>
             <div><dt>Session</dt><dd><code :title="operation.session_id ?? undefined">{{ shortSession(operation.session_id) }}</code></dd></div>
-            <div><dt>Route</dt><dd>{{ operation.route === "raw" ? "RAW · zero savings credit" : "Optimized" }}</dd></div>
+            <div><dt>Route</dt><dd>{{ routeDetail(operation) }}</dd></div>
             <div><dt>Latency</dt><dd>{{ operation.execution_ms }}ms</dd></div>
             <div><dt>Baseline estimate</dt><dd>{{ formatCount(operation.baseline_tokens_estimated) }} tokens</dd></div>
             <div><dt>Delivered estimate</dt><dd>{{ formatCount(operation.delivered_tokens_estimated) }} tokens</dd></div>

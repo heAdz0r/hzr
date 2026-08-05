@@ -169,6 +169,12 @@ pub struct Tracker {
     conn: Connection,
 }
 
+#[derive(Clone, Copy)]
+struct RecordAccounting<'a> {
+    measurement: &'a str,
+    route: Option<&'a str>,
+}
+
 /// Individual command record from tracking history.
 ///
 /// Contains timestamp, command name, and savings metrics for a single execution.
@@ -379,6 +385,15 @@ impl Tracker {
         );
         let _ = conn.execute("ALTER TABLE commands ADD COLUMN agent TEXT", []);
         let _ = conn.execute("ALTER TABLE commands ADD COLUMN session_id TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE commands ADD COLUMN channel TEXT NOT NULL DEFAULT 'hook_cli'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE commands ADD COLUMN measurement TEXT NOT NULL DEFAULT 'estimated'",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE commands ADD COLUMN route TEXT", []);
         // One-time migration: normalize NULLs from pre-default schema // changed: guarded with EXISTS
         let has_nulls: bool = conn
             .query_row(
@@ -448,6 +463,28 @@ impl Tracker {
         output_tokens: usize,
         exec_time_ms: u64,
     ) -> Result<()> {
+        self.record_with_accounting(
+            original_cmd,
+            rtk_cmd,
+            input_tokens,
+            output_tokens,
+            exec_time_ms,
+            RecordAccounting {
+                measurement: "estimated",
+                route: None,
+            },
+        )
+    }
+
+    fn record_with_accounting(
+        &self,
+        original_cmd: &str,
+        rtk_cmd: &str,
+        input_tokens: usize,
+        output_tokens: usize,
+        exec_time_ms: u64,
+        accounting: RecordAccounting<'_>,
+    ) -> Result<()> {
         let saved = input_tokens.saturating_sub(output_tokens);
         let pct = if input_tokens > 0 {
             (saved as f64 / input_tokens as f64) * 100.0
@@ -461,8 +498,12 @@ impl Tracker {
         self.conn.execute(
             "INSERT INTO commands (
                 timestamp, original_cmd, rtk_cmd, project_path, agent, session_id,
-                input_tokens, output_tokens, saved_tokens, savings_pct, exec_time_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                input_tokens, output_tokens, saved_tokens, savings_pct, exec_time_ms,
+                channel, measurement, route
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                'hook_cli', ?12, ?13
+             )",
             params![
                 Utc::now().to_rfc3339(),
                 original_cmd,
@@ -474,7 +515,9 @@ impl Tracker {
                 output_tokens as i64,
                 saved as i64,
                 pct,
-                exec_time_ms as i64
+                exec_time_ms as i64,
+                accounting.measurement,
+                accounting.route,
             ],
         )?;
 
@@ -1278,11 +1321,12 @@ impl TimedExecution {
         )
     }
 
-    /// Track passthrough commands (timing-only, no token counting).
+    /// Track passthrough commands whose inherited stdout cannot be counted.
     ///
     /// For commands that stream output or run interactively where output
-    /// cannot be captured. Records execution time but sets tokens to 0
-    /// (does not dilute savings statistics).
+    /// cannot be captured. The zero token placeholders are explicitly marked
+    /// `unmeasured`; consumers must report the coverage gap instead of treating zero as
+    /// a measured delivery.
     ///
     /// # Arguments
     ///
@@ -1302,7 +1346,6 @@ impl TimedExecution {
         if tracking_disabled() {
             return;
         }
-        // input_tokens=0, output_tokens=0 won't dilute savings statistics
         with_cached_tracker(|tracker| {
             let _ = self.track_passthrough_with(tracker, original_cmd, rtk_cmd);
         });
@@ -1314,12 +1357,16 @@ impl TimedExecution {
         original_cmd: &str,
         rtk_cmd: &str,
     ) -> Result<()> {
-        tracker.record(
+        tracker.record_with_accounting(
             original_cmd,
             rtk_cmd,
             0,
             0,
             self.start.elapsed().as_millis() as u64,
+            RecordAccounting {
+                measurement: "unmeasured",
+                route: Some("bypassed"),
+            },
         )
     }
 }
@@ -1495,7 +1542,7 @@ mod tests {
         assert!(elapsed_ms >= 10);
     }
 
-    // 6. TimedExecution::track_passthrough records with 0 tokens
+    // 6. TimedExecution::track_passthrough marks output as unmeasured instead of claiming zero
     #[test]
     fn test_timed_execution_passthrough() {
         let temp = tempfile::tempdir().expect("Failed to create temporary database directory");
@@ -1506,16 +1553,18 @@ mod tests {
             .track_passthrough_with(&tracker, "git tag", "rtk git tag (passthrough)")
             .expect("Failed to track passthrough execution");
 
-        let pt = tracker
-            .get_recent(1)
-            .expect("Failed to get recent")
-            .into_iter()
-            .find(|r| r.rtk_cmd.contains("passthrough"))
-            .expect("Passthrough record not found");
-
-        // savings_pct should be 0 for passthrough
-        assert_eq!(pt.savings_pct, 0.0);
-        assert_eq!(pt.saved_tokens, 0);
+        let (input, output, measurement, route): (u64, u64, String, String) = tracker
+            .conn
+            .query_row(
+                "SELECT input_tokens, output_tokens, measurement, route
+                   FROM commands WHERE rtk_cmd LIKE '%passthrough%'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .expect("passthrough record");
+        assert_eq!((input, output), (0, 0));
+        assert_eq!(measurement, "unmeasured");
+        assert_eq!(route, "bypassed");
     }
 
     // 7. get_db_path respects environment variable RTK_DB_PATH

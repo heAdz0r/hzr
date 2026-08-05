@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-HZR_VERSION="${HZR_VERSION:-0.3.6}"
+HZR_VERSION="${HZR_VERSION:-0.3.7}"
 HZR_REPOSITORY="${HZR_REPOSITORY:-heAdz0r/hzr}"
 HZR_INSTALL_ROOT="${HZR_INSTALL_ROOT:-${HOME}/.local/share/hzr}"
 HZR_BIN_DIR="${HZR_BIN_DIR:-${HOME}/.local/bin}"
@@ -107,15 +107,15 @@ download_hzr_file() {
   HZR_DOWNLOAD_DESTINATION="$2"
   HZR_SHOW_PROGRESS="${3:-0}"
   if command -v curl >/dev/null 2>&1; then
-    if [ "${HZR_SHOW_PROGRESS}" = "1" ] && [ -t 1 ]; then
-      curl --fail --progress-bar --show-error --location --proto '=https' --tlsv1.2 \
+    if [ "${HZR_SHOW_PROGRESS}" = "1" ]; then
+      curl --fail --progress-bar --show-error --location --max-time 1800 --proto '=https' --tlsv1.2 \
         "${HZR_DOWNLOAD_URL}" --output "${HZR_DOWNLOAD_DESTINATION}"
     else
-      curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+      curl --fail --silent --show-error --location --max-time 1800 --proto '=https' --tlsv1.2 \
         "${HZR_DOWNLOAD_URL}" --output "${HZR_DOWNLOAD_DESTINATION}"
     fi
   elif command -v wget >/dev/null 2>&1; then
-    if [ "${HZR_SHOW_PROGRESS}" = "1" ] && [ -t 1 ]; then
+    if [ "${HZR_SHOW_PROGRESS}" = "1" ]; then
       wget --https-only --quiet --show-progress \
         --output-document="${HZR_DOWNLOAD_DESTINATION}" "${HZR_DOWNLOAD_URL}"
     else
@@ -262,7 +262,7 @@ install_hzr_link() {
   fi
   HZR_LINK_TEMP="${HZR_BIN_DIR}/.${HZR_LINK_NAME}-${$}"
   ln -s "${HZR_LINK_TARGET}" "${HZR_LINK_TEMP}"
-  mv -f -- "${HZR_LINK_TEMP}" "${HZR_LINK_PATH}"
+  replace_hzr_symlink "${HZR_LINK_TEMP}" "${HZR_LINK_PATH}"
 }
 
 hzr_step "Placing the files and command-line entry points"
@@ -273,8 +273,10 @@ hzr_note "${HZR_VERSION_ROOT}"
 hzr_note "hzr, hzrd, rtk -> ${HZR_BIN_DIR}"
 
 hzr_step "Registering this project and starting the background service"
+hzr_note "initializing the current workspace registry"
 "${HZR_INSTALL_ROOT}/current/bin/hzr" init --if-needed --quiet --skip-service
 if [ "${HZR_INSTALL_HOOKS}" = "1" ]; then
+  hzr_note "installing agent hooks and instructions"
   if [ "${HZR_PROJECT_ONLY}" = "1" ]; then
     if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
       "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --project-only
@@ -293,6 +295,7 @@ if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
   # Reinstalling the definition restarts an already-running daemon after `current`
   # changes, while also starting it on a first install. This keeps the live UI and
   # API on the exact bundle that was just verified above.
+  hzr_note "installing or restarting the background daemon service"
   "${HZR_INSTALL_ROOT}/current/bin/hzr" daemon service install
 fi
 

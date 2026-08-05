@@ -93,6 +93,13 @@ pub struct MemoryRecord {
     pub scope: MemoryScope,
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct MemoryRecallResponse {
+    pub count: usize,
+    pub total_matches: usize,
+    pub memories: Vec<MemoryRecord>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MemorySource {

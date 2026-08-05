@@ -59,11 +59,14 @@ pub struct SearchApiResponse {
     pub skipped_large: usize,
     pub skipped_binary: usize,
     pub hits: Vec<SearchHit>,
+    pub effective_mode: SearchMode,
     pub strategy: SearchStrategy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_generation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_step: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -103,6 +106,7 @@ pub enum ContextWarningCode {
     SearchUnavailable,
     MemoryUnavailable,
     ContentUnavailable,
+    OutlineUnavailable,
     WarningsTruncated,
 }
 
@@ -316,6 +320,47 @@ pub struct UsageApiResponse {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum AccountingChannel {
+    HookCli,
+    Mcp,
+    NativeHost,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountingMeasurement {
+    Estimated,
+    Unmeasured,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountingRoute {
+    Optimized,
+    Bypassed,
+    NativeUnaccounted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OperationApiRequest {
+    pub original_command: String,
+    pub recorded_command: String,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub execution_ms: u64,
+    pub project_path: String,
+    pub channel: AccountingChannel,
+    pub measurement: AccountingMeasurement,
+    pub route: AccountingRoute,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OperationApiResponse {
+    pub recorded: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DashboardState {
     Ready,
     Degraded,
@@ -517,6 +562,8 @@ pub struct DashboardLocalActivity {
     pub operations: u64,
     pub optimized_operations: u64,
     pub raw_operations: u64,
+    pub native_unaccounted_operations: u64,
+    pub unmeasured_bypass_operations: u64,
     pub baseline_tokens_estimated: u64,
     pub delivered_tokens_estimated: u64,
     pub gross_avoided_tokens_estimated: u64,
@@ -535,6 +582,7 @@ pub struct DashboardLocalActivity {
 pub enum DashboardOperationRoute {
     Optimized,
     Raw,
+    NativeUnaccounted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -612,6 +660,8 @@ pub struct CodecApiRequest {
     pub risk: RiskClass,
     #[serde(default)]
     pub profile: CodecProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<AccountingChannel>,
 }
 
 #[cfg(test)]

@@ -41,30 +41,38 @@ pub struct DoctorReport {
     pub checks: Vec<DoctorCheck>,
 }
 
-pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> DoctorReport {
-    let mut checks = Vec::new();
-    match adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
-        Ok(status) if status.conflict || status.hzr_entries > 2 => checks.push(check(
+fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
+    if status.conflict || status.hzr_entries > 3 {
+        check(
             "hook_ownership",
             CheckStatus::Error,
             format!(
-                "HZR={} RTK={}; exactly two HZR handlers and zero RTK handlers are allowed",
+                "HZR={} RTK={}; exactly three HZR handlers and zero RTK handlers are allowed",
                 status.hzr_entries, status.rtk_entries
             ),
-        )),
-        Ok(status) if status.installed => checks.push(check(
+        )
+    } else if status.installed {
+        check(
             "hook_ownership",
             CheckStatus::Pass,
-            "one HZR dispatcher plus one SessionStart initializer",
-        )),
-        Ok(status) => checks.push(check(
+            "one HZR dispatcher, one SessionStart initializer, and one PostToolUse observer",
+        )
+    } else {
+        check(
             "hook_ownership",
             CheckStatus::Warning,
             format!(
                 "HZR={} RTK={}; run `hzr install --dry-run`",
                 status.hzr_entries, status.rtk_entries
             ),
-        )),
+        )
+    }
+}
+
+pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> DoctorReport {
+    let mut checks = Vec::new();
+    match adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
+        Ok(status) => checks.push(hook_ownership_check(status)),
         Err(error) => checks.push(check("hook_ownership", CheckStatus::Warning, error)),
     }
     if let Ok(status) = adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
@@ -841,8 +849,24 @@ mod tests {
 
     use super::{
         CheckStatus, attest_active_bundle, bounded, direct_icm_registration_detail,
-        integration_layout, workspace_binding_check,
+        hook_ownership_check, integration_layout, workspace_binding_check,
     };
+
+    #[test]
+    fn test_doctor_accepts_the_dispatch_init_and_observer_hooks() {
+        let status = crate::adoption::HookStatus {
+            settings_path: "/tmp/settings.json".into(),
+            hzr_entries: 3,
+            rtk_entries: 0,
+            external_icm_entries: 0,
+            installed: true,
+            conflict: false,
+        };
+
+        let check = hook_ownership_check(status);
+        assert_eq!(check.status, CheckStatus::Pass);
+        assert!(check.detail.contains("PostToolUse observer"));
+    }
 
     fn registration(client: Client, pinned: Option<&str>) -> ClientMcpStatus {
         ClientMcpStatus {

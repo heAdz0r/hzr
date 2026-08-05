@@ -5,7 +5,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use directories::BaseDirs;
 use hzr_protocol::{TraceId, Usage};
 
-use crate::operation::{OperationRoute, classify_operation, raw_route_sql_predicate};
+use crate::operation::{
+    OperationChannel, OperationMeasurement, OperationRoute, classify_operation,
+    raw_route_sql_predicate,
+};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -48,6 +51,13 @@ pub struct EfficiencySummary {
     pub regression_tokens_estimated: u64,
     pub net_avoided_tokens_estimated: i64,
     pub total_execution_ms: u64,
+    /// Rows included in the measured reduction ratio plus explicit unmeasured bypasses.
+    pub accounted_operations: u64,
+    /// Every row observed across measured, unmeasured, and host-native channels.
+    pub total_observed_operations: u64,
+    pub native_unaccounted_operations: u64,
+    pub unmeasured_bypass_operations: u64,
+    pub by_channel: BTreeMap<String, u64>,
     pub by_command: Vec<EfficiencyCommandSummary>,
 }
 
@@ -68,6 +78,8 @@ pub struct ProjectActivitySummary {
     pub operations: u64,
     pub optimized_operations: u64,
     pub raw_operations: u64,
+    pub native_unaccounted_operations: u64,
+    pub unmeasured_bypass_operations: u64,
     pub baseline_tokens_estimated: u64,
     pub delivered_tokens_estimated: u64,
     pub gross_avoided_tokens_estimated: u64,
@@ -85,6 +97,7 @@ pub struct ProjectActivitySummary {
 pub enum ProjectOperationRoute {
     Optimized,
     Raw,
+    NativeUnaccounted,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -111,6 +124,16 @@ pub struct OperationContext<'a> {
     pub project_path: &'a str,
     pub agent: Option<&'a str>,
     pub session_id: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OperationAttribution<'a> {
+    pub project_path: &'a str,
+    pub agent: Option<&'a str>,
+    pub session_id: Option<&'a str>,
+    pub channel: OperationChannel,
+    pub measurement: OperationMeasurement,
+    pub route: OperationRoute,
 }
 
 /// Operations that never reached the optimizer, split out of the reduction ratio they
@@ -295,7 +318,10 @@ impl Ledger {
                     exec_time_ms INTEGER DEFAULT 0,
                     project_path TEXT DEFAULT '',
                     agent TEXT,
-                    session_id TEXT
+                    session_id TEXT,
+                    channel TEXT NOT NULL DEFAULT 'hook_cli',
+                    measurement TEXT NOT NULL DEFAULT 'estimated',
+                    route TEXT
                  );
                  CREATE INDEX IF NOT EXISTS idx_timestamp ON commands(timestamp);
                  CREATE INDEX IF NOT EXISTS idx_project_path_timestamp
@@ -330,6 +356,15 @@ impl Ledger {
             .map_err(LedgerError::Database)?;
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN agent TEXT", []);
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN session_id TEXT", []);
+        let _ = connection.execute(
+            "ALTER TABLE commands ADD COLUMN channel TEXT NOT NULL DEFAULT 'hook_cli'",
+            [],
+        );
+        let _ = connection.execute(
+            "ALTER TABLE commands ADD COLUMN measurement TEXT NOT NULL DEFAULT 'estimated'",
+            [],
+        );
+        let _ = connection.execute("ALTER TABLE commands ADD COLUMN route TEXT", []);
         migrate_legacy_ledgers(&connection, path)?;
         Ok(Self { connection })
     }
@@ -473,7 +508,9 @@ impl Ledger {
                                   THEN 0 ELSE input_tokens - output_tokens END), 0),
                 COALESCE(SUM(exec_time_ms), 0)
              FROM commands
-             WHERE (?1 IS NULL OR project_path = ?1
+             WHERE measurement = 'estimated'
+               AND COALESCE(route, '') != 'native_unaccounted'
+               AND (?1 IS NULL OR project_path = ?1
                     OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)"
         );
         let mut summary = self
@@ -490,6 +527,11 @@ impl Ledger {
                         regression_tokens_estimated: row.get(4)?,
                         net_avoided_tokens_estimated: row.get(5)?,
                         total_execution_ms: row.get(6)?,
+                        accounted_operations: 0,
+                        total_observed_operations: 0,
+                        native_unaccounted_operations: 0,
+                        unmeasured_bypass_operations: 0,
+                        by_channel: BTreeMap::new(),
                         by_command: Vec::new(),
                     })
                 },
@@ -510,7 +552,9 @@ impl Ledger {
                                   THEN 0 ELSE input_tokens - output_tokens END), 0),
                 COALESCE(AVG(exec_time_ms), 0)
              FROM commands
-             WHERE (?1 IS NULL OR project_path = ?1
+             WHERE measurement = 'estimated'
+               AND COALESCE(route, '') != 'native_unaccounted'
+               AND (?1 IS NULL OR project_path = ?1
                     OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
              GROUP BY rtk_cmd
              ORDER BY SUM(CASE WHEN ({raw_predicate})
@@ -538,6 +582,47 @@ impl Ledger {
             )
             .map_err(LedgerError::Database)?
             .collect::<Result<Vec<_>, _>>()
+            .map_err(LedgerError::Database)?;
+        let scope_separator = std::path::MAIN_SEPARATOR.to_string();
+        let (total, native, unmeasured) = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*),
+                        COALESCE(SUM(route = 'native_unaccounted'), 0),
+                        COALESCE(SUM(measurement = 'unmeasured' AND route = 'bypassed'), 0)
+                   FROM commands
+                  WHERE (?1 IS NULL OR project_path = ?1
+                         OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)",
+                params![project_path, scope_separator],
+                |row| {
+                    Ok((
+                        row.get::<_, u64>(0)?,
+                        row.get::<_, u64>(1)?,
+                        row.get::<_, u64>(2)?,
+                    ))
+                },
+            )
+            .map_err(LedgerError::Database)?;
+        summary.total_observed_operations = total;
+        summary.native_unaccounted_operations = native;
+        summary.unmeasured_bypass_operations = unmeasured;
+        summary.accounted_operations = total.saturating_sub(native);
+        let mut channels = self
+            .connection
+            .prepare_cached(
+                "SELECT channel, COUNT(*) FROM commands
+                  WHERE (?1 IS NULL OR project_path = ?1
+                         OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                  GROUP BY channel",
+            )
+            .map_err(LedgerError::Database)?;
+        summary.by_channel = channels
+            .query_map(
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .map_err(LedgerError::Database)?
+            .collect::<Result<BTreeMap<_, _>, _>>()
             .map_err(LedgerError::Database)?;
         Ok(summary)
     }
@@ -581,6 +666,40 @@ impl Ledger {
         execution_ms: u64,
         context: OperationContext<'_>,
     ) -> Result<(), LedgerError> {
+        let route = classify_operation(recorded_command).route;
+        self.record_operation_attributed(
+            original_command,
+            recorded_command,
+            input_tokens,
+            output_tokens,
+            execution_ms,
+            OperationAttribution {
+                project_path: context.project_path,
+                agent: context.agent,
+                session_id: context.session_id,
+                channel: OperationChannel::HookCli,
+                measurement: OperationMeasurement::Estimated,
+                route,
+            },
+        )
+    }
+
+    pub fn record_operation_attributed(
+        &self,
+        original_command: &str,
+        recorded_command: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        execution_ms: u64,
+        attribution: OperationAttribution<'_>,
+    ) -> Result<(), LedgerError> {
+        if attribution.measurement == OperationMeasurement::Unmeasured
+            && (input_tokens != 0 || output_tokens != 0)
+        {
+            return Err(LedgerError::InvalidOperation(
+                "unmeasured operations cannot carry invented token counts".into(),
+            ));
+        }
         let saved = input_tokens.saturating_sub(output_tokens);
         let savings_pct = if input_tokens == 0 {
             0.0
@@ -591,8 +710,11 @@ impl Ledger {
             .execute(
                 "INSERT INTO commands (
                     timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
-                    saved_tokens, savings_pct, exec_time_ms, project_path, agent, session_id
-                 ) VALUES (datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    saved_tokens, savings_pct, exec_time_ms, project_path, agent, session_id,
+                    channel, measurement, route
+                 ) VALUES (
+                    datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+                 )",
                 params![
                     original_command,
                     recorded_command,
@@ -601,9 +723,12 @@ impl Ledger {
                     saved,
                     savings_pct,
                     execution_ms,
-                    context.project_path,
-                    context.agent,
-                    context.session_id,
+                    attribution.project_path,
+                    attribution.agent,
+                    attribution.session_id,
+                    attribution.channel.as_str(),
+                    attribution.measurement.as_str(),
+                    attribution.route.as_str(),
                 ],
             )
             .map_err(LedgerError::Database)?;
@@ -732,19 +857,22 @@ impl Ledger {
         project_path: &str,
     ) -> Result<ProjectActivitySummary, LedgerError> {
         let raw_predicate = raw_route_sql_predicate("rtk_cmd");
+        let measured_predicate =
+            "measurement = 'estimated' AND COALESCE(route, '') != 'native_unaccounted'";
         let activity_query = format!(
             "SELECT
                 COUNT(*),
-                COALESCE(SUM(CASE WHEN ({raw_predicate})
-                                  THEN output_tokens ELSE input_tokens END), 0),
-                COALESCE(SUM(output_tokens), 0),
-                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND input_tokens > output_tokens
+                COALESCE(SUM(CASE WHEN ({measured_predicate}) AND ({raw_predicate})
+                                  THEN output_tokens
+                                  WHEN ({measured_predicate}) THEN input_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN ({measured_predicate}) THEN output_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN ({measured_predicate}) AND NOT ({raw_predicate}) AND input_tokens > output_tokens
                                   THEN input_tokens - output_tokens ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND output_tokens > input_tokens
+                COALESCE(SUM(CASE WHEN ({measured_predicate}) AND NOT ({raw_predicate}) AND output_tokens > input_tokens
                                   THEN output_tokens - input_tokens ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                COALESCE(SUM(CASE WHEN NOT ({measured_predicate}) OR ({raw_predicate})
                                   THEN 0 ELSE input_tokens - output_tokens END), 0),
-                COALESCE(SUM(exec_time_ms), 0),
+                COALESCE(SUM(CASE WHEN ({measured_predicate}) THEN exec_time_ms ELSE 0 END), 0),
                 MIN(timestamp),
                 MAX(timestamp)
              FROM commands
@@ -761,6 +889,8 @@ impl Ledger {
                         operations: row.get(0)?,
                         optimized_operations: 0,
                         raw_operations: 0,
+                        native_unaccounted_operations: 0,
+                        unmeasured_bypass_operations: 0,
                         baseline_tokens_estimated: row.get(1)?,
                         delivered_tokens_estimated: row.get(2)?,
                         gross_avoided_tokens_estimated: row.get(3)?,
@@ -791,6 +921,8 @@ impl Ledger {
                      FROM commands
                      WHERE (project_path = ?1
                             OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                       AND measurement = 'estimated'
+                       AND COALESCE(route, '') != 'native_unaccounted'
                        AND ({})",
                     raw_route_sql_predicate("rtk_cmd")
                 ),
@@ -798,12 +930,45 @@ impl Ledger {
                 |row| row.get(0),
             )
             .map_err(LedgerError::Database)?;
-        summary.optimized_operations = summary.operations.saturating_sub(summary.raw_operations);
+        summary.optimized_operations = self
+            .connection
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*)
+                     FROM commands
+                     WHERE (project_path = ?1
+                            OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                       AND measurement = 'estimated'
+                       AND COALESCE(route, '') != 'native_unaccounted'
+                       AND NOT ({})",
+                    raw_route_sql_predicate("rtk_cmd")
+                ),
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                |row| row.get(0),
+            )
+            .map_err(LedgerError::Database)?;
+        (
+            summary.native_unaccounted_operations,
+            summary.unmeasured_bypass_operations,
+        ) = self
+            .connection
+            .query_row(
+                "SELECT
+                    COALESCE(SUM(route = 'native_unaccounted'), 0),
+                    COALESCE(SUM(measurement = 'unmeasured' AND route = 'bypassed'), 0)
+                 FROM commands
+                 WHERE project_path = ?1
+                    OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2",
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(LedgerError::Database)?;
         let mut statement = self
             .connection
             .prepare_cached(
                 "SELECT id, timestamp, original_cmd, rtk_cmd, project_path, agent, session_id,
-                        input_tokens, output_tokens, input_tokens - output_tokens, exec_time_ms
+                        input_tokens, output_tokens, input_tokens - output_tokens, exec_time_ms,
+                        COALESCE(route, '')
                  FROM commands
                  WHERE project_path = ?1
                     OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2
@@ -816,11 +981,22 @@ impl Ledger {
                 params![project_path, std::path::MAIN_SEPARATOR.to_string()],
                 |row| {
                     let command: String = row.get(3)?;
-                    let (operation, route, replacement, rationale) = operation_identity(&command);
+                    let (mut operation, classified_route, replacement, rationale) =
+                        operation_identity(&command);
+                    let route = if row.get::<_, String>(11)? == "native_unaccounted" {
+                        operation = command
+                            .strip_prefix("native ")
+                            .unwrap_or(&command)
+                            .to_owned();
+                        ProjectOperationRoute::NativeUnaccounted
+                    } else {
+                        classified_route
+                    };
                     let delivered_tokens_estimated = row.get(8)?;
                     let (baseline_tokens_estimated, net_avoided_tokens_estimated) = match route {
                         ProjectOperationRoute::Optimized => (row.get(7)?, row.get(9)?),
                         ProjectOperationRoute::Raw => (delivered_tokens_estimated, 0),
+                        ProjectOperationRoute::NativeUnaccounted => (delivered_tokens_estimated, 0),
                     };
                     Ok(ProjectOperationSummary {
                         ledger_id: row.get(0)?,
@@ -1103,6 +1279,7 @@ fn operation_identity(
     let route = match classification.route {
         OperationRoute::Optimized => ProjectOperationRoute::Optimized,
         OperationRoute::Bypassed => ProjectOperationRoute::Raw,
+        OperationRoute::NativeUnaccounted => ProjectOperationRoute::NativeUnaccounted,
     };
     let replacement = classification
         .replacement
@@ -1268,6 +1445,8 @@ fn import_legacy_efficiency(connection: &Connection, path: &Path) -> Result<(), 
 
 #[derive(Debug, Error)]
 pub enum LedgerError {
+    #[error("invalid operation accounting: {0}")]
+    InvalidOperation(String),
     #[error("failed to create ledger directory {path}: {source}")]
     Directory {
         path: PathBuf,
@@ -1297,11 +1476,93 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use crate::operation::{OperationChannel, OperationMeasurement, OperationRoute};
     use hzr_protocol::{ActualUsage, EstimatedUsage, TraceId, Usage};
     use rusqlite::Connection;
     use tempfile::tempdir;
 
-    use super::{Ledger, LedgerRecord, PriceTable, ProjectOperationRoute, operation_identity};
+    use super::{
+        Ledger, LedgerRecord, OperationAttribution, PriceTable, ProjectOperationRoute,
+        operation_identity,
+    };
+
+    #[test]
+    fn test_accounting_dimensions_are_migrated_and_reported_without_faking_zero_output() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("usage.sqlite");
+        let legacy = Connection::open(&path).expect("legacy database");
+        legacy
+            .execute_batch(
+                "CREATE TABLE commands (
+                    id INTEGER PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    original_cmd TEXT NOT NULL,
+                    rtk_cmd TEXT NOT NULL,
+                    input_tokens INTEGER NOT NULL,
+                    output_tokens INTEGER NOT NULL,
+                    saved_tokens INTEGER NOT NULL,
+                    savings_pct REAL NOT NULL,
+                    exec_time_ms INTEGER DEFAULT 0,
+                    project_path TEXT DEFAULT '',
+                    agent TEXT,
+                    session_id TEXT
+                 );
+                 INSERT INTO commands (
+                    timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
+                    saved_tokens, savings_pct, exec_time_ms, project_path
+                 ) VALUES ('2026-08-05', 'cat old', 'rtk read old', 100, 20, 80, 80, 1, '/work');",
+            )
+            .expect("legacy schema");
+        drop(legacy);
+
+        let ledger = Ledger::open(&path).expect("ledger migration");
+        ledger
+            .record_operation_attributed(
+                "native Read",
+                "native Read",
+                40,
+                40,
+                2,
+                OperationAttribution {
+                    project_path: "/work",
+                    agent: Some("claude"),
+                    session_id: Some("session"),
+                    channel: OperationChannel::NativeHost,
+                    measurement: OperationMeasurement::Estimated,
+                    route: OperationRoute::NativeUnaccounted,
+                },
+            )
+            .expect("native observation");
+        ledger
+            .record_operation_attributed(
+                "npx package",
+                "rtk proxy npx package",
+                0,
+                0,
+                3,
+                OperationAttribution {
+                    project_path: "/work",
+                    agent: None,
+                    session_id: None,
+                    channel: OperationChannel::HookCli,
+                    measurement: OperationMeasurement::Unmeasured,
+                    route: OperationRoute::Bypassed,
+                },
+            )
+            .expect("unmeasured bypass");
+
+        let summary = ledger.efficiency_summary().expect("efficiency summary");
+        assert_eq!(
+            summary.operations, 1,
+            "native and unmeasured rows leave the ratio"
+        );
+        assert_eq!(summary.native_unaccounted_operations, 1);
+        assert_eq!(summary.unmeasured_bypass_operations, 1);
+        assert_eq!(summary.accounted_operations, 2);
+        assert_eq!(summary.total_observed_operations, 3);
+        assert_eq!(summary.by_channel.get("hook_cli"), Some(&2));
+        assert_eq!(summary.by_channel.get("native_host"), Some(&1));
+    }
 
     #[test]
     fn test_proxy_ledger_rows_are_classified_as_raw() {
@@ -1543,7 +1804,7 @@ mod tests {
             retries: 0,
             latency_ms: 10,
             outcome: "accepted".into(),
-            policy_version: "0.3.6".into(),
+            policy_version: "0.3.7".into(),
             cost_microusd: Some(50),
         };
 

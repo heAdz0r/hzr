@@ -305,6 +305,12 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             hook_runner::dispatch(&config).await?;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Hooks {
+            command: HooksCommand::Observe,
+        } => {
+            hook_runner::observe(&config).await;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Doctor { workspace } => {
             let workspace = canonical_directory(workspace.as_deref())?;
             let report = doctor(&config_path, &config, &workspace).await;
@@ -1504,7 +1510,15 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             if json {
                 print_json(&response)?;
             } else {
-                print_memories(&response)?;
+                print_memories(&response.memories)?;
+                if response.count < response.total_matches {
+                    println!(
+                        "showing {} of {} matches; rerun with --limit {}",
+                        response.count,
+                        response.total_matches,
+                        response.total_matches.min(50)
+                    );
+                }
             }
         }
         MemoryCommand::Store {
@@ -1679,6 +1693,7 @@ async fn execute_codec(config: &Config, command: CodecCommand, json: bool) -> Re
             fidelity: fidelity.into(),
             risk: risk.into(),
             profile: profile.map_or(config.policy.codec_profile, Into::into),
+            channel: None,
         })
         .await?;
     if json {
@@ -1724,9 +1739,19 @@ async fn execute_agent(config: &Config, command: AgentCommand, json: bool) -> Re
     let mut agent_config =
         ManagedAgentConfig::new(node, integration_layout(config), workspace, agent_data, api);
     agent_config.timeout = Duration::from_millis(timeout_ms);
-    let run = ManagedAgent::new(agent_config)
-        .run(&prompt, response_format.into(), max_turns)
-        .await?;
+    let agent = ManagedAgent::new(agent_config);
+    let running = agent.run(&prompt, response_format.into(), max_turns);
+    tokio::pin!(running);
+    let mut heartbeat = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(15),
+        Duration::from_secs(15),
+    );
+    let run = loop {
+        tokio::select! {
+            result = &mut running => break result?,
+            _ = heartbeat.tick() => eprintln!("hzr agent is still working"),
+        }
+    };
     print_agent(&run, json)?;
     Ok(ExitCode::SUCCESS)
 }
@@ -1796,7 +1821,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.6-test");
+        let release = directory.path().join("versions/v0.3.7-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -1816,7 +1841,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.6-test");
+        let release = directory.path().join("versions/v0.3.7-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))
@@ -1834,7 +1859,7 @@ mod tests {
     #[test]
     fn public_binary_symlink_resolves_to_the_versioned_source_directory() {
         let directory = tempdir().expect("temporary directory");
-        let release_bin = directory.path().join("versions/v0.3.6-test/bin");
+        let release_bin = directory.path().join("versions/v0.3.7-test/bin");
         let release_binary = release_bin.join("hzr");
         let public_bin = directory.path().join("bin");
         std::fs::create_dir_all(&release_bin).expect("release bin");

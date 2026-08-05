@@ -242,6 +242,7 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
     let mut session = SessionState::default();
 
     let (completed_tx, mut completed_rx) = mpsc::channel::<(String, Value)>(32);
+    let (progress_tx, mut progress_rx) = mpsc::channel::<Value>(32);
     let mut pending = HashMap::<String, tokio::task::AbortHandle>::new();
 
     loop {
@@ -288,9 +289,45 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
                             let task_config = config.clone();
                             let task_binding = binding.clone();
                             let sender = completed_tx.clone();
+                            let progress_sender = progress_tx.clone();
                             let completed_key = key.clone();
                             let handle = tokio::spawn(async move {
-                                let response = call_tool(&task_config, &task_binding, id, &request).await;
+                                let progress_token = request
+                                    .pointer("/params/_meta/progressToken")
+                                    .cloned();
+                                let progress_enabled = request
+                                    .pointer("/params/name")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|name| matches!(name, "hzr_search" | "hzr_context_plan"));
+                                let call = call_tool(&task_config, &task_binding, id, &request);
+                                tokio::pin!(call);
+                                let response = if progress_enabled && progress_token.is_some() {
+                                    let mut ticks = tokio::time::interval_at(
+                                        tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+                                        std::time::Duration::from_secs(5),
+                                    );
+                                    let mut progress = 0_u64;
+                                    loop {
+                                        tokio::select! {
+                                            response = &mut call => break response,
+                                            _ = ticks.tick() => {
+                                                progress = progress.saturating_add(1);
+                                                let notification = json!({
+                                                    "jsonrpc": "2.0",
+                                                    "method": "notifications/progress",
+                                                    "params": {
+                                                        "progressToken": progress_token,
+                                                        "progress": progress,
+                                                        "message": "HZR is still working"
+                                                    }
+                                                });
+                                                let _ = progress_sender.send(notification).await;
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    call.await
+                                };
                                 let _ = sender.send((completed_key, response)).await;
                             });
                             pending.insert(key, handle.abort_handle());
@@ -306,6 +343,9 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
                 if pending.remove(&key).is_some() {
                     write_response(&mut stdout, &response).await?;
                 }
+            }
+            Some(notification) = progress_rx.recv(), if !pending.is_empty() => {
+                write_response(&mut stdout, &notification).await?;
             }
         }
     }
@@ -540,7 +580,16 @@ async fn call_tool(
     };
 
     match outcome {
-        Ok(value) => success(id, tool_success(&value)),
+        Ok(value) => {
+            if name != "hzr_codec" {
+                if let Ok(accounting) = mcp_operation_request(name, workspace, &value) {
+                    if client.record_operation(&accounting).await.is_err() {
+                        let _ = crate::hook_runner::record_daemon_unavailable_operation(config);
+                    }
+                }
+            }
+            success(id, tool_success(&value))
+        }
         Err(error)
             if matches!(
                 name,
@@ -565,6 +614,27 @@ async fn call_tool(
             )),
         ),
     }
+}
+
+fn mcp_operation_request(
+    tool_name: &str,
+    workspace: &str,
+    response: &Value,
+) -> Result<hzr_protocol::OperationApiRequest> {
+    let bytes = serde_json::to_vec(response)?.len();
+    let delivered = u64::try_from(bytes / 4).unwrap_or(u64::MAX).max(1);
+    let command = tool_name.replace('_', " ");
+    Ok(hzr_protocol::OperationApiRequest {
+        original_command: command.clone(),
+        recorded_command: command,
+        baseline_tokens_estimated: delivered,
+        delivered_tokens_estimated: delivered,
+        execution_ms: 0,
+        project_path: workspace.to_owned(),
+        channel: hzr_protocol::AccountingChannel::Mcp,
+        measurement: hzr_protocol::AccountingMeasurement::Estimated,
+        route: hzr_protocol::AccountingRoute::Optimized,
+    })
 }
 
 /// Compile a response-density contract through the daemon.
@@ -596,6 +666,7 @@ async fn codec(client: &DaemonClient, arguments: &Value) -> Result<Value> {
             parse_codec_profile,
             "off, safe, adaptive, compact, shadow",
         )?,
+        channel: Some(hzr_protocol::AccountingChannel::Mcp),
     };
     let transform = client.codec_compile(&request).await?;
     Ok(serde_json::to_value(transform)?)
@@ -618,8 +689,7 @@ async fn recall(client: &DaemonClient, workspace: &str, arguments: &Value) -> Re
             "project, global, project_and_global",
         )?,
     };
-    let records = client.memory_recall(&request).await?;
-    Ok(json!({"count": records.len(), "memories": records}))
+    Ok(serde_json::to_value(client.memory_recall(&request).await?)?)
 }
 
 async fn store(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {

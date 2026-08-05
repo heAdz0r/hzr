@@ -3,8 +3,8 @@ use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 
 use super::{
-    BuildState, CacheStatus, ContextSlice, DeltaKind, DeltaPayload, DeltaSummary, DetailLevel,
-    DetailLimits, FileArtifact, FileSurface, ImportStat, LayerFlags, MemoryResponse,
+    BoundNotice, BuildState, CacheStatus, ContextSlice, DeltaKind, DeltaPayload, DeltaSummary,
+    DetailLevel, DetailLimits, FileArtifact, FileSurface, ImportStat, LayerFlags, MemoryResponse,
     ModuleIndexEntry, PathStat, ProjectArtifact, ProjectStats, QueryType, TestMapEntry,
     TypeRelation, ENTRY_POINT_HINTS,
 };
@@ -92,6 +92,98 @@ pub(super) fn build_response(
     };
 
     let context = build_context_slice(&state.artifact, context_delta, limits, layers); // E6.4: pass pre-computed layers (feature-masked)
+    let unbounded = DetailLimits {
+        max_changes: usize::MAX,
+        max_entry_points: usize::MAX,
+        max_hot_paths: usize::MAX,
+        max_imports: usize::MAX,
+        max_api_files: usize::MAX,
+        max_api_symbols: usize::MAX,
+        max_modules: usize::MAX,
+        max_module_exports: usize::MAX,
+    };
+    let full_context = build_context_slice(&state.artifact, context_delta, unbounded, layers);
+    let mut bounds = Vec::new();
+    push_bound_notice(
+        &mut bounds,
+        "changes",
+        delta_payload.as_ref().map_or(0, |value| value.files.len()),
+        if layers.l6_change_digest {
+            delta.changes.len()
+        } else {
+            0
+        },
+    );
+    push_bound_notice(
+        &mut bounds,
+        "entry_points",
+        context.entry_points.len(),
+        full_context.entry_points.len(),
+    );
+    push_bound_notice(
+        &mut bounds,
+        "hot_paths",
+        context.hot_paths.len(),
+        full_context.hot_paths.len(),
+    );
+    push_bound_notice(
+        &mut bounds,
+        "top_imports",
+        context.top_imports.len(),
+        full_context.top_imports.len(),
+    );
+    push_bound_notice(
+        &mut bounds,
+        "api_surface",
+        context.api_surface.len(),
+        full_context.api_surface.len(),
+    );
+    for surface in &context.api_surface {
+        if let Some(full) = full_context
+            .api_surface
+            .iter()
+            .find(|candidate| candidate.path == surface.path)
+        {
+            push_bound_notice(
+                &mut bounds,
+                &format!("api_surface.{}.symbols", surface.path),
+                surface.symbols.len(),
+                full.symbols.len(),
+            );
+        }
+    }
+    push_bound_notice(
+        &mut bounds,
+        "module_index",
+        context.module_index.len(),
+        full_context.module_index.len(),
+    );
+    for module in &context.module_index {
+        if let Some(full) = full_context
+            .module_index
+            .iter()
+            .find(|candidate| candidate.module == module.module)
+        {
+            push_bound_notice(
+                &mut bounds,
+                &format!("module_index.{}.exports", module.module),
+                module.exports.len(),
+                full.exports.len(),
+            );
+        }
+    }
+    push_bound_notice(
+        &mut bounds,
+        "type_graph",
+        context.type_graph.len(),
+        full_context.type_graph.len(),
+    );
+    push_bound_notice(
+        &mut bounds,
+        "test_map",
+        context.test_map.len(),
+        full_context.test_map.len(),
+    );
 
     // P0 dirty-blocking: derive freshness from cache_status (PRD §8)
     // build_state always rebuilds from current FS, so DirtyRebuild/StaleRebuild data is fresh
@@ -116,7 +208,19 @@ pub(super) fn build_response(
         stats,
         delta: delta_payload,
         context,
+        bounds,
         graph: state.graph.clone(),
+    }
+}
+
+fn push_bound_notice(bounds: &mut Vec<BoundNotice>, section: &str, shown: usize, total: usize) {
+    if shown < total {
+        bounds.push(BoundNotice {
+            section: section.to_owned(),
+            shown,
+            total,
+            recovery: "--detail verbose",
+        });
     }
 }
 
@@ -150,8 +254,8 @@ pub(super) fn build_context_slice(
     // L3: api_surface — show recently changed files or entry points
     // On initial indexing delta contains ALL files — fall back to entry_points.
     let api_surface = if layers.l3_api_surface {
-        let use_delta =
-            !delta.changes.is_empty() && delta.changes.len() <= limits.max_api_files * 4;
+        let use_delta = !delta.changes.is_empty()
+            && delta.changes.len() <= limits.max_api_files.saturating_mul(4);
         let surface_paths: Vec<&str> = if use_delta {
             delta
                 .changes
@@ -663,6 +767,13 @@ pub(super) fn render_text(response: &MemoryResponse) -> String {
             let names: Vec<&str> = deps.build.iter().map(|d| d.name.as_str()).collect();
             out.push_str(&format!("deps_build {}\n", names.join(", ")));
         }
+    }
+
+    for bound in &response.bounds {
+        out.push_str(&format!(
+            "bounds {}: {} of {} shown; recovery: {}\n",
+            bound.section, bound.shown, bound.total, bound.recovery
+        ));
     }
 
     out

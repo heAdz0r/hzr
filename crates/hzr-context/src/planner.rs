@@ -328,7 +328,8 @@ impl ContextPlanner {
                 .into_iter()
                 .take(request.search_limit)
                 .collect();
-            let outlines = self.candidate_outlines(workspace, &selected).await;
+            let selected_count = selected.len();
+            let (outlines, missing_outlines) = self.candidate_outlines(workspace, &selected).await;
             let mut source = normalize_plan(
                 selected,
                 workspace,
@@ -336,6 +337,17 @@ impl ContextPlanner {
                 plan.pipeline_version.as_deref(),
                 &outlines,
             )?;
+            if missing_outlines > 0 {
+                push_warning(
+                    &mut source.warnings,
+                    ContextWarning {
+                        code: ContextWarningCode::OutlineUnavailable,
+                        message: format!(
+                            "symbol outline unavailable for {missing_outlines} of {selected_count} candidates"
+                        ),
+                    },
+                );
+            }
             if let Some(identifier) = exact_identifier(&request.intent) {
                 let exact_request = SearchRequest {
                     workspace: workspace.identity.root.clone(),
@@ -350,7 +362,22 @@ impl ContextPlanner {
                     .await
                 {
                     Ok(response) => {
-                        let exact = normalize_search(response, &generation.generation);
+                        let hit_count = response.hits.len();
+                        let (outlines, missing_outlines) =
+                            self.search_outlines(workspace, &response).await;
+                        let mut exact =
+                            normalize_search(response, &generation.generation, &outlines);
+                        if missing_outlines > 0 {
+                            push_warning(
+                                &mut exact.warnings,
+                                ContextWarning {
+                                    code: ContextWarningCode::OutlineUnavailable,
+                                    message: format!(
+                                        "symbol outline unavailable for {missing_outlines} of {hit_count} search candidates"
+                                    ),
+                                },
+                            );
+                        }
                         source.candidates.extend(exact.candidates);
                         exact
                             .warnings
@@ -399,7 +426,23 @@ impl ContextPlanner {
             .search_in(workspace, &generation, &search_request, true)
             .await
         {
-            Ok(response) => Some(normalize_search(response, &generation.generation)),
+            Ok(response) => {
+                let hit_count = response.hits.len();
+                let (outlines, missing_outlines) = self.search_outlines(workspace, &response).await;
+                let mut source = normalize_search(response, &generation.generation, &outlines);
+                if missing_outlines > 0 {
+                    push_warning(
+                        &mut source.warnings,
+                        ContextWarning {
+                            code: ContextWarningCode::OutlineUnavailable,
+                            message: format!(
+                                "symbol outline unavailable for {missing_outlines} of {hit_count} search candidates"
+                            ),
+                        },
+                    );
+                }
+                Some(source)
+            }
             Err(error) => {
                 push_warning(
                     &mut warnings,
@@ -432,13 +475,45 @@ impl ContextPlanner {
         &self,
         workspace: &Workspace,
         selected: &[ForkPlanCandidate],
-    ) -> BTreeMap<String, ForkSymbolIndex> {
+    ) -> (BTreeMap<String, ForkSymbolIndex>, usize) {
+        let paths = selected
+            .iter()
+            .map(|candidate| candidate.rel_path.clone())
+            .collect::<Vec<_>>();
+        self.candidate_outlines_for_paths(workspace, &paths).await
+    }
+
+    async fn search_outlines(
+        &self,
+        workspace: &Workspace,
+        response: &SearchApiResponse,
+    ) -> (BTreeMap<String, ForkSymbolIndex>, usize) {
+        let mut paths = response
+            .hits
+            .iter()
+            .map(|hit| hit.path.clone())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+        self.candidate_outlines_for_paths(workspace, &paths).await
+    }
+
+    async fn candidate_outlines_for_paths(
+        &self,
+        workspace: &Workspace,
+        paths: &[String],
+    ) -> (BTreeMap<String, ForkSymbolIndex>, usize) {
         let mut outlines = BTreeMap::new();
-        for candidate in selected {
-            let Ok(path) = workspace.normalize_result(Path::new(&candidate.rel_path)) else {
+        let mut unavailable = 0;
+        for requested_path in paths {
+            let Ok(path) = workspace.normalize_result(Path::new(requested_path)) else {
+                unavailable += 1;
                 continue;
             };
-            let Some(path) = path.to_str() else { continue };
+            let Some(path) = path.to_str() else {
+                unavailable += 1;
+                continue;
+            };
             let index: std::result::Result<ForkSymbolIndex, _> = self
                 .run_fork_json(
                     vec!["read".into(), path.to_owned(), "--symbols".into()],
@@ -451,10 +526,13 @@ impl ContextPlanner {
                 )
                 .await;
             if let Ok(index) = index {
+                outlines.insert(requested_path.clone(), index.clone());
                 outlines.insert(path.to_owned(), index);
+            } else {
+                unavailable += 1;
             }
         }
-        outlines
+        (outlines, unavailable)
     }
 
     async fn run_memory_plan(
@@ -552,6 +630,14 @@ impl ContextPlanner {
             .take(request.limit)
             .map(|hit| normalize_search_hit(workspace, Path::new(path_text), hit))
             .collect::<Result<Vec<_>>>()?;
+        let next_step = (raw.total_hits > hits.len()).then(|| {
+            format!(
+                "{} additional matches were bounded; narrow the query/path or rerun `hzr --json search '{}' --limit {}`",
+                raw.total_hits.saturating_sub(hits.len()),
+                raw.query.replace('\'', "'\\''"),
+                raw.total_hits.min(50)
+            )
+        });
         Ok(SearchApiResponse {
             query: raw.query,
             path: path_text.to_owned(),
@@ -561,9 +647,11 @@ impl ContextPlanner {
             skipped_large: raw.skipped_large,
             skipped_binary: raw.skipped_binary,
             hits,
+            effective_mode: request.mode,
             strategy,
             index_generation: Some(generation.generation.clone()),
             fallback_reason: None,
+            next_step,
         })
     }
 
@@ -1310,6 +1398,9 @@ mod tests {
                 content_ref: content_ref.clone(),
                 path: Some(format!("{id}.rs")),
                 symbol: None,
+                symbol_unavailable_reason: Some(
+                    hzr_protocol::SymbolUnavailableReason::OutlineUnavailable,
+                ),
                 line_start: Some(1),
                 line_end: Some(1),
                 source_rank: 1,

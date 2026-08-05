@@ -10,6 +10,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 const HZR_DISPATCH_SUFFIX: &str = " hooks dispatch";
+const HZR_OBSERVE_SUFFIX: &str = " hooks observe";
 const HZR_INIT_SUFFIX: &str = " init --if-needed --quiet --session-start-hook";
 const HZR_INIT_SKIP_SERVICE_SUFFIX: &str =
     " init --if-needed --quiet --session-start-hook --skip-service";
@@ -229,6 +230,7 @@ enum HookOwner {
 
 fn owner(command: &str) -> HookOwner {
     if command.trim_end().ends_with(HZR_DISPATCH_SUFFIX)
+        || command.trim_end().ends_with(HZR_OBSERVE_SUFFIX)
         || command.trim_end().ends_with(HZR_INIT_SUFFIX)
         || command.trim_end().ends_with(HZR_INIT_SKIP_SERVICE_SUFFIX)
         || command.trim_end().ends_with(HZR_INIT_ENABLED_SUFFIX)
@@ -265,7 +267,7 @@ fn classify(path: &Path, document: &Value) -> HookStatus {
         hzr_entries,
         rtk_entries,
         external_icm_entries,
-        installed: hzr_entries == 2 && rtk_entries == 0,
+        installed: hzr_entries == 3 && rtk_entries == 0,
         conflict: hzr_entries > 0 && rtk_entries > 0,
     }
 }
@@ -314,6 +316,7 @@ fn remove_owned_hooks(document: &mut Value, target: HookOwner) {
 
 struct ManagedCommands {
     dispatch: String,
+    observe: String,
     init: String,
 }
 
@@ -383,6 +386,7 @@ fn managed_commands(
     };
     Ok(ManagedCommands {
         dispatch: format!("{executable}{HZR_DISPATCH_SUFFIX}"),
+        observe: format!("{executable}{HZR_OBSERVE_SUFFIX}"),
         init: format!("{executable}{init_suffix}"),
     })
 }
@@ -416,6 +420,14 @@ fn add_hzr_hooks(document: &mut Value, commands: &ManagedCommands) -> Result<()>
         json!({
             "matcher": "Bash|Agent|Task",
             "hooks": [{"type": "command", "command": commands.dispatch, "timeout": 10}]
+        }),
+    )?;
+    append_event(
+        hooks,
+        "PostToolUse",
+        json!({
+            "matcher": "Read|Grep|Glob|Edit|Write",
+            "hooks": [{"type": "command", "command": commands.observe, "timeout": 10}]
         }),
     )?;
     Ok(())
@@ -612,7 +624,7 @@ mod tests {
 
         assert!(first.changed);
         assert!(!second.changed);
-        assert_eq!(current.hzr_entries, 2);
+        assert_eq!(current.hzr_entries, 3);
         assert_eq!(current.rtk_entries, 0);
         assert_eq!(
             current.external_icm_entries, 0,
@@ -620,6 +632,9 @@ mod tests {
         );
         assert!(current.installed);
         let installed = fs::read_to_string(&path).expect("installed settings");
+        assert!(installed.contains("PostToolUse"));
+        assert!(installed.contains("Read|Grep|Glob|Edit|Write"));
+        assert!(installed.contains("hooks observe"));
         assert!(
             installed.contains("/home/u/bin/foreign-hook"),
             "unknown third-party handlers must survive adoption"
@@ -754,7 +769,7 @@ mod tests {
     #[test]
     fn hook_binary_validates_but_preserves_a_durable_symlink() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.6/bin");
+        let release = directory.path().join("versions/v0.3.7/bin");
         let prefix = directory.path().join("bin");
         fs::create_dir_all(&release).expect("release directory");
         fs::create_dir_all(&prefix).expect("prefix directory");

@@ -234,6 +234,8 @@ pub enum HooksCommand {
     Status,
     #[command(hide = true)]
     Dispatch,
+    #[command(hide = true)]
+    Observe,
 }
 
 #[derive(Debug, Subcommand)]

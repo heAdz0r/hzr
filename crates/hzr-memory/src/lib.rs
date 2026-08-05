@@ -32,6 +32,6 @@ pub use snapshot::{
 };
 pub use supervisor::{IcmSupervisor, ServiceStatus, StartOutcome, StopOutcome};
 pub use types::{
-    IcmTransport, Importance, MemoryRecord, MemoryScope, MemorySource, MemoryStats,
-    MemoryTransport, RecallRequest, ServiceHealth, StoreReceipt, StoreRequest,
+    IcmTransport, Importance, MemoryRecallResponse, MemoryRecord, MemoryScope, MemorySource,
+    MemoryStats, MemoryTransport, RecallRequest, ServiceHealth, StoreReceipt, StoreRequest,
 };

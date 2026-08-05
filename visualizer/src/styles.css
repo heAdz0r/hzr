@@ -1405,6 +1405,10 @@ main {
   background: var(--warning);
 }
 
+.route-summary-gap {
+  background: var(--text-tertiary);
+}
+
 .raw-credit {
   padding: 4px 7px;
   border-radius: 999px;
@@ -1467,6 +1471,11 @@ main {
 .route-optimized {
   color: var(--success);
   background: rgba(61, 220, 151, 0.08);
+}
+
+.route-native_unaccounted {
+  color: var(--text-tertiary);
+  background: var(--ink-800);
 }
 
 .route-raw {

@@ -11,6 +11,13 @@ HZR_CAVEMAN_OUTPUT="${HZR_ENGINE_OUTPUT}/caveman-code"
 HZR_PROVENANCE_OUTPUT="${HZR_OUTPUT_ROOT}/share/hzr"
 HZR_VISUALIZER_OUTPUT="${HZR_PROVENANCE_OUTPUT}/visualizer"
 HZR_BUILD_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-build.XXXXXX")"
+HZR_BUILD_STAGE=0
+HZR_BUILD_STAGE_TOTAL=9
+
+hzr_build_stage() {
+  HZR_BUILD_STAGE=$((HZR_BUILD_STAGE + 1))
+  printf '[%s/%s] %s\n' "${HZR_BUILD_STAGE}" "${HZR_BUILD_STAGE_TOTAL}" "$1"
+}
 
 cleanup_hzr_build() {
   if [[ -n "${HZR_BUILD_TEMP:-}" && -d "${HZR_BUILD_TEMP}" ]]; then
@@ -31,7 +38,7 @@ clone_at_commit() {
   local commit="$2"
   local destination="$3"
 
-  git clone --quiet --filter=blob:none --no-checkout "${repository}" "${destination}"
+  git clone --progress --filter=blob:none --no-checkout "${repository}" "${destination}"
   git -C "${destination}" checkout --quiet --detach "${commit}"
   local actual
   actual="$(git -C "${destination}" rev-parse HEAD)"
@@ -73,8 +80,8 @@ download_cached() {
     return
   fi
 
-  curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-    --connect-timeout 20 --retry 3 --retry-all-errors \
+  curl --fail --progress-bar --show-error --location --proto '=https' --tlsv1.2 \
+    --connect-timeout 20 --max-time 1800 --retry 3 --retry-all-errors \
     "${url}" --output "${destination}"
   verify_sha256 "${expected}" "${destination}"
 
@@ -107,6 +114,7 @@ if [[ "$(bun --version)" != "${HZR_BUN_VERSION}" ]]; then
   exit 1
 fi
 
+hzr_build_stage "Verifying fork-core provenance and parity"
 "${HZR_REPOSITORY_ROOT}/scripts/verify-fork-core.sh"
 
 mkdir -p \
@@ -146,6 +154,7 @@ case "$(uname -s)-$(uname -m)" in
     ;;
 esac
 HZR_NODE_ARCHIVE="node-v${HZR_NODE_VERSION}-${HZR_NODE_PLATFORM}.tar.gz"
+hzr_build_stage "Downloading and staging the pinned Node.js runtime"
 HZR_NODE_DOWNLOAD="${HZR_BUILD_TEMP}/${HZR_NODE_ARCHIVE}"
 download_cached \
   "https://nodejs.org/download/release/v${HZR_NODE_VERSION}/${HZR_NODE_ARCHIVE}" \
@@ -164,6 +173,7 @@ ln -s ../runtime/node/bin/node "${HZR_ENGINE_OUTPUT}/node"
 verify_sha256 \
   "55535352bc9f4837198c652b8c44ec54a0a7ef82fbd81e11b4ec11f4c4082991" \
   "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
+hzr_build_stage "Building the pinned grepai engine"
 clone_at_commit \
   "https://github.com/yoanbernabeu/grepai" \
   "65c345ca32122c17a39a5bbec2780c2eea773a12" \
@@ -184,6 +194,7 @@ git -C "${HZR_BUILD_TEMP}/grepai" apply \
 verify_sha256 \
   "cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586" \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
+hzr_build_stage "Building the pinned ICM engine"
 clone_at_commit \
   "https://github.com/rtk-ai/icm" \
   "c3a1bac7cfe401b55fd66af16dfc0c774c02167a" \
@@ -200,6 +211,7 @@ install -m 0755 "${HZR_BUILD_TEMP}/icm/target/release/icm" "${HZR_ENGINE_OUTPUT}
 "${HZR_ENGINE_OUTPUT}/icm" --version | grep -F "0.10.61" >/dev/null
 
 HZR_FORK_TARGET="${HZR_BUILD_TEMP}/fork-core-target"
+hzr_build_stage "Building the managed RTK fork-core"
 CARGO_TARGET_DIR="${HZR_FORK_TARGET}" cargo build \
   --manifest-path "${HZR_REPOSITORY_ROOT}/fork-core/rtk/Cargo.toml" \
   --locked --release
@@ -207,6 +219,7 @@ install -m 0755 "${HZR_FORK_TARGET}/release/rtk" "${HZR_ENGINE_OUTPUT}/rtk"
 "${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 
 HZR_CAVEMAN_STAGE="${HZR_BUILD_TEMP}/caveman-code"
+hzr_build_stage "Installing the pinned Caveman runtime"
 mkdir -p "${HZR_CAVEMAN_STAGE}"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/bridge.mjs" \
   "${HZR_CAVEMAN_STAGE}/bridge.mjs"
@@ -227,6 +240,7 @@ fi
 mv -- "${HZR_CAVEMAN_STAGE}" "${HZR_CAVEMAN_OUTPUT}"
 
 HZR_VISUALIZER_STAGE="${HZR_BUILD_TEMP}/visualizer"
+hzr_build_stage "Testing and building the visualizer"
 mkdir -p "${HZR_VISUALIZER_STAGE}"
 for artifact in bun.lock index.html package.json tsconfig.json vite.config.ts; do
   cp -- \
@@ -244,6 +258,7 @@ cp -R -- "${HZR_REPOSITORY_ROOT}/visualizer/public" "${HZR_VISUALIZER_STAGE}/pub
 mkdir -p "${HZR_VISUALIZER_OUTPUT}"
 cp -R -- "${HZR_VISUALIZER_STAGE}/dist/." "${HZR_VISUALIZER_OUTPUT}/"
 
+hzr_build_stage "Building HZR binaries and assembling provenance"
 cargo build \
   --manifest-path "${HZR_REPOSITORY_ROOT}/Cargo.toml" \
   --locked --release --workspace
@@ -303,6 +318,7 @@ install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
 
+hzr_build_stage "Generating the manifest and smoke-testing the bundle"
 "${HZR_REPOSITORY_ROOT}/scripts/generate-bundle-manifest.sh" "${HZR_OUTPUT_ROOT}"
 "${HZR_REPOSITORY_ROOT}/scripts/smoke-bundle.sh" "${HZR_OUTPUT_ROOT}"
 

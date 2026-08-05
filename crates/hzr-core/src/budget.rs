@@ -278,6 +278,7 @@ mod tests {
             content_ref: id.into(),
             path: Some(path.into()),
             symbol: None,
+            symbol_unavailable_reason: Some(hzr_protocol::SymbolUnavailableReason::NotApplicable),
             line_start: None,
             line_end: None,
             source_rank: rank,

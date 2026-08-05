@@ -209,6 +209,35 @@ mod tests {
         assert!(!second.changed, "identical bytes must be a no-op");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_install_preserves_current_bundle_symlinks_when_bytes_match() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().expect("temp");
+        let source = temp.path().join("current/bin");
+        let prefix = temp.path().join("bin");
+        std::fs::create_dir_all(&source).expect("source dir");
+        std::fs::create_dir_all(&prefix).expect("prefix dir");
+        write_fake(&source, "hzr", b"one");
+        write_fake(&source, "hzrd", b"two");
+        symlink(source.join("hzr"), prefix.join("hzr")).expect("hzr symlink");
+        symlink(source.join("hzrd"), prefix.join("hzrd")).expect("hzrd symlink");
+
+        let report = install(&prefix, &source, false, true).expect("install succeeds");
+
+        assert!(!report.changed, "current bundle bytes must be a no-op");
+        for name in MANAGED_BINARIES {
+            assert!(
+                std::fs::symlink_metadata(prefix.join(name))
+                    .expect("symlink metadata")
+                    .file_type()
+                    .is_symlink(),
+                "{name} must remain linked through current"
+            );
+        }
+    }
+
     #[test]
     fn test_install_replaces_stale_binary() {
         let temp = tempfile::tempdir().expect("temp");

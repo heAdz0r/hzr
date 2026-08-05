@@ -89,6 +89,7 @@ pub(super) fn compute_gain_stats(artifact: &ProjectArtifact, detail: DetailLevel
             files: vec![],
         }),
         context,
+        bounds: vec![],
         graph,
     };
     let rendered = render_text(&response);

@@ -104,6 +104,7 @@ fn write_local_reduction(
         )?;
     }
     writeln!(output, "╰{}╯", "─".repeat(WIDTH))?;
+
     writeln!(
         output,
         "   {}",
@@ -172,6 +173,14 @@ fn write_optimizer_bypass(
         style(&progress_bar(bypass.token_share_pct, 68), "1;33", color)
     )?;
     writeln!(output, "╰{}╯", "─".repeat(WIDTH))?;
+
+    if report.traffic_coverage.unmeasured_bypass_operations > 0 {
+        writeln!(
+            output,
+            "   {} passthrough operation(s) were unmeasured; the ratio measures a shrinking fraction of traffic",
+            report.traffic_coverage.unmeasured_bypass_operations
+        )?;
+    }
 
     if bypass.by_tool.is_empty() {
         return Ok(());
@@ -397,6 +406,30 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
         style(label, status_color, color)
     )?;
     let coverage = &report.coverage;
+    let traffic = &report.traffic_coverage;
+    writeln!(
+        output,
+        "├─ reduction ratio covers {} of {} observed operations ({:.1}%)",
+        traffic.accounted_operations,
+        traffic.total_observed_operations,
+        traffic.accounted_share_pct
+    )?;
+    if traffic.native_unaccounted_operations > 0 {
+        writeln!(
+            output,
+            "├─ {} host-native operation(s) were observed outside the optimizer",
+            traffic.native_unaccounted_operations
+        )?;
+    }
+    if !traffic.by_channel.is_empty() {
+        let channels = traffic
+            .by_channel
+            .iter()
+            .map(|(channel, count)| format!("{channel}={count}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        writeln!(output, "├─ channels {channels}")?;
+    }
     if coverage.unreconciled_rewrites > 0 {
         writeln!(
             output,
@@ -413,6 +446,13 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
             output,
             "├─ {} daemon-free rewrite(s) occurred historically and are reconciled",
             coverage.lifetime_rewrites
+        )?;
+    }
+    if coverage.daemon_unavailable_operations > 0 {
+        writeln!(
+            output,
+            "├─ {} successful MCP operation(s) could not write their accounting row",
+            coverage.daemon_unavailable_operations
         )?;
     }
     for note in &report.notes {
@@ -485,7 +525,7 @@ mod tests {
     use crate::hook_runner::AccountingCoverage;
     use crate::stats::{
         BypassReport, BypassToolReport, CommandSavings, DirectSavings, StatsReport,
-        SubsystemSavings,
+        SubsystemSavings, TrafficCoverage,
     };
 
     use super::write_stats;
@@ -507,7 +547,7 @@ mod tests {
 
     fn report(usage: LedgerSummary, commands: Vec<CommandSavings>) -> StatsReport {
         StatsReport {
-            hzr_version: "0.3.6",
+            hzr_version: "0.3.7",
             scope: "global lifetime".into(),
             direct_savings: DirectSavings {
                 operations: 42,
@@ -532,10 +572,12 @@ mod tests {
             observed_model_usage: usage,
             observed_model_usage_scope: "global_lifetime",
             bypass: BypassReport::default(),
+            traffic_coverage: TrafficCoverage::default(),
             degraded_rewrites: 3,
             coverage: AccountingCoverage {
                 unreconciled_rewrites: 3,
                 lifetime_rewrites: 3,
+                daemon_unavailable_operations: 0,
                 complete: false,
                 last_degraded_at_unix: Some(1_785_531_432),
             },

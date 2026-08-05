@@ -10,7 +10,7 @@ use hzr_protocol::{
     CodecApiRequest, ContextPlanApiRequest, ContextPlanApiResponse, ErrorResponse, ExecApiRequest,
     ExecApprovalApiRequest, HealthResponse, MemoryForgetApiRequest, MemoryMutationApiResponse,
     MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryStoreApiRequest, MemoryUpdateApiRequest,
-    SearchApiRequest, SearchApiResponse,
+    OperationApiRequest, OperationApiResponse, SearchApiRequest, SearchApiResponse,
 };
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -83,7 +83,7 @@ impl DaemonClient {
     pub async fn memory_recall(
         &self,
         request: &MemoryRecallApiRequest,
-    ) -> Result<Vec<MemoryRecord>, ClientError> {
+    ) -> Result<hzr_memory::MemoryRecallResponse, ClientError> {
         self.post("/v1/memory/recall", request).await
     }
 
@@ -138,6 +138,13 @@ impl DaemonClient {
 
     pub async fn codec_compile(&self, request: &CodecApiRequest) -> Result<Transform, ClientError> {
         self.post("/v1/codec/compile", request).await
+    }
+
+    pub async fn record_operation(
+        &self,
+        request: &OperationApiRequest,
+    ) -> Result<OperationApiResponse, ClientError> {
+        self.post("/v1/operations", request).await
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &'static str) -> Result<T, ClientError> {
@@ -341,7 +348,7 @@ mod tests {
             let rendered = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
             assert!(rendered.contains("get /v1/health http/1.1"));
             assert!(rendered.contains(&expected_auth));
-            let body = br#"{"protocol_version":1,"hzr_version":"0.3.6","state":"ready","workspace_root":null,"engines":[],"capabilities":[]}"#;
+            let body = br#"{"protocol_version":1,"hzr_version":"0.3.7","state":"ready","workspace_root":null,"engines":[],"capabilities":[]}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                 body.len()
@@ -365,7 +372,7 @@ mod tests {
             .expect("typed health response");
         server.await.expect("test server completion");
 
-        assert_eq!(health.hzr_version, "0.3.6");
+        assert_eq!(health.hzr_version, "0.3.7");
         assert_eq!(health.protocol_version, 1);
     }
 }

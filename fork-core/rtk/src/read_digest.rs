@@ -810,10 +810,12 @@ pub fn truncate_long_lines(content: &str, level: FilterLevel) -> String {
     };
 
     let mut out = String::new();
+    let mut shortened = 0usize;
     for line in content.lines() {
         if let Some((byte_idx, _)) = line.char_indices().nth(max_width) {
             out.push_str(&line[..byte_idx]);
             out.push_str("…\n");
+            shortened += 1;
         } else {
             out.push_str(line);
             out.push('\n');
@@ -823,6 +825,15 @@ pub fn truncate_long_lines(content: &str, level: FilterLevel) -> String {
     // Remove trailing newline if original didn't have one
     if !content.ends_with('\n') && out.ends_with('\n') {
         out.pop();
+    }
+
+    if shortened > 0 {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "[long lines shortened: {shortened}; rerun with `--level none` for exact content]\n"
+        ));
     }
 
     out

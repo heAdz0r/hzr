@@ -1,5 +1,5 @@
 use hzr_core::Config;
-use hzr_protocol::SearchMode;
+use hzr_protocol::{AccountingChannel, AccountingRoute, SearchMode};
 use serde_json::{Value, json};
 
 use crate::cli::McpClientArg;
@@ -7,9 +7,24 @@ use crate::cli::McpClientArg;
 use super::{
     INVALID_REQUEST, LATEST_MCP_PROTOCOL_VERSION, METHOD_NOT_FOUND, PARSE_ERROR, SessionState,
     apply_workspace_policy, bounded_usize, cancelled_request_id, classify_workspace_binding,
-    handle_line, initialize_result, lifecycle_metadata, optional_enum, parse_mode,
-    registration_snippet, reject_unknown, tool_definitions, tool_error, tool_success,
+    handle_line, initialize_result, lifecycle_metadata, mcp_operation_request, optional_enum,
+    parse_mode, registration_snippet, reject_unknown, tool_definitions, tool_error, tool_success,
 };
+
+#[test]
+fn test_mcp_accounting_is_neutral_and_explicitly_tagged() {
+    let response = json!({"hits": [{"path": "src/lib.rs"}]});
+    let request =
+        mcp_operation_request("hzr_search", "/work", &response).expect("accounting request");
+
+    assert_eq!(request.channel, AccountingChannel::Mcp);
+    assert_eq!(request.route, AccountingRoute::Optimized);
+    assert_eq!(
+        request.baseline_tokens_estimated, request.delivered_tokens_estimated,
+        "retrieval is coverage, not claimed savings"
+    );
+    assert!(request.delivered_tokens_estimated > 0);
+}
 
 /// Mirror of the notification rule in `handle_line`, which cannot be exercised
 /// directly without a daemon: a request without `id` gets no response.
@@ -107,12 +122,186 @@ fn test_every_tool_has_model_guidance_and_typed_schemas() {
             "{name} must declare required arguments"
         );
         assert_eq!(tool["outputSchema"]["type"], "object");
+        assert_eq!(tool["outputSchema"]["additionalProperties"], false);
         assert!(tool["annotations"]["readOnlyHint"].is_boolean());
     }
     assert!(
         tools.iter().any(|tool| tool["name"] == "hzr_context_plan"),
         "the MCP surface must expose HZR graph-first planning"
     );
+}
+
+fn schema_accepts(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    if let Some(options) = schema.get("anyOf").and_then(Value::as_array) {
+        if options
+            .iter()
+            .any(|option| schema_accepts(option, value, path).is_ok())
+        {
+            return Ok(());
+        }
+        return Err(format!("{path} matched no anyOf branch"));
+    }
+    if let Some(expected) = schema.get("const") {
+        if expected != value {
+            return Err(format!("{path} expected constant {expected}, got {value}"));
+        }
+    }
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        if !values.contains(value) {
+            return Err(format!("{path} is outside enum: {value}"));
+        }
+    }
+    if let Some(kind) = schema.get("type") {
+        let kinds = kind
+            .as_array()
+            .cloned()
+            .unwrap_or_else(|| vec![kind.clone()]);
+        let matches = kinds.iter().any(|kind| match kind.as_str() {
+            Some("object") => value.is_object(),
+            Some("array") => value.is_array(),
+            Some("string") => value.is_string(),
+            Some("integer") => value.as_i64().is_some() || value.as_u64().is_some(),
+            Some("number") => value.is_number(),
+            Some("boolean") => value.is_boolean(),
+            Some("null") => value.is_null(),
+            _ => false,
+        });
+        if !matches {
+            return Err(format!("{path} has {value}, expected type {kind}"));
+        }
+    }
+    if let Some(object) = value.as_object() {
+        let properties = schema.get("properties").and_then(Value::as_object);
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            for key in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(key) {
+                    return Err(format!("{path} is missing required property {key}"));
+                }
+            }
+        }
+        for (key, child) in object {
+            if let Some(child_schema) = properties.and_then(|items| items.get(key)) {
+                schema_accepts(child_schema, child, &format!("{path}.{key}"))?;
+            } else if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+                return Err(format!("{path} emitted undeclared property {key}"));
+            } else if let Some(additional) = schema
+                .get("additionalProperties")
+                .filter(|value| value.is_object())
+            {
+                schema_accepts(additional, child, &format!("{path}.{key}"))?;
+            }
+        }
+    }
+    if let (Some(items), Some(values)) = (schema.get("items"), value.as_array()) {
+        for (index, item) in values.iter().enumerate() {
+            schema_accepts(items, item, &format!("{path}[{index}]"))?;
+        }
+    }
+    Ok(())
+}
+
+fn representative_output(name: &str) -> Option<Value> {
+    let memory = json!({
+        "score": null,
+        "id": "memory-1",
+        "created_at": "2026-08-05T00:00:00Z",
+        "updated_at": "2026-08-05T00:00:00Z",
+        "last_accessed": "2026-08-05T00:00:00Z",
+        "access_count": 0,
+        "weight": 0.5,
+        "topic": "architecture",
+        "summary": "One durable fact",
+        "raw_excerpt": null,
+        "keywords": ["ledger"],
+        "importance": "high",
+        "source": {"type": "manual"},
+        "related_ids": [],
+        "scope": "project"
+    });
+    Some(match name {
+        "hzr_memory_recall" => json!({"count": 1, "total_matches": 2, "memories": [memory]}),
+        "hzr_memory_store" => json!({"transport": "stdio_mcp", "memory": memory}),
+        "hzr_memory_forget" | "hzr_memory_update" | "hzr_memory_prune" => {
+            json!({"affected_ids": ["memory-1"], "dry_run": false})
+        }
+        "hzr_search" => json!({
+            "query": "Ledger",
+            "path": "crates",
+            "total_hits": 1,
+            "shown_hits": 1,
+            "scanned_files": 10,
+            "skipped_large": 0,
+            "skipped_binary": 0,
+            "hits": [{
+                "path": "crates/hzr-core/src/ledger.rs",
+                "score": 1.0,
+                "matched_lines": 1,
+                "snippets": [{"lines": [{"line": 10, "text": "struct Ledger"}]}]
+            }],
+            "effective_mode": "exact",
+            "strategy": "fork_rgai_builtin"
+        }),
+        "hzr_context_plan" => json!({
+            "pack": {
+                "selected": [{
+                    "id": "candidate-1",
+                    "source": "exact",
+                    "content_ref": "sha256:abc",
+                    "path": "src/lib.rs",
+                    "symbol": null,
+                    "symbol_unavailable_reason": "no_enclosing_symbol",
+                    "line_start": 1,
+                    "line_end": 2,
+                    "source_rank": 1,
+                    "relevance": 0.8,
+                    "tokens": {"value": 4, "source": "estimate"},
+                    "freshness": "generation-1",
+                    "trust": "workspace:untrusted",
+                    "provenance": {
+                        "source": "fork-core/rgai-builtin",
+                        "content_hash": "abc",
+                        "generation": "generation-1",
+                        "canonical_ref": "src/lib.rs#L1-L2",
+                        "derived_by": null
+                    }
+                }],
+                "rejected": [],
+                "used": {"value": 4, "source": "estimate"},
+                "hard_limit": 100,
+                "coverage": 1.0,
+                "confidence": 0.8,
+                "budget_exceeded": false
+            },
+            "contents": {"sha256:abc": "struct Ledger"},
+            "warnings": []
+        }),
+        "hzr_codec" => json!({
+            "content": "unchanged",
+            "changed": false,
+            "profile": "adaptive",
+            "protected_spans": [{"start": 0, "end": 4, "kind": "code"}]
+        }),
+        _ => return None,
+    })
+}
+
+#[test]
+fn test_representative_structured_content_conforms_to_every_output_schema() {
+    for tool in tool_definitions() {
+        let name = tool["name"].as_str().expect("tool name");
+        let output = representative_output(name);
+        assert!(output.is_some(), "missing representative output for {name}");
+        let result = schema_accepts(
+            &tool["outputSchema"],
+            output.as_ref().expect("representative output"),
+            name,
+        );
+        assert!(
+            result.is_ok(),
+            "{name}: {}",
+            result.expect_err("schema error")
+        );
+    }
 }
 
 /// The density codec was reachable only through `hzr codec compile`, so no agent ever

@@ -1,5 +1,197 @@
 use serde_json::{Value, json};
 
+fn strict_object(properties: Value, required: &[&str]) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": properties,
+        "required": required,
+    })
+}
+
+fn nullable_string() -> Value {
+    json!({"type": ["string", "null"]})
+}
+
+fn memory_source_schema() -> Value {
+    json!({
+        "anyOf": [
+            strict_object(
+                json!({
+                    "type": {"const": "claude_code"},
+                    "session_id": {"type": "string"},
+                    "file_path": nullable_string()
+                }),
+                &["type", "session_id", "file_path"]
+            ),
+            strict_object(
+                json!({
+                    "type": {"const": "conversation"},
+                    "thread_id": {"type": "string"}
+                }),
+                &["type", "thread_id"]
+            ),
+            strict_object(json!({"type": {"const": "manual"}}), &["type"])
+        ]
+    })
+}
+
+fn memory_record_schema() -> Value {
+    strict_object(
+        json!({
+            "score": {"type": ["number", "null"]},
+            "id": {"type": "string"},
+            "created_at": {"type": "string"},
+            "updated_at": {"type": "string"},
+            "last_accessed": {"type": "string"},
+            "access_count": {"type": "integer", "minimum": 0},
+            "weight": {"type": "number"},
+            "topic": {"type": "string"},
+            "summary": {"type": "string"},
+            "raw_excerpt": nullable_string(),
+            "keywords": {"type": "array", "items": {"type": "string"}},
+            "importance": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+            "source": memory_source_schema(),
+            "related_ids": {"type": "array", "items": {"type": "string"}},
+            "scope": {"type": "string", "enum": ["user", "project", "org"]}
+        }),
+        &[
+            "score",
+            "id",
+            "created_at",
+            "updated_at",
+            "last_accessed",
+            "access_count",
+            "weight",
+            "topic",
+            "summary",
+            "raw_excerpt",
+            "keywords",
+            "importance",
+            "source",
+            "related_ids",
+            "scope",
+        ],
+    )
+}
+
+fn search_hit_schema() -> Value {
+    strict_object(
+        json!({
+            "path": {"type": "string"},
+            "score": {"type": "number"},
+            "matched_lines": {"type": "integer", "minimum": 0},
+            "snippets": {
+                "type": "array",
+                "items": strict_object(
+                    json!({
+                        "lines": {
+                            "type": "array",
+                            "items": strict_object(
+                                json!({
+                                    "line": {"type": "integer", "minimum": 0},
+                                    "text": {"type": "string"}
+                                }),
+                                &["line", "text"]
+                            )
+                        },
+                        "matched_terms": {"type": "array", "items": {"type": "string"}}
+                    }),
+                    &["lines"]
+                )
+            }
+        }),
+        &["path", "score", "matched_lines", "snippets"],
+    )
+}
+
+fn token_count_schema() -> Value {
+    strict_object(
+        json!({
+            "value": {"type": "integer", "minimum": 0},
+            "source": {"type": "string", "enum": ["provider", "model_tokenizer", "estimate"]}
+        }),
+        &["value", "source"],
+    )
+}
+
+fn context_candidate_schema() -> Value {
+    strict_object(
+        json!({
+            "id": {"type": "string"},
+            "source": {"type": "string", "enum": ["exact", "index", "context", "memory"]},
+            "content_ref": {"type": "string"},
+            "path": nullable_string(),
+            "symbol": nullable_string(),
+            "symbol_unavailable_reason": {
+                "type": "string",
+                "enum": ["whole_file_candidate", "outline_unavailable", "no_enclosing_symbol", "not_applicable"]
+            },
+            "line_start": {"type": ["integer", "null"], "minimum": 0},
+            "line_end": {"type": ["integer", "null"], "minimum": 0},
+            "source_rank": {"type": "integer", "minimum": 0},
+            "relevance": {"type": "number"},
+            "tokens": token_count_schema(),
+            "freshness": {"type": "string"},
+            "trust": {"type": "string"},
+            "provenance": strict_object(
+                json!({
+                    "source": {"type": "string"},
+                    "content_hash": {"type": "string"},
+                    "generation": nullable_string(),
+                    "canonical_ref": nullable_string(),
+                    "derived_by": nullable_string()
+                }),
+                &["source", "content_hash", "generation", "canonical_ref", "derived_by"]
+            )
+        }),
+        &[
+            "id",
+            "source",
+            "content_ref",
+            "path",
+            "symbol",
+            "line_start",
+            "line_end",
+            "source_rank",
+            "relevance",
+            "tokens",
+            "freshness",
+            "trust",
+            "provenance",
+        ],
+    )
+}
+
+fn context_pack_schema() -> Value {
+    strict_object(
+        json!({
+            "selected": {"type": "array", "items": context_candidate_schema()},
+            "rejected": {
+                "type": "array",
+                "items": strict_object(
+                    json!({"candidate_id": {"type": "string"}, "reason": {"type": "string"}}),
+                    &["candidate_id", "reason"]
+                )
+            },
+            "used": token_count_schema(),
+            "hard_limit": {"type": "integer", "minimum": 0},
+            "coverage": {"type": "number"},
+            "confidence": {"type": "number"},
+            "budget_exceeded": {"type": "boolean"}
+        }),
+        &[
+            "selected",
+            "rejected",
+            "used",
+            "hard_limit",
+            "coverage",
+            "confidence",
+            "budget_exceeded",
+        ],
+    )
+}
+
 pub(super) fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
@@ -49,11 +241,13 @@ pub(super) fn tool_definitions() -> Vec<Value> {
             "outputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "count": {"type": "integer", "minimum": 0},
-                    "memories": {"type": "array", "items": {"type": "object"}},
+                    "total_matches": {"type": "integer", "minimum": 0},
+                    "memories": {"type": "array", "items": memory_record_schema()},
                 },
-                "required": ["count", "memories"],
+                "required": ["count", "total_matches", "memories"],
             },
             "annotations": {
                 "readOnlyHint": true,
@@ -108,9 +302,10 @@ pub(super) fn tool_definitions() -> Vec<Value> {
             "outputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "transport": {"type": "string", "enum": ["http", "stdio_mcp", "cli"]},
-                    "memory": {"type": ["object", "null"]},
+                    "memory": {"anyOf": [memory_record_schema(), {"type": "null"}]},
                 },
                 "required": ["transport", "memory"],
             },
@@ -142,6 +337,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
             "outputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "affected_ids": {"type": "array", "items": {"type": "string"}},
                     "dry_run": {"type": "boolean"}
@@ -179,6 +375,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
             "outputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "affected_ids": {"type": "array", "items": {"type": "string"}},
                     "dry_run": {"type": "boolean"}
@@ -214,6 +411,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
             "outputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "affected_ids": {"type": "array", "items": {"type": "string"}},
                     "dry_run": {"type": "boolean"}
@@ -273,16 +471,22 @@ pub(super) fn tool_definitions() -> Vec<Value> {
             "outputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "query": {"type": "string"},
                     "path": {"type": "string"},
                     "total_hits": {"type": "integer", "minimum": 0},
                     "shown_hits": {"type": "integer", "minimum": 0},
-                    "hits": {"type": "array", "items": {"type": "object"}},
+                    "scanned_files": {"type": "integer", "minimum": 0},
+                    "skipped_large": {"type": "integer", "minimum": 0},
+                    "skipped_binary": {"type": "integer", "minimum": 0},
+                    "hits": {"type": "array", "items": search_hit_schema()},
+                    "effective_mode": {"type": "string", "enum": ["auto", "semantic", "exact"]},
                     "strategy": {"type": "string", "enum": ["fork_rgai_adaptive", "fork_rgai_builtin"]},
                     "fallback_reason": {"type": "string"},
+                    "next_step": {"type": "string"},
                 },
-                "required": ["query", "path", "total_hits", "shown_hits", "hits", "strategy"],
+                "required": ["query", "path", "total_hits", "shown_hits", "scanned_files", "skipped_large", "skipped_binary", "hits", "effective_mode", "strategy"],
             },
             "annotations": {
                 "readOnlyHint": true,
@@ -339,11 +543,33 @@ pub(super) fn tool_definitions() -> Vec<Value> {
             "outputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
-                    "pack": {"type": "object"},
+                    "pack": context_pack_schema(),
                     "contents": {"type": "object", "additionalProperties": {"type": "string"}},
-                    "warnings": {"type": "array", "items": {"type": "object"}},
-                    "planner": {"type": "object"},
+                    "warnings": {
+                        "type": "array",
+                        "items": strict_object(
+                            json!({
+                                "code": {"type": "string", "enum": ["planner_fallback", "planner_unavailable", "search_degraded", "search_unavailable", "memory_unavailable", "content_unavailable", "outline_unavailable", "warnings_truncated"]},
+                                "message": {"type": "string"}
+                            }),
+                            &["code", "message"]
+                        )
+                    },
+                    "planner": strict_object(
+                        json!({
+                            "pipeline_version": nullable_string(),
+                            "semantic_backend_used": nullable_string(),
+                            "graph_candidate_count": {"type": ["integer", "null"], "minimum": 0},
+                            "semantic_hit_count": {"type": ["integer", "null"], "minimum": 0},
+                            "candidates_total": {"type": "integer", "minimum": 0},
+                            "candidates_selected": {"type": "integer", "minimum": 0},
+                            "estimated_tokens_used": {"type": "integer", "minimum": 0},
+                            "token_budget": {"type": "integer", "minimum": 0}
+                        }),
+                        &["pipeline_version", "semantic_backend_used", "graph_candidate_count", "semantic_hit_count", "candidates_total", "candidates_selected", "estimated_tokens_used", "token_budget"]
+                    ),
                 },
                 "required": ["pack", "contents", "warnings"],
             },
@@ -397,13 +623,25 @@ pub(super) fn tool_definitions() -> Vec<Value> {
             "outputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
+                "additionalProperties": false,
                 "properties": {
                     "content": {"type": "string"},
                     "changed": {"type": "boolean"},
                     "profile": {"type": "string"},
-                    "protected_spans": {"type": "array", "items": {"type": "object"}},
+                    "protected_spans": {
+                        "type": "array",
+                        "items": strict_object(
+                            json!({
+                                "start": {"type": "integer", "minimum": 0},
+                                "end": {"type": "integer", "minimum": 0},
+                                "kind": {"type": "string"}
+                            }),
+                            &["start", "end", "kind"]
+                        )
+                    },
                     "counterfactual": {
                         "type": "object",
+                        "additionalProperties": false,
                         "description": "Present in shadow profile: the sizes the transform would have produced.",
                         "properties": {
                             "input_bytes": {"type": "integer", "minimum": 0},
@@ -411,6 +649,7 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                             "saved_bytes": {"type": "integer", "minimum": 0},
                             "would_change": {"type": "boolean"},
                         },
+                        "required": ["input_bytes", "output_bytes", "saved_bytes", "would_change"],
                     },
                 },
                 "required": ["content", "changed", "profile", "protected_spans"],

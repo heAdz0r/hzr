@@ -103,7 +103,7 @@ export interface DashboardIndexObservatory {
     working_directory: string | null;
     agent: string | null;
     session_id: string | null;
-    route: "optimized" | "raw" | null;
+    route: "optimized" | "raw" | "native_unaccounted" | null;
     execution_ms: number | null;
     detail: string;
   };
@@ -115,6 +115,8 @@ export interface DashboardLocalActivity {
   operations: number;
   optimized_operations: number;
   raw_operations: number;
+  native_unaccounted_operations: number;
+  unmeasured_bypass_operations: number;
   baseline_tokens_estimated: number;
   delivered_tokens_estimated: number;
   gross_avoided_tokens_estimated: number;
@@ -132,7 +134,7 @@ export interface DashboardLocalOperation {
   ledger_id: number;
   timestamp: string;
   operation: string;
-  route: "optimized" | "raw";
+  route: "optimized" | "raw" | "native_unaccounted";
   original_command: string;
   recorded_command: string;
   working_directory: string;

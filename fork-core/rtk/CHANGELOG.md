@@ -10,8 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `read -n` defaults to exact content and preserves original source coordinates
   for full, ranged and tail reads.
-- `read --max-lines N` returns the exact first N lines instead of a smart
-  truncation marker.
+- Bounded and ranged reads report the file total, omitted span and a shell-safe
+  exact recovery command; shortened long lines name `--level none` recovery.
+- Memory exploration reports each capped list as `N of M shown` and names
+  `--detail verbose` as its recovery lever.
+- Passthrough rows that inherit stdio are explicitly `unmeasured` instead of
+  inventing a zero-token delivery.
+- Exact rgai queries preserve trailing whitespace instead of trimming the
+  caller's literal.
 - `cargo test` keeps bounded failing-test names, panic locations and assertion
   text in default compact output instead of returning only aggregate counts.
 - Captured `ls` output suppresses the interactive summary, matching upstream

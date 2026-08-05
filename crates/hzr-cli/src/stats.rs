@@ -21,6 +21,7 @@ pub struct StatsReport {
     /// Operations that skipped the optimizer. Reported next to the headline ratio because
     /// a bypassed row cancels out of that ratio instead of lowering it.
     pub bypass: BypassReport,
+    pub traffic_coverage: TrafficCoverage,
     pub degraded_rewrites: usize,
     /// Full accounting-coverage state: the open gap, the historical total, and when the
     /// last gap occurred. `degraded_rewrites` above is the open gap alone, retained for
@@ -29,6 +30,16 @@ pub struct StatsReport {
     pub runtime_accounting_complete: bool,
     pub economic_claim_ready: bool,
     pub notes: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct TrafficCoverage {
+    pub accounted_operations: u64,
+    pub total_observed_operations: u64,
+    pub native_unaccounted_operations: u64,
+    pub unmeasured_bypass_operations: u64,
+    pub accounted_share_pct: f64,
+    pub by_channel: BTreeMap<String, u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -125,6 +136,21 @@ fn build_report(
     bypass: BypassSummary,
     scope: String,
 ) -> StatsReport {
+    let traffic_coverage = TrafficCoverage {
+        // The reduction ratio is computed only from measured, non-native rows. An
+        // explicitly unmeasured bypass is known to the control plane, but it is not
+        // evidence that the ratio covered that operation.
+        accounted_operations: gain.operations,
+        total_observed_operations: gain.total_observed_operations,
+        native_unaccounted_operations: gain.native_unaccounted_operations,
+        unmeasured_bypass_operations: gain.unmeasured_bypass_operations,
+        accounted_share_pct: if gain.total_observed_operations == 0 {
+            100.0
+        } else {
+            gain.operations as f64 * 100.0 / gain.total_observed_operations as f64
+        },
+        by_channel: gain.by_channel.clone(),
+    };
     let commands = gain
         .by_command
         .into_iter()
@@ -208,6 +234,7 @@ fn build_report(
         observed_model_usage,
         observed_model_usage_scope: "global_lifetime",
         bypass: bypass_report(bypass),
+        traffic_coverage,
         degraded_rewrites: coverage.unreconciled_rewrites,
         coverage,
         runtime_accounting_complete: coverage.complete,
@@ -306,6 +333,7 @@ mod tests {
                     avg_time_ms: 8,
                 },
             ],
+            ..EfficiencySummary::default()
         };
         let usage = LedgerSummary {
             tasks: 2,
@@ -364,6 +392,7 @@ mod tests {
             net_avoided_tokens_estimated: 100,
             total_execution_ms: 10,
             by_command: Vec::new(),
+            ..EfficiencySummary::default()
         };
         let bypass = BypassSummary {
             lifetime: BypassWindow {

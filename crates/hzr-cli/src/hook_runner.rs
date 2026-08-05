@@ -4,7 +4,10 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
-use hzr_core::{Config, first_class_replacement};
+use hzr_core::{
+    Config, Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
+    first_class_replacement,
+};
 use hzr_exec::{
     CanonicalCommand, ForkRuntimePaths, PinnedRtkAdapter, RewriteDecision, RtkAdapterConfig,
 };
@@ -35,6 +38,66 @@ pub async fn dispatch(config: &Config) -> Result<()> {
         "Agent" | "Task" => task(config, &input).await,
         _ => Ok(()),
     }
+}
+
+/// Observe host-native file tools without steering or blocking them.
+///
+/// This entry point intentionally returns no error: a measurement failure must never turn a
+/// successful host tool call into a failed one. The hook emits no stdout payload.
+pub async fn observe(config: &Config) {
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    if !crate::activation::is_enabled(config, &cwd)
+        .await
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let Ok(input) = read_input() else {
+        return;
+    };
+    let _ = observe_input(config, &input);
+}
+
+fn observe_input(config: &Config, input: &Value) -> Result<()> {
+    let tool = input
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(tool, "Read" | "Grep" | "Glob" | "Edit" | "Write") {
+        return Ok(());
+    }
+    let response = input.get("tool_response");
+    let response_bytes = response
+        .map(serde_json::to_vec)
+        .transpose()
+        .context("failed to size native tool response")?
+        .map_or(0, |bytes| bytes.len());
+    let estimated = u64::try_from(response_bytes / 4).unwrap_or(u64::MAX);
+    let cwd = input.get("cwd").and_then(Value::as_str).unwrap_or_default();
+    let session_id = input.get("session_id").and_then(Value::as_str);
+    let (measurement, tokens) = if response.is_some() {
+        (OperationMeasurement::Estimated, estimated)
+    } else {
+        (OperationMeasurement::Unmeasured, 0)
+    };
+    Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?.record_operation_attributed(
+        &format!("native {tool}"),
+        &format!("native {tool}"),
+        tokens,
+        tokens,
+        0,
+        OperationAttribution {
+            project_path: cwd,
+            agent: Some("claude"),
+            session_id,
+            channel: OperationChannel::NativeHost,
+            measurement,
+            route: OperationRoute::NativeUnaccounted,
+        },
+    )?;
+    Ok(())
 }
 
 fn read_input() -> Result<Value> {
@@ -321,6 +384,7 @@ fn write_hook_json(value: Value) -> Result<()> {
 pub struct AccountingCoverage {
     pub unreconciled_rewrites: usize,
     pub lifetime_rewrites: usize,
+    pub daemon_unavailable_operations: usize,
     pub complete: bool,
     pub last_degraded_at_unix: Option<u64>,
 }
@@ -343,6 +407,35 @@ fn degraded_log_path(config: &Config) -> std::path::PathBuf {
 
 fn degraded_total_path(config: &Config) -> std::path::PathBuf {
     config.data_dir.join("ledger/degraded-rewrites.total")
+}
+
+fn daemon_unavailable_log_path(config: &Config) -> std::path::PathBuf {
+    config
+        .data_dir
+        .join("ledger/daemon-unavailable-operations.log")
+}
+
+pub(crate) fn record_daemon_unavailable_operation(config: &Config) -> Result<()> {
+    let ledger = config.data_dir.join("ledger");
+    fs::create_dir_all(&ledger)
+        .with_context(|| format!("failed to create {}", ledger.display()))?;
+    let path = daemon_unavailable_log_path(config);
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
+    writeln!(file, "1")?;
+    Ok(())
+}
+
+fn daemon_unavailable_operations(config: &Config) -> Result<usize> {
+    let path = daemon_unavailable_log_path(config);
+    match fs::read_to_string(&path) {
+        Ok(content) => Ok(content.lines().filter(|line| line.trim() == "1").count()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
 }
 
 fn record_degraded_rewrite(config: &Config) -> Result<()> {
@@ -418,25 +511,53 @@ pub fn degraded_rewrite_coverage(config: &Config) -> Result<AccountingCoverage> 
     // A ledger written by an earlier HZR has no lifetime file; its open log *is* the
     // history, so fall back to it instead of reporting a zero total next to a non-zero gap.
     let lifetime = read_lifetime_total(config)?.unwrap_or(0) + pending.len();
+    let daemon_unavailable_operations = daemon_unavailable_operations(config)?;
     Ok(AccountingCoverage {
         unreconciled_rewrites: pending.len(),
         lifetime_rewrites: lifetime,
-        complete: pending.is_empty(),
+        daemon_unavailable_operations,
+        complete: pending.is_empty() && daemon_unavailable_operations == 0,
         last_degraded_at_unix: pending.last().copied(),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use hzr_core::Config;
+    use hzr_core::{Config, Ledger};
     use tempfile::tempdir;
 
     use hzr_exec::{CanonicalCommand, RewriteDecision, RewriteSource};
 
     use super::{
-        clear_reconciled_rewrites, context_brief, degraded_rewrite_coverage,
+        clear_reconciled_rewrites, context_brief, degraded_rewrite_coverage, observe_input,
         record_degraded_rewrite_at, steer_to_first_class,
     };
+
+    #[test]
+    fn test_native_observer_records_coverage_without_claiming_savings() {
+        let directory = tempdir().expect("temporary directory");
+        let config = config(directory.path());
+        observe_input(
+            &config,
+            &serde_json::json!({
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/work/src/lib.rs"},
+                "tool_response": {"content": "four words of output"},
+                "cwd": "/work",
+                "session_id": "session-1"
+            }),
+        )
+        .expect("native observation");
+
+        let summary = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))
+            .expect("ledger")
+            .efficiency_summary()
+            .expect("summary");
+        assert_eq!(summary.operations, 0);
+        assert_eq!(summary.native_unaccounted_operations, 1);
+        assert_eq!(summary.total_observed_operations, 1);
+        assert_eq!(summary.by_channel.get("native_host"), Some(&1));
+    }
 
     fn allow_raw() -> RewriteDecision {
         RewriteDecision::allow_raw("no rule matched")
