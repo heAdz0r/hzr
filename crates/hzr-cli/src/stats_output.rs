@@ -545,7 +545,7 @@ mod tests {
 
     fn report(usage: LedgerSummary, commands: Vec<CommandSavings>) -> StatsReport {
         StatsReport {
-            hzr_version: "0.3.7",
+            hzr_version: "0.3.8",
             scope: "global lifetime".into(),
             direct_savings: DirectSavings {
                 operations: 42,

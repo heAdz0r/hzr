@@ -528,7 +528,7 @@ mod tests {
 
     fn sample_report() -> DoctorReport {
         DoctorReport {
-            hzr_version: "0.3.7".into(),
+            hzr_version: "0.3.8".into(),
             config_path: PathBuf::from("/tmp/hzr.toml"),
             data_dir: PathBuf::from("/tmp/hzr-data"),
             workspace: PathBuf::from("/tmp/project"),

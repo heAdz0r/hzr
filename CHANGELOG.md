@@ -4,6 +4,8 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-08-06
+
 ### Added
 
 - Root `hzr --help` groups commands (Setup, Runtime, Search & Memory, Agent tools,
@@ -516,6 +518,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.3.8]: https://github.com/heAdz0r/hzr/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/heAdz0r/hzr/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/heAdz0r/hzr/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/heAdz0r/hzr/compare/v0.3.4...v0.3.5

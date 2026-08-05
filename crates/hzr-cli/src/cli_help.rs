@@ -30,6 +30,7 @@ Setup:
   init       Register workspace data layout and service
   enable     Enable HZR for one workspace
   disable    Disable HZR for one workspace; keep data
+  activation Inspect project-only activation and enabled workspaces
   install    Adopt HZR binaries, hooks, and instructions
   uninstall  Remove HZR adoption hooks
   hooks      Inspect or run the HZR hook dispatcher
