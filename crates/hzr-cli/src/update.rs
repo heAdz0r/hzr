@@ -68,7 +68,7 @@ enum CacheStatus {
     Expired,
 }
 
-pub async fn execute(json: bool) -> Result<ExitCode> {
+pub async fn execute(json: bool, check_only: bool) -> Result<ExitCode> {
     let current = parse_release_version(env!("CARGO_PKG_VERSION"))?;
     let platform = current_platform()?;
     let release = fetch_latest_release(current, platform, UPDATE_TIMEOUT).await?;
@@ -77,6 +77,12 @@ pub async fn execute(json: bool) -> Result<ExitCode> {
         &data_dir,
         release.as_ref().map(|available| available.version),
     )?;
+
+    // `--check` переиспользует тот же fetch/cache, что и установка, но без скачивания.
+    if check_only {
+        emit_check_report(json, current, release.as_ref());
+        return Ok(check_exit_code());
+    }
 
     let Some(release) = release else {
         if json {
@@ -150,6 +156,65 @@ pub async fn startup_notice(data_dir: &Path) -> Option<String> {
 
 fn notice(current: ReleaseVersion, latest: ReleaseVersion) -> String {
     format!("HZR {latest} is available (current {current}). Run `hzr update` to install it.")
+}
+
+/// Исход проверки без побочных эффектов: есть ли более новый опубликованный релиз.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CheckOutcome {
+    Current,
+    Available {
+        latest: ReleaseVersion,
+        prerelease: bool,
+    },
+}
+
+fn classify_check(release: Option<&AvailableRelease>) -> CheckOutcome {
+    match release {
+        None => CheckOutcome::Current,
+        Some(available) => CheckOutcome::Available {
+            latest: available.version,
+            prerelease: available.prerelease,
+        },
+    }
+}
+
+/// Контракт exit code для `hzr update --check`: успех проверки всегда 0.
+///
+/// Агенты отличают «есть обновление» от «уже актуально» по stdout/JSON, а не по статусу.
+/// Ненулевой код остаётся только у `Result::Err` (сеть, разбор, платформа).
+fn check_exit_code() -> ExitCode {
+    ExitCode::SUCCESS
+}
+
+fn check_json(current: ReleaseVersion, outcome: &CheckOutcome) -> serde_json::Value {
+    match outcome {
+        CheckOutcome::Current => serde_json::json!({
+            "outcome": "current",
+            "current_version": current.to_string(),
+        }),
+        CheckOutcome::Available { latest, prerelease } => serde_json::json!({
+            "outcome": "available",
+            "current_version": current.to_string(),
+            "latest_version": latest.to_string(),
+            "prerelease": prerelease,
+        }),
+    }
+}
+
+fn emit_check_report(json: bool, current: ReleaseVersion, release: Option<&AvailableRelease>) {
+    let outcome = classify_check(release);
+    if json {
+        println!("{}", check_json(current, &outcome));
+        return;
+    }
+    match outcome {
+        CheckOutcome::Current => {
+            println!("HZR {current} is already the newest published release.");
+        }
+        CheckOutcome::Available { latest, .. } => {
+            println!("{}", notice(current, latest));
+        }
+    }
 }
 
 pub(crate) fn agent_notice(message: &str) -> String {
@@ -571,9 +636,11 @@ fn classify_cache(cached: &CachedRelease, now: u64, current: ReleaseVersion) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        CacheStatus, CachedRelease, checksum_for_artifact, classify_cache, notice,
-        parse_release_version, select_release, session_start_payload, startup_notice, write_cache,
+        AvailableRelease, CacheStatus, CachedRelease, CheckOutcome, check_exit_code, check_json,
+        checksum_for_artifact, classify_cache, classify_check, notice, parse_release_version,
+        select_release, session_start_payload, startup_notice, write_cache,
     };
+    use std::process::ExitCode;
     use tempfile::tempdir;
 
     #[test]
@@ -699,5 +766,48 @@ mod tests {
                 .expect("valid GitHub response")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn test_update_check_exit_code_stays_zero_when_update_is_available() {
+        // Агентский контракт: «есть обновление» — не ошибка; отличие только в JSON/тексте.
+        assert_eq!(check_exit_code(), ExitCode::SUCCESS);
+        assert_eq!(classify_check(None), CheckOutcome::Current);
+        let available = AvailableRelease {
+            version: parse_release_version("0.4.0").expect("latest"),
+            tag: "v0.4.0".to_owned(),
+            prerelease: true,
+            archive_name: "hzr-v0.4.0-darwin-arm64.tar.gz".to_owned(),
+            archive_url: "https://github.com/heAdz0r/hzr/releases/download/v0.4.0/hzr-v0.4.0-darwin-arm64.tar.gz".to_owned(),
+            checksums_url: "https://github.com/heAdz0r/hzr/releases/download/v0.4.0/SHA256SUMS".to_owned(),
+        };
+        assert_eq!(
+            classify_check(Some(&available)),
+            CheckOutcome::Available {
+                latest: available.version,
+                prerelease: true,
+            }
+        );
+    }
+
+    #[test]
+    fn test_update_check_json_distinguishes_available_from_current() {
+        let current = parse_release_version("0.3.2").expect("current");
+        let current_payload = check_json(current, &CheckOutcome::Current);
+        assert_eq!(current_payload["outcome"], "current");
+        assert_eq!(current_payload["current_version"], "0.3.2");
+        assert!(current_payload.get("latest_version").is_none());
+
+        let available_payload = check_json(
+            current,
+            &CheckOutcome::Available {
+                latest: parse_release_version("0.4.0").expect("latest"),
+                prerelease: false,
+            },
+        );
+        assert_eq!(available_payload["outcome"], "available");
+        assert_eq!(available_payload["current_version"], "0.3.2");
+        assert_eq!(available_payload["latest_version"], "0.4.0");
+        assert_eq!(available_payload["prerelease"], false);
     }
 }

@@ -339,7 +339,7 @@ hzr tdd                                strict RED → GREEN → REFACTOR contrac
 hzr stats                              global cumulative efficiency ledger
 hzr build <args>                       build YOUR project (token-optimized output)
 hzr release --force                    rebuild and reinstall HZR itself
-hzr update                             install a newer published HZR release
+hzr update [--check]                   install a newer published HZR release; `--check` reports only
 hzr migrate scan|apply|history|memory
 hzr rtk -- <fork arguments>
 ```
@@ -359,7 +359,9 @@ previously allowed a stale bundle to look current.
 
 `hzr update` queries the repository's published GitHub releases, selects a newer native
 bundle for the current platform, verifies it against the release `SHA256SUMS`, and installs
-it through HZR's versioned, atomic `current` switch. A check that finds no update is cached for
+it through HZR's versioned, atomic `current` switch. `hzr update --check` performs the same
+release query and cache write without downloading or installing; it exits 0 when the check
+succeeds (already current or update available) and non-zero only when the check itself fails. A check that finds no update is cached for
 one hour, so a release published later that day is not hidden until tomorrow; a known newer
 release remains cached for 24 hours. Claude SessionStart emits both a visible UI message and
 agent context. Codex's mandatory `HZR.md` bootstrap performs the same bounded check and writes
