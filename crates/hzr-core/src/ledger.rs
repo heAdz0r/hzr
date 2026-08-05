@@ -444,6 +444,20 @@ impl Ledger {
     }
 
     pub fn efficiency_summary(&self) -> Result<EfficiencySummary, LedgerError> {
+        self.efficiency_summary_scoped(None)
+    }
+
+    pub fn efficiency_summary_for_project(
+        &self,
+        project_path: &str,
+    ) -> Result<EfficiencySummary, LedgerError> {
+        self.efficiency_summary_scoped(Some(project_path))
+    }
+
+    fn efficiency_summary_scoped(
+        &self,
+        project_path: Option<&str>,
+    ) -> Result<EfficiencySummary, LedgerError> {
         let raw_predicate = raw_route_sql_predicate("rtk_cmd");
         let totals_query = format!(
             "SELECT
@@ -458,22 +472,28 @@ impl Ledger {
                 COALESCE(SUM(CASE WHEN ({raw_predicate})
                                   THEN 0 ELSE input_tokens - output_tokens END), 0),
                 COALESCE(SUM(exec_time_ms), 0)
-             FROM commands"
+             FROM commands
+             WHERE (?1 IS NULL OR project_path = ?1
+                    OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)"
         );
         let mut summary = self
             .connection
-            .query_row(&totals_query, [], |row| {
-                Ok(EfficiencySummary {
-                    operations: row.get(0)?,
-                    baseline_tokens_estimated: row.get(1)?,
-                    delivered_tokens_estimated: row.get(2)?,
-                    gross_avoided_tokens_estimated: row.get(3)?,
-                    regression_tokens_estimated: row.get(4)?,
-                    net_avoided_tokens_estimated: row.get(5)?,
-                    total_execution_ms: row.get(6)?,
-                    by_command: Vec::new(),
-                })
-            })
+            .query_row(
+                &totals_query,
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                |row| {
+                    Ok(EfficiencySummary {
+                        operations: row.get(0)?,
+                        baseline_tokens_estimated: row.get(1)?,
+                        delivered_tokens_estimated: row.get(2)?,
+                        gross_avoided_tokens_estimated: row.get(3)?,
+                        regression_tokens_estimated: row.get(4)?,
+                        net_avoided_tokens_estimated: row.get(5)?,
+                        total_execution_ms: row.get(6)?,
+                        by_command: Vec::new(),
+                    })
+                },
+            )
             .map_err(LedgerError::Database)?;
         let by_command_query = format!(
             "SELECT
@@ -490,6 +510,8 @@ impl Ledger {
                                   THEN 0 ELSE input_tokens - output_tokens END), 0),
                 COALESCE(AVG(exec_time_ms), 0)
              FROM commands
+             WHERE (?1 IS NULL OR project_path = ?1
+                    OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
              GROUP BY rtk_cmd
              ORDER BY SUM(CASE WHEN ({raw_predicate})
                                THEN 0 ELSE input_tokens - output_tokens END) DESC"
@@ -499,18 +521,21 @@ impl Ledger {
             .prepare_cached(&by_command_query)
             .map_err(LedgerError::Database)?;
         summary.by_command = statement
-            .query_map([], |row| {
-                Ok(EfficiencyCommandSummary {
-                    command: row.get(0)?,
-                    executions: row.get(1)?,
-                    baseline_tokens_estimated: row.get(2)?,
-                    delivered_tokens_estimated: row.get(3)?,
-                    gross_avoided_tokens_estimated: row.get(4)?,
-                    regression_tokens_estimated: row.get(5)?,
-                    net_avoided_tokens_estimated: row.get(6)?,
-                    avg_time_ms: row.get::<_, f64>(7)? as u64,
-                })
-            })
+            .query_map(
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                |row| {
+                    Ok(EfficiencyCommandSummary {
+                        command: row.get(0)?,
+                        executions: row.get(1)?,
+                        baseline_tokens_estimated: row.get(2)?,
+                        delivered_tokens_estimated: row.get(3)?,
+                        gross_avoided_tokens_estimated: row.get(4)?,
+                        regression_tokens_estimated: row.get(5)?,
+                        net_avoided_tokens_estimated: row.get(6)?,
+                        avg_time_ms: row.get::<_, f64>(7)? as u64,
+                    })
+                },
+            )
             .map_err(LedgerError::Database)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(LedgerError::Database)?;
@@ -592,18 +617,37 @@ impl Ledger {
     /// half of its tool output straight to the model while `hzr stats` still reports a
     /// healthy percentage.
     pub fn bypass_summary(&self) -> Result<BypassSummary, LedgerError> {
+        self.bypass_summary_scoped(None)
+    }
+
+    pub fn bypass_summary_for_project(
+        &self,
+        project_path: &str,
+    ) -> Result<BypassSummary, LedgerError> {
+        self.bypass_summary_scoped(Some(project_path))
+    }
+
+    fn bypass_summary_scoped(
+        &self,
+        project_path: Option<&str>,
+    ) -> Result<BypassSummary, LedgerError> {
         let (total_operations, total_delivered) = self
             .connection
             .query_row(
-                "SELECT COUNT(*), COALESCE(SUM(output_tokens), 0) FROM commands",
-                [],
+                "SELECT COUNT(*), COALESCE(SUM(output_tokens), 0)
+                 FROM commands
+                 WHERE (?1 IS NULL OR project_path = ?1
+                        OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)",
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
                 |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
             )
             .map_err(LedgerError::Database)?;
         let query = format!(
             "SELECT rtk_cmd, COUNT(*), COALESCE(SUM(output_tokens), 0)
              FROM commands
-             WHERE {}
+             WHERE ({})
+               AND (?1 IS NULL OR project_path = ?1
+                    OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
              GROUP BY rtk_cmd",
             raw_route_sql_predicate("rtk_cmd")
         );
@@ -612,13 +656,16 @@ impl Ledger {
             .prepare(&query)
             .map_err(LedgerError::Database)?;
         let groups = statement
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u64>(1)?,
-                    row.get::<_, u64>(2)?,
-                ))
-            })
+            .query_map(
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, u64>(1)?,
+                        row.get::<_, u64>(2)?,
+                    ))
+                },
+            )
             .map_err(LedgerError::Database)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(LedgerError::Database)?;
@@ -1358,6 +1405,40 @@ mod tests {
     }
 
     #[test]
+    fn test_efficiency_and_bypass_summaries_can_be_scoped_to_one_project() {
+        let directory = tempdir().expect("temp directory");
+        let ledger = Ledger::open(&directory.path().join("usage.sqlite")).expect("ledger open");
+        ledger
+            .connection
+            .execute_batch(
+                "INSERT INTO commands (
+                    timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
+                    saved_tokens, savings_pct, exec_time_ms, project_path
+                 ) VALUES
+                    ('2026-08-01T10:00:00Z', 'cat a', 'read', 100, 20, 80, 80.0, 5, '/work/a'),
+                    ('2026-08-01T10:01:00Z', 'cat nested', 'read', 50, 10, 40, 80.0, 3, '/work/a/sub'),
+                    ('2026-08-01T10:02:00Z', 'sed a', 'rtk proxy sed', 30, 30, 0, 0.0, 2, '/work/a'),
+                    ('2026-08-01T10:03:00Z', 'cat b', 'read', 500, 5, 495, 99.0, 7, '/work/b');",
+            )
+            .expect("summary fixture");
+
+        let gain = ledger
+            .efficiency_summary_for_project("/work/a")
+            .expect("project efficiency");
+        let bypass = ledger
+            .bypass_summary_for_project("/work/a")
+            .expect("project bypass");
+
+        assert_eq!(gain.operations, 3);
+        assert_eq!(gain.baseline_tokens_estimated, 180);
+        assert_eq!(gain.delivered_tokens_estimated, 60);
+        assert_eq!(gain.net_avoided_tokens_estimated, 120);
+        assert_eq!(bypass.lifetime.operations, 1);
+        assert_eq!(bypass.lifetime.total_operations, 3);
+        assert_eq!(bypass.lifetime.total_delivered_tokens_estimated, 60);
+    }
+
+    #[test]
     fn test_legacy_named_database_is_not_migrated_into_itself() {
         let directory = tempdir().expect("temp directory");
         let ledger_directory = directory.path().join("ledger");
@@ -1462,7 +1543,7 @@ mod tests {
             retries: 0,
             latency_ms: 10,
             outcome: "accepted".into(),
-            policy_version: "0.3.4".into(),
+            policy_version: "0.3.5".into(),
             cost_microusd: Some(50),
         };
 

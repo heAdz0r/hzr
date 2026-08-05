@@ -63,11 +63,7 @@ fn write_local_reduction(
         style("estimated · not a provider bill", "2;37", color)
     )?;
     writeln!(output, "╭{}╮", "─".repeat(WIDTH))?;
-    writeln!(
-        output,
-        "│  {:<68}  │",
-        truncate(&report.scope.replace('_', " "), 68)
-    )?;
+    writeln!(output, "│  {:<68}  │", truncate(&report.scope, 68))?;
     writeln!(output, "│{}│", " ".repeat(WIDTH))?;
 
     // Absolutes first, ratio second: the ratio is derived from the two numbers above it.
@@ -320,7 +316,14 @@ fn write_provider_usage(
         output,
         "{}  {}",
         style("PROVIDER USAGE", "1;38;5;208", color),
-        style("actual · billed by the provider", "2;37", color)
+        style(
+            &format!(
+                "actual · billed by the provider · {}",
+                report.observed_model_usage_scope.replace('_', " ")
+            ),
+            "2;37",
+            color
+        )
     )?;
 
     if usage.tasks == 0 {
@@ -504,8 +507,8 @@ mod tests {
 
     fn report(usage: LedgerSummary, commands: Vec<CommandSavings>) -> StatsReport {
         StatsReport {
-            hzr_version: "0.3.4",
-            scope: "global_lifetime",
+            hzr_version: "0.3.5",
+            scope: "global lifetime".into(),
             direct_savings: DirectSavings {
                 operations: 42,
                 input_tokens_estimated: 10_000,
@@ -527,6 +530,7 @@ mod tests {
             }],
             by_command: commands,
             observed_model_usage: usage,
+            observed_model_usage_scope: "global_lifetime",
             bypass: BypassReport::default(),
             degraded_rewrites: 3,
             coverage: AccountingCoverage {

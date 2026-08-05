@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use anyhow::Result;
 use hzr_core::{
@@ -11,11 +12,12 @@ use crate::hook_runner::{self, AccountingCoverage};
 #[derive(Clone, Debug, Serialize)]
 pub struct StatsReport {
     pub hzr_version: &'static str,
-    pub scope: &'static str,
+    pub scope: String,
     pub direct_savings: DirectSavings,
     pub by_subsystem: Vec<SubsystemSavings>,
     pub by_command: Vec<CommandSavings>,
     pub observed_model_usage: LedgerSummary,
+    pub observed_model_usage_scope: &'static str,
     /// Operations that skipped the optimizer. Reported next to the headline ratio because
     /// a bypassed row cancels out of that ratio instead of lowering it.
     pub bypass: BypassReport,
@@ -88,13 +90,32 @@ pub struct CommandSavings {
     pub avg_time_ms: u64,
 }
 
-pub fn collect(config: &Config) -> Result<StatsReport> {
+pub fn collect(config: &Config, workspace: Option<&Path>) -> Result<StatsReport> {
     let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?;
-    let gain = ledger.efficiency_summary()?;
+    let (gain, bypass, scope) = match workspace {
+        Some(workspace) => {
+            let workspace = workspace.to_string_lossy();
+            (
+                ledger.efficiency_summary_for_project(&workspace)?,
+                ledger.bypass_summary_for_project(&workspace)?,
+                format!("project {}", workspace),
+            )
+        }
+        None => (
+            ledger.efficiency_summary()?,
+            ledger.bypass_summary()?,
+            "global lifetime".to_owned(),
+        ),
+    };
     let observed_model_usage = ledger.summary()?;
     let coverage = hook_runner::degraded_rewrite_coverage(config)?;
-    let bypass = ledger.bypass_summary()?;
-    Ok(build_report(gain, observed_model_usage, coverage, bypass))
+    Ok(build_report(
+        gain,
+        observed_model_usage,
+        coverage,
+        bypass,
+        scope,
+    ))
 }
 
 fn build_report(
@@ -102,6 +123,7 @@ fn build_report(
     observed_model_usage: LedgerSummary,
     coverage: AccountingCoverage,
     bypass: BypassSummary,
+    scope: String,
 ) -> StatsReport {
     let commands = gain
         .by_command
@@ -166,7 +188,7 @@ fn build_report(
 
     StatsReport {
         hzr_version: env!("CARGO_PKG_VERSION"),
-        scope: "global_lifetime",
+        scope,
         direct_savings: DirectSavings {
             operations: gain.operations,
             input_tokens_estimated: gain.baseline_tokens_estimated,
@@ -184,6 +206,7 @@ fn build_report(
         by_subsystem,
         by_command: commands,
         observed_model_usage,
+        observed_model_usage_scope: "global_lifetime",
         bypass: bypass_report(bypass),
         degraded_rewrites: coverage.unreconciled_rewrites,
         coverage,
@@ -194,6 +217,7 @@ fn build_report(
             "read, write, rgai/search, and command filters share the same cumulative HZR-owned history",
             "a bypassed operation delivers as many tokens as it consumed, so it cancels out of the reduction ratio instead of lowering it",
             "context selection, memory recall, and response contracts receive no savings credit without a measured counterfactual",
+            "provider usage and accounting coverage remain global because provider rows do not yet carry a workspace identity",
         ],
     }
 }
@@ -295,6 +319,7 @@ mod tests {
             usage,
             AccountingCoverage::default_complete(),
             BypassSummary::default(),
+            "global lifetime".into(),
         );
 
         assert_eq!(report.direct_savings.net_avoided_tokens_estimated, 730);
@@ -362,6 +387,7 @@ mod tests {
             LedgerSummary::default(),
             AccountingCoverage::default_complete(),
             bypass,
+            "global lifetime".into(),
         );
 
         assert_eq!(report.bypass.operations, 3);
@@ -383,6 +409,7 @@ mod tests {
             LedgerSummary::default(),
             AccountingCoverage::default_complete(),
             BypassSummary::default(),
+            "global lifetime".into(),
         );
 
         assert_eq!(report.bypass.operations, 0);

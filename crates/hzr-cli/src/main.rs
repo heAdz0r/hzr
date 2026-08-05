@@ -1,3 +1,4 @@
+mod activation;
 mod adoption;
 mod build;
 mod cli;
@@ -99,6 +100,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             keep_external_icm,
             skip_instructions,
             skip_service,
+            project_only,
         } => {
             return run_install(
                 InstallOptions {
@@ -110,9 +112,12 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     adopt_icm: !*keep_external_icm,
                     wire_instructions: !*skip_instructions,
                     start_service: !*skip_service,
+                    project_only: *project_only,
                 },
+                &config_path,
                 cli.json,
-            );
+            )
+            .await;
         }
         Command::Uninstall {
             keep_data,
@@ -131,11 +136,17 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 instruction_reports
                     .push(instructions::uninstall(surface, &target, *dry_run, *force)?);
             }
+            let workspace = canonical_directory(None)?;
+            for (surface, target) in activation::local_instruction_paths(&workspace) {
+                instruction_reports
+                    .push(instructions::uninstall(surface, &target, *dry_run, *force)?);
+            }
+            let client_reports = client_config::uninstall_all(*dry_run, *force)?;
             return print_adoption_bundle(
                 &report,
                 None,
                 &instruction_reports,
-                &[],
+                &client_reports,
                 None,
                 None,
                 cli.json,
@@ -147,8 +158,19 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             let status = adoption::status(&adoption::default_settings_path()?)?;
             // Adoption is only real when hooks, instructions and PATH all agree, so
             // report all three rather than letting hooks alone imply success.
-            let claude_md = instructions::Surface::Claude.default_path()?;
-            let codex_md = instructions::Surface::Codex.default_path()?;
+            let config = Config::load_or_default(&config_path)?;
+            let project_only = config.activation.mode == hzr_core::ActivationMode::Selected;
+            let workspace = canonical_directory(None)?;
+            let claude_md = if project_only {
+                workspace.join("CLAUDE.md")
+            } else {
+                instructions::Surface::Claude.default_path()?
+            };
+            let codex_md = if project_only {
+                workspace.join("AGENTS.md")
+            } else {
+                instructions::Surface::Codex.default_path()?
+            };
             let claude_wired = instructions::is_installed(&claude_md)?;
             let codex_wired = instructions::is_installed(&codex_md)?;
             let prefix_dir = prefix::default_prefix()?;
@@ -163,6 +185,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                         "codex": {"path": codex_md, "installed": codex_wired},
                     },
                     "path": {"prefix": prefix_dir, "hzr_reachable": hzr_on_path},
+                    "activation": config.activation,
                     "foreign": foreign_report,
                 }))?;
             } else {
@@ -178,6 +201,13 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     "instructions claude={claude_wired} codex={codex_wired}; \
                      hzr-on-path={hzr_on_path} ({})",
                     prefix_dir.display()
+                );
+                println!(
+                    "activation={} workspace-enabled={}",
+                    if project_only { "selected" } else { "all" },
+                    activation::is_enabled(&config, &workspace)
+                        .await
+                        .unwrap_or(false)
                 );
                 if let Some(report) = &foreign_report {
                     for (engine, count) in &report.unmanaged_by_engine {
@@ -200,12 +230,24 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         force,
         data_dir,
         if_needed,
+        if_enabled,
         quiet,
         skip_service,
+        ..
     } = &cli.command
     {
         if *if_needed {
             return initialize_if_needed(
+                &config_path,
+                data_dir.as_deref(),
+                *quiet,
+                *skip_service,
+                cli.json,
+            )
+            .await;
+        }
+        if *if_enabled {
+            return initialize_if_enabled(
                 &config_path,
                 data_dir.as_deref(),
                 *quiet,
@@ -224,6 +266,18 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         .await;
     }
 
+    match &cli.command {
+        Command::Enable { workspace } => {
+            return set_workspace_activation(&config_path, workspace.as_deref(), true, cli.json)
+                .await;
+        }
+        Command::Disable { workspace } => {
+            return set_workspace_activation(&config_path, workspace.as_deref(), false, cli.json)
+                .await;
+        }
+        _ => {}
+    }
+
     if matches!(&cli.command, Command::Update) {
         return update::execute(cli.json).await;
     }
@@ -232,7 +286,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         .with_context(|| format!("failed to load {}", config_path.display()))?;
     match cli.command {
         Command::Init { .. } => bail!("init command entered configured execution path"),
-        Command::Install { .. } | Command::Uninstall { .. } => {
+        Command::Install { .. }
+        | Command::Uninstall { .. }
+        | Command::Enable { .. }
+        | Command::Disable { .. } => {
             bail!("adoption command entered configured execution path")
         }
         Command::Hooks {
@@ -422,7 +479,8 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Stats | Command::Savings => show_stats(&config, cli.json).await,
+        Command::Stats { workspace } => show_stats(&config, workspace.as_deref(), cli.json).await,
+        Command::Savings => show_stats(&config, None, cli.json).await,
         Command::Migrate { command } => match command {
             MigrateCommand::Scan { workspace } => {
                 let workspace = canonical_directory(workspace.as_deref())?;
@@ -575,15 +633,50 @@ struct InstallOptions {
     adopt_icm: bool,
     wire_instructions: bool,
     start_service: bool,
+    project_only: bool,
 }
 
 /// Full adoption in one confirmed operation: durable binaries on PATH, one hook
 /// dispatcher, and agent instructions. Ordering matters — binaries are placed first
 /// so the hook command and the `CLAUDE.md` contract both name a path that already
 /// exists, and so a `--dry-run` preview shows the same target the real run will use.
-fn run_install(options: InstallOptions, json: bool) -> Result<ExitCode> {
+async fn run_install(options: InstallOptions, config_path: &Path, json: bool) -> Result<ExitCode> {
+    if !options.dry_run && !options.force {
+        bail!(
+            "installation changes user configuration; inspect `hzr install --dry-run`, then rerun with `--force` to confirm"
+        );
+    }
     let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
     let source_dir = executable_source_directory(&executable)?;
+    let mut config = Config::load_or_default(config_path)?;
+    let previously_enabled_roots = config
+        .activation
+        .enabled_workspaces
+        .iter()
+        .map(|workspace| workspace.root.clone())
+        .collect::<Vec<_>>();
+    if !options.dry_run {
+        config.ensure_layout()?;
+    }
+    let workspace_root = canonical_directory(None)?;
+    let workspace = if options.project_only && !options.dry_run {
+        let (workspace, _, _, _, _) = initialize_workspace_at(&config, &workspace_root).await?;
+        Some(workspace)
+    } else {
+        Some(activation::discover(&config, &workspace_root).await?)
+    };
+    if options.project_only {
+        config.activation.mode = hzr_core::ActivationMode::Selected;
+        config
+            .activation
+            .enable(activation::record(workspace.as_ref().context("workspace")?));
+    } else {
+        config.activation.mode = hzr_core::ActivationMode::All;
+        config.activation.enabled_workspaces.clear();
+    }
+    if !options.dry_run {
+        config.write(config_path)?;
+    }
 
     let prefix_dir = match options.prefix.clone() {
         Some(prefix) => prefix,
@@ -612,26 +705,68 @@ fn run_install(options: InstallOptions, json: bool) -> Result<ExitCode> {
         &hook_binary,
         options.adopt_icm,
         options.start_service,
+        options.project_only,
         options.dry_run,
         options.force,
     )?;
 
     let mut instruction_reports = Vec::new();
-    if options.wire_instructions {
-        let contract = contract_asset_path(&source_dir);
+    if options.project_only {
         for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
             let target = surface.default_path()?;
-            instruction_reports.push(instructions::install(
+            instruction_reports.push(instructions::uninstall(
                 surface,
                 &target,
-                &contract,
                 options.dry_run,
                 options.force,
             )?);
         }
     }
+    if options.wire_instructions {
+        let contract = contract_asset_path(&source_dir);
+        if options.project_only {
+            for (surface, target) in activation::local_instruction_paths(&workspace_root) {
+                instruction_reports.push(instructions::install(
+                    surface,
+                    &target,
+                    &contract,
+                    options.dry_run,
+                    options.force,
+                )?);
+            }
+        } else {
+            let mut roots = previously_enabled_roots;
+            roots.push(workspace_root.clone());
+            roots.sort();
+            roots.dedup();
+            for root in roots {
+                for (surface, target) in activation::local_instruction_paths(&root) {
+                    instruction_reports.push(instructions::uninstall(
+                        surface,
+                        &target,
+                        options.dry_run,
+                        options.force,
+                    )?);
+                }
+            }
+            for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
+                let target = surface.default_path()?;
+                instruction_reports.push(instructions::install(
+                    surface,
+                    &target,
+                    &contract,
+                    options.dry_run,
+                    options.force,
+                )?);
+            }
+        }
+    }
 
-    let client_reports = client_config::install_all(&hook_binary, options.dry_run, options.force)?;
+    let client_reports = if options.project_only {
+        client_config::uninstall_all(options.dry_run, options.force)?
+    } else {
+        client_config::install_all(&hook_binary, options.dry_run, options.force)?
+    };
 
     let foreign_report = foreign::scan(&ConfigPaths::discover().data_dir).ok();
     let service_report = if options.start_service && !options.dry_run {
@@ -974,6 +1109,24 @@ async fn initialize_if_needed(
         (config, true)
     };
 
+    if config.activation.mode == hzr_core::ActivationMode::Selected {
+        let workspace = canonical_directory(None)?;
+        if !activation::is_enabled(&config, &workspace)
+            .await
+            .unwrap_or(false)
+        {
+            if json {
+                print_json(&serde_json::json!({
+                    "outcome": "disabled",
+                    "workspace": workspace,
+                    "changed": false,
+                    "config_created": config_created,
+                }))?;
+            }
+            return Ok(ExitCode::SUCCESS);
+        }
+    }
+
     let (workspace, outcome, changed, git_backed, registration) =
         initialize_workspace(&config).await?;
     let dashboard = format!("http://{}", config.daemon.bind);
@@ -1035,12 +1188,137 @@ async fn initialize_if_needed(
     Ok(ExitCode::SUCCESS)
 }
 
+async fn initialize_if_enabled(
+    config_path: &Path,
+    data_dir: Option<&Path>,
+    quiet: bool,
+    skip_service: bool,
+    json: bool,
+) -> Result<ExitCode> {
+    if !config_path.is_file() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    let config = Config::load(config_path)?;
+    if let Some(requested) = data_dir {
+        if requested != config.data_dir {
+            bail!(
+                "configured data root is {}; --data-dir requested {}",
+                config.data_dir.display(),
+                requested.display()
+            );
+        }
+    }
+    let workspace = canonical_directory(None)?;
+    if !activation::is_enabled(&config, &workspace)
+        .await
+        .unwrap_or(false)
+    {
+        if json {
+            print_json(&serde_json::json!({
+                "outcome": "disabled",
+                "workspace": workspace,
+                "changed": false,
+            }))?;
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    initialize_if_needed(config_path, data_dir, quiet, skip_service, json).await
+}
+
+async fn set_workspace_activation(
+    config_path: &Path,
+    workspace_path: Option<&Path>,
+    enabled: bool,
+    json: bool,
+) -> Result<ExitCode> {
+    let root = canonical_directory(workspace_path)?;
+    let mut config = Config::load_or_default(config_path)?;
+    config.ensure_layout()?;
+    config.activation.mode = hzr_core::ActivationMode::Selected;
+    let workspace = if enabled {
+        initialize_workspace_at(&config, &root).await?.0
+    } else {
+        activation::discover(&config, &root).await?
+    };
+    let changed = if enabled {
+        let already_enabled = config.activation.allows(
+            &workspace.identity.repository_id,
+            &workspace.identity.worktree_id,
+        );
+        config.activation.enable(activation::record(&workspace));
+        !already_enabled
+    } else {
+        config.activation.disable(
+            &workspace.identity.repository_id,
+            &workspace.identity.worktree_id,
+        )
+    };
+    config.write(config_path)?;
+
+    let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
+    let contract = contract_asset_path(&executable_source_directory(&executable)?);
+    for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
+        instructions::uninstall(surface, &surface.default_path()?, false, true)?;
+    }
+    client_config::uninstall_all(false, true)?;
+    let hook_status = adoption::status(&adoption::default_settings_path()?)?;
+    if hook_status.installed {
+        let prefix_binary = prefix::default_prefix()?.join("hzr");
+        let hook_binary = if prefix_binary.is_file() {
+            prefix_binary
+        } else {
+            adoption::resolve_hook_binary(Some(&executable), false, false)?
+        };
+        adoption::install(
+            &adoption::default_settings_path()?,
+            &hook_binary,
+            true,
+            true,
+            true,
+            false,
+            true,
+        )?;
+    }
+    for (surface, target) in activation::local_instruction_paths(&workspace.identity.root) {
+        if enabled {
+            instructions::install(surface, &target, &contract, false, true)?;
+        } else {
+            instructions::uninstall(surface, &target, false, true)?;
+        }
+    }
+
+    if json {
+        print_json(&serde_json::json!({
+            "enabled": enabled,
+            "changed": changed,
+            "activation_mode": "selected",
+            "workspace": workspace.identity.root,
+            "repository_id": workspace.identity.repository_id,
+            "worktree_id": workspace.identity.worktree_id,
+        }))?;
+    } else {
+        println!(
+            "{} {} (project-only activation)",
+            if enabled { "enabled" } else { "disabled" },
+            workspace.identity.root.display()
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
 async fn initialize_workspace(
     config: &Config,
 ) -> Result<(Workspace, &'static str, bool, bool, WorkspaceRegistration)> {
     let workspace_path = canonical_directory(None)?;
+    initialize_workspace_at(config, &workspace_path).await
+}
+
+async fn initialize_workspace_at(
+    config: &Config,
+    workspace_path: &Path,
+) -> Result<(Workspace, &'static str, bool, bool, WorkspaceRegistration)> {
     let workspace = Workspace::discover_managed(
-        &workspace_path,
+        workspace_path,
         Path::new("git"),
         &config.data_dir,
         Deadlines::default().version,
@@ -1436,8 +1714,11 @@ async fn execute_agent(config: &Config, command: AgentCommand, json: bool) -> Re
     Ok(ExitCode::SUCCESS)
 }
 
-async fn show_stats(config: &Config, json: bool) -> Result<ExitCode> {
-    let report = stats::collect(config)?;
+async fn show_stats(config: &Config, workspace: Option<&Path>, json: bool) -> Result<ExitCode> {
+    let workspace = workspace
+        .map(|path| canonical_directory(Some(path)))
+        .transpose()?;
+    let report = stats::collect(config, workspace.as_deref())?;
     if json {
         print_json(&report)?;
     } else {
@@ -1498,7 +1779,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.4-test");
+        let release = directory.path().join("versions/v0.3.5-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -1518,7 +1799,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.4-test");
+        let release = directory.path().join("versions/v0.3.5-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))
@@ -1536,7 +1817,7 @@ mod tests {
     #[test]
     fn public_binary_symlink_resolves_to_the_versioned_source_directory() {
         let directory = tempdir().expect("temporary directory");
-        let release_bin = directory.path().join("versions/v0.3.4-test/bin");
+        let release_bin = directory.path().join("versions/v0.3.5-test/bin");
         let release_binary = release_bin.join("hzr");
         let public_bin = directory.path().join("bin");
         std::fs::create_dir_all(&release_bin).expect("release bin");

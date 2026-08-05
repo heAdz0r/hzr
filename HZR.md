@@ -43,6 +43,12 @@ through stdin EOF. Run `hzr install --force` once to install native client
 registrations, then `hzr mcp status` to inspect them. The only persistent
 background process is the single `hzrd` service.
 
+When `[activation].mode = "selected"`, project-scoped MCP tools additionally require an
+initialized workspace whose repository/worktree identity appears in `enabled_workspaces`.
+Anything else returns `isError` before dispatch. Project-only installation intentionally removes
+client-global MCP registrations; a manual pinned registration requires a separate client profile
+if the tool itself must be invisible in baseline projects.
+
 `isError: true` means the requested result was not confirmed and HZR did not
 fall back to a second engine or store. Validation and pre-dispatch failures do not
 write anything. If a store transport fails after dispatch, completion can be
@@ -72,7 +78,9 @@ MCP      -> hzr mcp serve            (launched by a client, never by hand)
 Config   -> hzr mcp config --client codex|claude-desktop  (prints a snippet)
 MCP state -> hzr mcp status
 Health   -> hzr doctor
-Gains    -> hzr stats
+Enable   -> hzr enable [--workspace DIR]
+Disable  -> hzr disable [--workspace DIR]   (keeps index and memory)
+Gains    -> hzr stats [--workspace DIR]
 Project build -> hzr build <args>    (your project, token-optimized output)
 HZR release   -> hzr release --force (rebuild and reinstall HZR itself)
 ```
@@ -85,6 +93,26 @@ test without an observed relevant failure is regression coverage, not TDD.
 `hzr build` and `hzr release` are different verbs on purpose: `build` builds **your
 project**, `release` rebuilds and reinstalls **HZR itself**. Do not use `release` to build
 a project.
+
+## Project-only activation
+
+The normal installation enables HZR for every project. A controlled baseline comparison uses:
+
+```text
+hzr install --project-only --dry-run
+hzr install --project-only --force
+```
+
+In that mode the global hook is only a dispatcher: it resolves the canonical repository/worktree
+identity and emits no hook response outside the enabled set. `SessionStart` uses
+`init --if-enabled`, so merely opening another directory cannot create `.grepai` or register it.
+Agent instructions live in the enabled project's root `CLAUDE.md` and `AGENTS.md`; the user-global
+managed blocks and HZR-owned global MCP registrations are removed transactionally with backups.
+
+`hzr enable` adds one initialized workspace and installs its local managed instruction blocks.
+`hzr disable` removes that activation entry and those blocks without deleting the managed index,
+workspace registration, memory, or ledger history. Explicit CLI commands remain available to the
+operator even when automatic activation is disabled.
 
 ## Reading a file: reach for the flags, not for `sed`
 

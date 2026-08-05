@@ -31,11 +31,24 @@ pub enum Command {
         data_dir: Option<PathBuf>,
         #[arg(long, conflicts_with = "force")]
         if_needed: bool,
-        #[arg(long, requires = "if_needed")]
+        /// Initialize only when the current workspace was explicitly enabled.
+        #[arg(long, conflicts_with_all = ["force", "if_needed"])]
+        if_enabled: bool,
+        #[arg(long)]
         quiet: bool,
         /// Register the workspace without installing or starting the production daemon.
         #[arg(long)]
         skip_service: bool,
+    },
+    #[command(about = "Enable HZR for one workspace and select project-only activation")]
+    Enable {
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+    },
+    #[command(about = "Disable HZR for one workspace without deleting its index or memory")]
+    Disable {
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
     },
     #[command(
         about = "Adopt HZR: PATH binaries, one hook dispatcher, agent instructions, and visualizer service"
@@ -63,6 +76,9 @@ pub enum Command {
         /// Skip service startup and keep the installed SessionStart hook from starting it.
         #[arg(long)]
         skip_service: bool,
+        /// Enable HZR only for the current workspace; hooks become no-ops elsewhere.
+        #[arg(long)]
+        project_only: bool,
     },
     #[command(about = "Remove HZR adoption hooks without restoring RTK implicitly")]
     Uninstall {
@@ -164,8 +180,11 @@ pub enum Command {
         about = "Build your project through the inherited fork-core build wrapper (token-optimized output)"
     )]
     Build(ForkForwardArgs),
-    #[command(about = "Show global cumulative zero-redundancy gains and observed model usage")]
-    Stats,
+    #[command(about = "Show cumulative zero-redundancy gains globally or for one workspace")]
+    Stats {
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+    },
     #[command(hide = true)]
     Savings,
     #[command(about = "Inspect or safely centralize legacy state")]
@@ -726,6 +745,41 @@ mod tests {
                 quiet: true,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn test_cli_exposes_first_class_project_only_activation_and_scoped_stats() {
+        let install = Cli::try_parse_from(["hzr", "install", "--project-only", "--dry-run"])
+            .expect("project-only install preview");
+        let enable = Cli::try_parse_from(["hzr", "enable", "--workspace", "/work/app"])
+            .expect("enable one workspace");
+        let disable = Cli::try_parse_from(["hzr", "disable", "--workspace", "/work/app"])
+            .expect("disable one workspace");
+        let stats = Cli::try_parse_from(["hzr", "stats", "--workspace", "/work/app"])
+            .expect("project-scoped stats");
+
+        assert!(matches!(
+            install.command,
+            Command::Install {
+                project_only: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            enable.command,
+            Command::Enable { workspace: Some(ref path) }
+                if path == std::path::Path::new("/work/app")
+        ));
+        assert!(matches!(
+            disable.command,
+            Command::Disable { workspace: Some(ref path) }
+                if path == std::path::Path::new("/work/app")
+        ));
+        assert!(matches!(
+            stats.command,
+            Command::Stats { workspace: Some(ref path) }
+                if path == std::path::Path::new("/work/app")
         ));
     }
 

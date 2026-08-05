@@ -4,14 +4,14 @@
 
 ![HZR control-plane banner](docs/assets/hzr-hero.png)
 
-[![Version](https://img.shields.io/badge/version-0.3.4-e64a19)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.5-e64a19)](Cargo.toml)
 [![CI](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg)](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/heAdz0r/hzr?include_prereleases&color=ef6c00)](https://github.com/heAdz0r/hzr/releases)
 [![License](https://img.shields.io/badge/control_plane-Apache--2.0-37474f)](LICENSE)
 
 HZR is an independent product from heAdz0r that turns disparate layers of agent optimization into one controlled execution path. A single control plane handles search, memory, context budget, execution, response density, and usage accounting—without rework or competing loops.
 
-**The core invariant of the 0.3.4 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
+**The core invariant of the 0.3.5 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
 
 > HZR does not claim unverified percentage savings. Functional and supply-chain gates are defined and repeatedly tested before release; the end-to-end economic effect must still be measured through paired, provider-billed benchmarks on identical tasks.
 
@@ -19,7 +19,7 @@ HZR is an independent product from heAdz0r that turns disparate layers of agent 
 
 HZR optimizes for an agent reaching the correct next action, not for the smallest output in isolation. A bounded response must say what it represents, what was omitted, how much source it covers, and how to recover exact evidence. Mutations need the same discipline: exact preconditions, atomic replacement, idempotent retries, dry-run, and structured outcomes.
 
-| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.3.4` |
+| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.3.5` |
 |---|---|---|---|
 | Understand a large Markdown file quickly | no common bounded contract | full file in the recorded case | self-described digest: bounded lead prose, omitted-content marker, source lines/bytes, section coverage, exact recovery hint |
 | Recover authoritative content | command-specific full output | full output | `--level none` is byte-exact; `--from`/`--to` gives an exact focused range |
@@ -85,13 +85,13 @@ Published artifacts:
 | macOS | Apple Silicon | Available | native release workflow + clean-install smoke |
 | macOS | Intel | Available | native release workflow + clean-install smoke |
 
-No Windows artifact is provided in 0.3.4. Release scripts build native artifacts rather than cross-compiling them.
+No Windows artifact is provided in 0.3.5. Release scripts build native artifacts rather than cross-compiling them.
 
 Download the installer, review it, then run it:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.3.4/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.3.5/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -104,7 +104,7 @@ The installer downloads the platform artifact and `SHA256SUMS` from GitHub Relea
 
 ```text
 ~/.local/share/hzr/
-  versions/v0.3.4-<platform>/   # version-scoped self-contained bundle
+  versions/v0.3.5-<platform>/   # version-scoped self-contained bundle
   current -> versions/...
 
 ~/.local/bin/
@@ -127,13 +127,19 @@ hzr install --dry-run
 hzr install --force
 ```
 
-Available installer overrides: `HZR_INSTALL_ROOT`, `HZR_BIN_DIR`, `HZR_INSTALL_HOOKS=0`, `HZR_INSTALL_SERVICE=0`, `HZR_FORCE=1`, and `HZR_VERSION`. Installation requires standard POSIX utilities: `sh`, `tar`, `curl` or `wget`, and `shasum` or `sha256sum`. HZR requires system `git`; external Node.js, npm, Go, Rust, and separate engine binaries are not required.
+Available installer overrides: `HZR_INSTALL_ROOT`, `HZR_BIN_DIR`, `HZR_INSTALL_HOOKS=0`,
+`HZR_INSTALL_SERVICE=0`, `HZR_PROJECT_ONLY=1`, `HZR_FORCE=1`, and `HZR_VERSION`.
+`HZR_PROJECT_ONLY=1` installs the same single service and global no-op-capable hook, but writes
+agent instructions only into the current project and removes HZR-owned global MCP registrations.
+Installation requires standard POSIX utilities: `sh`, `tar`, `curl` or `wget`, and `shasum` or
+`sha256sum`. HZR requires system `git`; external Node.js, npm, Go, Rust, and separate engine
+binaries are not required.
 
 ### What one bundle contains
 
 | Component | Pin | Distribution role |
 |---|---:|---|
-| HZR | 0.3.4 | public CLI + daemon |
+| HZR | 0.3.5 | public CLI + daemon |
 | HZR fork-core RTK | 0.44.1-fork.1 | private native engine; complete inherited surface |
 | grepai | 0.35.0 + ownership patch | private native engine |
 | ICM | 0.10.61 + lockfile patch | private native engine |
@@ -199,6 +205,7 @@ hzr context plan "change command policy" --workspace .
 hzr exec rewrite 'cargo test 2>&1 | tail -80'
 hzr agent run "Implement the requested change" --workspace .
 hzr stats
+hzr stats --workspace .
 ```
 
 The complete fork CLI remains available:
@@ -221,10 +228,11 @@ Both commands reach private `engines/rtk`; alias `rtk` does not create a second 
 
 Native memory, repo-map, RTK, hooks, compression, skills, and tools in caveman-code are disabled before the first model session and verified by a runtime test. This preserves caveman-code as an agent loop without turning it into a second control plane.
 
-## Every project, including before `git init`
+## Activation modes
 
-The installed `SessionStart` hook runs `hzr init --if-needed --quiet`, so a project becomes
-HZR-backed on first use with no manual step. Workspace identity has two bases:
+The default installation keeps the original all-projects behavior. Its installed `SessionStart`
+hook runs `hzr init --if-needed --quiet`, so a project becomes HZR-backed on first use with no
+manual step. Workspace identity has two bases:
 
 | Project state | Identity basis | `init` outcome |
 |---|---|---|
@@ -242,6 +250,35 @@ stays foreign and is still refused.
 Note that `init` registers the workspace and creates the symlink but does **not** build the
 index. The first semantic query starts the watcher, and while that first scan runs, search
 degrades to exact mode with a visible `fallback_reason` rather than blocking.
+
+For a controlled comparison, install or switch to project-only activation from the project that
+should use HZR:
+
+```bash
+HZR_PROJECT_ONLY=1 sh /tmp/hzr-install.sh
+# or, after installing the bundle:
+hzr install --project-only --dry-run
+hzr install --project-only --force
+
+hzr enable --workspace /path/to/another/project
+hzr disable --workspace /path/to/project
+hzr stats --workspace /path/to/project
+```
+
+Project-only activation is fail-closed:
+
+- the one global Claude hook remains installed, but both `SessionStart` and `PreToolUse` are no-ops
+  outside explicitly enabled repository/worktree identities;
+- managed `CLAUDE.md` and `AGENTS.md` blocks are project-local, not user-global;
+- HZR-owned global Codex and Claude Desktop MCP registrations are removed, because a client-global
+  registration cannot prove which open project issued a call;
+- MCP refuses uninitialized and unselected workspace bindings before any project-scoped read or
+  write; `hzr_codec` remains workspace-independent;
+- `disable` removes only the local managed instruction blocks and activation entry. It preserves
+  the project's index and memory for a later re-enable.
+
+The implementation and threat boundary are specified in
+[`PRD_HZR_PROJECT_ACTIVATION.md`](docs/PRD_HZR_PROJECT_ACTIVATION.md).
 
 ## One index and one memory
 
@@ -390,6 +427,8 @@ It is important to distinguish between two levels of installation:
   controlled installation/test environments. That opt-out is also written into the managed
   `SessionStart` hook, so a later project initialization cannot silently install the service;
   rerun confirmed `hzr install` without `--skip-service` to re-enable automatic startup.
+  `--project-only` instead installs project-local instructions, enables the current workspace,
+  gates the hook by repository/worktree identity, and removes HZR-owned global MCP registrations.
 
 ## MCP for clients without hooks
 
@@ -404,6 +443,11 @@ hzr mcp config --client claude-desktop  # prints the mcpServers block
 and the confirmed `hzr install --force` applies it with full-SHA backup/CAS. The
 `hzr mcp config` command remains a read-only way to obtain a snippet for manual integration.
 `hzr mcp status` reports the native registration for each supported client.
+
+In project-only mode HZR deliberately does not install a client-global MCP registration. A manual
+`--workspace` pin is safe at the HZR boundary — uninitialized or unselected projects are refused —
+but the registration itself is still visible to every session using that client profile. Use a
+separate client profile when MCP availability must also be invisible outside the experiment.
 
 `hzr init` does not start an MCP process. It initializes configuration and the
 current workspace, refreshes its visualizer registration, and is intentionally safe to run from every Claude
@@ -432,7 +476,7 @@ contract is in [HZR.md](HZR.md).
 Standards baseline: [MCP 2025-11-25 lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
 and [tool contracts](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
 
-The MCP layer in 0.3.4 is a stateless stdio gateway: it stores no data of its own
+The MCP layer in 0.3.5 is a stateless stdio gateway: it stores no data of its own
 and does not spawn internal engines. Each client process terminates at EOF,
 while durable ownership remains with production `hzrd`; the installer migrates direct ICM
 registrations, and `hzr doctor` verifies the service lifecycle.
@@ -470,7 +514,7 @@ Contributors need Rust 1.85+, Go (CI pin 1.24.2), Git, Bash, curl and standard U
 scripts/build-bundle.sh "$PWD/dist"
 scripts/package-release.sh "$PWD/dist" "$PWD/dist-release"
 HZR_RELEASE_ARCHIVE="$(find "$PWD/dist-release" -maxdepth 1 \
-  -name 'hzr-v0.3.4-*.tar.gz' -print -quit)"
+  -name 'hzr-v0.3.5-*.tar.gz' -print -quit)"
 scripts/smoke-install.sh "$HZR_RELEASE_ARCHIVE" "$PWD/dist-release/SHA256SUMS"
 ```
 
@@ -496,7 +540,7 @@ Do not run `cargo test` directly inside `fork-core/rtk`: the official gate creat
 
 ## Verifiable guarantees and fair boundaries
 
-|Guarantee|Status 0.3.4|
+|Guarantee|Status 0.3.5|
 |---|---|
 |Full fork baseline and current engine have verifiable identity|implemented|
 |Stock RTK is missing from the production path|implemented|

@@ -5,7 +5,10 @@ mod ledger;
 mod operation;
 
 pub use budget::{BudgetPlanner, FusionInput};
-pub use config::{Config, ConfigError, ConfigPaths, DaemonConfig, EngineConfig, PrivacyConfig};
+pub use config::{
+    ActivationConfig, ActivationMode, Config, ConfigError, ConfigPaths, DaemonConfig,
+    EnabledWorkspace, EngineConfig, PrivacyConfig,
+};
 pub use engines::{EngineManifest, EnginePin, locked_engines};
 pub use ledger::{
     BypassSummary, BypassTool, BypassWindow, EfficiencyCommandSummary, EfficiencySummary, Ledger,

@@ -29,6 +29,7 @@ use std::io::IsTerminal;
 use anyhow::{Context, Result};
 use directories::BaseDirs;
 use hzr_core::Config;
+use hzr_index::IndexPlacement;
 use hzr_protocol::{
     CodecApiRequest, CodecProfile, ContextPlanApiRequest, FidelityClass, MemoryForgetApiRequest,
     MemoryImportance, MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector,
@@ -163,6 +164,59 @@ pub(crate) fn classify_workspace_binding(
     WorkspaceBinding::Project(resolved.to_path_buf())
 }
 
+async fn apply_workspace_policy(config: &Config, binding: WorkspaceBinding) -> WorkspaceBinding {
+    let WorkspaceBinding::Project(path) = binding else {
+        return binding;
+    };
+    let workspace = match crate::activation::discover(config, &path).await {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            return WorkspaceBinding::Refused {
+                path,
+                reason: format!(
+                    "HZR could not resolve the MCP workspace safely ({error:#}). Nothing was read or written."
+                ),
+            };
+        }
+    };
+    if !config.activation.allows(
+        &workspace.identity.repository_id,
+        &workspace.identity.worktree_id,
+    ) {
+        return WorkspaceBinding::Refused {
+            path,
+            reason: format!(
+                "HZR project-only activation is enabled and {} is not an enabled workspace. \
+                 Nothing was read or written. Run `hzr enable --workspace {}` from an \
+                 operator shell, then reconnect the MCP client.",
+                workspace.identity.root.display(),
+                workspace.identity.root.display()
+            ),
+        };
+    }
+    match workspace.placement() {
+        Ok(IndexPlacement::ManagedSymlink { .. }) => {
+            WorkspaceBinding::Project(workspace.identity.root)
+        }
+        Ok(_) => WorkspaceBinding::Refused {
+            path,
+            reason: format!(
+                "{} is not an initialized HZR workspace. Nothing was read or written. Run \
+                 `cd {}` followed by `hzr init --if-needed`, or pin an initialized project with \
+                 `hzr mcp config --client <client> --workspace <dir>`.",
+                workspace.identity.root.display(),
+                workspace.identity.root.display()
+            ),
+        },
+        Err(error) => WorkspaceBinding::Refused {
+            path,
+            reason: format!(
+                "HZR refused the MCP workspace placement ({error}). Nothing was read or written."
+            ),
+        },
+    }
+}
+
 pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
     // A terminal stdin means a human ran this by hand; an MCP server would then hang
     // forever looking like a wedged session. Fail fast and say what it is for.
@@ -181,6 +235,7 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
         workspace,
         BaseDirs::new().as_ref().map(|base| base.home_dir()),
     );
+    let binding = apply_workspace_policy(config, binding).await;
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
     let mut stdout = tokio::io::stdout();

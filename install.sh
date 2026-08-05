@@ -1,12 +1,13 @@
 #!/bin/sh
 set -eu
 
-HZR_VERSION="${HZR_VERSION:-0.3.4}"
+HZR_VERSION="${HZR_VERSION:-0.3.5}"
 HZR_REPOSITORY="${HZR_REPOSITORY:-heAdz0r/hzr}"
 HZR_INSTALL_ROOT="${HZR_INSTALL_ROOT:-${HOME}/.local/share/hzr}"
 HZR_BIN_DIR="${HZR_BIN_DIR:-${HOME}/.local/bin}"
 HZR_INSTALL_HOOKS="${HZR_INSTALL_HOOKS:-1}"
 HZR_INSTALL_SERVICE="${HZR_INSTALL_SERVICE:-1}"
+HZR_PROJECT_ONLY="${HZR_PROJECT_ONLY:-0}"
 HZR_FORCE="${HZR_FORCE:-0}"
 
 case "$(uname -s)-$(uname -m)" in
@@ -274,10 +275,18 @@ hzr_note "hzr, hzrd, rtk -> ${HZR_BIN_DIR}"
 hzr_step "Registering this project and starting the background service"
 "${HZR_INSTALL_ROOT}/current/bin/hzr" init --if-needed --quiet --skip-service
 if [ "${HZR_INSTALL_HOOKS}" = "1" ]; then
-  if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
-    "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force
+  if [ "${HZR_PROJECT_ONLY}" = "1" ]; then
+    if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
+      "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --project-only
+    else
+      "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --project-only --skip-service
+    fi
   else
-    "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --skip-service
+    if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
+      "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force
+    else
+      "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --skip-service
+    fi
   fi
 fi
 if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
@@ -326,7 +335,12 @@ printf '  Data and memory  %s\n' "${HZR_INSTALL_ROOT}"
 
 if [ "${HZR_INSTALL_HOOKS}" = "1" ]; then
   printf '\n%sAgent integration%s\n' "${HZR_BOLD}" "${HZR_RESET}"
-  printf '  Claude Code hooks and the HZR blocks in CLAUDE.md / AGENTS.md are configured.\n'
+  if [ "${HZR_PROJECT_ONLY}" = "1" ]; then
+    printf '  Project-only: hooks are no-ops outside %s.\n' "$(pwd -P)"
+    printf '  HZR blocks are local to this project; global HZR MCP registrations were removed.\n'
+  else
+    printf '  Claude Code hooks and the global HZR blocks in CLAUDE.md / AGENTS.md are configured.\n'
+  fi
   printf '  Existing files were backed up before being changed.\n'
 fi
 

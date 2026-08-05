@@ -6,9 +6,9 @@ use crate::cli::McpClientArg;
 
 use super::{
     INVALID_REQUEST, LATEST_MCP_PROTOCOL_VERSION, METHOD_NOT_FOUND, PARSE_ERROR, SessionState,
-    bounded_usize, cancelled_request_id, classify_workspace_binding, handle_line,
-    initialize_result, lifecycle_metadata, optional_enum, parse_mode, registration_snippet,
-    reject_unknown, tool_definitions, tool_error, tool_success,
+    apply_workspace_policy, bounded_usize, cancelled_request_id, classify_workspace_binding,
+    handle_line, initialize_result, lifecycle_metadata, optional_enum, parse_mode,
+    registration_snippet, reject_unknown, tool_definitions, tool_error, tool_success,
 };
 
 /// Mirror of the notification rule in `handle_line`, which cannot be exercised
@@ -317,4 +317,40 @@ fn test_a_real_project_directory_still_binds() {
         Some(std::path::Path::new("/Users/andrew/code/app"))
     );
     assert!(binding.refusal().is_none());
+}
+
+#[tokio::test]
+async fn test_mcp_refuses_an_uninitialized_or_unselected_workspace() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let project = directory.path().join("project");
+    std::fs::create_dir_all(&project).expect("project directory");
+    let mut config = Config {
+        data_dir: directory.path().join("data"),
+        ..Config::default()
+    };
+    config.ensure_layout().expect("data layout");
+
+    let binding = apply_workspace_policy(&config, classify_workspace_binding(&project, None)).await;
+    assert!(
+        binding
+            .refusal()
+            .expect("uninitialized workspace refusal")
+            .contains("hzr init")
+    );
+
+    let workspace = crate::activation::discover(&config, &project)
+        .await
+        .expect("workspace identity");
+    workspace
+        .ensure_managed_location()
+        .expect("managed workspace");
+    config.activation.mode = hzr_core::ActivationMode::Selected;
+
+    let binding = apply_workspace_policy(&config, classify_workspace_binding(&project, None)).await;
+    assert!(
+        binding
+            .refusal()
+            .expect("unselected workspace refusal")
+            .contains("hzr enable")
+    );
 }

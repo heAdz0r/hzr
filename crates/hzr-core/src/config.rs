@@ -16,6 +16,7 @@ pub struct Config {
     pub engines: EngineConfig,
     pub policy: PolicyConfig,
     pub privacy: PrivacyConfig,
+    pub activation: ActivationConfig,
 }
 
 impl Default for Config {
@@ -28,6 +29,7 @@ impl Default for Config {
             engines: EngineConfig::default(),
             policy: PolicyConfig::default(),
             privacy: PrivacyConfig::default(),
+            activation: ActivationConfig::default(),
         }
     }
 }
@@ -152,8 +154,73 @@ impl Config {
         if self.policy.input_token_budget() == 0 {
             return Err(ConfigError::InvalidPolicyBudget);
         }
+        for workspace in &self.activation.enabled_workspaces {
+            if !is_sha256(&workspace.repository_id)
+                || !is_sha256(&workspace.worktree_id)
+                || !workspace.root.is_absolute()
+            {
+                return Err(ConfigError::InvalidActivation);
+            }
+        }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivationMode {
+    #[default]
+    All,
+    Selected,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnabledWorkspace {
+    pub repository_id: String,
+    pub worktree_id: String,
+    pub root: PathBuf,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ActivationConfig {
+    pub mode: ActivationMode,
+    pub enabled_workspaces: Vec<EnabledWorkspace>,
+}
+
+impl ActivationConfig {
+    #[must_use]
+    pub fn allows(&self, repository_id: &str, worktree_id: &str) -> bool {
+        self.mode == ActivationMode::All
+            || self.enabled_workspaces.iter().any(|workspace| {
+                workspace.repository_id == repository_id && workspace.worktree_id == worktree_id
+            })
+    }
+
+    pub fn enable(&mut self, workspace: EnabledWorkspace) {
+        self.enabled_workspaces.retain(|enabled| {
+            enabled.worktree_id != workspace.worktree_id && enabled.root != workspace.root
+        });
+        self.enabled_workspaces.push(workspace);
+        self.enabled_workspaces
+            .sort_by(|left, right| left.root.cmp(&right.root));
+    }
+
+    pub fn disable(&mut self, repository_id: &str, worktree_id: &str) -> bool {
+        let before = self.enabled_workspaces.len();
+        self.enabled_workspaces.retain(|workspace| {
+            workspace.repository_id != repository_id || workspace.worktree_id != worktree_id
+        });
+        self.enabled_workspaces.len() != before
+    }
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[derive(Clone, Debug)]
@@ -268,7 +335,7 @@ fn sibling_engine_directory(executable: &Path) -> Option<PathBuf> {
     }
     // Canonicalize to reject traversal, then translate the physical location back to the
     // upgrade-stable one. Storing the canonical path directly would pin the config to
-    // `versions/v0.3.4-<platform>/engines`, so after the next upgrade a new `hzr` would
+    // `versions/v0.3.5-<platform>/engines`, so after the next upgrade a new `hzr` would
     // keep launching the *previous* RTK/grepai/ICM/Node.
     let physical = std::fs::canonicalize(&directory).unwrap_or(directory);
     Some(stable_engine_directory(&physical))
@@ -383,6 +450,8 @@ pub enum ConfigError {
     InvalidRequestLimit,
     #[error("context token limit must exceed output reserve plus safety margin")]
     InvalidPolicyBudget,
+    #[error("activation workspaces require absolute roots and lowercase SHA-256 identities")]
+    InvalidActivation,
 }
 
 #[cfg(unix)]
@@ -438,8 +507,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        Config, ConfigError, EngineConfig, PolicyConfig, discover_bundle_engine_directory,
-        sibling_engine_directory, stable_engine_directory,
+        ActivationMode, Config, ConfigError, EnabledWorkspace, EngineConfig, PolicyConfig,
+        discover_bundle_engine_directory, sibling_engine_directory, stable_engine_directory,
     };
 
     /// Build `<root>/versions/<release>/{bin,engines}` plus a `current` symlink, i.e. the
@@ -469,7 +538,7 @@ mod tests {
     fn test_engine_directory_uses_upgrade_stable_current_path() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let release = versioned_bundle(root, "v0.3.4-darwin-arm64");
+        let release = versioned_bundle(root, "v0.3.5-darwin-arm64");
         point_current_at(root, &release);
 
         let resolved = stable_engine_directory(&release.join("engines"));
@@ -489,7 +558,7 @@ mod tests {
     fn test_pinned_engine_directory_is_migrated_on_load() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let release = versioned_bundle(root, "v0.3.4-darwin-arm64");
+        let release = versioned_bundle(root, "v0.3.5-darwin-arm64");
         point_current_at(root, &release);
 
         let config_path = root.join("config.toml");
@@ -511,12 +580,12 @@ mod tests {
     fn test_upgrade_switches_engines_through_current() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let old = versioned_bundle(root, "v0.3.4-darwin-arm64");
+        let old = versioned_bundle(root, "v0.3.5-darwin-arm64");
         point_current_at(root, &old);
         let stable = stable_engine_directory(&old.join("engines"));
 
         // Upgrade: a new release becomes current, exactly as install.sh repoints it.
-        let new = versioned_bundle(root, "v0.3.4-darwin-arm64");
+        let new = versioned_bundle(root, "v0.3.5-darwin-arm64");
         fs::write(new.join("engines").join("rtk"), b"new").expect("new engine bytes");
         point_current_at(root, &new);
 
@@ -532,7 +601,7 @@ mod tests {
     fn test_foreign_or_dangling_current_never_redirects_engines() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
-        let release = versioned_bundle(root, "v0.3.4-darwin-arm64");
+        let release = versioned_bundle(root, "v0.3.5-darwin-arm64");
         let other = versioned_bundle(root, "v0.9.9-other");
 
         // `current` pointing at a different release must not capture this one.
@@ -597,7 +666,7 @@ mod tests {
     fn test_public_binary_symlink_discovers_private_bundle_engines() {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path().join("install");
-        let release = versioned_bundle(&root, "v0.3.4-darwin-arm64");
+        let release = versioned_bundle(&root, "v0.3.5-darwin-arm64");
         point_current_at(&root, &release);
         let public = directory.path().join("bin/hzr");
         fs::create_dir_all(public.parent().expect("public parent")).expect("public directory");
@@ -628,6 +697,30 @@ mod tests {
 
         assert_eq!(loaded.schema_version, 1);
         assert_eq!(loaded.data_dir, config.data_dir);
+    }
+
+    #[test]
+    fn test_selected_activation_allows_only_explicit_workspaces_and_round_trips() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("config.toml");
+        let mut config = Config {
+            data_dir: directory.path().join("data"),
+            ..Config::default()
+        };
+        config.activation.mode = ActivationMode::Selected;
+        config.activation.enabled_workspaces.push(EnabledWorkspace {
+            repository_id: "a".repeat(64),
+            worktree_id: "b".repeat(64),
+            root: "/work/enabled".into(),
+        });
+
+        assert!(config.activation.allows(&"a".repeat(64), &"b".repeat(64)));
+        assert!(!config.activation.allows(&"c".repeat(64), &"d".repeat(64)));
+
+        config.write(&path).expect("config write");
+        let loaded = Config::load(&path).expect("config load");
+        assert_eq!(loaded.activation.mode, ActivationMode::Selected);
+        assert_eq!(loaded.activation.enabled_workspaces.len(), 1);
     }
 
     #[test]

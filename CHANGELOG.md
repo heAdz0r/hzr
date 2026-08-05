@@ -4,10 +4,33 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-08-05
+
+### Added
+
+- First-class project-only activation through `hzr install --project-only`, `hzr enable`,
+  `hzr disable`, and the release-installer `HZR_PROJECT_ONLY=1` override. Enabled workspaces are
+  keyed by validated repository/worktree identities; disabling preserves index, memory, workspace
+  registration, and ledger history.
+- `hzr stats --workspace <dir>` applies one separator-safe project filter to the headline,
+  subsystem and command totals, and optimizer-bypass denominator. Provider receipts and degraded
+  hook coverage remain explicitly global because those records do not carry project attribution.
+
+### Changed
+
+- Selected activation keeps one global Claude dispatcher but makes `SessionStart` and `PreToolUse`
+  no-ops outside enabled workspaces. Managed instructions move to project-root `CLAUDE.md` and
+  `AGENTS.md`; HZR-owned client-global MCP registrations are removed with transactional backups.
+- MCP project tools now require a safe, initialized HZR workspace and, in selected mode, an enabled
+  repository/worktree identity. Uninitialized and unselected bindings fail before daemon dispatch.
+
 ### Fixed
 
 - The dashboard reports a ready on-disk index with its on-demand watcher at rest as `Standby`
   instead of claiming that a rebuild is active indefinitely after a daemon restart.
+- Project data isolation no longer masquerades as project-level activation: the default remains
+  all-project, while the selected mode now gates instructions, hooks, MCP, and statistics as one
+  auditable contract.
 
 ## [0.3.4] - 2026-08-02
 
@@ -399,6 +422,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.3.5]: https://github.com/heAdz0r/hzr/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/heAdz0r/hzr/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/heAdz0r/hzr/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/heAdz0r/hzr/compare/v0.3.1...v0.3.2

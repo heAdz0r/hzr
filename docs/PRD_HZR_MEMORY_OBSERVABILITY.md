@@ -8,7 +8,9 @@
 
 > Historical 0.3.1 requirements. The interactive record drill-down, quiet synchronization,
 > and request-evidence requirements introduced for 0.3.3 are specified in
-> [`PRD_HZR_SOTA_OBSERVATORY.md`](PRD_HZR_SOTA_OBSERVATORY.md).
+> [`PRD_HZR_SOTA_OBSERVATORY.md`](PRD_HZR_SOTA_OBSERVATORY.md). Project-only activation and
+> workspace-scoped CLI accounting introduced in 0.3.5 are specified in
+> [`PRD_HZR_PROJECT_ACTIVATION.md`](PRD_HZR_PROJECT_ACTIVATION.md).
 
 ## 1. Product intent
 

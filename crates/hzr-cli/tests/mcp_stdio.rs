@@ -166,6 +166,20 @@ fn test_stdio_mcp_cancels_in_flight_tool_without_late_response() -> anyhow::Resu
     config.daemon.bind = address;
     config.daemon.request_timeout_ms = 10_000;
     config.write(&config_path)?;
+    let initialized = Command::new(env!("CARGO_BIN_EXE_hzr"))
+        .args([
+            "--config",
+            config_path.to_str().expect("UTF-8 config path"),
+            "init",
+            "--if-needed",
+            "--quiet",
+            "--skip-service",
+        ])
+        .current_dir(&workspace_dir)
+        .env("HOME", &home_dir)
+        .env("XDG_CONFIG_HOME", home_dir.join("xdg"))
+        .status()?;
+    assert!(initialized.success(), "workspace initialization failed");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_hzr"))
         .args([

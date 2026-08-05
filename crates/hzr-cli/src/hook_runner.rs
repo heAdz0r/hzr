@@ -18,6 +18,13 @@ const HOOK_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_HOOK_INPUT_BYTES: u64 = 2 * 1024 * 1024;
 
 pub async fn dispatch(config: &Config) -> Result<()> {
+    let cwd = std::env::current_dir().context("failed to resolve hook working directory")?;
+    if !crate::activation::is_enabled(config, &cwd)
+        .await
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
     let input = read_input()?;
     let tool_name = input
         .get("tool_name")

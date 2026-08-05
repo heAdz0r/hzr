@@ -169,6 +169,51 @@ pub fn install_all(
         .collect()
 }
 
+pub fn uninstall_all(dry_run: bool, confirmed: bool) -> Result<Vec<ClientConfigReport>> {
+    default_paths()?
+        .into_iter()
+        .map(|(client, path)| uninstall(client, &path, dry_run, confirmed))
+        .collect()
+}
+
+fn uninstall(
+    client: Client,
+    path: &Path,
+    dry_run: bool,
+    confirmed: bool,
+) -> Result<ClientConfigReport> {
+    let before = read_optional(path)?;
+    let after = match client {
+        Client::Codex => remove_codex_hzr(path, &before)?,
+        Client::ClaudeDesktop => remove_json_hzr(path, &before)?,
+        Client::ClaudeCode => anyhow::bail!("Claude Code MCP state is audited, never written"),
+    };
+    let changed = before != after.as_bytes();
+    let backup = (changed && !before.is_empty()).then(|| backup_path(path, &before));
+    if changed && !dry_run {
+        if !confirmed {
+            bail!(
+                "installation changes {}; inspect `hzr install --dry-run`, then rerun with `--force` to confirm",
+                path.display()
+            );
+        }
+        match backup.as_ref() {
+            Some(backup) => commit(path, &before, after.as_bytes(), backup, b"")?,
+            None => atomic_write(path, after.as_bytes())?,
+        }
+    }
+    Ok(ClientConfigReport {
+        client,
+        path: path.to_path_buf(),
+        changed,
+        direct_icm_removed: 0,
+        hzr_registered: false,
+        backup_path: backup,
+        before_sha256: sha256(&before),
+        after_sha256: sha256(after.as_bytes()),
+    })
+}
+
 pub fn status_all() -> Result<Vec<ClientMcpStatus>> {
     audit_paths()?
         .into_iter()
@@ -414,6 +459,26 @@ fn migrate_codex(path: &Path, before: &[u8], binary: &Path) -> Result<(String, u
     Ok((document.to_string(), direct.len(), true))
 }
 
+fn remove_codex_hzr(path: &Path, before: &[u8]) -> Result<String> {
+    if before.is_empty() {
+        return Ok(String::new());
+    }
+    let text = std::str::from_utf8(before)
+        .with_context(|| format!("{} is not UTF-8; HZR will not rewrite it", path.display()))?;
+    let mut document = text
+        .parse::<DocumentMut>()
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let owned =
+        codex_hzr_registration(&document).is_some_and(|registration| registration.is_native_hzr());
+    if !owned {
+        return Ok(text.to_owned());
+    }
+    if let Some(servers) = document.get_mut("mcp_servers").and_then(Item::as_table_mut) {
+        servers.remove("hzr");
+    }
+    Ok(document.to_string())
+}
+
 fn json_servers(document: &Value) -> Option<&Map<String, Value>> {
     document.get("mcpServers").and_then(Value::as_object)
 }
@@ -527,6 +592,29 @@ fn migrate_claude_desktop(
     Ok((rendered, direct.len(), true))
 }
 
+fn remove_json_hzr(path: &Path, before: &[u8]) -> Result<String> {
+    if before.is_empty() {
+        return Ok(String::new());
+    }
+    let mut document = serde_json::from_slice::<Value>(before)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let owned =
+        json_hzr_registration(&document).is_some_and(|registration| registration.is_native_hzr());
+    if !owned {
+        return String::from_utf8(before.to_vec())
+            .with_context(|| format!("{} is not UTF-8", path.display()));
+    }
+    if let Some(servers) = document
+        .get_mut("mcpServers")
+        .and_then(Value::as_object_mut)
+    {
+        servers.remove("hzr");
+    }
+    let mut rendered = serde_json::to_string_pretty(&document)?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -536,7 +624,7 @@ mod tests {
     use tempfile::tempdir;
     use toml_edit::DocumentMut;
 
-    use super::{Client, MCP_LIFECYCLE, audit_paths, default_paths, install, status};
+    use super::{Client, MCP_LIFECYCLE, audit_paths, default_paths, install, status, uninstall};
 
     fn binary() -> &'static Path {
         Path::new("/opt/hzr/current/bin/hzr")
@@ -675,6 +763,32 @@ mod tests {
         assert_eq!(status.direct_icm_registrations, 0);
         assert_eq!(status.command.as_deref(), Some("/opt/hzr/current/bin/hzr"));
         assert_eq!(status.args, ["mcp", "serve"]);
+    }
+
+    #[test]
+    fn test_project_only_migration_removes_only_the_hzr_owned_registration() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            "[mcp_servers.hzr]\ncommand = '/opt/hzr/current/bin/hzr'\nargs = ['mcp', 'serve']\n\n\
+             [mcp_servers.other]\ncommand = '/opt/other'\n",
+        )
+        .expect("fixture");
+
+        let report = uninstall(Client::Codex, &path, false, true).expect("remove HZR MCP");
+        let document = fs::read_to_string(&path)
+            .expect("updated config")
+            .parse::<DocumentMut>()
+            .expect("valid TOML");
+
+        assert!(report.changed);
+        assert!(!report.hzr_registered);
+        assert!(document["mcp_servers"].get("hzr").is_none());
+        assert_eq!(
+            document["mcp_servers"]["other"]["command"].as_str(),
+            Some("/opt/other")
+        );
     }
 
     #[test]
