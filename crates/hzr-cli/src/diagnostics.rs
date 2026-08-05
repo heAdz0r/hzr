@@ -186,10 +186,18 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         Err(error) => checks.push(check("client_mcp_ownership", CheckStatus::Warning, error)),
     }
     // Ownership is not enough: a server HZR owns can still be bound to a directory that is
-    // not the project, which is invisible until a recall comes back empty.
+    // not the project, which is invisible until a recall comes back empty. Claude Code is
+    // audited but never written by install, so a missing HZR MCP there is its own check —
+    // otherwise hooks can look healthy while `hzr mcp status` shows registered=false.
     match client_config::status_all() {
-        Ok(statuses) => checks.push(workspace_binding_check(&statuses)),
-        Err(error) => checks.push(check("client_mcp_workspace", CheckStatus::Warning, error)),
+        Ok(statuses) => {
+            checks.push(workspace_binding_check(&statuses));
+            checks.push(claude_code_mcp_check(&statuses));
+        }
+        Err(error) => {
+            checks.push(check("client_mcp_workspace", CheckStatus::Warning, &error));
+            checks.push(check("claude_code_mcp", CheckStatus::Warning, error));
+        }
     }
     // Neither host exposes a global request/response interception point. Keep that
     // boundary machine-visible so an MCP/tool migration cannot be mistaken for codec
@@ -742,6 +750,39 @@ fn strict_status(config: &Config) -> CheckStatus {
     }
 }
 
+/// Claude Code's state file is audited, never rewritten by `hzr install`. When HZR MCP is
+/// absent there, hooks can still look healthy while the agent has no native HZR tools —
+/// the same gap `hzr mcp status` already shows as `claude-code registered=false`.
+fn claude_code_mcp_check(statuses: &[client_config::ClientMcpStatus]) -> DoctorCheck {
+    match statuses
+        .iter()
+        .find(|status| status.client == client_config::Client::ClaudeCode)
+    {
+        Some(status) if status.registered => check(
+            "claude_code_mcp",
+            CheckStatus::Pass,
+            format!("HZR MCP registered at {}", status.path.display()),
+        ),
+        Some(status) => check(
+            "claude_code_mcp",
+            CheckStatus::Warning,
+            format!(
+                "HZR MCP is not registered for Claude Code ({}); {}",
+                status.path.display(),
+                client_config::Client::ClaudeCode.direct_icm_remediation()
+            ),
+        ),
+        None => check(
+            "claude_code_mcp",
+            CheckStatus::Warning,
+            format!(
+                "Claude Code MCP status unavailable; {}",
+                client_config::Client::ClaudeCode.direct_icm_remediation()
+            ),
+        ),
+    }
+}
+
 /// Report registered MCP servers whose project namespace is decided by the client's working
 /// directory rather than pinned.
 ///
@@ -848,8 +889,9 @@ mod tests {
     use crate::client_config::{Client, ClientMcpStatus};
 
     use super::{
-        CheckStatus, attest_active_bundle, bounded, direct_icm_registration_detail,
-        hook_ownership_check, integration_layout, workspace_binding_check,
+        CheckStatus, attest_active_bundle, bounded, claude_code_mcp_check,
+        direct_icm_registration_detail, hook_ownership_check, integration_layout,
+        workspace_binding_check,
     };
 
     #[test]
@@ -921,6 +963,37 @@ mod tests {
             CheckStatus::Pass,
             "only registered servers can have a workspace binding"
         );
+    }
+
+    /// Hooks alone do not register the Claude Code MCP server. `hzr mcp status` can report
+    /// `claude-code registered=false` while hook ownership looks healthy, and doctor used to
+    /// stay silent because the only Claude Code remediation path was the direct-ICM check.
+    /// Install never writes that file, so the warning must name `claude mcp add`.
+    #[test]
+    fn test_doctor_warns_when_claude_code_hzr_mcp_is_absent() {
+        let mut absent = registration(Client::ClaudeCode, None);
+        absent.registered = false;
+        absent.path = std::path::PathBuf::from("/tmp/.claude.json");
+
+        let check = claude_code_mcp_check(&[absent]);
+        assert_eq!(check.name, "claude_code_mcp");
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert!(
+            check.detail.contains("claude mcp add"),
+            "must name the CLI that mutates Claude Code state, got: {}",
+            check.detail
+        );
+        assert!(
+            check.detail.contains("/tmp/.claude.json"),
+            "must name the audited path, got: {}",
+            check.detail
+        );
+
+        let present = claude_code_mcp_check(&[registration(
+            Client::ClaudeCode,
+            Some("/Users/andrew/code/app"),
+        )]);
+        assert_eq!(present.status, CheckStatus::Pass);
     }
 
     #[test]
