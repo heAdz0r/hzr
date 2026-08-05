@@ -14,7 +14,7 @@ use hzr_memory::MemoryRecord;
 use hzr_protocol::{ContextPlanApiResponse, EngineHealth, HealthResponse, SearchApiResponse};
 use serde::Serialize;
 
-use crate::diagnostics::{CheckStatus, DoctorReport};
+use crate::diagnostics::{CheckStatus, DoctorCheck, DoctorReport};
 use crate::migration::MigrationScan;
 use crate::stats::StatsReport;
 
@@ -321,21 +321,88 @@ pub fn print_stats(report: &StatsReport) -> io::Result<()> {
 pub fn print_doctor(report: &DoctorReport) -> io::Result<()> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
+    write_doctor(&mut output, report)
+}
+
+fn write_doctor(output: &mut impl Write, report: &DoctorReport) -> io::Result<()> {
     writeln!(
         output,
         "HZR {} doctor: {}",
         report.hzr_version,
         if report.healthy { "healthy" } else { "failed" }
     )?;
+
+    // Постоянные host limits (например global_codec) не смешиваем с actionable WARN/ERROR.
+    let mut host_limits = Vec::new();
+    let mut actionable = Vec::new();
     for check in &report.checks {
+        if is_host_limit(check) {
+            host_limits.push(check);
+            continue;
+        }
         let status = match check.status {
             CheckStatus::Pass => "PASS",
             CheckStatus::Warning => "WARN",
             CheckStatus::Error => "ERROR",
         };
         writeln!(output, "{status:<5} {}: {}", check.name, check.detail)?;
+        if is_actionable_finding(check) {
+            actionable.push(check);
+        }
+    }
+
+    if !host_limits.is_empty() {
+        writeln!(output)?;
+        writeln!(output, "Host limits (permanent):")?;
+        for check in &host_limits {
+            writeln!(output, "NOTE  {}: {}", check.name, check.detail)?;
+        }
+    }
+
+    if !actionable.is_empty() {
+        writeln!(output)?;
+        writeln!(output, "Next actions:")?;
+        for check in actionable {
+            writeln!(output, "- {}: {}", check.name, remediation_for(check))?;
+        }
     }
     Ok(())
+}
+
+/// Постоянный предел хоста: нельзя исправить установкой HZR (см. README unintercepted).
+fn is_host_limit(check: &DoctorCheck) -> bool {
+    check.name.ends_with("_global_codec")
+}
+
+fn is_actionable_finding(check: &DoctorCheck) -> bool {
+    !is_host_limit(check) && matches!(check.status, CheckStatus::Warning | CheckStatus::Error)
+}
+
+/// Короткая remediation для футера: предпочитаем явную команду/инструкцию из detail.
+fn remediation_for(check: &DoctorCheck) -> &str {
+    for marker in [
+        "; run `",
+        "; Re-register ",
+        ". Re-register ",
+        "; add ",
+        "; stop ",
+        "; restart ",
+    ] {
+        if let Some(pos) = check.detail.find(marker) {
+            // Пропускаем "; " или ". " — оставляем императив целиком.
+            return check.detail[pos + 2..].trim();
+        }
+    }
+    match check.name.as_str() {
+        "client_mcp_ownership" => {
+            "replace direct ICM MCP registration with HZR (`hzr install --force` or client-specific add)"
+        }
+        "hzr_on_path" if check.detail.contains("not on PATH") => {
+            "add the HZR install prefix to PATH"
+        }
+        "degraded_rewrites" => "run a managed rewrite; the next one reconciles the ledger",
+        _ => check.detail.as_str(),
+    }
 }
 
 pub fn print_migration(scan: &MigrationScan) -> io::Result<()> {
@@ -428,11 +495,14 @@ fn exit_code(cause: TerminationCause, code: Option<i32>, signal: Option<i32>) ->
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
     use std::process::ExitCode;
 
     use hzr_exec::TerminationCause;
 
     use super::exit_code;
+    use super::write_doctor;
+    use crate::diagnostics::{CheckStatus, DoctorCheck, DoctorReport};
 
     #[test]
     fn test_exit_code_preserves_completed_process_status() {
@@ -447,6 +517,137 @@ mod tests {
         assert_eq!(
             exit_code(TerminationCause::TimedOut, None, None),
             ExitCode::from(124)
+        );
+    }
+
+    fn render_doctor(report: &DoctorReport) -> String {
+        let mut output = Vec::new();
+        write_doctor(&mut output, report).expect("doctor render");
+        String::from_utf8(output).expect("UTF-8 doctor output")
+    }
+
+    fn sample_report() -> DoctorReport {
+        DoctorReport {
+            hzr_version: "0.3.7".into(),
+            config_path: PathBuf::from("/tmp/hzr.toml"),
+            data_dir: PathBuf::from("/tmp/hzr-data"),
+            workspace: PathBuf::from("/tmp/project"),
+            healthy: false,
+            checks: vec![
+                DoctorCheck {
+                    name: "hook_ownership".into(),
+                    status: CheckStatus::Pass,
+                    detail: "HZR owns hooks".into(),
+                },
+                DoctorCheck {
+                    name: "client_mcp_workspace".into(),
+                    status: CheckStatus::Warning,
+                    detail: "claude-desktop registered without `--workspace`, so the memory \
+                             namespace comes from the directory the client launches from; \
+                             Re-register with `hzr mcp config --client <client> --workspace <dir>`"
+                        .into(),
+                },
+                DoctorCheck {
+                    name: "claude_global_codec".into(),
+                    status: CheckStatus::Warning,
+                    detail: "unintercepted: the host exposes no global request/response hook; \
+                             HZR records no codec savings for this path"
+                        .into(),
+                },
+                DoctorCheck {
+                    name: "codex_global_codec".into(),
+                    status: CheckStatus::Warning,
+                    detail: "unintercepted: the host exposes no global request/response hook; \
+                             HZR records no codec savings for this path"
+                        .into(),
+                },
+                DoctorCheck {
+                    name: "hzr_on_path".into(),
+                    status: CheckStatus::Error,
+                    detail: "no durable `hzr` in /tmp/bin; run `hzr install --prefix /tmp/bin`"
+                        .into(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn test_doctor_labels_permanent_host_limits_separately_from_actionable_warns() {
+        let rendered = render_doctor(&sample_report());
+
+        assert!(
+            rendered.contains("Host limits (permanent):"),
+            "permanent codec host limits must not share the WARN stream with actionable findings"
+        );
+        assert!(
+            rendered.contains("NOTE  claude_global_codec:"),
+            "claude_global_codec is a permanent host limit, not an actionable WARN"
+        );
+        assert!(
+            rendered.contains("NOTE  codex_global_codec:"),
+            "codex_global_codec is a permanent host limit, not an actionable WARN"
+        );
+        assert!(
+            !rendered.contains("WARN  claude_global_codec:"),
+            "host limits must not render as WARN"
+        );
+        assert!(
+            !rendered.contains("WARN  codex_global_codec:"),
+            "host limits must not render as WARN"
+        );
+        assert!(
+            rendered.contains("WARN  client_mcp_workspace:"),
+            "actionable warnings stay in the main check list"
+        );
+    }
+
+    #[test]
+    fn test_doctor_lists_next_actions_for_actionable_findings_only() {
+        let rendered = render_doctor(&sample_report());
+
+        assert!(
+            rendered.contains("Next actions:"),
+            "human doctor output must end with remediations for actionable findings"
+        );
+        assert!(
+            rendered.contains("client_mcp_workspace:"),
+            "workspace pinning warn must appear in Next actions"
+        );
+        assert!(
+            rendered.contains("hzr mcp config --client <client> --workspace <dir>"),
+            "next action should carry the remediation command"
+        );
+        assert!(
+            rendered.contains("hzr_on_path:"),
+            "path error must appear in Next actions"
+        );
+        assert!(
+            rendered.contains("hzr install --prefix /tmp/bin"),
+            "next action should carry the install remediation"
+        );
+        assert!(
+            !rendered
+                .split("Next actions:")
+                .nth(1)
+                .expect("footer")
+                .contains("global_codec"),
+            "host limits must not appear under Next actions"
+        );
+    }
+
+    #[test]
+    fn test_doctor_omits_next_actions_when_only_host_limits_warn() {
+        let mut report = sample_report();
+        report.healthy = true;
+        report.checks.retain(|check| {
+            check.status == CheckStatus::Pass || check.name.ends_with("_global_codec")
+        });
+        let rendered = render_doctor(&report);
+
+        assert!(rendered.contains("Host limits (permanent):"));
+        assert!(
+            !rendered.contains("Next actions:"),
+            "a report with only permanent host limits has nothing actionable to list"
         );
     }
 }
