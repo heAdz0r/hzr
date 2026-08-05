@@ -1503,6 +1503,7 @@ pub async fn usage(
     Json(request): Json<UsageApiRequest>,
 ) -> Result<Json<UsageApiResponse>, ApiError> {
     validate_usage(&request)?;
+    let project_path = normalize_usage_project_path(request.project_path.as_deref());
     let record = LedgerRecord {
         trace_id: TraceId::from_string(request.trace_id),
         provider: request.provider,
@@ -1514,6 +1515,7 @@ pub async fn usage(
         outcome: request.outcome,
         policy_version: env!("CARGO_PKG_VERSION").into(),
         cost_microusd: request.cost_microusd,
+        project_path,
     };
     state
         .ledger
@@ -1910,7 +1912,23 @@ fn validate_usage(request: &UsageApiRequest) -> Result<(), ApiError> {
     ) {
         return Err(ApiError::bad_request("invalid usage outcome"));
     }
+    if let Some(path) = request.project_path.as_deref() {
+        let trimmed = path.trim();
+        if trimmed.len() > 4096 || trimmed.contains('\0') {
+            return Err(ApiError::bad_request("invalid usage project path"));
+        }
+    }
     Ok(())
+}
+
+/// Сохраняет канонический путь, если он существует; иначе — trimmed строку (не роняем чек).
+fn normalize_usage_project_path(value: Option<&str>) -> String {
+    let Some(raw) = value.map(str::trim).filter(|path| !path.is_empty()) else {
+        return String::new();
+    };
+    std::fs::canonicalize(raw)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| raw.to_owned())
 }
 
 fn captured_utf8(

@@ -91,8 +91,11 @@ client profile; HZR still enforces initialization and activation when it starts.
 canonical project root and separator-safe descendants. The headline, command ranking, subsystem
 totals, and optimizer-bypass denominator use the same filter.
 
-Provider receipts and degraded-hook coverage remain explicitly labelled `global_lifetime`: current
-provider rows have no workspace identity, so HZR does not invent a project attribution.
+Provider receipts that carry a workspace identity are labelled `project_matched` under
+`hzr stats --workspace DIR` and count only matching rows (exact root or separator-safe
+descendants). Older receipts without `project_path` stay unscoped: they appear in the global
+lifetime view and are omitted from project-scoped provider totals so HZR never invents
+attribution. Degraded-hook coverage remains process-local and is not project-filtered.
 
 ## 8. Acceptance criteria
 

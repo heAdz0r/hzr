@@ -36,6 +36,7 @@ mod tests {
             "event.type === \"auto_retry_start\"",
             "usage_recorded: usage.recorded",
             "usage_warning: usage.warning",
+            "project_path: workspace",
         ] {
             assert!(
                 BRIDGE.contains(required),

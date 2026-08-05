@@ -16,7 +16,8 @@ pub struct LedgerWriter {
 
 enum WriteCommand {
     Usage {
-        record: LedgerRecord,
+        // Box: LedgerRecord с workspace identity раздувает enum — держим варианты компактными.
+        record: Box<LedgerRecord>,
         reply: oneshot::Sender<Result<(), LedgerError>>,
     },
     /// An HZR-owned reduction, written to the same table the pinned engine uses so it is
@@ -89,7 +90,10 @@ impl LedgerWriter {
     pub async fn record(&self, record: LedgerRecord) -> Result<(), LedgerWriterError> {
         let (reply, result) = oneshot::channel();
         self.sender
-            .send(WriteCommand::Usage { record, reply })
+            .send(WriteCommand::Usage {
+                record: Box::new(record),
+                reply,
+            })
             .await
             .map_err(|_| LedgerWriterError::Unavailable)?;
         result.await.map_err(|_| LedgerWriterError::Unavailable)??;
@@ -135,6 +139,7 @@ mod tests {
                         outcome: "accepted".into(),
                         policy_version: env!("CARGO_PKG_VERSION").into(),
                         cost_microusd: None,
+                        project_path: String::new(),
                     })
                     .await
             }));

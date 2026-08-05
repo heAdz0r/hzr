@@ -103,26 +103,30 @@ pub struct CommandSavings {
 
 pub fn collect(config: &Config, workspace: Option<&Path>) -> Result<StatsReport> {
     let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?;
-    let (gain, bypass, scope) = match workspace {
+    let (gain, bypass, scope, observed_model_usage, observed_model_usage_scope) = match workspace {
         Some(workspace) => {
             let workspace = workspace.to_string_lossy();
             (
                 ledger.efficiency_summary_for_project(&workspace)?,
                 ledger.bypass_summary_for_project(&workspace)?,
                 format!("project {}", workspace),
+                ledger.summary_for_project(&workspace)?,
+                "project_matched",
             )
         }
         None => (
             ledger.efficiency_summary()?,
             ledger.bypass_summary()?,
             "global lifetime".to_owned(),
+            ledger.summary()?,
+            "global_lifetime",
         ),
     };
-    let observed_model_usage = ledger.summary()?;
     let coverage = hook_runner::degraded_rewrite_coverage(config)?;
     Ok(build_report(
         gain,
         observed_model_usage,
+        observed_model_usage_scope,
         coverage,
         bypass,
         scope,
@@ -132,6 +136,7 @@ pub fn collect(config: &Config, workspace: Option<&Path>) -> Result<StatsReport>
 fn build_report(
     gain: EfficiencySummary,
     observed_model_usage: LedgerSummary,
+    observed_model_usage_scope: &'static str,
     coverage: AccountingCoverage,
     bypass: BypassSummary,
     scope: String,
@@ -232,21 +237,36 @@ fn build_report(
         by_subsystem,
         by_command: commands,
         observed_model_usage,
-        observed_model_usage_scope: "global_lifetime",
+        observed_model_usage_scope,
         bypass: bypass_report(bypass),
         traffic_coverage,
         degraded_rewrites: coverage.unreconciled_rewrites,
         coverage,
         runtime_accounting_complete: coverage.complete,
         economic_claim_ready: false,
-        notes: vec![
-            "direct savings are estimated from before/after output size and never mixed with provider usage",
-            "read, write, rgai/search, and command filters share the same cumulative HZR-owned history",
-            "a bypassed operation delivers as many tokens as it consumed, so it cancels out of the reduction ratio instead of lowering it",
-            "context selection, memory recall, and response contracts receive no savings credit without a measured counterfactual",
-            "provider usage and accounting coverage remain global because provider rows do not yet carry a workspace identity",
-        ],
+        notes: provider_usage_notes(observed_model_usage_scope),
     }
+}
+
+fn provider_usage_notes(observed_model_usage_scope: &str) -> Vec<&'static str> {
+    let mut notes = vec![
+        "direct savings are estimated from before/after output size and never mixed with provider usage",
+        "read, write, rgai/search, and command filters share the same cumulative HZR-owned history",
+        "a bypassed operation delivers as many tokens as it consumed, so it cancels out of the reduction ratio instead of lowering it",
+        "context selection, memory recall, and response contracts receive no savings credit without a measured counterfactual",
+    ];
+    notes.push(match observed_model_usage_scope {
+        "project_matched" => {
+            "provider usage is scoped to receipts that carry a matching workspace identity; older unscoped receipts stay in the global lifetime view only"
+        }
+        _ => {
+            "provider usage is the global lifetime total across scoped and legacy unscoped receipts"
+        }
+    });
+    notes.push(
+        "degraded-hook accounting coverage remains process-local and is not project-filtered",
+    );
+    notes
 }
 
 fn bypass_report(bypass: BypassSummary) -> BypassReport {
@@ -345,6 +365,7 @@ mod tests {
         let report = build_report(
             gain,
             usage,
+            "global_lifetime",
             AccountingCoverage::default_complete(),
             BypassSummary::default(),
             "global lifetime".into(),
@@ -353,9 +374,38 @@ mod tests {
         assert_eq!(report.direct_savings.net_avoided_tokens_estimated, 730);
         assert_eq!(report.direct_savings.regression_tokens_estimated, 20);
         assert_eq!(report.observed_model_usage.actual_input_tokens, 900);
+        assert_eq!(report.observed_model_usage_scope, "global_lifetime");
         assert_eq!(report.by_subsystem.len(), 2);
         assert!(report.runtime_accounting_complete);
         assert!(!report.economic_claim_ready);
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|note| note.contains("never mixed with provider usage"))
+        );
+    }
+
+    #[test]
+    fn test_project_scoped_report_labels_matched_provider_usage() {
+        let report = build_report(
+            EfficiencySummary::default(),
+            LedgerSummary {
+                tasks: 1,
+                actual_input_tokens: 40,
+                ..LedgerSummary::default()
+            },
+            "project_matched",
+            AccountingCoverage::default_complete(),
+            BypassSummary::default(),
+            "project /work/a".into(),
+        );
+
+        assert_eq!(report.observed_model_usage_scope, "project_matched");
+        assert_eq!(report.observed_model_usage.actual_input_tokens, 40);
+        assert!(report.notes.iter().any(|note| {
+            note.contains("matching workspace identity") && note.contains("unscoped")
+        }));
     }
 
     #[test]
@@ -414,6 +464,7 @@ mod tests {
         let report = build_report(
             gain,
             LedgerSummary::default(),
+            "global_lifetime",
             AccountingCoverage::default_complete(),
             bypass,
             "global lifetime".into(),
@@ -436,6 +487,7 @@ mod tests {
         let report = build_report(
             EfficiencySummary::default(),
             LedgerSummary::default(),
+            "global_lifetime",
             AccountingCoverage::default_complete(),
             BypassSummary::default(),
             "global lifetime".into(),

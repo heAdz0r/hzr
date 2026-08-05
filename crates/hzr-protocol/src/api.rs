@@ -311,6 +311,9 @@ pub struct UsageApiRequest {
     pub outcome: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_microusd: Option<u64>,
+    /// Канонический workspace root; отсутствует у legacy-чеков — они остаются глобальными.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
