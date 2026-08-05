@@ -46,9 +46,9 @@ use hzr_protocol::{
 };
 
 use crate::cli::{
-    AgentCommand, Cli, CodecCommand, Command, ContextCommand, ContextPlanArgs, DaemonCommand,
-    EnginesCommand, ExecArgs, ExecCommand, HooksCommand, IndexCommand, McpCommand, MemoryCommand,
-    MigrateCommand, SearchArgs, ServiceCommand,
+    ActivationCommand, AgentCommand, Cli, CodecCommand, Command, ContextCommand, ContextPlanArgs,
+    DaemonCommand, EnginesCommand, ExecArgs, ExecCommand, HooksCommand, IndexCommand, McpCommand,
+    MemoryCommand, MigrateCommand, SearchArgs, ServiceCommand,
 };
 use crate::client::DaemonClient;
 use crate::diagnostics::{doctor, integration_layout};
@@ -278,6 +278,13 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             return set_workspace_activation(&config_path, workspace.as_deref(), false, cli.json)
                 .await;
         }
+        Command::Activation {
+            command: ActivationCommand::Status,
+        } => {
+            let config = Config::load_or_default(&config_path)
+                .with_context(|| format!("failed to load {}", config_path.display()))?;
+            return show_activation_status(&config, cli.json);
+        }
         _ => {}
     }
 
@@ -292,7 +299,8 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Install { .. }
         | Command::Uninstall { .. }
         | Command::Enable { .. }
-        | Command::Disable { .. } => {
+        | Command::Disable { .. }
+        | Command::Activation { .. } => {
             bail!("adoption command entered configured execution path")
         }
         Command::Hooks {
@@ -1246,6 +1254,16 @@ async fn initialize_if_enabled(
         json,
     )
     .await
+}
+
+fn show_activation_status(config: &Config, json: bool) -> Result<ExitCode> {
+    let report = activation::ActivationStatusReport::from_config(&config.activation);
+    if json {
+        print_json(&report)?;
+    } else {
+        print!("{}", activation::render_status_text(&report));
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 async fn set_workspace_activation(

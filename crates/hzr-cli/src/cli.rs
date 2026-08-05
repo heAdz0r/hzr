@@ -53,6 +53,11 @@ pub enum Command {
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
+    #[command(about = "Inspect project-only activation mode and enabled workspaces")]
+    Activation {
+        #[command(subcommand)]
+        command: ActivationCommand,
+    },
     #[command(
         about = "Adopt HZR: PATH binaries, one hook dispatcher, agent instructions, and visualizer service"
     )]
@@ -226,6 +231,12 @@ pub enum McpCommand {
 pub enum McpClientArg {
     Codex,
     ClaudeDesktop,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ActivationCommand {
+    #[command(about = "List activation mode and enabled workspaces")]
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -678,8 +689,8 @@ mod tests {
     use clap::Parser;
 
     use super::{
-        Cli, Command, ContextCommand, DaemonCommand, ExecCommand, HooksCommand, IndexCommand,
-        McpCommand, MigrateCommand, ServiceCommand,
+        ActivationCommand, Cli, Command, ContextCommand, DaemonCommand, ExecCommand, HooksCommand,
+        IndexCommand, McpCommand, MigrateCommand, ServiceCommand,
     };
 
     /// `hzr search q --mode exact --path crates fork-core/src` used to fail with clap's
@@ -785,6 +796,20 @@ mod tests {
             stats.command,
             Command::Stats { workspace: Some(ref path) }
                 if path == std::path::Path::new("/work/app")
+        ));
+    }
+
+    #[test]
+    fn test_cli_parses_activation_status() {
+        let cli = Cli::try_parse_from(["hzr", "activation", "status", "--json"])
+            .expect("activation status");
+
+        assert!(cli.json);
+        assert!(matches!(
+            cli.command,
+            Command::Activation {
+                command: ActivationCommand::Status
+            }
         ));
     }
 
