@@ -331,7 +331,8 @@ hzr engines status
 hzr index status|init
 hzr search|rgai
 hzr context plan
-hzr memory recall|store|status         --scope project|global|project-and-global
+hzr memory recall|store|forget|update|prune|status
+                                      --scope project|global|project-and-global
 hzr exec rewrite|run|approve|deny
 hzr codec compile
 hzr agent run

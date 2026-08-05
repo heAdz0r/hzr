@@ -4,6 +4,11 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Documentation
+
+- Retired stale “no forget/prune” known-gap text that no longer matches the current CLI.
+  README basic commands list `hzr memory forget|update|prune` alongside recall/store/status.
+
 ## [0.3.7] - 2026-08-05
 
 ### Added
@@ -294,11 +299,12 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 - README, the canonical agent contract, Claude/Codex integration guides, fork docs and
   the parity ledger now agree on the corrected behavior and scope.
 
-### Known gaps
+### Known gaps (as of 0.3.3; closed in 0.3.4)
 
-- `hzr memory` still has no `forget` or `prune`, so cross-project rows written into a
-  project namespace by the legacy import cannot be removed through the sanctioned control
-  plane. The engine supports it; the HZR path does not exist yet.
+- As of 0.3.3, `hzr memory` had no `forget` or `prune` on the HZR control plane, so
+  quarantined legacy-import rows could not be removed through sanctioned commands. Closed
+  in 0.3.4: use `hzr memory forget`, `hzr memory update`, and `hzr memory prune` on current
+  releases.
 
 
 ## [0.3.2] - 2026-08-02
