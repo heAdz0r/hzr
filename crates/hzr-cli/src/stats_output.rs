@@ -17,7 +17,7 @@
 
 use std::io::{self, IsTerminal, Write};
 
-use crate::stats::StatsReport;
+use crate::stats::{StatsReport, with_explicit_mcp_channel};
 
 /// Inner width of every framed panel. Kept in one place so the alignment assertion in the
 /// tests stays meaningful.
@@ -421,15 +421,13 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
             traffic.native_unaccounted_operations
         )?;
     }
-    if !traffic.by_channel.is_empty() {
-        let channels = traffic
-            .by_channel
-            .iter()
-            .map(|(channel, count)| format!("{channel}={count}"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        writeln!(output, "├─ channels {channels}")?;
-    }
+    // MCP всегда в строке split, иначе отсутствие ключа читается как «канал вне учёта».
+    let channels = with_explicit_mcp_channel(traffic.by_channel.clone())
+        .iter()
+        .map(|(channel, count)| format!("{channel}={count}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    writeln!(output, "├─ channels {channels}")?;
     if coverage.unreconciled_rewrites > 0 {
         writeln!(
             output,
@@ -757,6 +755,41 @@ mod tests {
         assert!(rendered.contains("▲ INCOMPLETE"));
         assert!(rendered.contains("absent from the ledger"));
         assert!(rendered.contains("never summed"));
+    }
+
+    /// A missing MCP key looks like the channel is unaccounted; the split must show mcp=0.
+    #[test]
+    fn test_channel_split_always_shows_mcp_even_when_zero() {
+        let mut traffic = TrafficCoverage {
+            accounted_operations: 5,
+            total_observed_operations: 5,
+            accounted_share_pct: 100.0,
+            ..TrafficCoverage::default()
+        };
+        traffic.by_channel.insert("hook_cli".into(), 5);
+        let rendered = render(&StatsReport {
+            traffic_coverage: traffic,
+            ..report(LedgerSummary::default(), Vec::new())
+        });
+
+        let channels = rendered
+            .lines()
+            .find(|line| line.contains("channels "))
+            .expect("channel split line");
+        assert!(
+            channels.contains("mcp=0"),
+            "expected mcp=0 in channel split, got: {channels}"
+        );
+        assert!(channels.contains("hook_cli=5"));
+    }
+
+    #[test]
+    fn test_empty_traffic_still_renders_mcp_zero_in_channel_split() {
+        let rendered = render(&report(LedgerSummary::default(), Vec::new()));
+        assert!(
+            rendered.contains("channels ") && rendered.contains("mcp=0"),
+            "empty traffic must still render an explicit mcp=0 channel"
+        );
     }
 
     #[test]
