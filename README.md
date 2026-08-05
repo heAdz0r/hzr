@@ -297,7 +297,10 @@ The implementation and threat boundary are specified in
 - One worktree owner lock prevents a second grepai watcher.
 - ICM has one lifecycle and one physical DB; the repository namespace is set by HZR, not by the client.
 - Fork `mem.db` remains derived structural cache. It is not a second embedding index or durable agent memory.
-- Legacy, nested and foreign stores are detected but never automatically removed.
+- Legacy, nested and foreign stores are detected but never automatically removed. Dormant nested
+  stores are reported as a `doctor` warning but do not block canonical search; HZR never launches a
+  watcher for them. An active nested writer, conflicting root placement, and ambiguous explicit
+  migration still fail closed.
 
 Safe migration begins with a read-only scan:
 

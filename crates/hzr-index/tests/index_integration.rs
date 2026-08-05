@@ -1,11 +1,12 @@
 #![cfg(unix)]
 
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use fs2::FileExt;
 use hzr_index::{
     Deadlines, GrepAi, IndexCoordinator, IndexError, IndexPlacement, IndexWatcherState,
     InitOptions, InitOutcome, Workspace,
@@ -13,7 +14,7 @@ use hzr_index::{
 use tempfile::TempDir;
 
 #[tokio::test]
-async fn test_workspace_uses_git_root_and_reports_nested_indexes() {
+async fn test_workspace_uses_git_root_and_reports_dormant_nested_indexes() {
     let repo = git_repo();
     let nested = repo.path().join("src/deep");
     fs::create_dir_all(&nested).expect("nested source directory must be created");
@@ -28,11 +29,77 @@ async fn test_workspace_uses_git_root_and_reports_nested_indexes() {
     assert_eq!(workspace.identity.root, canonical_root.clone());
     assert_eq!(workspace.index.directory, canonical_root.join(".grepai"));
     assert_eq!(workspace.duplicate_index_dirs, vec![canonical_duplicate]);
-    assert!(matches!(
-        workspace.require_single_index(),
-        Err(IndexError::DuplicateIndexes { .. })
-    ));
+    assert!(workspace.require_single_index().is_ok());
     assert!(duplicate.is_dir());
+}
+
+#[tokio::test]
+async fn test_coordinator_keeps_canonical_index_available_with_dormant_nested_index() {
+    let repo = git_repo();
+    let data = tempfile::tempdir().expect("managed data root");
+    write_source(repo.path(), "pub fn canonical() {}\n");
+    fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    let duplicate = repo.path().join("src/.grepai");
+    fs::create_dir(&duplicate).expect("dormant nested index directory");
+    fs::write(duplicate.join("config.yaml"), "version: 1\n").expect("dormant nested config");
+    fs::write(duplicate.join("index.gob"), b"legacy-index").expect("dormant nested vectors");
+    let canonical_duplicate =
+        fs::canonicalize(&duplicate).expect("dormant nested index must canonicalize");
+    let grepai = fake_grepai(repo.path(), "0.35.0");
+    let coordinator = IndexCoordinator::new(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        grepai,
+        deadlines(),
+        true,
+    );
+
+    let prepared = coordinator
+        .prepare(repo.path())
+        .await
+        .expect("dormant nested index must not block the canonical index");
+
+    assert_eq!(
+        prepared.workspace.duplicate_index_dirs,
+        vec![canonical_duplicate]
+    );
+    assert_eq!(
+        fs::read(duplicate.join("index.gob")).expect("dormant vectors remain readable"),
+        b"legacy-index"
+    );
+    assert!(prepared.workspace.index.config.is_file());
+    coordinator.shutdown().await.expect("coordinator shutdown");
+}
+
+#[tokio::test]
+async fn test_coordinator_refuses_an_active_nested_index_writer() {
+    let repo = git_repo();
+    let data = tempfile::tempdir().expect("managed data root");
+    write_source(repo.path(), "pub fn canonical() {}\n");
+    let duplicate = repo.path().join("src/.grepai");
+    fs::create_dir(&duplicate).expect("nested index directory");
+    fs::write(duplicate.join("config.yaml"), "version: 1\n").expect("nested config");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(duplicate.join("index.gob.lock"))
+        .expect("nested writer lock");
+    lock.try_lock_exclusive().expect("hold nested writer lock");
+    let coordinator = IndexCoordinator::new(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        fake_grepai(repo.path(), "0.35.0"),
+        deadlines(),
+        true,
+    );
+
+    let result = coordinator.prepare(repo.path()).await;
+
+    assert!(matches!(result, Err(IndexError::DuplicateIndexes { .. })));
+    assert!(!repo.path().join(".grepai").exists());
+    assert!(duplicate.join("config.yaml").is_file());
 }
 
 #[tokio::test]

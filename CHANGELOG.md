@@ -17,6 +17,9 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 - Codex now checks the cached/published version during its mandatory installed `HZR.md` bootstrap.
   The notice is emitted separately from fork-core stdout, preserving byte-exact `hzr rtk -- read`
   output while making the update visible to the model.
+- Dormant nested `.grepai` directories left by older grepai/RTK invocations no longer disable the
+  canonical HZR index. HZR reports them as a doctor warning, never activates or mutates them, and
+  keeps explicit migration strict when multiple stores make source selection ambiguous.
 
 ## [0.3.5] - 2026-08-05
 

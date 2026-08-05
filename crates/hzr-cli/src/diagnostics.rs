@@ -420,19 +420,21 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 )),
                 Err(error) => checks.push(check("grepai_ownership", CheckStatus::Error, error)),
             }
+            let duplicate_detail = discovered
+                .duplicate_index_dirs
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
             checks.push(if discovered.duplicate_index_dirs.is_empty() {
                 check("grepai_duplicates", CheckStatus::Pass, "none found")
+            } else if matches!(
+                discovered.require_single_index(),
+                Err(hzr_index::IndexError::DuplicateIndexes { .. })
+            ) {
+                check("grepai_duplicates", CheckStatus::Error, duplicate_detail)
             } else {
-                check(
-                    "grepai_duplicates",
-                    CheckStatus::Error,
-                    discovered
-                        .duplicate_index_dirs
-                        .iter()
-                        .map(|path| path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                )
+                check("grepai_duplicates", CheckStatus::Warning, duplicate_detail)
             });
         }
         Err(error) => checks.push(check("grepai_ownership", CheckStatus::Error, error)),

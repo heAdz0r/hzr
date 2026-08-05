@@ -1,9 +1,13 @@
-# HZR 0.3.6 — Reliable update notifications
+# HZR 0.3.6 — Reliable notifications and resilient index startup
 
 HZR 0.3.6 fixes the path that tells users and agents a newer published version exists. The updater
 itself already downloaded, verified, and atomically installed release bundles correctly; discovery
 was unreliable because a pre-release “nothing newer” result stayed cached for 24 hours and only one
 agent surface invoked the check.
+
+It also restores canonical search in repositories that still contain dormant nested `.grepai`
+directories created by older grepai/RTK invocations. Those stores remain preserved and visible to
+diagnostics, but no longer turn a hygiene finding into a search outage.
 
 No update is installed automatically. HZR reports availability and waits for explicit approval.
 
@@ -20,6 +24,12 @@ No update is installed automatically. HZR reports availability and waits for exp
 - Agent-facing notices explicitly require telling the user once and prohibit running `hzr update`
   without approval.
 - Network errors remain silent and fail-open: workspace initialization and tool execution continue.
+- A dormant nested `.grepai` is now a non-blocking doctor warning. HZR takes only the canonical
+  owner lock, launches only the canonical watcher, and leaves every nested byte untouched.
+- A nested `index.gob.lock` held by an active legacy writer is still a hard error, preventing two
+  grepai writers from running against one repository.
+- Explicit migration remains fail-closed when several stores make the intended source ambiguous;
+  this availability fix does not guess, merge, delete, or silently archive user data.
 
 ## Why 0.3.5 could stay silent
 
@@ -30,7 +40,8 @@ user notification, while Codex's bootstrap did not call the update path at all.
 
 ## Upgrade impact
 
-The upgrade does not rewrite indexes, memory, ledger rows, or project activation. The installer
+The upgrade does not rewrite indexes, memory, ledger rows, or project activation. Dormant nested
+stores remain in place until an operator deliberately handles them. The installer
 rewires the marker-owned Claude SessionStart command to request structured hook output and preserves
 unrelated hooks and settings through the existing transactional backup and compare-and-swap path.
 
@@ -48,7 +59,8 @@ Restart already-open agent sessions after upgrading so they reload the managed h
 ## Verification
 
 The release gate includes focused RED/GREEN regression tests for negative-cache expiry, structured
-SessionStart output, and Codex contract-bootstrap detection, followed by:
+SessionStart output, Codex contract-bootstrap detection, and canonical index availability in the
+presence of a byte-preserved dormant nested store, followed by:
 
 ```bash
 cargo fmt --all -- --check
