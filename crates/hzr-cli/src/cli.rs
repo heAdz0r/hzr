@@ -211,8 +211,18 @@ pub enum Command {
         #[arg(long, value_name = "DIR")]
         install_root: Option<PathBuf>,
     },
-    #[command(about = "Install a newer GitHub release when available")]
-    Update,
+    #[command(
+        about = "Install a newer GitHub release when available",
+        long_about = "Download, verify, and install a newer GitHub release when available.\n\nWith `--check`, only query GitHub and report whether a newer release exists; nothing is downloaded or installed.\n\nExit status for `--check`: 0 when the check succeeds (already current or update available). Non-zero only when the check fails (network, parse, or unsupported platform)."
+    )]
+    Update {
+        /// Report whether a newer GitHub release is available without downloading or installing.
+        ///
+        /// Exit status is 0 when the check succeeds (already current or update available).
+        /// Non-zero only when the check fails (network, parse, or unsupported platform).
+        #[arg(long)]
+        check: bool,
+    },
     #[command(about = "Print the HZR Red-Green-Refactor contract")]
     Tdd,
     #[command(
@@ -1166,7 +1176,28 @@ mod tests {
     fn test_cli_parses_update_command() {
         let cli = Cli::try_parse_from(["hzr", "update"]).expect("native update command");
 
-        assert!(matches!(cli.command, Command::Update));
+        assert!(matches!(cli.command, Command::Update { check: false }));
+    }
+
+    #[test]
+    fn test_cli_parses_update_check_without_installing() {
+        let cli = Cli::try_parse_from(["hzr", "update", "--check"]).expect("update --check");
+
+        assert!(matches!(cli.command, Command::Update { check: true }));
+    }
+
+    #[test]
+    fn test_update_check_help_documents_agent_friendly_exit_codes() {
+        let help = Cli::command()
+            .find_subcommand_mut("update")
+            .expect("update subcommand")
+            .render_long_help()
+            .to_string();
+
+        assert!(help.contains("--check"));
+        assert!(help.contains("without downloading or installing"));
+        assert!(help.contains("Exit status"));
+        assert!(help.contains("Non-zero only when the check fails"));
     }
 
     #[test]

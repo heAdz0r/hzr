@@ -284,8 +284,8 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         _ => {}
     }
 
-    if matches!(&cli.command, Command::Update) {
-        return update::execute(cli.json).await;
+    if let Command::Update { check } = &cli.command {
+        return update::execute(cli.json, *check).await;
     }
 
     let config = Config::load_or_default(&config_path)
@@ -301,7 +301,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Hooks {
             command: HooksCommand::Status,
         } => bail!("hook status entered configured execution path"),
-        Command::Update => bail!("update command entered configured execution path"),
+        Command::Update { .. } => bail!("update command entered configured execution path"),
         Command::Hooks {
             command: HooksCommand::Dispatch,
         } => {
