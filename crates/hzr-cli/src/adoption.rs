@@ -10,10 +10,12 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 const HZR_DISPATCH_SUFFIX: &str = " hooks dispatch";
-const HZR_INIT_SUFFIX: &str = " init --if-needed --quiet";
-const HZR_INIT_SKIP_SERVICE_SUFFIX: &str = " init --if-needed --quiet --skip-service";
-const HZR_INIT_ENABLED_SUFFIX: &str = " init --if-enabled --quiet";
-const HZR_INIT_ENABLED_SKIP_SERVICE_SUFFIX: &str = " init --if-enabled --quiet --skip-service";
+const HZR_INIT_SUFFIX: &str = " init --if-needed --quiet --session-start-hook";
+const HZR_INIT_SKIP_SERVICE_SUFFIX: &str =
+    " init --if-needed --quiet --session-start-hook --skip-service";
+const HZR_INIT_ENABLED_SUFFIX: &str = " init --if-enabled --quiet --session-start-hook";
+const HZR_INIT_ENABLED_SKIP_SERVICE_SUFFIX: &str =
+    " init --if-enabled --quiet --session-start-hook --skip-service";
 
 /// What "settings.json is absent" means, so a first install is not mistaken for a
 /// concurrent modification during compare-and-swap.
@@ -685,13 +687,17 @@ mod tests {
         install(&path, binary(), true, false, false, false, true)
             .expect("install with service opt-out");
         let opted_out = fs::read_to_string(&path).expect("opted-out settings");
-        assert!(opted_out.contains("init --if-needed --quiet --skip-service"));
+        assert!(opted_out.contains("init --if-needed --quiet --session-start-hook --skip-service"));
         assert!(status(&path).expect("opted-out hook status").installed);
 
         install(&path, binary(), true, true, false, false, true)
             .expect("restore automatic service startup");
         let automatic = fs::read_to_string(&path).expect("automatic settings");
         assert!(automatic.contains("init --if-needed --quiet"));
+        assert!(
+            automatic.contains("--session-start-hook"),
+            "the hook must request structured user-visible update notices"
+        );
         assert!(!automatic.contains("--skip-service"));
     }
 
@@ -706,7 +712,7 @@ mod tests {
         assert!(
             report
                 .rendered_settings
-                .contains("init --if-enabled --quiet")
+                .contains("init --if-enabled --quiet --session-start-hook")
         );
         assert!(
             !report
@@ -748,7 +754,7 @@ mod tests {
     #[test]
     fn hook_binary_validates_but_preserves_a_durable_symlink() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.5/bin");
+        let release = directory.path().join("versions/v0.3.6/bin");
         let prefix = directory.path().join("bin");
         fs::create_dir_all(&release).expect("release directory");
         fs::create_dir_all(&prefix).expect("prefix directory");

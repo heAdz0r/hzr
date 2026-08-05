@@ -232,6 +232,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         if_needed,
         if_enabled,
         quiet,
+        session_start_hook,
         skip_service,
         ..
     } = &cli.command
@@ -241,6 +242,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 &config_path,
                 data_dir.as_deref(),
                 *quiet,
+                *session_start_hook,
                 *skip_service,
                 cli.json,
             )
@@ -251,6 +253,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 &config_path,
                 data_dir.as_deref(),
                 *quiet,
+                *session_start_hook,
                 *skip_service,
                 cli.json,
             )
@@ -1083,6 +1086,7 @@ async fn initialize_if_needed(
     config_path: &Path,
     data_dir: Option<&Path>,
     quiet: bool,
+    session_start_hook: bool,
     skip_service: bool,
     json: bool,
 ) -> Result<ExitCode> {
@@ -1182,7 +1186,11 @@ async fn initialize_if_needed(
     }
     if !json {
         if let Some(notice) = update::startup_notice(&config.data_dir).await {
-            println!("{notice}");
+            if session_start_hook {
+                print_json(&update::session_start_payload(&notice))?;
+            } else {
+                println!("{notice}");
+            }
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -1192,6 +1200,7 @@ async fn initialize_if_enabled(
     config_path: &Path,
     data_dir: Option<&Path>,
     quiet: bool,
+    session_start_hook: bool,
     skip_service: bool,
     json: bool,
 ) -> Result<ExitCode> {
@@ -1222,7 +1231,15 @@ async fn initialize_if_enabled(
         }
         return Ok(ExitCode::SUCCESS);
     }
-    initialize_if_needed(config_path, data_dir, quiet, skip_service, json).await
+    initialize_if_needed(
+        config_path,
+        data_dir,
+        quiet,
+        session_start_hook,
+        skip_service,
+        json,
+    )
+    .await
 }
 
 async fn set_workspace_activation(
@@ -1779,7 +1796,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.5-test");
+        let release = directory.path().join("versions/v0.3.6-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -1799,7 +1816,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.5-test");
+        let release = directory.path().join("versions/v0.3.6-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))
@@ -1817,7 +1834,7 @@ mod tests {
     #[test]
     fn public_binary_symlink_resolves_to_the_versioned_source_directory() {
         let directory = tempdir().expect("temporary directory");
-        let release_bin = directory.path().join("versions/v0.3.5-test/bin");
+        let release_bin = directory.path().join("versions/v0.3.6-test/bin");
         let release_binary = release_bin.join("hzr");
         let public_bin = directory.path().join("bin");
         std::fs::create_dir_all(&release_bin).expect("release bin");

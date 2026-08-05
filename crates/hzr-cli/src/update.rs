@@ -14,7 +14,8 @@ use tokio::io::AsyncWriteExt;
 
 const RELEASES_API: &str = "https://api.github.com/repos/heAdz0r/hzr/releases?per_page=30";
 const RELEASE_DOWNLOAD_ROOT: &str = "https://github.com/heAdz0r/hzr/releases/download";
-const CACHE_TTL_SECONDS: u64 = 86_400;
+const CURRENT_CACHE_TTL_SECONDS: u64 = 3_600;
+const AVAILABLE_CACHE_TTL_SECONDS: u64 = 86_400;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(2);
 const UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_API_BYTES: usize = 1_048_576;
@@ -149,6 +150,22 @@ pub async fn startup_notice(data_dir: &Path) -> Option<String> {
 
 fn notice(current: ReleaseVersion, latest: ReleaseVersion) -> String {
     format!("HZR {latest} is available (current {current}). Run `hzr update` to install it.")
+}
+
+pub(crate) fn agent_notice(message: &str) -> String {
+    format!(
+        "{message} Inform the user once that this update is available. Do not install it without explicit approval."
+    )
+}
+
+pub(crate) fn session_start_payload(message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "systemMessage": message,
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": agent_notice(message),
+        },
+    })
 }
 
 async fn fetch_latest_release(
@@ -534,13 +551,17 @@ fn checksum_for_artifact<'a>(manifest: &'a str, artifact: &str) -> Result<&'a st
 
 fn classify_cache(cached: &CachedRelease, now: u64, current: ReleaseVersion) -> CacheStatus {
     let age = now.saturating_sub(cached.checked_at_unix_seconds);
-    if now < cached.checked_at_unix_seconds || age >= CACHE_TTL_SECONDS {
-        return CacheStatus::Expired;
-    }
     let latest = cached
         .latest_version
         .as_deref()
         .and_then(|version| parse_release_version(version).ok());
+    let ttl = match latest {
+        Some(version) if version > current => AVAILABLE_CACHE_TTL_SECONDS,
+        _ => CURRENT_CACHE_TTL_SECONDS,
+    };
+    if now < cached.checked_at_unix_seconds || age >= ttl {
+        return CacheStatus::Expired;
+    }
     match latest {
         Some(version) if version > current => CacheStatus::FreshNewer(version),
         _ => CacheStatus::FreshCurrent,
@@ -551,8 +572,9 @@ fn classify_cache(cached: &CachedRelease, now: u64, current: ReleaseVersion) -> 
 mod tests {
     use super::{
         CacheStatus, CachedRelease, checksum_for_artifact, classify_cache, notice,
-        parse_release_version, select_release,
+        parse_release_version, select_release, session_start_payload, startup_notice, write_cache,
     };
+    use tempfile::tempdir;
 
     #[test]
     fn selects_highest_usable_release_including_github_prereleases() {
@@ -591,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_is_fresh_for_one_day_and_only_notices_newer_versions() {
+    fn available_cache_lasts_one_day_but_negative_cache_expires_hourly() {
         let cached = CachedRelease {
             checked_at_unix_seconds: 1_000,
             latest_version: Some("0.4.0".to_owned()),
@@ -606,6 +628,20 @@ mod tests {
             classify_cache(&cached, 1_000 + 86_400, current),
             CacheStatus::Expired
         );
+
+        let no_update = CachedRelease {
+            checked_at_unix_seconds: 1_000,
+            latest_version: None,
+        };
+        assert_eq!(
+            classify_cache(&no_update, 1_000 + 3_599, current),
+            CacheStatus::FreshCurrent
+        );
+        assert_eq!(
+            classify_cache(&no_update, 1_000 + 3_600, current),
+            CacheStatus::Expired,
+            "a check made before a release must not suppress notifications for a full day"
+        );
     }
 
     #[test]
@@ -617,6 +653,37 @@ mod tests {
             notice(current, latest),
             "HZR 0.4.0 is available (current 0.3.2). Run `hzr update` to install it."
         );
+    }
+
+    #[test]
+    fn session_start_notice_is_visible_to_both_user_and_agent() {
+        let message = "HZR 0.4.0 is available (current 0.3.2). Run `hzr update` to install it.";
+        let payload = session_start_payload(message);
+
+        assert_eq!(payload["systemMessage"], message);
+        assert_eq!(
+            payload["hookSpecificOutput"]["hookEventName"],
+            "SessionStart"
+        );
+        let context = payload["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .expect("agent context");
+        assert!(context.contains(message));
+        assert!(context.contains("Inform the user once"));
+        assert!(context.contains("Do not install it without explicit approval"));
+    }
+
+    #[tokio::test]
+    async fn startup_notice_uses_a_cached_newer_release_without_network() {
+        let data = tempdir().expect("temporary data directory");
+        write_cache(data.path(), Some(super::ReleaseVersion([99, 0, 0]))).expect("update cache");
+
+        let message = startup_notice(data.path())
+            .await
+            .expect("cached update notice");
+
+        assert!(message.contains("HZR 99.0.0 is available"));
+        assert!(message.contains("Run `hzr update`"));
     }
 
     #[test]

@@ -36,6 +36,9 @@ pub enum Command {
         if_enabled: bool,
         #[arg(long)]
         quiet: bool,
+        /// Emit Claude SessionStart-compatible JSON when an update is available.
+        #[arg(long, hide = true, requires = "quiet")]
+        session_start_hook: bool,
         /// Register the workspace without installing or starting the production daemon.
         #[arg(long)]
         skip_service: bool,

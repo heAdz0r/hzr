@@ -7,6 +7,11 @@ use hzr_core::Config;
 use hzr_exec::{ForkRuntimePaths, PinnedRtkAdapter, RtkAdapterConfig};
 
 pub async fn passthrough(config: &Config, args: &[OsString]) -> Result<ExitCode> {
+    if is_contract_bootstrap(args) {
+        if let Some(message) = crate::update::startup_notice(&config.data_dir).await {
+            eprintln!("{}", crate::update::agent_notice(&message));
+        }
+    }
     let binary = config.engines.binary("rtk");
     reject_compatibility_cycle(&binary)?;
     let adapter = PinnedRtkAdapter::detect(RtkAdapterConfig {
@@ -42,6 +47,15 @@ pub async fn passthrough(config: &Config, args: &[OsString]) -> Result<ExitCode>
             .with_context(|| format!("failed to run {}", runner.binary().display()))?;
         std::process::exit(status.code().unwrap_or(1));
     }
+}
+
+fn is_contract_bootstrap(args: &[OsString]) -> bool {
+    args.first().is_some_and(|argument| argument == "read")
+        && args.iter().skip(1).any(|argument| {
+            Path::new(argument)
+                .file_name()
+                .is_some_and(|name| name == "HZR.md")
+        })
 }
 
 fn reject_compatibility_cycle(binary: &Path) -> Result<()> {
@@ -106,4 +120,32 @@ fn reject_compatibility_cycle(binary: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::is_contract_bootstrap;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn installed_contract_read_is_an_agent_update_checkpoint() {
+        assert!(is_contract_bootstrap(&args(&[
+            "read",
+            "/opt/hzr/current/share/hzr/HZR.md",
+            "--level",
+            "none",
+        ])));
+        assert!(!is_contract_bootstrap(&args(&[
+            "read",
+            "/opt/hzr/current/share/hzr/README.md",
+            "--level",
+            "none",
+        ])));
+        assert!(!is_contract_bootstrap(&args(&["raw", "sh", "HZR.md",])));
+    }
 }

@@ -85,6 +85,17 @@ Project build -> hzr build <args>    (your project, token-optimized output)
 HZR release   -> hzr release --force (rebuild and reinstall HZR itself)
 ```
 
+## Update notices
+
+HZR checks published GitHub releases without auto-installing them. A negative result is cached for
+one hour; a known newer release is cached for 24 hours. Network failure is silent and never blocks
+workspace startup or a tool call.
+
+Claude's managed `SessionStart` hook returns a visible `systemMessage` and the same fact as agent
+context. Codex reaches the check through the mandatory exact read of this installed `HZR.md` file;
+the notice is written separately so canonical file output remains byte-exact. When a notice says a
+newer release exists, inform the user once and do not run `hzr update` without explicit approval.
+
 For implementation, bug fixes, behavior changes and refactoring, run `hzr tdd`
 before changing production code and follow its RED → GREEN → REFACTOR contract.
 The canonical skill is shipped at `share/hzr/skills/hzr-tdd/SKILL.md`. A passing

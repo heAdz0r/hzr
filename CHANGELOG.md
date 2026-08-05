@@ -4,6 +4,20 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-08-05
+
+### Fixed
+
+- A successful “no update” result now expires after one hour instead of suppressing a release
+  published later that day for 24 hours. Cached positive notices retain the 24-hour TTL, and
+  network failures remain fail-open.
+- Claude SessionStart update notices now use structured hook output that reaches both the visible
+  UI and agent context. The agent context requires one user notification and forbids installation
+  without explicit approval.
+- Codex now checks the cached/published version during its mandatory installed `HZR.md` bootstrap.
+  The notice is emitted separately from fork-core stdout, preserving byte-exact `hzr rtk -- read`
+  output while making the update visible to the model.
+
 ## [0.3.5] - 2026-08-05
 
 ### Added
@@ -422,6 +436,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.3.6]: https://github.com/heAdz0r/hzr/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/heAdz0r/hzr/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/heAdz0r/hzr/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/heAdz0r/hzr/compare/v0.3.2...v0.3.3
