@@ -574,6 +574,17 @@ mod tests {
         );
     }
 
+    /// One-shot helper for release assembly; ignore in CI.
+    #[test]
+    #[ignore = "manual: cargo test -p hzr-cli --bin hzr apply_version_sync_0_3_8 -- --ignored --exact"]
+    fn apply_version_sync_0_3_8() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("repository root");
+        super::synchronize(&root, "0.3.8", false).expect("synchronize 0.3.8");
+    }
+
     #[test]
     fn version_surfaces_exclude_internal_planning_documents() {
         assert!(is_version_surface(Path::new("README.md")));

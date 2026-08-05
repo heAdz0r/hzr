@@ -3,6 +3,7 @@ mod adoption;
 mod build;
 mod cli;
 mod cli_help;
+mod cli_subcommand_help;
 mod client;
 mod client_config;
 mod diagnostics;

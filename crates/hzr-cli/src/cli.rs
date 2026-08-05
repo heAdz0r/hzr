@@ -11,6 +11,17 @@ use hzr_protocol::{
 use crate::cli_help::{
     HZR_CLI_STYLES, HZR_COMMAND_GROUPS, HZR_EXAMPLES_FOOTER, HZR_ROOT_HELP_TEMPLATE,
 };
+use crate::cli_subcommand_help::{
+    AGENT_AFTER_HELP, AGENT_LONG_ABOUT, AGENT_RUN_AFTER_HELP, AGENT_RUN_LONG_ABOUT,
+    DISABLE_AFTER_HELP, DISABLE_LONG_ABOUT, DOCTOR_AFTER_HELP, DOCTOR_LONG_ABOUT,
+    ENABLE_AFTER_HELP, ENABLE_LONG_ABOUT, MCP_CONFIG_AFTER_HELP, MCP_CONFIG_LONG_ABOUT,
+    MCP_SERVE_AFTER_HELP, MCP_SERVE_LONG_ABOUT, MCP_STATUS_AFTER_HELP, MCP_STATUS_LONG_ABOUT,
+    MEMORY_FORGET_AFTER_HELP, MEMORY_FORGET_LONG_ABOUT, MEMORY_PRUNE_AFTER_HELP,
+    MEMORY_PRUNE_LONG_ABOUT, MEMORY_RECALL_AFTER_HELP, MEMORY_RECALL_LONG_ABOUT,
+    MEMORY_STATUS_AFTER_HELP, MEMORY_STATUS_LONG_ABOUT, MEMORY_STORE_AFTER_HELP,
+    MEMORY_STORE_LONG_ABOUT, MEMORY_UPDATE_AFTER_HELP, MEMORY_UPDATE_LONG_ABOUT, STATS_AFTER_HELP,
+    STATS_LONG_ABOUT, UPDATE_AFTER_HELP, UPDATE_LONG_ABOUT,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -62,13 +73,21 @@ pub enum Command {
         #[arg(long)]
         skip_service: bool,
     },
-    #[command(about = "Enable HZR for one workspace")]
+    #[command(
+        about = "Enable HZR for one workspace",
+        long_about = ENABLE_LONG_ABOUT,
+        after_help = ENABLE_AFTER_HELP
+    )]
     Enable {
         /// Workspace root to enable (defaults to the current directory)
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
-    #[command(about = "Disable HZR for one workspace; keep data")]
+    #[command(
+        about = "Disable HZR for one workspace; keep data",
+        long_about = DISABLE_LONG_ABOUT,
+        after_help = DISABLE_AFTER_HELP
+    )]
     Disable {
         /// Workspace root to disable (defaults to the current directory)
         #[arg(long, value_name = "DIR")]
@@ -134,7 +153,11 @@ pub enum Command {
         #[command(subcommand)]
         command: HooksCommand,
     },
-    #[command(about = "Verify pins, ownership, and daemon health")]
+    #[command(
+        about = "Verify pins, ownership, and daemon health",
+        long_about = DOCTOR_LONG_ABOUT,
+        after_help = DOCTOR_AFTER_HELP
+    )]
     Doctor {
         /// Workspace root to diagnose (defaults to the current directory)
         #[arg(long, value_name = "DIR")]
@@ -182,7 +205,11 @@ pub enum Command {
         #[command(subcommand)]
         command: CodecCommand,
     },
-    #[command(about = "Run the managed caveman-code agent")]
+    #[command(
+        about = "Run the managed caveman-code agent",
+        long_about = AGENT_LONG_ABOUT,
+        after_help = AGENT_AFTER_HELP
+    )]
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
@@ -218,7 +245,8 @@ pub enum Command {
     },
     #[command(
         about = "Install a newer GitHub release when available",
-        long_about = "Download, verify, and install a newer GitHub release when available.\n\nWith `--check`, only query GitHub and report whether a newer release exists; nothing is downloaded or installed.\n\nExit status for `--check`: 0 when the check succeeds (already current or update available). Non-zero only when the check fails (network, parse, or unsupported platform)."
+        long_about = UPDATE_LONG_ABOUT,
+        after_help = UPDATE_AFTER_HELP
     )]
     Update {
         /// Report whether a newer GitHub release is available without downloading or installing.
@@ -235,7 +263,11 @@ pub enum Command {
         long_about = "Build your project through the inherited fork-core build wrapper with token-optimized output. Deliberately kept as `build` rather than folded into `hzr rtk -- build` so RTK muscle memory keeps working. Building the HZR distribution itself is `hzr release`."
     )]
     Build(ForkForwardArgs),
-    #[command(about = "Show cumulative efficiency gains")]
+    #[command(
+        about = "Show cumulative efficiency gains",
+        long_about = STATS_LONG_ABOUT,
+        after_help = STATS_AFTER_HELP
+    )]
     Stats {
         /// Limit the ledger view to one workspace root
         #[arg(long, value_name = "DIR")]
@@ -255,7 +287,9 @@ pub enum Command {
 #[derive(Debug, Subcommand)]
 pub enum McpCommand {
     #[command(
-        about = "Serve stdio MCP until the parent agent closes stdin; routes to the one HZR store"
+        about = "Serve stdio MCP until the parent agent closes stdin; routes to the one HZR store",
+        long_about = MCP_SERVE_LONG_ABOUT,
+        after_help = MCP_SERVE_AFTER_HELP
     )]
     Serve {
         /// Workspace root that scopes MCP memory and search
@@ -263,7 +297,9 @@ pub enum McpCommand {
         workspace: Option<PathBuf>,
     },
     #[command(
-        about = "Print or apply an MCP server registration; pin --workspace so memory is not bound to the client cwd"
+        about = "Print or apply an MCP server registration; pin --workspace so memory is not bound to the client cwd",
+        long_about = MCP_CONFIG_LONG_ABOUT,
+        after_help = MCP_CONFIG_AFTER_HELP
     )]
     Config {
         /// Target agent client for the registration snippet
@@ -281,7 +317,11 @@ pub enum McpCommand {
         #[arg(long)]
         apply: bool,
     },
-    #[command(about = "Report native client registrations and the client-managed stdio lifecycle")]
+    #[command(
+        about = "Report native client registrations and the client-managed stdio lifecycle",
+        long_about = MCP_STATUS_LONG_ABOUT,
+        after_help = MCP_STATUS_AFTER_HELP
+    )]
     Status,
 }
 
@@ -471,7 +511,11 @@ impl From<StoreScopeArg> for MemoryWriteScope {
 
 #[derive(Debug, Subcommand)]
 pub enum MemoryCommand {
-    #[command(about = "Recall relevant memories with full ICM semantics")]
+    #[command(
+        about = "Recall relevant memories with full ICM semantics",
+        long_about = MEMORY_RECALL_LONG_ABOUT,
+        after_help = MEMORY_RECALL_AFTER_HELP
+    )]
     Recall {
         query: String,
         /// Workspace root that selects the project memory namespace
@@ -490,7 +534,11 @@ pub enum MemoryCommand {
         #[arg(long, value_enum, default_value_t = RecallScopeArg::ProjectAndGlobal)]
         scope: RecallScopeArg,
     },
-    #[command(about = "Store or update a centralized ICM memory")]
+    #[command(
+        about = "Store or update a centralized ICM memory",
+        long_about = MEMORY_STORE_LONG_ABOUT,
+        after_help = MEMORY_STORE_AFTER_HELP
+    )]
     Store {
         topic: String,
         /// Workspace root that selects the project memory namespace
@@ -516,7 +564,11 @@ pub enum MemoryCommand {
         #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
         scope: StoreScopeArg,
     },
-    #[command(about = "Delete one memory after namespace ownership is verified")]
+    #[command(
+        about = "Delete one memory after namespace ownership is verified",
+        long_about = MEMORY_FORGET_LONG_ABOUT,
+        after_help = MEMORY_FORGET_AFTER_HELP
+    )]
     Forget {
         id: String,
         /// Workspace root that selects the project memory namespace
@@ -526,7 +578,11 @@ pub enum MemoryCommand {
         #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
         scope: StoreScopeArg,
     },
-    #[command(about = "Replace one memory after namespace ownership is verified")]
+    #[command(
+        about = "Replace one memory after namespace ownership is verified",
+        long_about = MEMORY_UPDATE_LONG_ABOUT,
+        after_help = MEMORY_UPDATE_AFTER_HELP
+    )]
     Update {
         id: String,
         /// Workspace root that selects the project memory namespace
@@ -548,7 +604,11 @@ pub enum MemoryCommand {
         #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
         scope: StoreScopeArg,
     },
-    #[command(about = "Delete low-weight memories only in the selected namespace")]
+    #[command(
+        about = "Delete low-weight memories only in the selected namespace",
+        long_about = MEMORY_PRUNE_LONG_ABOUT,
+        after_help = MEMORY_PRUNE_AFTER_HELP
+    )]
     Prune {
         /// Workspace root that selects the project memory namespace
         #[arg(long, value_name = "DIR")]
@@ -563,7 +623,11 @@ pub enum MemoryCommand {
         #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
         scope: StoreScopeArg,
     },
-    #[command(about = "Show ICM state reported by hzrd")]
+    #[command(
+        about = "Show ICM state reported by hzrd",
+        long_about = MEMORY_STATUS_LONG_ABOUT,
+        after_help = MEMORY_STATUS_AFTER_HELP
+    )]
     Status,
 }
 
@@ -618,7 +682,11 @@ pub enum CodecCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum AgentCommand {
-    #[command(about = "Run one managed prompt; reads stdin when PROMPT and --file are absent")]
+    #[command(
+        about = "Run one managed prompt; reads stdin when PROMPT and --file are absent",
+        long_about = AGENT_RUN_LONG_ABOUT,
+        after_help = AGENT_RUN_AFTER_HELP
+    )]
     Run {
         /// Prompt text (mutually exclusive with `--file`)
         #[arg(value_name = "PROMPT", conflicts_with = "file")]
@@ -1003,6 +1071,170 @@ mod tests {
         assert!(
             too_long.is_empty(),
             "root command about strings should be <= 60 chars: {too_long:?}"
+        );
+    }
+
+    fn subcommand_long_help(path: &[&str]) -> String {
+        let mut command = Cli::command();
+        let mut current = &mut command;
+        for name in path {
+            current = current
+                .find_subcommand_mut(name)
+                .expect("missing subcommand");
+        }
+        strip_ansi(&current.render_long_help().to_string())
+    }
+
+    fn assert_help_has_examples(help: &str, command: &str, fragments: &[&str]) {
+        assert!(
+            help.contains("Examples:"),
+            "{command} help missing Examples footer\n{help}"
+        );
+        for fragment in fragments {
+            assert!(
+                help.contains(fragment),
+                "{command} Examples missing `{fragment}`\n{help}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_subcommand_help_update_includes_long_about_and_examples() {
+        let help = subcommand_long_help(&["update"]);
+        assert!(
+            help.contains("SHA-256") || help.contains("checksum"),
+            "update help should explain verification\n{help}"
+        );
+        assert_help_has_examples(&help, "update", &["hzr update"]);
+    }
+
+    #[test]
+    fn test_subcommand_help_stats_includes_long_about_and_examples() {
+        let help = subcommand_long_help(&["stats"]);
+        assert!(
+            help.contains("ledger") || help.contains("zero-redundancy"),
+            "stats help should explain the ledger view\n{help}"
+        );
+        assert_help_has_examples(&help, "stats", &["hzr stats", "--workspace"]);
+    }
+
+    #[test]
+    fn test_subcommand_help_enable_disable_doctor_include_examples() {
+        for (path, fragment) in [
+            (&["enable"][..], "hzr enable"),
+            (&["disable"][..], "hzr disable"),
+            (&["doctor"][..], "hzr doctor"),
+        ] {
+            let help = subcommand_long_help(path);
+            assert_help_has_examples(&help, path[0], &[fragment]);
+            assert!(
+                help.contains("project-only")
+                    || help.contains("index")
+                    || help.contains("ownership")
+                    || help.contains("pins"),
+                "{} help should expand beyond a one-liner\n{help}",
+                path[0]
+            );
+        }
+    }
+
+    #[test]
+    fn test_subcommand_help_agent_and_mcp_leaves_include_examples() {
+        let agent = subcommand_long_help(&["agent"]);
+        assert_help_has_examples(&agent, "agent", &["hzr agent run"]);
+
+        let agent_run = subcommand_long_help(&["agent", "run"]);
+        assert_help_has_examples(&agent_run, "agent run", &["hzr agent run"]);
+
+        let mcp_serve = subcommand_long_help(&["mcp", "serve"]);
+        assert_help_has_examples(&mcp_serve, "mcp serve", &["hzr mcp serve"]);
+
+        let mcp_config = subcommand_long_help(&["mcp", "config"]);
+        assert_help_has_examples(
+            &mcp_config,
+            "mcp config",
+            &["hzr mcp config", "--workspace"],
+        );
+
+        let mcp_status = subcommand_long_help(&["mcp", "status"]);
+        assert_help_has_examples(&mcp_status, "mcp status", &["hzr mcp status"]);
+    }
+
+    #[test]
+    fn test_subcommand_help_memory_leaves_include_examples() {
+        for (path, fragment) in [
+            (&["memory", "recall"][..], "hzr memory recall"),
+            (&["memory", "store"][..], "hzr memory store"),
+            (&["memory", "forget"][..], "hzr memory forget"),
+            (&["memory", "update"][..], "hzr memory update"),
+            (&["memory", "prune"][..], "hzr memory prune"),
+            (&["memory", "status"][..], "hzr memory status"),
+        ] {
+            let help = subcommand_long_help(path);
+            assert_help_has_examples(&help, &path.join(" "), &[fragment]);
+        }
+    }
+
+    #[test]
+    fn test_subcommand_help_high_traffic_flags_have_non_empty_help() {
+        let mut missing = Vec::new();
+        let cases: &[(&[&str], &[&str])] = &[
+            (&[], &["config", "json"]),
+            (&["enable"], &["workspace"]),
+            (&["disable"], &["workspace"]),
+            (&["doctor"], &["workspace"]),
+            (&["stats"], &["workspace"]),
+            (&["mcp", "serve"], &["workspace"]),
+            (&["mcp", "config"], &["client", "workspace"]),
+            (
+                &["agent", "run"],
+                &[
+                    "file",
+                    "workspace",
+                    "max-turns",
+                    "response-format",
+                    "timeout-ms",
+                ],
+            ),
+            (
+                &["memory", "recall"],
+                &["workspace", "topic", "keyword", "limit", "scope"],
+            ),
+            (
+                &["memory", "store"],
+                &["workspace", "file", "importance", "keyword", "raw", "scope"],
+            ),
+        ];
+
+        for (path, flags) in cases {
+            let mut command = Cli::command();
+            let mut current = &mut command;
+            for name in *path {
+                current = current
+                    .find_subcommand_mut(name)
+                    .expect("missing subcommand");
+            }
+            for flag in *flags {
+                let Some(arg) = current
+                    .get_arguments()
+                    .find(|argument| argument.get_long() == Some(*flag))
+                else {
+                    missing.push(format!("{} --{flag} (absent)", path.join(" ")));
+                    continue;
+                };
+                let help = arg
+                    .get_help()
+                    .map(|text| text.to_string())
+                    .unwrap_or_default();
+                if help.trim().is_empty() {
+                    missing.push(format!("{} --{flag}", path.join(" ")));
+                }
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "flags missing non-empty help: {missing:?}"
         );
     }
 

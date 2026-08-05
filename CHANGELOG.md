@@ -4,17 +4,40 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Added
+
+- Root `hzr --help` groups commands (Setup, Runtime, Search & Memory, Agent tools,
+  Distribution, Legacy), fills global/common flag help, adds an Examples footer, and
+  applies light HZR orange styling.
+- High-traffic subcommands (`update`, `stats`, `enable`/`disable`, `doctor`, `agent`,
+  `mcp`, `memory` leaves) gain `long_about` text and Examples footers.
+- `hzr update --check` reports whether a newer GitHub release is available without
+  downloading or installing (exit 0 when the check succeeds; non-zero only on failure).
+- `hzr activation status` lists project-only activation mode and enabled workspace roots
+  (human and `--json`).
+- `hzr install` and `hzr mcp config --apply` pin MCP registrations with
+  `mcp serve --workspace <dir>` so Desktop/Codex memory is not bound to `/`.
+- `hzr doctor` warns when Claude Code has no HZR MCP registration and prints the
+  `claude mcp add` remediation.
+- `hzr doctor` human output separates permanent host limits (`*_global_codec`) as NOTE and
+  lists actionable remediations under **Next actions:** (JSON schema unchanged).
+- `hzr doctor` reports `index_readiness` when the semantic index is missing or not yet
+  warm, with remediation to `hzr index init` or wait for the hzrd watcher.
+
 ### Changed
 
-- Provider usage receipts may carry a workspace `project_path`. `hzr stats --workspace` labels
-  matching receipts `project_matched` and omits older unscoped rows from project provider totals;
-  the global lifetime view still includes every receipt. Estimated savings remain separate from
-  billed provider counters.
+- Provider usage receipts may carry a workspace `project_path`. `hzr stats --workspace`
+  labels matching receipts `project_matched` and omits older unscoped rows from project
+  provider totals; the global lifetime view still includes every receipt. Estimated
+  savings remain separate from billed provider counters.
+- `hzr stats` always shows the MCP channel in coverage, including `mcp=0` when there was
+  no MCP traffic.
 
 ### Documentation
 
 - Retired stale “no forget/prune” known-gap text that no longer matches the current CLI.
-  README basic commands list `hzr memory forget|update|prune` alongside recall/store/status.
+  README basic commands list `hzr memory forget|update|prune` alongside recall/store/status,
+  plus `enable`/`disable` where relevant.
 
 ## [0.3.7] - 2026-08-05
 

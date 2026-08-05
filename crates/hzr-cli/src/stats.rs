@@ -528,6 +528,7 @@ mod tests {
         let report = build_report(
             gain,
             LedgerSummary::default(),
+            "global_lifetime",
             AccountingCoverage::default_complete(),
             BypassSummary::default(),
             "global lifetime".into(),
@@ -550,6 +551,7 @@ mod tests {
         let report = build_report(
             EfficiencySummary::default(),
             LedgerSummary::default(),
+            "global_lifetime",
             AccountingCoverage::default_complete(),
             BypassSummary::default(),
             "global lifetime".into(),
