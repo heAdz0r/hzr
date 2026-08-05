@@ -8,11 +8,25 @@ use hzr_protocol::{
     RiskClass, SearchMode,
 };
 
+use crate::cli_help::{
+    HZR_CLI_STYLES, HZR_COMMAND_GROUPS, HZR_EXAMPLES_FOOTER, HZR_ROOT_HELP_TEMPLATE,
+};
+
 #[derive(Debug, Parser)]
-#[command(name = "hzr", version, about = "Unified agent efficiency platform")]
+#[command(
+    name = "hzr",
+    version,
+    about = "Unified agent efficiency platform",
+    styles = HZR_CLI_STYLES,
+    help_template = HZR_ROOT_HELP_TEMPLATE,
+    before_help = HZR_COMMAND_GROUPS,
+    after_help = HZR_EXAMPLES_FOOTER
+)]
 pub struct Cli {
+    /// Path to an HZR config file (defaults to the platform config)
     #[arg(long, global = true, value_name = "PATH")]
     pub config: Option<PathBuf>,
+    /// Emit machine-readable JSON instead of human text
     #[arg(long, global = true)]
     pub json: bool,
     #[command(subcommand)]
@@ -22,83 +36,97 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     #[command(
-        about = "Initialize the workspace registry, private data layout, and visualizer service"
+        about = "Register workspace data layout and service",
+        long_about = "Initialize the workspace registry, private data layout, and visualizer service."
     )]
     Init {
+        /// Re-run initialization even when the workspace is already registered
         #[arg(long)]
         force: bool,
+        /// Override the private HZR data directory for this workspace
         #[arg(long, value_name = "DIR")]
         data_dir: Option<PathBuf>,
+        /// No-op when the workspace is already initialized
         #[arg(long, conflicts_with = "force")]
         if_needed: bool,
-        /// Initialize only when the current workspace was explicitly enabled.
+        /// Initialize only when the current workspace was explicitly enabled
         #[arg(long, conflicts_with_all = ["force", "if_needed"])]
         if_enabled: bool,
+        /// Suppress non-essential status output
         #[arg(long)]
         quiet: bool,
-        /// Emit Claude SessionStart-compatible JSON when an update is available.
+        /// Emit Claude SessionStart-compatible JSON when an update is available
         #[arg(long, hide = true, requires = "quiet")]
         session_start_hook: bool,
-        /// Register the workspace without installing or starting the production daemon.
+        /// Register the workspace without installing or starting the production daemon
         #[arg(long)]
         skip_service: bool,
     },
-    #[command(about = "Enable HZR for one workspace and select project-only activation")]
+    #[command(about = "Enable HZR for one workspace")]
     Enable {
+        /// Workspace root to enable (defaults to the current directory)
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
-    #[command(about = "Disable HZR for one workspace without deleting its index or memory")]
+    #[command(about = "Disable HZR for one workspace; keep data")]
     Disable {
+        /// Workspace root to disable (defaults to the current directory)
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
     #[command(
-        about = "Adopt HZR: PATH binaries, one hook dispatcher, agent instructions, and visualizer service"
+        about = "Adopt HZR binaries, hooks, and instructions",
+        long_about = "Adopt HZR for this machine: install PATH binaries, the one hook dispatcher, agent instructions, and the visualizer service."
     )]
     Install {
+        /// Show the adoption plan without changing the system
         #[arg(long)]
         dry_run: bool,
+        /// Apply adoption changes that otherwise require confirmation
         #[arg(long)]
         force: bool,
-        /// Directory that receives durable `hzr`/`hzrd` binaries and must be on PATH.
+        /// Directory that receives durable `hzr`/`hzrd` binaries and must be on PATH
         #[arg(long, value_name = "DIR")]
         prefix: Option<PathBuf>,
-        /// Explicit binary the hooks should invoke instead of the resolved current executable.
+        /// Explicit binary the hooks should invoke instead of the resolved current executable
         #[arg(long, value_name = "PATH")]
         binary: Option<PathBuf>,
-        /// Allow hooks to point at a `target/debug` or `target/release` build (development only).
+        /// Allow hooks to point at a `target/debug` or `target/release` build (development only)
         #[arg(long)]
         allow_dev_path: bool,
-        /// Keep external `icm hook` entries instead of centralizing memory ownership in HZR.
+        /// Keep external `icm hook` entries instead of centralizing memory ownership in HZR
         #[arg(long)]
         keep_external_icm: bool,
-        /// Skip `CLAUDE.md`/`AGENTS.md` instruction wiring and install hooks only.
+        /// Skip `CLAUDE.md`/`AGENTS.md` instruction wiring and install hooks only
         #[arg(long)]
         skip_instructions: bool,
-        /// Skip service startup and keep the installed SessionStart hook from starting it.
+        /// Skip service startup and keep the installed SessionStart hook from starting it
         #[arg(long)]
         skip_service: bool,
-        /// Enable HZR only for the current workspace; hooks become no-ops elsewhere.
+        /// Enable HZR only for the current workspace; hooks become no-ops elsewhere
         #[arg(long)]
         project_only: bool,
     },
-    #[command(about = "Remove HZR adoption hooks without restoring RTK implicitly")]
+    #[command(about = "Remove HZR adoption hooks")]
     Uninstall {
+        /// Leave indexes and memory on disk after removing hooks
         #[arg(long)]
         keep_data: bool,
+        /// Show the uninstall plan without changing the system
         #[arg(long)]
         dry_run: bool,
+        /// Apply uninstall changes that otherwise require confirmation
         #[arg(long)]
         force: bool,
     },
-    #[command(about = "Inspect or execute the single HZR hook dispatcher")]
+    #[command(about = "Inspect or run the HZR hook dispatcher")]
     Hooks {
         #[command(subcommand)]
         command: HooksCommand,
     },
-    #[command(about = "Verify pins, ownership, daemon health, and duplicate indexes")]
+    #[command(about = "Verify pins, ownership, and daemon health")]
     Doctor {
+        /// Workspace root to diagnose (defaults to the current directory)
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
@@ -107,31 +135,34 @@ pub enum Command {
         #[command(subcommand)]
         command: DaemonCommand,
     },
-    #[command(about = "Inspect the engine manifest served by hzrd")]
+    #[command(about = "Inspect the engine manifest from hzrd")]
     Engines {
         #[command(subcommand)]
         command: EnginesCommand,
     },
-    #[command(about = "Inspect or initialize the one canonical grepai index")]
+    #[command(about = "Inspect or init the canonical grepai index")]
     Index {
         #[command(subcommand)]
         command: IndexCommand,
     },
-    #[command(about = "Search through the canonical exact/semantic router")]
+    #[command(
+        about = "Search via the exact/semantic router",
+        long_about = "Search through the canonical exact/semantic router over the one HZR-owned index."
+    )]
     Search(SearchArgs),
-    #[command(about = "Use the rgai-compatible facade over the same canonical index")]
+    #[command(about = "rgai-compatible search over the same index")]
     Rgai(SearchArgs),
-    #[command(about = "Plan bounded code and ICM context through the unified control plane")]
+    #[command(about = "Plan bounded code and ICM context")]
     Context {
         #[command(subcommand)]
         command: ContextCommand,
     },
-    #[command(about = "Recall, store, or inspect centralized ICM memory")]
+    #[command(about = "Recall, store, or inspect ICM memory")]
     Memory {
         #[command(subcommand)]
         command: MemoryCommand,
     },
-    #[command(about = "Rewrite or execute a shell command through HZR policy")]
+    #[command(about = "Rewrite or run a command through policy")]
     Exec {
         #[command(subcommand)]
         command: ExecCommand,
@@ -141,61 +172,63 @@ pub enum Command {
         #[command(subcommand)]
         command: CodecCommand,
     },
-    #[command(about = "Run the managed caveman-code agent with HZR-owned tools")]
+    #[command(about = "Run the managed caveman-code agent")]
     Agent {
         #[command(subcommand)]
         command: AgentCommand,
     },
     #[command(
-        about = "Serve HZR-owned tools to external agents over stdio MCP (one store, no orphans)"
+        about = "Serve HZR tools over stdio MCP",
+        long_about = "Serve HZR-owned tools to external agents over stdio MCP. Routes to the one HZR store and does not spawn orphan engines."
     )]
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
     },
     #[command(
-        about = "Build this source tree into a bundle, install it globally, switch `current`, and verify every engine"
+        about = "Build, install, and verify an HZR release",
+        long_about = "Build this source tree into a bundle, install it globally, switch `current`, and verify every engine reports the expected version."
     )]
     Release {
-        /// Synchronize every current version surface before building the release.
+        /// Synchronize every current version surface before building the release
         #[arg(value_name = "VERSION")]
         version: Option<String>,
+        /// Show the release plan without building or installing
         #[arg(long)]
         dry_run: bool,
+        /// Apply the release even when confirmation would otherwise be required
         #[arg(long)]
         force: bool,
-        /// Keep the running daemon on the previous bundle instead of restarting it.
+        /// Keep the running daemon on the previous bundle instead of restarting it
         #[arg(long)]
         skip_service: bool,
+        /// Override the versioned install root for this release
         #[arg(long, value_name = "DIR")]
         install_root: Option<PathBuf>,
     },
-    #[command(about = "Download, verify, and install a newer GitHub release when available")]
+    #[command(about = "Install a newer GitHub release when available")]
     Update,
-    #[command(about = "Print the strict HZR Red-Green-Refactor contract before implementation")]
+    #[command(about = "Print the HZR Red-Green-Refactor contract")]
     Tdd,
-    /// Build *your* project through the inherited token-optimized wrapper.
-    ///
-    /// Deliberately kept as `build` rather than folded into `hzr rtk -- build`: the
-    /// inherited fork already used this verb for project builds, so muscle memory from
-    /// RTK keeps working. Building the HZR distribution itself is `hzr release`.
     #[command(
-        about = "Build your project through the inherited fork-core build wrapper (token-optimized output)"
+        about = "Build your project (token-optimized wrapper)",
+        long_about = "Build your project through the inherited fork-core build wrapper with token-optimized output. Deliberately kept as `build` rather than folded into `hzr rtk -- build` so RTK muscle memory keeps working. Building the HZR distribution itself is `hzr release`."
     )]
     Build(ForkForwardArgs),
-    #[command(about = "Show cumulative zero-redundancy gains globally or for one workspace")]
+    #[command(about = "Show cumulative efficiency gains")]
     Stats {
+        /// Limit the ledger view to one workspace root
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
     #[command(hide = true)]
     Savings,
-    #[command(about = "Inspect or safely centralize legacy state")]
+    #[command(about = "Inspect or centralize legacy state")]
     Migrate {
         #[command(subcommand)]
         command: MigrateCommand,
     },
-    #[command(about = "Run the complete managed fork-core CLI without changing its arguments")]
+    #[command(about = "Run the managed fork-core CLI unchanged")]
     Rtk(RtkArgs),
 }
 
@@ -205,11 +238,13 @@ pub enum McpCommand {
         about = "Serve stdio MCP until the parent agent closes stdin; routes to the one HZR store"
     )]
     Serve {
+        /// Workspace root that scopes MCP memory and search
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
     #[command(about = "Print the MCP server registration snippet for an agent configuration")]
     Config {
+        /// Target agent client for the registration snippet
         #[arg(long, value_enum, default_value_t = McpClientArg::Codex)]
         client: McpClientArg,
         /// Pin the project the server's memory is scoped to. Without it the namespace comes
@@ -277,11 +312,13 @@ pub enum EnginesCommand {
 pub enum IndexCommand {
     #[command(about = "Inspect placement and artifacts without starting a watcher")]
     Status {
+        /// Workspace root whose index placement is reported
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
     #[command(about = "Initialize the canonical index; hzrd remains the watcher owner")]
     Init {
+        /// Workspace root that receives the canonical index
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
@@ -296,14 +333,19 @@ pub enum ContextCommand {
 #[derive(Clone, Debug, Args)]
 pub struct ContextPlanArgs {
     pub intent: String,
+    /// Workspace root used for code and memory planning
     #[arg(long, value_name = "DIR")]
     pub workspace: Option<PathBuf>,
+    /// Optional path hint that scopes the planner
     #[arg(long, value_name = "PATH")]
     pub path: Option<PathBuf>,
+    /// Optional ICM topic hint for memory retrieval
     #[arg(long)]
     pub topic: Option<String>,
+    /// Maximum search hits to include in the plan
     #[arg(long, default_value_t = 10, value_parser = parse_limit)]
     pub search_limit: usize,
+    /// Maximum memories to include in the plan
     #[arg(long, default_value_t = 5, value_parser = parse_limit)]
     pub memory_limit: usize,
 }
@@ -328,6 +370,7 @@ pub struct RtkArgs {
 #[derive(Clone, Debug, Args)]
 pub struct SearchArgs {
     pub query: String,
+    /// Workspace root that owns the canonical index
     #[arg(long, value_name = "DIR")]
     pub workspace: Option<PathBuf>,
     /// Restrict the search to one or more subtrees.
@@ -337,10 +380,13 @@ pub struct SearchArgs {
     /// to `raw rg` and kept them there.
     #[arg(long, value_name = "PATH", num_args = 1..)]
     pub path: Vec<PathBuf>,
+    /// Maximum number of hits to return (1-100)
     #[arg(long, default_value_t = 10, value_parser = parse_limit)]
     pub limit: usize,
+    /// Search mode: exact, semantic, or auto
     #[arg(long, value_enum)]
     pub mode: Option<SearchModeArg>,
+    /// Include matching file content snippets in the response
     #[arg(long)]
     pub include_content: bool,
 }
@@ -385,73 +431,92 @@ pub enum MemoryCommand {
     #[command(about = "Recall relevant memories with full ICM semantics")]
     Recall {
         query: String,
+        /// Workspace root that selects the project memory namespace
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Restrict recall to one ICM topic
         #[arg(long)]
         topic: Option<String>,
+        /// Restrict recall to memories tagged with this keyword
         #[arg(long)]
         keyword: Option<String>,
+        /// Maximum number of memories to return (1-100)
         #[arg(long, default_value_t = 10, value_parser = parse_limit)]
         limit: usize,
-        /// Which namespaces to reach. Defaults to this project plus your global memory.
+        /// Which namespaces to reach. Defaults to this project plus your global memory
         #[arg(long, value_enum, default_value_t = RecallScopeArg::ProjectAndGlobal)]
         scope: RecallScopeArg,
     },
     #[command(about = "Store or update a centralized ICM memory")]
     Store {
         topic: String,
+        /// Workspace root that selects the project memory namespace
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Memory body text (mutually exclusive with `--file`)
         #[arg(value_name = "CONTENT", conflicts_with = "file")]
         content: Option<String>,
+        /// Read memory body from a file instead of CONTENT
         #[arg(long, value_name = "PATH", conflicts_with = "content")]
         file: Option<PathBuf>,
+        /// Retention importance for the stored memory
         #[arg(long, value_enum, default_value_t = ImportanceArg::Medium)]
         importance: ImportanceArg,
+        /// Keyword tags attached to the memory (repeatable)
         #[arg(long = "keyword")]
         keywords: Vec<String>,
+        /// Optional raw sidecar payload stored beside the memory body
         #[arg(long)]
         raw: Option<String>,
         /// `global` for a user-wide preference or rule; `project` (default) for a fact
-        /// about this repository only.
+        /// about this repository only
         #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
         scope: StoreScopeArg,
     },
     #[command(about = "Delete one memory after namespace ownership is verified")]
     Forget {
         id: String,
+        /// Workspace root that selects the project memory namespace
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Namespace that must own the memory id
         #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
         scope: StoreScopeArg,
     },
     #[command(about = "Replace one memory after namespace ownership is verified")]
     Update {
         id: String,
+        /// Workspace root that selects the project memory namespace
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Replacement body text (mutually exclusive with `--file`)
         #[arg(value_name = "CONTENT", conflicts_with = "file")]
         content: Option<String>,
+        /// Read the replacement body from a file instead of CONTENT
         #[arg(long, value_name = "PATH", conflicts_with = "content")]
         file: Option<PathBuf>,
+        /// Optional new retention importance
         #[arg(long, value_enum)]
         importance: Option<ImportanceArg>,
+        /// Replace keyword tags (repeatable)
         #[arg(long = "keyword")]
         keywords: Option<Vec<String>>,
+        /// Namespace that must own the memory id
         #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
         scope: StoreScopeArg,
     },
     #[command(about = "Delete low-weight memories only in the selected namespace")]
     Prune {
+        /// Workspace root that selects the project memory namespace
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Delete or preview memories at or below this weight
         #[arg(long, default_value_t = 0.1)]
         threshold: f32,
-        #[arg(
-            long,
-            help = "Delete selected records; without this flag prune only previews"
-        )]
+        /// Delete selected records; without this flag prune only previews
+        #[arg(long)]
         apply: bool,
+        /// Namespace to prune
         #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
         scope: StoreScopeArg,
     },
@@ -478,8 +543,10 @@ pub struct ExecArgs {
         help = "One shell string; quote it to preserve pipes, redirects, and spaces"
     )]
     pub command: String,
+    /// Working directory for the rewritten or executed command
     #[arg(long, value_name = "DIR")]
     pub cwd: Option<PathBuf>,
+    /// Kill the command after this many milliseconds
     #[arg(long)]
     pub timeout_ms: Option<u64>,
 }
@@ -488,14 +555,19 @@ pub struct ExecArgs {
 pub enum CodecCommand {
     #[command(about = "Apply a safe transform; reads stdin when TEXT and --file are absent")]
     Compile {
+        /// Input text to transform (mutually exclusive with `--file`)
         #[arg(value_name = "TEXT", conflicts_with = "file")]
         text: Option<String>,
+        /// Read input text from a file instead of TEXT or stdin
         #[arg(long, value_name = "PATH", conflicts_with = "text")]
         file: Option<PathBuf>,
+        /// Fidelity class that bounds how lossy the transform may be
         #[arg(long, value_enum, default_value_t = FidelityArg::Semantic)]
         fidelity: FidelityArg,
+        /// Optional codec profile override
         #[arg(long, value_enum)]
         profile: Option<ProfileArg>,
+        /// Risk class that gates irreversible transforms
         #[arg(long, value_enum, default_value_t = RiskArg::Low)]
         risk: RiskArg,
     },
@@ -505,16 +577,22 @@ pub enum CodecCommand {
 pub enum AgentCommand {
     #[command(about = "Run one managed prompt; reads stdin when PROMPT and --file are absent")]
     Run {
+        /// Prompt text (mutually exclusive with `--file`)
         #[arg(value_name = "PROMPT", conflicts_with = "file")]
         prompt: Option<String>,
+        /// Read the prompt from a file instead of PROMPT or stdin
         #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
         file: Option<PathBuf>,
+        /// Workspace root the managed agent is bound to
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Maximum agent turns before the run stops
         #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=100))]
         max_turns: u32,
+        /// Response shape returned by the managed agent
         #[arg(long, value_enum, default_value_t = ResponseFormatArg::Text)]
         response_format: ResponseFormatArg,
+        /// Abort the managed run after this many milliseconds
         #[arg(long, default_value_t = 1_800_000)]
         timeout_ms: u64,
     },
@@ -524,11 +602,13 @@ pub enum AgentCommand {
 pub enum MigrateCommand {
     #[command(about = "Report legacy indexes, memory, settings, wrappers, and process markers")]
     Scan {
+        /// Workspace root to scan for legacy markers
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
     #[command(about = "Move one legacy .grepai into HZR with a retained backup and manifest")]
     Apply {
+        /// Workspace root whose legacy `.grepai` should be moved
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
@@ -536,17 +616,22 @@ pub enum MigrateCommand {
         about = "Snapshot and idempotently import platform RTK history into the canonical ledger"
     )]
     History {
+        /// Preview the history import without writing the ledger
         #[arg(long)]
         dry_run: bool,
+        /// Perform the history import
         #[arg(long, conflicts_with = "dry_run")]
         force: bool,
     },
     #[command(about = "Snapshot and idempotently import the legacy ICM database into HZR memory")]
     Memory {
+        /// Workspace root used when resolving the legacy ICM database
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Preview the memory import without writing HZR memory
         #[arg(long)]
         dry_run: bool,
+        /// Perform the memory import
         #[arg(long, conflicts_with = "dry_run")]
         force: bool,
     },
@@ -675,12 +760,215 @@ fn parse_limit(value: &str) -> Result<usize, String> {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     use super::{
         Cli, Command, ContextCommand, DaemonCommand, ExecCommand, HooksCommand, IndexCommand,
         McpCommand, MigrateCommand, ServiceCommand,
     };
+
+    fn root_help() -> String {
+        Cli::command().render_long_help().to_string()
+    }
+
+    fn strip_ansi(input: &str) -> String {
+        let mut out = String::with_capacity(input.len());
+        let mut chars = input.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\u{1b}' {
+                if chars.peek() == Some(&'[') {
+                    chars.next();
+                    for next in chars.by_ref() {
+                        if next.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            out.push(ch);
+        }
+        out
+    }
+
+    #[test]
+    fn test_help_ux_root_groups_top_level_commands() {
+        let help = strip_ansi(&root_help());
+        for heading in [
+            "Setup:",
+            "Runtime:",
+            "Search & Memory:",
+            "Agent tools:",
+            "Distribution:",
+            "Legacy:",
+        ] {
+            assert!(
+                help.contains(heading),
+                "root help missing command group {heading}\n{help}"
+            );
+        }
+        assert!(
+            help.find("Setup:").expect("Setup") < help.find("Runtime:").expect("Runtime"),
+            "Setup should precede Runtime"
+        );
+        assert!(
+            help.contains("init") && help.contains("doctor"),
+            "Setup group should list setup commands"
+        );
+        assert!(
+            help.contains("search") && help.contains("memory"),
+            "Search & Memory group should list search/memory"
+        );
+        assert!(
+            help.contains("migrate") && help.contains("rtk"),
+            "Legacy group should list migrate/rtk"
+        );
+    }
+
+    #[test]
+    fn test_help_ux_root_includes_examples_footer() {
+        let help = strip_ansi(&root_help());
+        assert!(
+            help.contains("Examples:"),
+            "root help missing Examples footer\n{help}"
+        );
+        for fragment in [
+            "hzr init",
+            "hzr install",
+            "hzr doctor",
+            "hzr search",
+            "hzr stats",
+        ] {
+            assert!(
+                help.contains(fragment),
+                "Examples footer missing `{fragment}`\n{help}"
+            );
+        }
+        let examples_at = help.find("Examples:").expect("Examples");
+        let options_at = help.find("Options:").expect("Options");
+        assert!(
+            options_at < examples_at,
+            "Examples should be a footer after Options"
+        );
+    }
+
+    #[test]
+    fn test_help_ux_global_flags_have_help_text() {
+        let cmd = Cli::command();
+        for name in ["config", "json"] {
+            let arg = cmd
+                .get_arguments()
+                .find(|arg| arg.get_long() == Some(name))
+                .expect("global flag must exist on Cli");
+            let help = arg
+                .get_help()
+                .map(|text| text.to_string())
+                .unwrap_or_default();
+            assert!(
+                !help.trim().is_empty(),
+                "global --{name} must have help text"
+            );
+        }
+    }
+
+    #[test]
+    fn test_help_ux_frequent_flags_expose_non_empty_help() {
+        let cmd = Cli::command();
+        let mut commands = vec![&cmd];
+        collect_subcommands(&cmd, &mut commands);
+
+        let mut missing = Vec::new();
+        for name in [
+            "force",
+            "dry-run",
+            "workspace",
+            "cwd",
+            "limit",
+            "mode",
+            "include-content",
+            "keep-data",
+            "file",
+            "keyword",
+            "raw",
+            "timeout-ms",
+            "install-root",
+            "data-dir",
+            "if-needed",
+            "quiet",
+            "config",
+            "json",
+        ] {
+            let mut seen = 0usize;
+            let mut empty = 0usize;
+            for command in &commands {
+                for arg in command.get_arguments() {
+                    if arg.get_long() == Some(name) || arg.get_id().as_str() == name {
+                        seen += 1;
+                        let help = arg
+                            .get_help()
+                            .map(|text| text.to_string())
+                            .unwrap_or_default();
+                        if help.trim().is_empty() {
+                            empty += 1;
+                        }
+                    }
+                }
+            }
+            if seen == 0 || empty > 0 {
+                missing.push(format!("{name} (seen={seen}, empty={empty})"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "flags missing non-empty help: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn test_help_ux_groups_list_every_visible_command() {
+        let help = strip_ansi(&root_help());
+        let cmd = Cli::command();
+        let mut missing = Vec::new();
+        for sub in cmd.get_subcommands().filter(|sub| !sub.is_hide_set()) {
+            let name = sub.get_name();
+            if name == "help" {
+                continue;
+            }
+            if !help.contains(name) {
+                missing.push(name.to_owned());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "grouped root help missing visible commands: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn test_help_ux_root_command_about_strings_stay_compact() {
+        let cmd = Cli::command();
+        let mut too_long = Vec::new();
+        for sub in cmd.get_subcommands().filter(|sub| !sub.is_hide_set()) {
+            let about = sub
+                .get_about()
+                .map(|text| text.to_string())
+                .unwrap_or_default();
+            if about.chars().count() > 60 {
+                too_long.push(format!("{} ({})", sub.get_name(), about.chars().count()));
+            }
+        }
+        assert!(
+            too_long.is_empty(),
+            "root command about strings should be <= 60 chars: {too_long:?}"
+        );
+    }
+
+    fn collect_subcommands<'a>(cmd: &'a clap::Command, out: &mut Vec<&'a clap::Command>) {
+        for sub in cmd.get_subcommands() {
+            out.push(sub);
+            collect_subcommands(sub, out);
+        }
+    }
 
     /// `hzr search q --mode exact --path crates fork-core/src` used to fail with clap's
     /// "unexpected argument", which is the exact moment an agent gives up on `hzr search`

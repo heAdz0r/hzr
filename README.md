@@ -319,6 +319,7 @@ imports each source row once, and saves the content-addressed snapshot with a JS
 
 ```text
 hzr init                              workspace registry + data layout + visualizer service
+hzr enable|disable                    project-only activation for one workspace
 hzr install|uninstall                 adoption, hooks, instructions, and service startup
 hzr hooks status
 hzr mcp serve                         stdio MCP for clients without hooks
@@ -331,7 +332,8 @@ hzr engines status
 hzr index status|init
 hzr search|rgai
 hzr context plan
-hzr memory recall|store|status         --scope project|global|project-and-global
+hzr memory recall|store|forget|update|prune|status
+                                      --scope project|global|project-and-global
 hzr exec rewrite|run|approve|deny
 hzr codec compile
 hzr agent run

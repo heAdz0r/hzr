@@ -2,6 +2,7 @@ mod activation;
 mod adoption;
 mod build;
 mod cli;
+mod cli_help;
 mod client;
 mod client_config;
 mod diagnostics;
