@@ -3,7 +3,8 @@ use std::path::Path;
 
 use anyhow::Result;
 use hzr_core::{
-    BypassSummary, Config, EfficiencySummary, Ledger, LedgerSummary, classify_operation,
+    BypassSummary, Config, EfficiencySummary, Ledger, LedgerSummary, OperationChannel,
+    classify_operation,
 };
 use serde::Serialize;
 
@@ -149,7 +150,7 @@ fn build_report(
         } else {
             gain.operations as f64 * 100.0 / gain.total_observed_operations as f64
         },
-        by_channel: gain.by_channel.clone(),
+        by_channel: with_explicit_mcp_channel(gain.by_channel.clone()),
     };
     let commands = gain
         .by_command
@@ -291,8 +292,20 @@ fn signed_percentage(part: i64, total: u64) -> f64 {
     }
 }
 
+/// Гарантирует ключ `mcp` в channel split: отсутствие трафика — явный 0, а не «канал не учтён».
+pub(crate) fn with_explicit_mcp_channel(
+    mut by_channel: BTreeMap<String, u64>,
+) -> BTreeMap<String, u64> {
+    by_channel
+        .entry(OperationChannel::Mcp.as_str().to_owned())
+        .or_insert(0);
+    by_channel
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use hzr_core::LedgerSummary;
 
     use super::{build_report, classify_command, normalize_command};
@@ -444,5 +457,52 @@ mod tests {
         assert_eq!(report.bypass.operations, 0);
         assert_eq!(report.bypass.operation_share_pct, 0.0);
         assert!(report.bypass.by_tool.is_empty());
+    }
+
+    /// Absent MCP traffic must still appear as an explicit zero so JSON consumers never
+    /// confuse a missing key with "MCP is outside the channel split."
+    #[test]
+    fn test_channel_split_always_includes_explicit_mcp_zero() {
+        let mut by_channel = BTreeMap::new();
+        by_channel.insert("hook_cli".into(), 4);
+        by_channel.insert("native_host".into(), 1);
+        let gain = EfficiencySummary {
+            operations: 5,
+            total_observed_operations: 5,
+            by_channel,
+            ..EfficiencySummary::default()
+        };
+
+        let report = build_report(
+            gain,
+            LedgerSummary::default(),
+            AccountingCoverage::default_complete(),
+            BypassSummary::default(),
+            "global lifetime".into(),
+        );
+
+        assert_eq!(
+            report.traffic_coverage.by_channel.get("mcp"),
+            Some(&0),
+            "mcp must be present as 0 when the ledger recorded no MCP rows"
+        );
+        assert_eq!(report.traffic_coverage.by_channel.get("hook_cli"), Some(&4));
+        assert_eq!(
+            report.traffic_coverage.by_channel.get("native_host"),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn test_empty_ledger_still_exposes_mcp_zero_in_channel_split() {
+        let report = build_report(
+            EfficiencySummary::default(),
+            LedgerSummary::default(),
+            AccountingCoverage::default_complete(),
+            BypassSummary::default(),
+            "global lifetime".into(),
+        );
+
+        assert_eq!(report.traffic_coverage.by_channel.get("mcp"), Some(&0));
     }
 }
