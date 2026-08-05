@@ -4,6 +4,13 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Changed
+
+- Provider usage receipts may carry a workspace `project_path`. `hzr stats --workspace` labels
+  matching receipts `project_matched` and omits older unscoped rows from project provider totals;
+  the global lifetime view still includes every receipt. Estimated savings remain separate from
+  billed provider counters.
+
 ### Documentation
 
 - Retired stale “no forget/prune” known-gap text that no longer matches the current CLI.

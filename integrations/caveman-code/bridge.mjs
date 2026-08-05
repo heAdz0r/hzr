@@ -788,7 +788,16 @@ export async function replayUsageOutbox(agentDir, callHzr) {
   return warnings;
 }
 
-async function recordUsage(callHzr, session, requestId, outcome, retries, startedAt, agentDir) {
+async function recordUsage(
+  callHzr,
+  session,
+  requestId,
+  outcome,
+  retries,
+  startedAt,
+  agentDir,
+  workspace,
+) {
   let payload = null;
   try {
     if (!USAGE_OUTCOMES.has(outcome)) {
@@ -818,6 +827,7 @@ async function recordUsage(callHzr, session, requestId, outcome, retries, starte
         retries: usageInteger(retries, "retries", 0xffff_ffff),
         latency_ms: usageInteger(Math.round(performance.now() - startedAt), "latency_ms"),
         outcome,
+        project_path: workspace,
       };
     const receiptText = await callHzr(
       USAGE_ROUTE,
@@ -1073,6 +1083,7 @@ async function run() {
         retries,
         startedAt,
         environment.agentDir,
+        workspace,
       );
     }
     try {

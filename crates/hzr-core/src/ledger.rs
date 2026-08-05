@@ -30,6 +30,8 @@ pub struct LedgerRecord {
     pub outcome: String,
     pub policy_version: String,
     pub cost_microusd: Option<u64>,
+    /// Канонический корень workspace; пустая строка — глобальный/исторический чек без атрибуции.
+    pub project_path: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -302,7 +304,8 @@ impl Ledger {
                     latency_ms INTEGER NOT NULL,
                     outcome TEXT NOT NULL,
                     policy_version TEXT NOT NULL,
-                    cost_microusd INTEGER
+                    cost_microusd INTEGER,
+                    project_path TEXT NOT NULL DEFAULT ''
                  );
                  CREATE INDEX IF NOT EXISTS idx_usage_created
                     ON usage_records(created_at_ms DESC);
@@ -365,6 +368,11 @@ impl Ledger {
             [],
         );
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN route TEXT", []);
+        // Идемпотентно: существующие БД получают колонку; повторный ALTER безопасно игнорируется.
+        let _ = connection.execute(
+            "ALTER TABLE usage_records ADD COLUMN project_path TEXT NOT NULL DEFAULT ''",
+            [],
+        );
         migrate_legacy_ledgers(&connection, path)?;
         Ok(Self { connection })
     }
@@ -377,10 +385,11 @@ impl Ledger {
                     actual_input, actual_output, actual_reasoning,
                     actual_cache_write, actual_cache_read,
                     estimated_input, estimated_output, estimate_method,
-                    turns, retries, latency_ms, outcome, policy_version, cost_microusd
+                    turns, retries, latency_ms, outcome, policy_version, cost_microusd,
+                    project_path
                  ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-                    ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18
+                    ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
                  ) ON CONFLICT(trace_id) DO NOTHING",
                 params![
                     record.trace_id.as_str(),
@@ -401,6 +410,7 @@ impl Ledger {
                     record.outcome.as_str(),
                     record.policy_version.as_str(),
                     record.cost_microusd,
+                    record.project_path.as_str(),
                 ],
             )
             .map_err(LedgerError::Database)?;
@@ -413,7 +423,7 @@ impl Ledger {
                 "SELECT provider, model, actual_input, actual_output, actual_reasoning,
                         actual_cache_write, actual_cache_read, estimated_input,
                         estimated_output, estimate_method, turns, retries, latency_ms,
-                        outcome, policy_version, cost_microusd
+                        outcome, policy_version, cost_microusd, project_path
                    FROM usage_records WHERE trace_id = ?1",
                 [trace_id.as_str()],
                 |row| {
@@ -441,6 +451,7 @@ impl Ledger {
                         outcome: row.get(13)?,
                         policy_version: row.get(14)?,
                         cost_microusd: row.get(15)?,
+                        project_path: row.get(16)?,
                     })
                 },
             )
@@ -449,6 +460,15 @@ impl Ledger {
     }
 
     pub fn summary(&self) -> Result<LedgerSummary, LedgerError> {
+        self.summary_scoped(None)
+    }
+
+    /// Суммирует только чеки с совпадающим project_path; пустые (legacy) строки не входят.
+    pub fn summary_for_project(&self, project_path: &str) -> Result<LedgerSummary, LedgerError> {
+        self.summary_scoped(Some(project_path))
+    }
+
+    fn summary_scoped(&self, project_path: Option<&str>) -> Result<LedgerSummary, LedgerError> {
         self.connection
             .query_row(
                 "SELECT
@@ -462,8 +482,13 @@ impl Ledger {
                     COALESCE(SUM(actual_output), 0),
                     COALESCE(SUM(estimated_input), 0),
                     COALESCE(SUM(cost_microusd), 0)
-                 FROM usage_records",
-                [],
+                 FROM usage_records
+                 WHERE (?1 IS NULL OR (
+                    project_path != ''
+                    AND (project_path = ?1
+                         OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                 ))",
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
                 |row| {
                     Ok(LedgerSummary {
                         tasks: row.get(0)?,
@@ -1806,6 +1831,7 @@ mod tests {
             outcome: "accepted".into(),
             policy_version: "0.3.7".into(),
             cost_microusd: Some(50),
+            project_path: String::new(),
         };
 
         ledger.record(&record).expect("record");
@@ -1818,6 +1844,150 @@ mod tests {
         assert_eq!(summary.actual_input_tokens, 100);
         assert_eq!(summary.estimated_input_tokens, 900);
         assert_eq!(loaded.trace_id, trace_id);
+    }
+
+    /// Старые чеки без project_path остаются глобальными; scoped summary считает только
+    /// строки с совпадающей workspace-идентичностью и не смешивает их с соседним проектом.
+    #[test]
+    fn test_provider_summary_scopes_to_matching_workspace_and_skips_unscoped_rows() {
+        let directory = tempdir().expect("temp directory");
+        let ledger = Ledger::open(&directory.path().join("usage.sqlite")).expect("ledger open");
+
+        let scoped = |trace: &str, path: &str, input: u64| LedgerRecord {
+            trace_id: TraceId::from_string(trace.to_owned()),
+            provider: Some("test".into()),
+            model: Some("model".into()),
+            usage: Usage {
+                actual: ActualUsage {
+                    input_tokens: Some(input),
+                    output_tokens: Some(1),
+                    ..ActualUsage::default()
+                },
+                ..Usage::default()
+            },
+            turns: 1,
+            retries: 0,
+            latency_ms: 1,
+            outcome: "completed".into(),
+            policy_version: "0.3.7".into(),
+            cost_microusd: Some(10),
+            project_path: path.to_owned(),
+        };
+
+        ledger
+            .record(&scoped("legacy-unscoped", "", 1_000))
+            .expect("unscoped");
+        ledger
+            .record(&scoped("project-a", "/work/a", 100))
+            .expect("project a");
+        ledger
+            .record(&scoped("project-a-child", "/work/a/pkg", 50))
+            .expect("project a child");
+        ledger
+            .record(&scoped("project-ab-prefix", "/work/ab", 900))
+            .expect("prefix sibling");
+
+        let global = ledger.summary().expect("global");
+        let scoped_a = ledger
+            .summary_for_project("/work/a")
+            .expect("scoped summary");
+        let loaded = ledger
+            .find(&TraceId::from_string("project-a".into()))
+            .expect("find")
+            .expect("exists");
+
+        assert_eq!(global.actual_input_tokens, 2_050);
+        assert_eq!(scoped_a.tasks, 2);
+        assert_eq!(scoped_a.actual_input_tokens, 150);
+        assert_eq!(scoped_a.actual_output_tokens, 2);
+        assert_eq!(scoped_a.cost_microusd, 20);
+        assert_eq!(loaded.project_path, "/work/a");
+    }
+
+    #[test]
+    fn test_usage_project_path_column_migrates_idempotently_on_legacy_schema() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("usage.sqlite");
+        let legacy = Connection::open(&path).expect("legacy database");
+        legacy
+            .execute_batch(
+                "CREATE TABLE usage_records (
+                    trace_id TEXT PRIMARY KEY,
+                    created_at_ms INTEGER NOT NULL,
+                    provider TEXT,
+                    model TEXT,
+                    actual_input INTEGER,
+                    actual_output INTEGER,
+                    actual_reasoning INTEGER,
+                    actual_cache_write INTEGER,
+                    actual_cache_read INTEGER,
+                    estimated_input INTEGER,
+                    estimated_output INTEGER,
+                    estimate_method TEXT,
+                    turns INTEGER NOT NULL,
+                    retries INTEGER NOT NULL,
+                    latency_ms INTEGER NOT NULL,
+                    outcome TEXT NOT NULL,
+                    policy_version TEXT NOT NULL,
+                    cost_microusd INTEGER
+                 );
+                 INSERT INTO usage_records (
+                    trace_id, created_at_ms, provider, model,
+                    actual_input, actual_output, actual_reasoning,
+                    actual_cache_write, actual_cache_read,
+                    estimated_input, estimated_output, estimate_method,
+                    turns, retries, latency_ms, outcome, policy_version, cost_microusd
+                 ) VALUES (
+                    'legacy', 1, 'test', 'model',
+                    40, 2, NULL, NULL, NULL,
+                    NULL, NULL, NULL,
+                    1, 0, 1, 'completed', '0.3.6', 5
+                 );",
+            )
+            .expect("legacy usage schema");
+        drop(legacy);
+
+        let ledger = Ledger::open(&path).expect("first open migrates");
+        let _ = Ledger::open(&path).expect("second open stays idempotent");
+        ledger
+            .record(&LedgerRecord {
+                trace_id: TraceId::from_string("scoped".into()),
+                provider: Some("test".into()),
+                model: Some("model".into()),
+                usage: Usage {
+                    actual: ActualUsage {
+                        input_tokens: Some(10),
+                        output_tokens: Some(1),
+                        ..ActualUsage::default()
+                    },
+                    ..Usage::default()
+                },
+                turns: 1,
+                retries: 0,
+                latency_ms: 1,
+                outcome: "completed".into(),
+                policy_version: "0.3.7".into(),
+                cost_microusd: Some(1),
+                project_path: "/work/a".into(),
+            })
+            .expect("scoped insert");
+
+        assert_eq!(ledger.summary().expect("global").actual_input_tokens, 50);
+        assert_eq!(
+            ledger
+                .summary_for_project("/work/a")
+                .expect("scoped")
+                .actual_input_tokens,
+            10
+        );
+        assert_eq!(
+            ledger
+                .find(&TraceId::from_string("legacy".into()))
+                .expect("find")
+                .expect("legacy row")
+                .project_path,
+            ""
+        );
     }
 
     #[test]

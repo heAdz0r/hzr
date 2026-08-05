@@ -464,6 +464,8 @@ mod tests {
     #[tokio::test]
     async fn test_usage_route_records_provider_tokens_separately_from_estimates() {
         let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace = directory.path().join("project");
+        std::fs::create_dir_all(&workspace).expect("workspace");
         let body = serde_json::json!({
             "trace_id": "019fb8bb-c468-7eb0-b133-b0b1239288c6",
             "provider": "test-provider",
@@ -485,7 +487,8 @@ mod tests {
             "turns": 2,
             "retries": 0,
             "latency_ms": 25,
-            "outcome": "completed"
+            "outcome": "completed",
+            "project_path": workspace
         });
         let response = test_router(&directory)
             .await
@@ -502,13 +505,24 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::OK);
-        let summary = hzr_core::Ledger::open(&directory.path().join("data/ledger/hzr.sqlite"))
-            .expect("ledger opens")
-            .summary()
-            .expect("ledger summary");
+        let ledger = hzr_core::Ledger::open(&directory.path().join("data/ledger/hzr.sqlite"))
+            .expect("ledger opens");
+        let summary = ledger.summary().expect("ledger summary");
         assert_eq!(summary.actual_input_tokens, 120);
         assert_eq!(summary.actual_output_tokens, 30);
         assert_eq!(summary.estimated_input_tokens, 900);
+        let canonical = std::fs::canonicalize(&workspace).expect("canonical workspace");
+        let scoped = ledger
+            .summary_for_project(&canonical.to_string_lossy())
+            .expect("scoped summary");
+        assert_eq!(scoped.actual_input_tokens, 120);
+        assert_eq!(
+            ledger
+                .summary_for_project("/other")
+                .expect("empty scope")
+                .actual_input_tokens,
+            0
+        );
     }
 
     #[tokio::test]
