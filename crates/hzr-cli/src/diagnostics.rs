@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use hzr_agent::{IntegrationLayout, preflight};
 use hzr_core::{Config, locked_engines};
-use hzr_index::{Deadlines, IndexPlacement, Workspace};
+use hzr_index::{Deadlines, IndexGeneration, IndexPlacement, IndexStatus, Workspace};
 use hzr_protocol::{EngineState, PROTOCOL_VERSION};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -444,6 +444,12 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             } else {
                 check("grepai_duplicates", CheckStatus::Warning, duplicate_detail)
             });
+            // Ownership alone does not mean semantic search works: cold/missing artifacts
+            // only showed up in context-plan warnings before this probe existed.
+            match index_status_snapshot(&discovered) {
+                Ok(status) => checks.push(index_readiness_check(&status)),
+                Err(error) => checks.push(check("index_readiness", CheckStatus::Warning, error)),
+            }
         }
         Err(error) => checks.push(check("grepai_ownership", CheckStatus::Error, error)),
     }
@@ -742,6 +748,66 @@ fn strict_status(config: &Config) -> CheckStatus {
     }
 }
 
+/// Снимок артефактов индекса без запуска grepai — doctor только читает файлы.
+fn index_status_snapshot(workspace: &Workspace) -> Result<IndexStatus, String> {
+    let initialized = workspace.index.config.is_file();
+    Ok(IndexStatus {
+        placement: workspace.placement().map_err(|error| error.to_string())?,
+        initialized,
+        vectors_present: workspace.index.vectors.is_file(),
+        symbols_present: workspace.index.symbols.is_file(),
+        repository_graph_present: workspace.index.repository_graph.is_file(),
+        duplicate_index_dirs: workspace.duplicate_index_dirs.clone(),
+        generation: initialized
+            .then(|| IndexGeneration::read(workspace))
+            .transpose()
+            .map_err(|error| error.to_string())?,
+    })
+}
+
+/// Готовность семантического индекса для doctor: init + vectors/symbols/graph.
+///
+/// Совпадает с тем, что оператор видит в `hzr index status`, и даёт remediation до
+/// первого `context plan` warning о cold warm-up.
+fn index_readiness_check(status: &IndexStatus) -> DoctorCheck {
+    if !status.initialized {
+        return check(
+            "index_readiness",
+            CheckStatus::Warning,
+            "semantic index is not initialized; run `hzr index init --workspace .` \
+             (the first semantic query also starts the hzrd watcher warm-up)",
+        );
+    }
+
+    let mut missing = Vec::new();
+    if !status.vectors_present {
+        missing.push("vectors");
+    }
+    if !status.symbols_present {
+        missing.push("symbols");
+    }
+    if !status.repository_graph_present {
+        missing.push("repository_graph");
+    }
+    if !missing.is_empty() {
+        return check(
+            "index_readiness",
+            CheckStatus::Warning,
+            format!(
+                "semantic index is not ready (missing {}); wait for the hzrd watcher or run a \
+                 semantic query to warm, then check with `hzr index status --workspace .`",
+                missing.join(", ")
+            ),
+        );
+    }
+
+    check(
+        "index_readiness",
+        CheckStatus::Pass,
+        "ready; vectors, symbols, and repository graph are present",
+    )
+}
+
 /// Report registered MCP servers whose project namespace is decided by the client's working
 /// directory rather than pinned.
 ///
@@ -843,14 +909,79 @@ mod tests {
     use std::fs;
 
     use hzr_core::Config;
+    use hzr_index::{IndexPlacement, IndexStatus};
     use sha2::{Digest, Sha256};
 
     use crate::client_config::{Client, ClientMcpStatus};
 
     use super::{
         CheckStatus, attest_active_bundle, bounded, direct_icm_registration_detail,
-        hook_ownership_check, integration_layout, workspace_binding_check,
+        hook_ownership_check, index_readiness_check, integration_layout, workspace_binding_check,
     };
+
+    fn index_status(
+        initialized: bool,
+        vectors: bool,
+        symbols: bool,
+        repository_graph: bool,
+    ) -> IndexStatus {
+        IndexStatus {
+            placement: IndexPlacement::Missing {
+                project_entry: "/tmp/project/.grepai".into(),
+                intended_directory: "/tmp/data/workspaces/x/.grepai".into(),
+                managed: true,
+            },
+            initialized,
+            vectors_present: vectors,
+            symbols_present: symbols,
+            repository_graph_present: repository_graph,
+            duplicate_index_dirs: Vec::new(),
+            generation: None,
+        }
+    }
+
+    /// Операторы не должны узнавать о холодном индексе только из warning'а context plan.
+    #[test]
+    fn test_doctor_warns_when_semantic_index_is_not_initialized() {
+        let check = index_readiness_check(&index_status(false, false, false, false));
+        assert_eq!(check.name, "index_readiness");
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert!(
+            check.detail.contains("hzr index init"),
+            "remediation must name index init, got: {}",
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_doctor_warns_when_semantic_index_artifacts_are_incomplete() {
+        let check = index_readiness_check(&index_status(true, false, false, false));
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert!(
+            check.detail.contains("not ready"),
+            "detail must say not ready, got: {}",
+            check.detail
+        );
+        assert!(
+            check.detail.contains("repository_graph")
+                || check.detail.contains("vectors")
+                || check.detail.contains("symbols"),
+            "detail must name missing artifacts, got: {}",
+            check.detail
+        );
+        assert!(
+            check.detail.contains("hzrd") || check.detail.contains("warm"),
+            "detail must point at watcher/warm remediation, got: {}",
+            check.detail
+        );
+    }
+
+    #[test]
+    fn test_doctor_passes_when_semantic_index_artifacts_are_present() {
+        let check = index_readiness_check(&index_status(true, true, true, true));
+        assert_eq!(check.status, CheckStatus::Pass);
+        assert!(check.detail.contains("ready") || check.detail.contains("present"));
+    }
 
     #[test]
     fn test_doctor_accepts_the_dispatch_init_and_observer_hooks() {
