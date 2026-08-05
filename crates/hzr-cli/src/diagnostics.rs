@@ -772,7 +772,7 @@ fn workspace_binding_check(statuses: &[client_config::ClientMcpStatus]) -> Docto
             "{} registered without `--workspace`, so the memory namespace comes from the \
              directory the client launches from; the desktop app uses `/` and Codex uses a \
              per-session directory, and stores made there are unreachable from the project. \
-             Re-register with `hzr mcp config --client <client> --workspace <dir>`",
+             Re-register with `hzr mcp config --client <client> --workspace <dir> --apply`",
             unpinned.join(", ")
         ),
     )
@@ -898,8 +898,8 @@ mod tests {
         let unpinned = workspace_binding_check(&[registration(Client::ClaudeDesktop, None)]);
         assert_eq!(unpinned.status, CheckStatus::Warning);
         assert!(
-            unpinned.detail.contains("--workspace"),
-            "the warning must name the fix, got: {}",
+            unpinned.detail.contains("--workspace") && unpinned.detail.contains("--apply"),
+            "the warning must name the apply fix, got: {}",
             unpinned.detail
         );
         assert!(
@@ -946,11 +946,10 @@ mod tests {
         assert_eq!(integration_layout(&config).root(), integration);
     }
 
-    /// The repair instruction must be the one that actually mutates the file, not the one that
-    /// prints a snippet — and it differs by client, because HZR rewrites Codex and the desktop
-    /// app but must never rewrite Claude Code's own state file. A single generic instruction
-    /// was wrong for whichever client it did not fit, so each entry now carries its own and
-    /// the detail line only joins them.
+    /// The repair instruction must be the one that actually mutates the file — and it differs
+    /// by client, because HZR rewrites Codex and the desktop app but must never rewrite Claude
+    /// Code's own state file. A single generic instruction was wrong for whichever client it
+    /// did not fit, so each entry now carries its own and the detail line only joins them.
     #[test]
     fn test_direct_icm_repair_names_the_command_that_fits_each_client() {
         assert!(
@@ -959,9 +958,8 @@ mod tests {
                 .contains("`hzr install --force`")
         );
         assert!(
-            Client::Codex
-                .direct_icm_remediation()
-                .contains("only prints a snippet")
+            Client::Codex.direct_icm_remediation().contains("--apply"),
+            "writable clients must name the mcp config apply path"
         );
         assert!(
             Client::ClaudeCode

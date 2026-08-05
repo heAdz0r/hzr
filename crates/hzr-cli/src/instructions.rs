@@ -137,7 +137,7 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          completion may be unknown.\n\
          MCP is client-managed stdio: `hzr init` never starts it. Run `hzr install --force`\n\
          once to register it, and `hzr mcp status` to audit native client launch state.\n\
-         `hzr mcp config --client codex\\|claude-desktop` prints a registration snippet without modifying client config. Never\n\
+         `hzr mcp config --client codex\\|claude-desktop --workspace <dir> --apply` writes a pinned registration; omit `--apply` to print a paste snippet. Never\n\
          register `icm`, `grepai` or `rtk` as your own MCP server: each direct launch adds\n\
          another writer to the store HZR supervises and leaks orphans when the session dies.\n\n\
          `hzr rtk -- raw <command> <args...>` directly spawns the first argument; it does\n\
@@ -612,7 +612,10 @@ mod tests {
     fn test_managed_block_describes_mcp_and_batch_semantics_exactly() {
         let out = compose("", Surface::Codex, contract()).0;
         assert!(out.contains("`hzr_codec`"));
-        assert!(out.contains("prints a registration snippet without modifying client config"));
+        assert!(
+            out.contains("--apply` writes a pinned registration"),
+            "managed block must document the apply path for pinned MCP registration"
+        );
         assert!(out.contains("independent file groups can fail separately"));
         assert!(!out.contains("Register the server with `hzr mcp config"));
     }

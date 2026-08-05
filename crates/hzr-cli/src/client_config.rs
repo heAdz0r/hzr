@@ -28,8 +28,8 @@ impl Client {
         match self {
             Self::Codex | Self::ClaudeDesktop => {
                 "HZR owns this registration: run `hzr install --dry-run`, then \
-                 `hzr install --force` to replace it; `hzr mcp config --client <client> \
-                 --workspace <dir>` only prints a snippet to paste by hand"
+                 `hzr install --force` to replace it; or write a pinned entry with \
+                 `hzr mcp config --client <client> --workspace <dir> --apply`"
             }
             Self::ClaudeCode => {
                 "HZR never writes this file: remove the server with `claude mcp remove icm`, \
@@ -117,6 +117,28 @@ impl Registration {
             .and_then(|index| self.args.get(index + 1))
             .cloned()
     }
+
+    /// Binary and `mcp serve` alone are not enough: an unpinned Desktop entry still
+    /// "matches" while binding `/`, so desired state also requires the workspace pin.
+    fn matches_desired(&self, binary: &Path, workspace: &Path) -> bool {
+        self.matches(binary)
+            && self.pinned_workspace().as_deref() == Some(workspace_arg(workspace).as_str())
+    }
+}
+
+/// Аргумент `--workspace` в регистрации MCP — одна строка, одинаковая при записи и сравнении.
+fn workspace_arg(workspace: &Path) -> String {
+    workspace.to_string_lossy().into_owned()
+}
+
+/// Аргументы `hzr mcp serve` с пином проекта, чтобы клиент не брал cwd (`/` у Desktop).
+fn mcp_serve_args(workspace: &Path) -> Vec<String> {
+    vec![
+        "mcp".to_owned(),
+        "serve".to_owned(),
+        "--workspace".to_owned(),
+        workspace_arg(workspace),
+    ]
 }
 
 pub const MCP_LIFECYCLE: &str = "client_managed_stdio";
@@ -160,13 +182,35 @@ pub fn audit_paths() -> Result<Vec<(Client, PathBuf)>> {
 
 pub fn install_all(
     binary: &Path,
+    workspace: &Path,
     dry_run: bool,
     confirmed: bool,
 ) -> Result<Vec<ClientConfigReport>> {
     default_paths()?
         .into_iter()
-        .map(|(client, path)| install(client, &path, binary, dry_run, confirmed))
+        .map(|(client, path)| install(client, &path, binary, workspace, dry_run, confirmed))
         .collect()
+}
+
+/// Записать (или обновить) регистрацию одного клиента с пином `--workspace`.
+pub fn apply(
+    client: Client,
+    binary: &Path,
+    workspace: &Path,
+    dry_run: bool,
+    confirmed: bool,
+) -> Result<ClientConfigReport> {
+    let path = default_paths()?
+        .into_iter()
+        .find(|(candidate, _)| *candidate == client)
+        .map(|(_, path)| path)
+        .with_context(|| {
+            format!(
+                "{} has no writable MCP configuration path on this platform",
+                client.as_str()
+            )
+        })?;
+    install(client, &path, binary, workspace, dry_run, confirmed)
 }
 
 pub fn uninstall_all(dry_run: bool, confirmed: bool) -> Result<Vec<ClientConfigReport>> {
@@ -316,13 +360,14 @@ pub fn install(
     client: Client,
     path: &Path,
     binary: &Path,
+    workspace: &Path,
     dry_run: bool,
     confirmed: bool,
 ) -> Result<ClientConfigReport> {
     let before = read_optional(path)?;
     let (after, direct_icm_removed, hzr_registered) = match client {
-        Client::Codex => migrate_codex(path, &before, binary)?,
-        Client::ClaudeDesktop => migrate_claude_desktop(path, &before, binary)?,
+        Client::Codex => migrate_codex(path, &before, binary, workspace)?,
+        Client::ClaudeDesktop => migrate_claude_desktop(path, &before, binary, workspace)?,
         // Claude Code's state file is audit-only. Refusing here rather than silently
         // skipping keeps the "HZR owns its own files" rule a checked invariant instead of a
         // convention that a future caller can quietly break.
@@ -406,7 +451,12 @@ fn codex_hzr_registration(document: &DocumentMut) -> Option<Registration> {
     })
 }
 
-fn migrate_codex(path: &Path, before: &[u8], binary: &Path) -> Result<(String, usize, bool)> {
+fn migrate_codex(
+    path: &Path,
+    before: &[u8],
+    binary: &Path,
+    workspace: &Path,
+) -> Result<(String, usize, bool)> {
     let text = if before.is_empty() {
         String::new()
     } else {
@@ -420,7 +470,7 @@ fn migrate_codex(path: &Path, before: &[u8], binary: &Path) -> Result<(String, u
     let direct_before = codex_direct_icm_count(&document);
     let hzr_matches = codex_hzr_registration(&document)
         .as_ref()
-        .is_some_and(|registration| registration.matches(binary));
+        .is_some_and(|registration| registration.matches_desired(binary, workspace));
     if direct_before == 0 && hzr_matches {
         return Ok((text, 0, true));
     }
@@ -452,8 +502,9 @@ fn migrate_codex(path: &Path, before: &[u8], binary: &Path) -> Result<(String, u
         .with_context(|| format!("mcp_servers.hzr in {} is not a table", path.display()))?;
     hzr["command"] = value(binary.to_string_lossy().as_ref());
     let mut args = Array::new();
-    args.push("mcp");
-    args.push("serve");
+    for argument in mcp_serve_args(workspace) {
+        args.push(argument);
+    }
     hzr["args"] = value(args);
 
     Ok((document.to_string(), direct.len(), true))
@@ -539,6 +590,7 @@ fn migrate_claude_desktop(
     path: &Path,
     before: &[u8],
     binary: &Path,
+    workspace: &Path,
 ) -> Result<(String, usize, bool)> {
     let mut document = if before.is_empty() {
         json!({})
@@ -549,7 +601,7 @@ fn migrate_claude_desktop(
     let direct_before = json_direct_icm_count(&document);
     let hzr_matches = json_hzr_registration(&document)
         .as_ref()
-        .is_some_and(|registration| registration.matches(binary));
+        .is_some_and(|registration| registration.matches_desired(binary, workspace));
     if direct_before == 0 && hzr_matches {
         let text = std::str::from_utf8(before)
             .with_context(|| format!("{} is not UTF-8", path.display()))?
@@ -585,7 +637,7 @@ fn migrate_claude_desktop(
         "command".to_owned(),
         Value::String(binary.to_string_lossy().into_owned()),
     );
-    hzr.insert("args".to_owned(), json!(["mcp", "serve"]));
+    hzr.insert("args".to_owned(), json!(mcp_serve_args(workspace)));
 
     let mut rendered = serde_json::to_string_pretty(&document)?;
     rendered.push('\n');
@@ -620,7 +672,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use tempfile::tempdir;
     use toml_edit::DocumentMut;
 
@@ -728,15 +780,78 @@ mod tests {
         assert!(status.pinned_workspace.is_none());
     }
 
+    /// Install used to hardcode unpinned `["mcp", "serve"]`, so Claude Desktop launched from
+    /// `/` and wrote memory into the filesystem-root namespace. The registration written by
+    /// install must carry `--workspace` for the adopted project.
+    #[test]
+    fn test_install_pins_the_adopted_workspace_in_mcp_args() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("config.toml");
+        let project = directory.path().join("app");
+        fs::create_dir_all(&project).expect("project");
+
+        install(Client::Codex, &path, binary(), &project, false, true).expect("install");
+        let status = status(Client::Codex, &path).expect("status");
+
+        assert_eq!(
+            status.args,
+            [
+                "mcp".to_owned(),
+                "serve".to_owned(),
+                "--workspace".to_owned(),
+                project.to_string_lossy().into_owned(),
+            ]
+        );
+        assert_eq!(
+            status.pinned_workspace.as_deref(),
+            Some(project.to_string_lossy().as_ref())
+        );
+    }
+
+    /// An already-matching unpinned registration must be rewritten: matching only on binary
+    /// and `mcp serve` left Desktop stuck on `/` after every idempotent reinstall.
+    #[test]
+    fn test_install_rewrites_an_unpinned_registration_to_pin_workspace() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("claude.json");
+        let project = directory.path().join("app");
+        fs::create_dir_all(&project).expect("project");
+        fs::write(
+            &path,
+            r#"{"mcpServers":{"hzr":{"command":"/opt/hzr/current/bin/hzr","args":["mcp","serve"]}}}"#,
+        )
+        .expect("fixture");
+
+        let report = install(
+            Client::ClaudeDesktop,
+            &path,
+            binary(),
+            &project,
+            false,
+            true,
+        )
+        .expect("pin rewrite");
+        let status = status(Client::ClaudeDesktop, &path).expect("status");
+
+        assert!(report.changed, "unpinned registration must be rewritten");
+        assert_eq!(
+            status.pinned_workspace.as_deref(),
+            Some(project.to_string_lossy().as_ref())
+        );
+    }
+
     #[test]
     fn test_codex_migration_replaces_direct_icm_and_preserves_other_servers() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("config.toml");
+        let project = directory.path().join("app");
+        fs::create_dir_all(&project).expect("project");
         let original = "[mcp_servers.icm]\ncommand = '/usr/local/bin/icm'\nargs = ['serve']\n\n\
                         [mcp_servers.other]\ncommand = '/opt/other'\n";
         fs::write(&path, original).expect("fixture");
 
-        let first = install(Client::Codex, &path, binary(), false, true).expect("migration");
+        let first =
+            install(Client::Codex, &path, binary(), &project, false, true).expect("migration");
         let after = fs::read_to_string(&path).expect("migrated config");
         let document = after.parse::<DocumentMut>().expect("valid TOML");
 
@@ -752,7 +867,7 @@ mod tests {
         );
         assert!(first.backup_path.expect("backup").is_file());
         assert!(
-            !install(Client::Codex, &path, binary(), false, true)
+            !install(Client::Codex, &path, binary(), &project, false, true)
                 .expect("idempotent reinstall")
                 .changed
         );
@@ -762,7 +877,19 @@ mod tests {
         assert!(!status.started_by_init);
         assert_eq!(status.direct_icm_registrations, 0);
         assert_eq!(status.command.as_deref(), Some("/opt/hzr/current/bin/hzr"));
-        assert_eq!(status.args, ["mcp", "serve"]);
+        assert_eq!(
+            status.args,
+            [
+                "mcp".to_owned(),
+                "serve".to_owned(),
+                "--workspace".to_owned(),
+                project.to_string_lossy().into_owned(),
+            ]
+        );
+        assert_eq!(
+            status.pinned_workspace.as_deref(),
+            Some(project.to_string_lossy().as_ref())
+        );
     }
 
     #[test]
@@ -798,13 +925,30 @@ mod tests {
         let original = r#"{"mcpServers":{"memory":{"command":"/usr/bin/icm","args":["serve"]},"other":{"command":"/opt/other"}}}"#;
         fs::write(&path, original).expect("fixture");
 
-        let preview = install(Client::ClaudeDesktop, &path, binary(), true, false)
-            .expect("dry-run migration");
+        let project = directory.path().join("app");
+        fs::create_dir_all(&project).expect("project");
+
+        let preview = install(
+            Client::ClaudeDesktop,
+            &path,
+            binary(),
+            &project,
+            true,
+            false,
+        )
+        .expect("dry-run migration");
         assert!(preview.changed);
         assert_eq!(fs::read_to_string(&path).expect("unchanged"), original);
 
-        let applied = install(Client::ClaudeDesktop, &path, binary(), false, true)
-            .expect("applied migration");
+        let applied = install(
+            Client::ClaudeDesktop,
+            &path,
+            binary(),
+            &project,
+            false,
+            true,
+        )
+        .expect("applied migration");
         let document: Value =
             serde_json::from_slice(&fs::read(&path).expect("config bytes")).expect("valid JSON");
         let servers = document["mcpServers"].as_object().expect("servers");
@@ -814,11 +958,24 @@ mod tests {
             servers["hzr"]["command"],
             Value::String("/opt/hzr/current/bin/hzr".to_owned())
         );
+        assert_eq!(
+            servers["hzr"]["args"],
+            json!([
+                "mcp",
+                "serve",
+                "--workspace",
+                project.to_string_lossy().as_ref()
+            ])
+        );
         assert!(servers.contains_key("other"));
         let status = status(Client::ClaudeDesktop, &path).expect("native MCP status");
         assert!(status.registered);
         assert!(!status.started_by_init);
         assert_eq!(status.direct_icm_registrations, 0);
+        assert_eq!(
+            status.pinned_workspace.as_deref(),
+            Some(project.to_string_lossy().as_ref())
+        );
     }
 
     #[test]
