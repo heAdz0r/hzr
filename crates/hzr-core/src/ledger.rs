@@ -1829,7 +1829,7 @@ mod tests {
             retries: 0,
             latency_ms: 10,
             outcome: "accepted".into(),
-            policy_version: "0.3.8".into(),
+            policy_version: "0.3.9".into(),
             cost_microusd: Some(50),
             project_path: String::new(),
         };
@@ -1869,7 +1869,7 @@ mod tests {
             retries: 0,
             latency_ms: 1,
             outcome: "completed".into(),
-            policy_version: "0.3.8".into(),
+            policy_version: "0.3.9".into(),
             cost_microusd: Some(10),
             project_path: path.to_owned(),
         };
@@ -1966,7 +1966,7 @@ mod tests {
                 retries: 0,
                 latency_ms: 1,
                 outcome: "completed".into(),
-                policy_version: "0.3.8".into(),
+                policy_version: "0.3.9".into(),
                 cost_microusd: Some(1),
                 project_path: "/work/a".into(),
             })

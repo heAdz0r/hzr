@@ -348,7 +348,7 @@ mod tests {
             let rendered = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
             assert!(rendered.contains("get /v1/health http/1.1"));
             assert!(rendered.contains(&expected_auth));
-            let body = br#"{"protocol_version":1,"hzr_version":"0.3.8","state":"ready","workspace_root":null,"engines":[],"capabilities":[]}"#;
+            let body = br#"{"protocol_version":1,"hzr_version":"0.3.9","state":"ready","workspace_root":null,"engines":[],"capabilities":[]}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                 body.len()
@@ -372,7 +372,7 @@ mod tests {
             .expect("typed health response");
         server.await.expect("test server completion");
 
-        assert_eq!(health.hzr_version, "0.3.8");
+        assert_eq!(health.hzr_version, "0.3.9");
         assert_eq!(health.protocol_version, 1);
     }
 }

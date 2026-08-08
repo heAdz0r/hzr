@@ -4,14 +4,14 @@
 
 ![HZR control-plane banner](docs/assets/hzr-hero.png)
 
-[![Version](https://img.shields.io/badge/version-0.3.8-e64a19)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.3.9-e64a19)](Cargo.toml)
 [![CI](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg)](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/heAdz0r/hzr?include_prereleases&color=ef6c00)](https://github.com/heAdz0r/hzr/releases)
 [![License](https://img.shields.io/badge/control_plane-Apache--2.0-37474f)](LICENSE)
 
 HZR is an independent product from heAdz0r that turns disparate layers of agent optimization into one controlled execution path. A single control plane handles search, memory, context budget, execution, response density, and usage accounting—without rework or competing loops.
 
-**The core invariant of the 0.3.8 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
+**The core invariant of the 0.3.9 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
 
 > HZR does not claim unverified percentage savings. Functional and supply-chain gates are defined and repeatedly tested before release; the end-to-end economic effect must still be measured through paired, provider-billed benchmarks on identical tasks.
 
@@ -19,7 +19,7 @@ HZR is an independent product from heAdz0r that turns disparate layers of agent 
 
 HZR optimizes for an agent reaching the correct next action, not for the smallest output in isolation. A bounded response must say what it represents, what was omitted, how much source it covers, and how to recover exact evidence. Mutations need the same discipline: exact preconditions, atomic replacement, idempotent retries, dry-run, and structured outcomes.
 
-| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.3.8` |
+| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.3.9` |
 |---|---|---|---|
 | Understand a large Markdown file quickly | no common bounded contract | full file in the recorded case | self-described digest: bounded lead prose, omitted-content marker, source lines/bytes, section coverage, exact recovery hint |
 | Recover authoritative content | command-specific full output | full output | `--level none` is byte-exact; `--from`/`--to` gives an exact focused range |
@@ -85,13 +85,13 @@ Published artifacts:
 | macOS | Apple Silicon | Available | native release workflow + clean-install smoke |
 | macOS | Intel | Available | native release workflow + clean-install smoke |
 
-No Windows artifact is provided in 0.3.8. Release scripts build native artifacts rather than cross-compiling them.
+No Windows artifact is provided in 0.3.9. Release scripts build native artifacts rather than cross-compiling them.
 
 Download the installer, review it, then run it:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.3.8/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.3.9/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -104,7 +104,7 @@ The installer downloads the platform artifact and `SHA256SUMS` from GitHub Relea
 
 ```text
 ~/.local/share/hzr/
-  versions/v0.3.8-<platform>/   # version-scoped self-contained bundle
+  versions/v0.3.9-<platform>/   # version-scoped self-contained bundle
   current -> versions/...
 
 ~/.local/bin/
@@ -139,7 +139,7 @@ binaries are not required.
 
 | Component | Pin | Distribution role |
 |---|---:|---|
-| HZR | 0.3.8 | public CLI + daemon |
+| HZR | 0.3.9 | public CLI + daemon |
 | HZR fork-core RTK | 0.44.1-fork.1 | private native engine; complete inherited surface |
 | grepai | 0.35.0 + ownership patch | private native engine |
 | ICM | 0.10.61 + lockfile patch | private native engine |
@@ -338,7 +338,7 @@ hzr memory recall|store|forget|update|prune|status
 hzr exec rewrite|run|approve|deny
 hzr codec compile
 hzr agent run
-hzr tdd                                strict RED → GREEN → REFACTOR contract
+hzr tdd                                optional; strict RED → GREEN → REFACTOR when selected
 hzr stats                              global cumulative efficiency ledger
 hzr build <args>                       build YOUR project (token-optimized output)
 hzr release --force                    rebuild and reinstall HZR itself
@@ -347,11 +347,14 @@ hzr migrate scan|apply|history|memory
 hzr rtk -- <fork arguments>
 ```
 
-`hzr tdd` is HZR's native, executable form of the upstream RTK project skill.
-Run it before production changes. It requires an observed relevant RED, the
-identical focused command passing at GREEN, refactoring while green, and the full
-HZR workspace/all-features gate. Release bundles also ship the canonical
-`share/hzr/skills/hzr-tdd/SKILL.md` asset for agent integrations.
+`hzr tdd` is HZR's optional, executable form of the upstream RTK project skill.
+Use it when explicitly requested, required by repository-local policy, or worth
+the test-first overhead for a risky change. Agents may skip it when token or time
+efficiency matters, while still running proportionate verification and every
+repository-required quality gate. Once selected, it requires an observed relevant
+RED, the identical focused command passing at GREEN, and refactoring while green.
+Release bundles also ship the canonical `share/hzr/skills/hzr-tdd/SKILL.md` asset
+for agent integrations.
 
 `build` and `release` are separate verbs deliberately. `hzr build` forwards to the
 inherited fork wrapper that builds **your project** — the same verb RTK used, so existing
@@ -488,7 +491,7 @@ contract is in [HZR.md](HZR.md).
 Standards baseline: [MCP 2025-11-25 lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
 and [tool contracts](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
 
-The MCP layer in 0.3.8 is a stateless stdio gateway: it stores no data of its own
+The MCP layer in 0.3.9 is a stateless stdio gateway: it stores no data of its own
 and does not spawn internal engines. Each client process terminates at EOF,
 while durable ownership remains with production `hzrd`; the installer migrates direct ICM
 registrations, and `hzr doctor` verifies the service lifecycle.
@@ -526,7 +529,7 @@ Contributors need Rust 1.85+, Go (CI pin 1.24.2), Git, Bash, curl and standard U
 scripts/build-bundle.sh "$PWD/dist"
 scripts/package-release.sh "$PWD/dist" "$PWD/dist-release"
 HZR_RELEASE_ARCHIVE="$(find "$PWD/dist-release" -maxdepth 1 \
-  -name 'hzr-v0.3.8-*.tar.gz' -print -quit)"
+  -name 'hzr-v0.3.9-*.tar.gz' -print -quit)"
 scripts/smoke-install.sh "$HZR_RELEASE_ARCHIVE" "$PWD/dist-release/SHA256SUMS"
 ```
 
@@ -552,7 +555,7 @@ Do not run `cargo test` directly inside `fork-core/rtk`: the official gate creat
 
 ## Verifiable guarantees and fair boundaries
 
-|Guarantee|Status 0.3.8|
+|Guarantee|Status 0.3.9|
 |---|---|
 |Full fork baseline and current engine have verifiable identity|implemented|
 |Stock RTK is missing from the production path|implemented|

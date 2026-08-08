@@ -476,8 +476,10 @@ fn initialize_result(request: &Value, binding: &WorkspaceBinding) -> Result<Valu
 
     const GUIDANCE: &str = "Use hzr_context_plan first for unfamiliar or cross-cutting work, \
     hzr_search for targeted code discovery, hzr_memory_recall before re-reading prior work, \
-    hzr_memory_store only for durable decisions or resolved errors, and `hzr tdd` before \
-    production changes. HZR owns the single \
+    and hzr_memory_store only for durable decisions or resolved errors. TDD is opt-in: use \
+    `hzr tdd` only when the user or repository requires it, or regression risk justifies \
+    test-first overhead; skip it when token or time efficiency matters while preserving \
+    repository-required verification. HZR owns the single \
     context planner, semantic index and memory store; never launch icm, grepai or rtk directly.";
 
     let instructions = match binding.refusal() {

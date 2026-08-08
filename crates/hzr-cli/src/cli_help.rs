@@ -52,7 +52,7 @@ Agent tools:
   codec      Compile protected response-density transforms
   agent      Run the managed caveman-code agent
   mcp        Serve HZR tools over stdio MCP
-  tdd        Print the HZR Red-Green-Refactor contract
+  tdd        Print the optional HZR Red-Green-Refactor contract
 
 Distribution:
   release    Build, install, and verify an HZR release

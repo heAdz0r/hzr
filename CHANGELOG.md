@@ -4,6 +4,21 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-08-08
+
+### Changed
+
+- TDD is now opt-in rather than automatically required for every agent implementation.
+  Agents use `hzr tdd` when the user or repository requires it, or when regression risk
+  justifies test-first overhead; token- or time-sensitive work may use proportionate
+  verification instead.
+- The `hzr tdd --json` contract adds `required: false` while retaining `strict: true`:
+  selecting TDD still requires observed RED, identical-command GREEN, and refactoring
+  while green. Skipping TDD does not waive repository-required quality gates.
+- Managed Claude/Codex instructions, MCP initialization guidance, bundled awareness files,
+  the canonical `hzr-tdd` skill, CLI help, README, and contributor guidance now describe
+  the same opt-in policy.
+
 ## [0.3.8] - 2026-08-06
 
 ### Added
@@ -518,6 +533,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.3.9]: https://github.com/heAdz0r/hzr/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/heAdz0r/hzr/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/heAdz0r/hzr/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/heAdz0r/hzr/compare/v0.3.5...v0.3.6

@@ -10,6 +10,7 @@ pub struct TddPhase {
 pub struct TddContract {
     pub name: &'static str,
     pub workflow: &'static str,
+    pub required: bool,
     pub strict: bool,
     pub upstream_reference: &'static str,
     pub upstream_repository: &'static str,
@@ -22,6 +23,7 @@ pub fn contract() -> TddContract {
     TddContract {
         name: "hzr-tdd",
         workflow: "red_green_refactor",
+        required: false,
         strict: true,
         upstream_reference: "rtk-tdd",
         upstream_repository: "https://github.com/rtk-ai/rtk",
@@ -49,7 +51,12 @@ pub fn contract() -> TddContract {
 }
 
 pub fn render_text(contract: &TddContract) -> String {
-    let mut output = String::from("HZR TDD — strict Red-Green-Refactor\n\n");
+    let mut output = String::from(
+        "HZR TDD — optional Red-Green-Refactor workflow\n\n\
+         Opt in when the user or repository requires TDD, or when regression risk justifies test-first overhead.\n\
+         Skip it when token or time efficiency matters; use proportionate verification instead.\n\
+         Choosing not to use TDD does not waive repository-required quality gates.\n\n",
+    );
     for phase in &contract.phases {
         output.push_str(&phase.name.to_uppercase());
         output.push_str(": ");
@@ -72,13 +79,16 @@ mod tests {
     const SKILL: &str = include_str!("../../../.claude/skills/hzr-tdd/SKILL.md");
 
     #[test]
-    fn test_skill_and_cli_contract_share_strict_red_evidence() {
+    fn test_skill_and_cli_contract_share_optional_selection_and_strict_red_evidence() {
         let contract = contract();
         let rendered = render_text(&contract);
 
-        assert!(SKILL.contains("hzr-managed-skill: hzr-tdd-v1"));
+        assert!(SKILL.contains("hzr-managed-skill: hzr-tdd-v2"));
+        assert!(SKILL.contains("Do not apply it automatically to every code change."));
         assert!(SKILL.contains("A test that already passes is regression coverage, not TDD."));
+        assert!(rendered.contains("optional Red-Green-Refactor workflow"));
         assert!(rendered.contains("without an observed RED is regression coverage, not TDD"));
+        assert!(!contract.required);
         assert!(contract.strict);
     }
 }

@@ -10,8 +10,10 @@ For direct operations follow the root `HZR.md` contract. In particular, the
 current exact read/write compatibility surface is `hzr rtk -- ...`; standalone
 `rtk` and undocumented `hzr read`/`hzr write` aliases are not valid entrypoints.
 
-For Rust implementation, fixes, behavior changes, and refactoring, run `hzr tdd`
-before production changes. Preserve the focused RED and GREEN command evidence;
+TDD is opt-in. Use `hzr tdd` when the user or repository requires it, or when
+regression risk justifies test-first overhead. When token or time efficiency
+matters, skip it and use proportionate verification while preserving repository
+quality gates. If selected, preserve focused RED and GREEN command evidence;
 post-hoc passing tests are regression coverage, not TDD.
 
 ## MCP tools

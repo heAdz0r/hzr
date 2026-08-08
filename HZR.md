@@ -73,7 +73,7 @@ Read     -> hzr rtk -- read <file> [--from N --to M | --outline | --symbols | --
 Write    -> hzr rtk -- write patch|replace|set|create|batch ...
 Density  -> hzr codec compile --profile shadow|adaptive|compact
 Raw      -> hzr rtk -- raw <command...>   (escape hatch — see the cost below)
-TDD      -> hzr tdd                  (read before production changes)
+TDD      -> hzr tdd                  (optional; strict when selected)
 MCP      -> hzr mcp serve            (launched by a client, never by hand)
 Config   -> hzr mcp config --client codex|claude-desktop  (prints a snippet)
 MCP state -> hzr mcp status
@@ -96,10 +96,13 @@ context. Codex reaches the check through the mandatory exact read of this instal
 the notice is written separately so canonical file output remains byte-exact. When a notice says a
 newer release exists, inform the user once and do not run `hzr update` without explicit approval.
 
-For implementation, bug fixes, behavior changes and refactoring, run `hzr tdd`
-before changing production code and follow its RED → GREEN → REFACTOR contract.
-The canonical skill is shipped at `share/hzr/skills/hzr-tdd/SKILL.md`. A passing
-test without an observed relevant failure is regression coverage, not TDD.
+TDD is opt-in, not the default for every agent change. Use `hzr tdd` when the
+user or repository requires it, or when regression risk justifies test-first
+overhead. When token or time efficiency matters, skip it and use proportionate
+verification instead. Repository-required quality gates still apply. When TDD
+is selected, follow its strict RED → GREEN → REFACTOR contract. The canonical
+skill is shipped at `share/hzr/skills/hzr-tdd/SKILL.md`; a passing test without
+an observed relevant failure is regression coverage, not TDD.
 
 `hzr build` and `hzr release` are different verbs on purpose: `build` builds **your
 project**, `release` rebuilds and reinstalls **HZR itself**. Do not use `release` to build

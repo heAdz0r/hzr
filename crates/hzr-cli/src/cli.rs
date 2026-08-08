@@ -256,7 +256,7 @@ pub enum Command {
         #[arg(long)]
         check: bool,
     },
-    #[command(about = "Print the HZR Red-Green-Refactor contract")]
+    #[command(about = "Print the optional HZR Red-Green-Refactor contract")]
     Tdd,
     #[command(
         about = "Build your project (token-optimized wrapper)",

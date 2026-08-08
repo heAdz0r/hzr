@@ -81,6 +81,11 @@ fn test_stdio_mcp_negotiates_lists_typed_tools_and_exits_on_eof() -> anyhow::Res
     )
     .expect("parse initialize response");
     assert_eq!(initialize["result"]["protocolVersion"], "2025-11-25");
+    let instructions = initialize["result"]["instructions"]
+        .as_str()
+        .expect("initialize instructions");
+    assert!(instructions.contains("TDD is opt-in"));
+    assert!(!instructions.contains("`hzr tdd` before production changes"));
 
     writeln!(
         stdin,

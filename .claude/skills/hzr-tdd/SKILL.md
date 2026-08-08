@@ -1,18 +1,22 @@
 ---
 name: hzr-tdd
 description: >
-  Enforces evidence-backed Red-Green-Refactor for HZR Rust implementation,
-  bug-fix, and refactoring work. Requires an observed failing test before
-  production changes and the complete HZR Rust quality gate before completion.
+  Optional evidence-backed Red-Green-Refactor workflow for HZR Rust work.
+  Use when the user or repository requires TDD, or when regression risk justifies
+  test-first overhead. Do not auto-apply it to every implementation task.
 ---
 
 # HZR TDD Workflow
 
-<!-- hzr-managed-skill: hzr-tdd-v1 -->
+<!-- hzr-managed-skill: hzr-tdd-v2 -->
 
-Use this skill for Rust implementation, bug fixes, behavior changes, and
-refactoring in HZR. Documentation-only and read-only review tasks do not require
-a fabricated RED phase.
+TDD is opt-in. Do not apply it automatically to every code change. Use this
+skill when the user explicitly requests TDD, repository-local instructions
+require it, or regression risk justifies the extra test-first work.
+
+When token or time efficiency matters, skip this skill and use proportionate
+verification instead. Skipping TDD does not waive repository-required quality
+gates, and post-hoc tests must not be reported as test-first TDD.
 
 ## Three laws
 

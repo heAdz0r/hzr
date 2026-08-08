@@ -107,8 +107,10 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          | memory | `hzr memory recall\\|store` |\n\
          | context | `hzr context plan \"<intent>\"` |\n\
          | exact/raw output | `hzr rtk -- raw <command...>` |\n\
-         | test-first development | `hzr tdd` before production changes |\n\
+         | optional TDD | `hzr tdd` only when user/repository policy or regression risk justifies test-first overhead |\n\
          | build this project | `hzr build <args>` (not `hzr release`, which rebuilds HZR) |\n\n\
+         TDD is opt-in, not the default. When token or time efficiency matters, skip it\n\
+         and use proportionate verification; repository-required quality gates still apply.\n\n\
          `read -n` defaults to exact content and preserves source coordinates, including\n\
          ranged and tail reads. `--max-lines N` is the exact head equivalent. `--outline`\n\
          returns Markdown headings or heuristic symbols for Rust, Python, TypeScript,\n\
@@ -612,6 +614,9 @@ mod tests {
     fn test_managed_block_describes_mcp_and_batch_semantics_exactly() {
         let out = compose("", Surface::Codex, contract()).0;
         assert!(out.contains("`hzr_codec`"));
+        assert!(out.contains("| optional TDD | `hzr tdd` only when"));
+        assert!(out.contains("TDD is opt-in, not the default"));
+        assert!(!out.contains("`hzr tdd` before production changes"));
         assert!(
             out.contains("--apply` writes a pinned registration"),
             "managed block must document the apply path for pinned MCP registration"

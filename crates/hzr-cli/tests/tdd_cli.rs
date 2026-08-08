@@ -16,6 +16,7 @@ fn test_tdd_reports_hzr_red_green_refactor_contract() -> anyhow::Result<()> {
     let contract: Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(contract["name"], "hzr-tdd");
     assert_eq!(contract["workflow"], "red_green_refactor");
+    assert_eq!(contract["required"], false);
     assert_eq!(contract["strict"], true);
     assert_eq!(contract["upstream_reference"], "rtk-tdd");
     assert_eq!(
@@ -58,6 +59,11 @@ fn test_tdd_text_distinguishes_tdd_from_post_hoc_tests() -> anyhow::Result<()> {
     assert!(stdout.contains("RED"));
     assert!(stdout.contains("GREEN"));
     assert!(stdout.contains("REFACTOR"));
+    assert!(stdout.contains("optional Red-Green-Refactor workflow"));
+    assert!(
+        stdout
+            .contains("Choosing not to use TDD does not waive repository-required quality gates.")
+    );
     assert!(
         stdout.contains("A passing test without an observed RED is regression coverage, not TDD.")
     );

@@ -11,10 +11,13 @@ You need Rust 1.85 or newer, Git, Go, Bun 1.2.19, and a POSIX shell. Bun builds 
 tests the Vue visualizer. Node is downloaded and verified by the bundle builder,
 so a separate Node installation is not required to assemble a release bundle.
 
-Before Rust implementation, bug fixes, behavior changes, or refactoring, run
-`hzr tdd` and preserve the observed RED and GREEN commands for the final report.
-Passing tests added after production code are useful regression coverage, but
-must not be reported as test-first TDD.
+TDD is optional. Use `hzr tdd` when the user or repository requires it, or when
+regression risk justifies test-first overhead. When token or time efficiency
+matters, implementation may proceed without a RED phase, but the relevant tests
+and repository quality gates still apply. If TDD is selected, preserve the
+observed RED and GREEN commands for the final report. Passing tests added after
+production code are regression coverage and must not be reported as test-first
+TDD.
 
 Run the fast checks while developing:
 
