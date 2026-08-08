@@ -103,6 +103,16 @@ impl IndexCoordinator {
         Ok(workspace)
     }
 
+    pub async fn workspace_for_builtin_search(&self, start: &Path) -> Result<Workspace> {
+        Workspace::discover_managed_fast(
+            start,
+            &self.git_binary,
+            &self.data_root,
+            self.deadlines.version,
+        )
+        .await
+    }
+
     #[must_use]
     pub fn grepai_binary(&self) -> &Path {
         &self.grepai_binary

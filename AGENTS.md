@@ -13,4 +13,5 @@
 - Provider usage and estimates are separate fields. Never present estimated counters as billed savings.
 - Public HZR documentation and user-facing text are written in English. Preserve imported fork-core audit and provenance artifacts in their original form unless a dedicated migration updates current-engine identity and passes the complete fork regression gate.
 - Production Rust must pass cargo fmt, cargo clippy --all-targets --all-features -- -D warnings, and cargo test --all-targets --all-features.
+- TDD is optional. Use it when the user requests it or regression risk justifies the extra cycle; otherwise use proportionate verification to conserve tokens and time. Required quality gates still apply.
 - Do not add placeholders, TODOs, dead abstractions or suppressed lints.

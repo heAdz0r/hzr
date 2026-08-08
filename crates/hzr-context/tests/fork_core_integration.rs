@@ -117,6 +117,52 @@ async fn test_search_and_context_use_managed_fork_core_commands() {
             .iter()
             .any(|warning| warning.code == ContextWarningCode::MemoryUnavailable)
     );
+
+    let legacy_workspace = fixture.path().join("legacy-workspace");
+    fs::create_dir_all(legacy_workspace.join("src")).expect("legacy workspace source directory");
+    fs::create_dir(legacy_workspace.join(".grepai")).expect("legacy grepai directory");
+    fs::write(
+        legacy_workspace.join("src/lib.rs"),
+        "pub fn managed_fork_hit() {}\n",
+    )
+    .expect("legacy source fixture");
+
+    let legacy_search = planner
+        .search(SearchRequest {
+            workspace: legacy_workspace.clone(),
+            query: "managed_fork_hit".into(),
+            path: Some(PathBuf::from("src")),
+            limit: 5,
+            mode: SearchMode::Auto,
+            include_content: true,
+        })
+        .await
+        .expect("legacy index search falls back internally");
+    assert_eq!(legacy_search.strategy, SearchStrategy::ForkRgaiBuiltin);
+    assert_eq!(legacy_search.hits.len(), 1);
+    assert!(
+        legacy_search
+            .fallback_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("requires explicit migration"))
+    );
+
+    let legacy_context = planner
+        .plan(PlanRequest {
+            workspace: legacy_workspace,
+            intent: "find managed fork hit".into(),
+            path: Some(PathBuf::from("src")),
+            topic: Some("hzr-test".into()),
+            search_limit: 5,
+            memory_limit: 5,
+        })
+        .await
+        .expect("legacy index planning falls back internally");
+    assert!(legacy_context.warnings.iter().any(|warning| {
+        warning.code == ContextWarningCode::SearchDegraded
+            && warning.message.contains("must be centralized")
+    }));
+
     planner.shutdown().await.expect("index shutdown");
 }
 

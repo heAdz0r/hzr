@@ -8,8 +8,8 @@ use hzr_exec::{
     ForkCoreRunner, TerminationCause,
 };
 use hzr_index::{
-    Deadlines, IndexCoordinator, IndexCoordinatorSnapshot, IndexGeneration, PreparedIndex,
-    Workspace,
+    Deadlines, IndexCoordinator, IndexCoordinatorSnapshot, IndexError, IndexGeneration,
+    PreparedIndex, Workspace,
 };
 use hzr_memory::{
     IcmClient, RecallRequest, isolate_project_memories, namespaced_topic, recall_candidate_limit,
@@ -140,16 +140,35 @@ impl ContextPlanner {
         self.search_with_accounting(request, false).await
     }
 
+    async fn workspace_for_read(&self, start: &Path) -> Result<(Workspace, Option<String>)> {
+        match self.indexes.workspace(start).await {
+            Ok(workspace) => Ok((workspace, None)),
+            Err(error @ IndexError::LegacyIndexRequiresMigration { .. }) => {
+                let workspace = self.indexes.workspace_for_builtin_search(start).await?;
+                Ok((
+                    workspace,
+                    Some(format!(
+                        "canonical grepai index requires explicit migration; fork rgai used its builtin fallback without activating or modifying the legacy index: {error}"
+                    )),
+                ))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     async fn search_with_accounting(
         &self,
         mut request: SearchRequest,
         account_usage: bool,
     ) -> Result<SearchApiResponse> {
         request.validate()?;
-        let workspace = self.indexes.workspace(&request.workspace).await?;
+        let (workspace, migration_fallback) = self.workspace_for_read(&request.workspace).await?;
+        if migration_fallback.is_some() {
+            request.mode = SearchMode::Exact;
+        }
         let initial_generation = IndexGeneration::read(&workspace)?;
         let (workspace, generation, fallback_reason) = if request.mode == SearchMode::Exact {
-            (workspace, initial_generation, None)
+            (workspace, initial_generation, migration_fallback)
         } else {
             match self.prepare_within_request_budget(&workspace).await {
                 Ok(prepared) => (prepared.workspace, prepared.generation, None),
@@ -181,7 +200,7 @@ impl ContextPlanner {
 
     pub async fn plan(&self, request: PlanRequest) -> Result<ContextPlanApiResponse> {
         request.validate()?;
-        let workspace = self.indexes.workspace(&request.workspace).await?;
+        let (workspace, _) = self.workspace_for_read(&request.workspace).await?;
         workspace.normalize_filter(request.path.as_deref())?;
         let initial_generation = IndexGeneration::read(&workspace)?;
         let project = workspace.identity.repository_id.clone();
