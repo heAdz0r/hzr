@@ -77,7 +77,7 @@ TDD      -> hzr tdd                  (optional; strict when selected)
 MCP      -> hzr mcp serve            (launched by a client, never by hand)
 Config   -> hzr mcp config --client codex|claude-desktop  (prints a snippet)
 MCP state -> hzr mcp status
-Health   -> hzr doctor
+Health   -> hzr doctor [--fix]     (--fix migrates one unambiguous legacy .grepai with backup)
 Enable   -> hzr enable [--workspace DIR]
 Disable  -> hzr disable [--workspace DIR]   (keeps index and memory)
 Gains    -> hzr stats [--workspace DIR]

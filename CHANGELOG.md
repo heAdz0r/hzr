@@ -4,6 +4,18 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Added
+
+- `hzr doctor --fix` transactionally migrates one unambiguous legacy `.grepai`, retains
+  the verified backup and manifest, then reports the post-repair health state. Duplicate or
+  conflicting indexes fail without mutation.
+
+### Fixed
+
+- Search and context planning no longer surface HTTP 503 when a project has a legacy local
+  index. HZR stays inside its single control plane and uses the fork-core builtin fallback
+  without activating or modifying the legacy index.
+
 ## [0.3.9] - 2026-08-08
 
 ### Changed

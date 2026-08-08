@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use hzr_agent::{IntegrationLayout, preflight};
 use hzr_core::{Config, locked_engines};
-use hzr_index::{Deadlines, IndexGeneration, IndexPlacement, IndexStatus, Workspace};
+use hzr_index::{
+    Deadlines, IndexGeneration, IndexMigrationOutcome, IndexPlacement, IndexStatus, Workspace,
+    migrate_legacy_index,
+};
 use hzr_protocol::{EngineState, PROTOCOL_VERSION};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -39,6 +42,36 @@ pub struct DoctorReport {
     pub workspace: PathBuf,
     pub healthy: bool,
     pub checks: Vec<DoctorCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repair: Option<IndexMigrationOutcome>,
+}
+
+pub async fn repair_legacy_index(
+    config: &Config,
+    workspace: &Path,
+) -> hzr_index::Result<Option<IndexMigrationOutcome>> {
+    let deadlines = Deadlines::default();
+    let discovered = Workspace::discover_managed(
+        workspace,
+        Path::new("git"),
+        &config.data_dir,
+        deadlines.version,
+    )
+    .await?;
+    if !matches!(
+        discovered.placement()?,
+        IndexPlacement::LegacyProject { .. }
+    ) {
+        return Ok(None);
+    }
+    migrate_legacy_index(
+        workspace,
+        Path::new("git"),
+        &config.data_dir,
+        deadlines.version,
+    )
+    .await
+    .map(Some)
 }
 
 fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
@@ -521,6 +554,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         workspace: workspace.to_path_buf(),
         healthy,
         checks,
+        repair: None,
     }
 }
 
@@ -950,7 +984,7 @@ mod tests {
     use std::fs;
 
     use hzr_core::Config;
-    use hzr_index::{IndexPlacement, IndexStatus};
+    use hzr_index::{IndexMigrationOutcome, IndexPlacement, IndexStatus};
     use sha2::{Digest, Sha256};
 
     use crate::client_config::{Client, ClientMcpStatus};
@@ -958,7 +992,7 @@ mod tests {
     use super::{
         CheckStatus, attest_active_bundle, bounded, claude_code_mcp_check,
         direct_icm_registration_detail, hook_ownership_check, index_readiness_check,
-        integration_layout, workspace_binding_check,
+        integration_layout, repair_legacy_index, workspace_binding_check,
     };
 
     fn index_status(
@@ -980,6 +1014,41 @@ mod tests {
             duplicate_index_dirs: Vec::new(),
             generation: None,
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_doctor_fix_migrates_one_legacy_index_with_a_backup() {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let workspace = fixture.path().join("workspace");
+        let legacy = workspace.join(".grepai");
+        fs::create_dir_all(&legacy).expect("legacy index directory");
+        fs::write(legacy.join("config.yaml"), "version: 1\n").expect("legacy config");
+        fs::write(legacy.join("index.gob"), b"vectors").expect("legacy vectors");
+        fs::write(legacy.join("symbols.gob"), b"symbols").expect("legacy symbols");
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Config::default()
+        };
+        config.ensure_layout().expect("HZR data layout");
+
+        let outcome = repair_legacy_index(&config, &workspace)
+            .await
+            .expect("doctor repair")
+            .expect("legacy repair outcome");
+        assert!(matches!(outcome, IndexMigrationOutcome::Applied { .. }));
+        let manifest = match outcome {
+            IndexMigrationOutcome::Applied { manifest, .. }
+            | IndexMigrationOutcome::AlreadyApplied { manifest, .. } => manifest,
+        };
+
+        assert!(
+            fs::symlink_metadata(workspace.join(".grepai"))
+                .expect("managed project link")
+                .file_type()
+                .is_symlink()
+        );
+        assert!(std::path::Path::new(&manifest.backup.display).is_dir());
     }
 
     /// Операторы не должны узнавать о холодном индексе только из warning'а context plan.

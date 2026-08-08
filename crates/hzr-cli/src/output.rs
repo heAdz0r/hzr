@@ -568,6 +568,7 @@ mod tests {
                         .into(),
                 },
             ],
+            repair: None,
         }
     }
 

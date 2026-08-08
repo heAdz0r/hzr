@@ -53,12 +53,14 @@ Examples:
 
 pub const DOCTOR_LONG_ABOUT: &str = "\
 Verify pins, ownership, daemon health, and duplicate indexes for one workspace. \
-Use this after install or when search, memory, or MCP looks misrouted.";
+Use `--fix` to transactionally migrate one unambiguous legacy index with a retained backup. \
+Duplicate or conflicting indexes remain unchanged and fail with their exact paths.";
 
 pub const DOCTOR_AFTER_HELP: &str = "\
 Examples:
   hzr doctor
   hzr doctor --workspace /path/to/project
+  hzr doctor --fix --workspace /path/to/project
   hzr doctor --json
 ";
 

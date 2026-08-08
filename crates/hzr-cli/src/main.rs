@@ -53,7 +53,7 @@ use crate::cli::{
     MemoryCommand, MigrateCommand, SearchArgs, ServiceCommand,
 };
 use crate::client::DaemonClient;
-use crate::diagnostics::{doctor, integration_layout};
+use crate::diagnostics::{doctor, integration_layout, repair_legacy_index};
 use crate::input::read_text;
 use crate::invocation::normalize;
 use crate::migration::scan;
@@ -323,12 +323,21 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             hook_runner::observe(&config).await;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Doctor { workspace } => {
+        Command::Doctor { workspace, fix } => {
             let workspace = canonical_directory(workspace.as_deref())?;
-            let report = doctor(&config_path, &config, &workspace).await;
+            let repair = if fix {
+                repair_legacy_index(&config, &workspace).await?
+            } else {
+                None
+            };
+            let mut report = doctor(&config_path, &config, &workspace).await;
+            report.repair = repair;
             if cli.json {
                 print_json(&report)?;
             } else {
+                if let Some(outcome) = &report.repair {
+                    print_migration_apply(outcome)?;
+                }
                 print_doctor(&report)?;
             }
             Ok(if report.healthy {

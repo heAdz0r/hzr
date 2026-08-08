@@ -156,9 +156,14 @@ Inside a Git repository:
 
 ```bash
 hzr doctor --workspace .
+hzr doctor --fix --workspace .  # safely migrate one unambiguous legacy .grepai
 hzr daemon service status
 hzr daemon status
 ```
+
+`hzr doctor` is read-only by default. `--fix` uses the same transactional index migration as
+`hzr migrate apply`, retains a byte-verified backup, and refuses duplicate or conflicting indexes
+without mutation.
 
 Release installer creates a user service (`launchd` on macOS, `systemd --user` on Linux)
 and binds it to stable `current/bin/hzrd`. For source-only foreground development

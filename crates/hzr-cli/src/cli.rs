@@ -162,6 +162,9 @@ pub enum Command {
         /// Workspace root to diagnose (defaults to the current directory)
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Safely migrate one unambiguous legacy .grepai before diagnosing
+        #[arg(long)]
+        fix: bool,
     },
     #[command(about = "Operate the authenticated loopback daemon")]
     Daemon {
@@ -903,6 +906,18 @@ mod tests {
     }
 
     #[test]
+    fn test_cli_parses_doctor_fix() {
+        let cli = Cli::parse_from(["hzr", "doctor", "--fix", "--workspace", "/tmp/project"]);
+        assert!(matches!(
+            cli.command,
+            Command::Doctor {
+                workspace: Some(_),
+                fix: true
+            }
+        ));
+    }
+
+    #[test]
     fn test_help_ux_root_groups_top_level_commands() {
         let help = strip_ansi(&root_help());
         for heading in [
@@ -1182,7 +1197,7 @@ mod tests {
             (&[], &["config", "json"]),
             (&["enable"], &["workspace"]),
             (&["disable"], &["workspace"]),
-            (&["doctor"], &["workspace"]),
+            (&["doctor"], &["workspace", "fix"]),
             (&["stats"], &["workspace"]),
             (&["mcp", "serve"], &["workspace"]),
             (&["mcp", "config"], &["client", "workspace"]),
