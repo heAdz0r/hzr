@@ -213,6 +213,14 @@ fn write_optimizer_bypass(
             )?,
         }
     }
+    if bypass.by_tool_total > 8 {
+        writeln!(
+            output,
+            "   {} more bypass tools not shown; exact details: {}",
+            bypass.by_tool_total - 8,
+            bypass.by_tool_recovery
+        )?;
+    }
     writeln!(
         output,
         "   {}",
@@ -297,13 +305,17 @@ fn write_hot_paths(output: &mut impl Write, report: &StatsReport, color: bool) -
         )?;
     }
     write_rule(output, '╰', '┴', '╯', &columns)?;
-    if ranked.len() > 12 {
+    if report.by_command_total > 12 {
         // Never let a truncated table read as the whole picture.
         writeln!(
             output,
             "   {}",
             style(
-                &format!("{} more commands not shown", ranked.len() - 12),
+                &format!(
+                    "{} more commands not shown; exact details: {}",
+                    report.by_command_total - 12,
+                    report.by_command_recovery
+                ),
                 "2;37",
                 color
             )
@@ -394,7 +406,7 @@ fn write_provider_usage(
 /// ledger, so a reader must be able to tell partial coverage from complete coverage.
 fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -> io::Result<()> {
     let (label, status_color) = if report.runtime_accounting_complete {
-        ("● COMPLETE", "1;32")
+        ("● COMPLETE FOR OBSERVED CHANNELS", "1;32")
     } else {
         ("▲ INCOMPLETE", "1;33")
     };
@@ -544,8 +556,9 @@ mod tests {
     }
 
     fn report(usage: LedgerSummary, commands: Vec<CommandSavings>) -> StatsReport {
+        let by_command_total = commands.len();
         StatsReport {
-            hzr_version: "0.3.9",
+            hzr_version: "0.4.0",
             scope: "global lifetime".into(),
             direct_savings: DirectSavings {
                 operations: 42,
@@ -567,6 +580,9 @@ mod tests {
                 share_pct: 80.0,
             }],
             by_command: commands,
+            by_command_total,
+            by_command_omitted: 0,
+            by_command_recovery: "hzr stats --json --all".into(),
             observed_model_usage: usage,
             observed_model_usage_scope: "global_lifetime",
             bypass: BypassReport::default(),
@@ -631,6 +647,9 @@ mod tests {
                 replacement: Some("hzr rtk -- read install.sh --from 1 --to 80".into()),
                 rationale: Some("hzr read streams the requested span".into()),
             }],
+            by_tool_total: 1,
+            by_tool_omitted: 0,
+            by_tool_recovery: "hzr stats --json --all".into(),
         }));
 
         assert!(rendered.contains("OPTIMIZER BYPASS"));
@@ -755,6 +774,15 @@ mod tests {
         assert!(rendered.contains("▲ INCOMPLETE"));
         assert!(rendered.contains("absent from the ledger"));
         assert!(rendered.contains("never summed"));
+    }
+
+    #[test]
+    fn test_complete_coverage_is_limited_to_observed_channels() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.coverage = AccountingCoverage::default_complete();
+        report.runtime_accounting_complete = true;
+        let rendered = render(&report);
+        assert!(rendered.contains("COMPLETE FOR OBSERVED CHANNELS"));
     }
 
     /// A missing MCP key looks like the channel is unaccounted; the split must show mcp=0.

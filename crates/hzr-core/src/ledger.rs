@@ -519,17 +519,18 @@ impl Ledger {
         project_path: Option<&str>,
     ) -> Result<EfficiencySummary, LedgerError> {
         let raw_predicate = raw_route_sql_predicate("rtk_cmd");
+        let neutral_predicate = format!("({raw_predicate}) OR rtk_cmd = 'rtk write'");
         let totals_query = format!(
             "SELECT
                 COUNT(*),
-                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                COALESCE(SUM(CASE WHEN ({neutral_predicate})
                                   THEN output_tokens ELSE input_tokens END), 0),
                 COALESCE(SUM(output_tokens), 0),
-                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND input_tokens > output_tokens
+                COALESCE(SUM(CASE WHEN NOT ({neutral_predicate}) AND input_tokens > output_tokens
                                   THEN input_tokens - output_tokens ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND output_tokens > input_tokens
+                COALESCE(SUM(CASE WHEN NOT ({neutral_predicate}) AND output_tokens > input_tokens
                                   THEN output_tokens - input_tokens ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                COALESCE(SUM(CASE WHEN ({neutral_predicate})
                                   THEN 0 ELSE input_tokens - output_tokens END), 0),
                 COALESCE(SUM(exec_time_ms), 0)
              FROM commands
@@ -566,14 +567,14 @@ impl Ledger {
             "SELECT
                 rtk_cmd,
                 COUNT(*),
-                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                COALESCE(SUM(CASE WHEN ({neutral_predicate})
                                   THEN output_tokens ELSE input_tokens END), 0),
                 COALESCE(SUM(output_tokens), 0),
-                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND input_tokens > output_tokens
+                COALESCE(SUM(CASE WHEN NOT ({neutral_predicate}) AND input_tokens > output_tokens
                                   THEN input_tokens - output_tokens ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) AND output_tokens > input_tokens
+                COALESCE(SUM(CASE WHEN NOT ({neutral_predicate}) AND output_tokens > input_tokens
                                   THEN output_tokens - input_tokens ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN ({raw_predicate})
+                COALESCE(SUM(CASE WHEN ({neutral_predicate})
                                   THEN 0 ELSE input_tokens - output_tokens END), 0),
                 COALESCE(AVG(exec_time_ms), 0)
              FROM commands
@@ -582,7 +583,7 @@ impl Ledger {
                AND (?1 IS NULL OR project_path = ?1
                     OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
              GROUP BY rtk_cmd
-             ORDER BY SUM(CASE WHEN ({raw_predicate})
+             ORDER BY SUM(CASE WHEN ({neutral_predicate})
                                THEN 0 ELSE input_tokens - output_tokens END) DESC"
         );
         let mut statement = self
@@ -1590,6 +1591,27 @@ mod tests {
     }
 
     #[test]
+    fn test_unobserved_write_counterfactual_is_neutral_in_summary() {
+        let directory = tempdir().expect("temp directory");
+        let ledger = Ledger::open(&directory.path().join("usage.sqlite")).expect("ledger");
+        ledger
+            .record_operation("write patch file", "rtk write", 1_000, 10, 1, "/work")
+            .expect("write operation");
+
+        let summary = ledger
+            .efficiency_summary_for_project("/work")
+            .expect("efficiency summary");
+        assert_eq!(summary.baseline_tokens_estimated, 10);
+        assert_eq!(summary.delivered_tokens_estimated, 10);
+        assert_eq!(summary.gross_avoided_tokens_estimated, 0);
+        assert_eq!(summary.regression_tokens_estimated, 0);
+        assert_eq!(summary.net_avoided_tokens_estimated, 0);
+        assert_eq!(summary.by_command.len(), 1);
+        assert_eq!(summary.by_command[0].baseline_tokens_estimated, 10);
+        assert_eq!(summary.by_command[0].net_avoided_tokens_estimated, 0);
+    }
+
+    #[test]
     fn test_proxy_ledger_rows_are_classified_as_raw() {
         assert_eq!(
             operation_identity("rtk proxy sed -n 1,20p file"),
@@ -1829,7 +1851,7 @@ mod tests {
             retries: 0,
             latency_ms: 10,
             outcome: "accepted".into(),
-            policy_version: "0.3.9".into(),
+            policy_version: "0.4.0".into(),
             cost_microusd: Some(50),
             project_path: String::new(),
         };
@@ -1869,7 +1891,7 @@ mod tests {
             retries: 0,
             latency_ms: 1,
             outcome: "completed".into(),
-            policy_version: "0.3.9".into(),
+            policy_version: "0.4.0".into(),
             cost_microusd: Some(10),
             project_path: path.to_owned(),
         };
@@ -1966,7 +1988,7 @@ mod tests {
                 retries: 0,
                 latency_ms: 1,
                 outcome: "completed".into(),
-                policy_version: "0.3.9".into(),
+                policy_version: "0.4.0".into(),
                 cost_microusd: Some(1),
                 project_path: "/work/a".into(),
             })

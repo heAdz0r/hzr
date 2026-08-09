@@ -1559,6 +1559,8 @@ pub async fn operation(
             channel,
             measurement,
             route,
+            agent: request.agent,
+            session_id: request.session_id,
         })
         .await
         .map_err(|error| ApiError::internal(format!("operation ledger write failed: {error}")))?;
@@ -1631,6 +1633,9 @@ async fn record_codec_operation(
             },
             measurement: hzr_core::OperationMeasurement::Estimated,
             route: hzr_core::OperationRoute::Optimized,
+            agent: matches!(request.channel, Some(hzr_protocol::AccountingChannel::Mcp))
+                .then(|| "mcp".to_owned()),
+            session_id: None,
         })
         .await;
 }

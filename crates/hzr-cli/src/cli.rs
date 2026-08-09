@@ -275,6 +275,9 @@ pub enum Command {
         /// Limit the ledger view to one workspace root
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Emit every per-command row. Default JSON is bounded to protect agent context.
+        #[arg(long)]
+        all: bool,
     },
     #[command(hide = true)]
     Savings,
@@ -1361,7 +1364,7 @@ mod tests {
         ));
         assert!(matches!(
             stats.command,
-            Command::Stats { workspace: Some(ref path) }
+            Command::Stats { workspace: Some(ref path), .. }
                 if path == std::path::Path::new("/work/app")
         ));
     }

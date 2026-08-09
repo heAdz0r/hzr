@@ -4,11 +4,14 @@ use std::path::Path;
 use anyhow::Result;
 use hzr_core::{
     BypassSummary, Config, EfficiencySummary, Ledger, LedgerSummary, OperationChannel,
-    classify_operation,
+    OperationRoute, classify_operation,
 };
 use serde::Serialize;
 
 use crate::hook_runner::{self, AccountingCoverage};
+
+const DEFAULT_COMMAND_LIMIT: usize = 12;
+const DEFAULT_BYPASS_TOOL_LIMIT: usize = 12;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct StatsReport {
@@ -17,6 +20,9 @@ pub struct StatsReport {
     pub direct_savings: DirectSavings,
     pub by_subsystem: Vec<SubsystemSavings>,
     pub by_command: Vec<CommandSavings>,
+    pub by_command_total: usize,
+    pub by_command_omitted: usize,
+    pub by_command_recovery: String,
     pub observed_model_usage: LedgerSummary,
     pub observed_model_usage_scope: &'static str,
     /// Operations that skipped the optimizer. Reported next to the headline ratio because
@@ -35,6 +41,7 @@ pub struct StatsReport {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct TrafficCoverage {
+    pub observability_scope: &'static str,
     pub accounted_operations: u64,
     pub total_observed_operations: u64,
     pub native_unaccounted_operations: u64,
@@ -52,6 +59,9 @@ pub struct BypassReport {
     pub total_delivered_tokens_estimated: u64,
     pub token_share_pct: f64,
     pub by_tool: Vec<BypassToolReport>,
+    pub by_tool_total: usize,
+    pub by_tool_omitted: usize,
+    pub by_tool_recovery: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -102,7 +112,11 @@ pub struct CommandSavings {
     pub avg_time_ms: u64,
 }
 
-pub fn collect(config: &Config, workspace: Option<&Path>) -> Result<StatsReport> {
+pub fn collect(
+    config: &Config,
+    workspace: Option<&Path>,
+    include_all_commands: bool,
+) -> Result<StatsReport> {
     let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?;
     let (gain, bypass, scope, observed_model_usage, observed_model_usage_scope) = match workspace {
         Some(workspace) => {
@@ -124,16 +138,18 @@ pub fn collect(config: &Config, workspace: Option<&Path>) -> Result<StatsReport>
         ),
     };
     let coverage = hook_runner::degraded_rewrite_coverage(config)?;
-    Ok(build_report(
+    Ok(build_report_with_command_limit(
         gain,
         observed_model_usage,
         observed_model_usage_scope,
         coverage,
         bypass,
         scope,
+        (!include_all_commands).then_some(DEFAULT_COMMAND_LIMIT),
     ))
 }
 
+#[cfg(test)]
 fn build_report(
     gain: EfficiencySummary,
     observed_model_usage: LedgerSummary,
@@ -142,7 +158,29 @@ fn build_report(
     bypass: BypassSummary,
     scope: String,
 ) -> StatsReport {
+    build_report_with_command_limit(
+        gain,
+        observed_model_usage,
+        observed_model_usage_scope,
+        coverage,
+        bypass,
+        scope,
+        Some(DEFAULT_COMMAND_LIMIT),
+    )
+}
+
+fn build_report_with_command_limit(
+    gain: EfficiencySummary,
+    observed_model_usage: LedgerSummary,
+    observed_model_usage_scope: &'static str,
+    coverage: AccountingCoverage,
+    bypass: BypassSummary,
+    scope: String,
+    command_limit: Option<usize>,
+) -> StatsReport {
+    let reveal_command_details = command_limit.is_none();
     let traffic_coverage = TrafficCoverage {
+        observability_scope: "observed_channels_only",
         // The reduction ratio is computed only from measured, non-native rows. An
         // explicitly unmeasured bypass is known to the control plane, but it is not
         // evidence that the ratio covered that operation.
@@ -157,12 +195,12 @@ fn build_report(
         },
         by_channel: with_explicit_mcp_channel(gain.by_channel.clone()),
     };
-    let commands = gain
+    let mut commands = gain
         .by_command
         .into_iter()
         .map(|stats| CommandSavings {
             subsystem: classify_command(&stats.command),
-            command: normalize_command(&stats.command),
+            command: command_label(&stats.command, reveal_command_details),
             executions: stats.executions,
             baseline_tokens_estimated: stats.baseline_tokens_estimated,
             delivered_tokens_estimated: stats.delivered_tokens_estimated,
@@ -218,6 +256,20 @@ fn build_report(
             .cmp(&left.net_avoided_tokens_estimated)
     });
 
+    let by_command_total = commands.len();
+    if let Some(limit) = command_limit {
+        commands.truncate(limit);
+    }
+    let by_command_omitted = by_command_total.saturating_sub(commands.len());
+    let by_command_recovery = if scope == "global lifetime" {
+        "hzr stats --json --all".to_owned()
+    } else {
+        format!(
+            "hzr stats --json --all --workspace {}",
+            scope.trim_start_matches("project ")
+        )
+    };
+
     StatsReport {
         hzr_version: env!("CARGO_PKG_VERSION"),
         scope,
@@ -237,9 +289,12 @@ fn build_report(
         },
         by_subsystem,
         by_command: commands,
+        by_command_total,
+        by_command_omitted,
+        by_command_recovery: by_command_recovery.clone(),
         observed_model_usage,
         observed_model_usage_scope,
-        bypass: bypass_report(bypass),
+        bypass: bypass_report(bypass, reveal_command_details, by_command_recovery.clone()),
         traffic_coverage,
         degraded_rewrites: coverage.unreconciled_rewrites,
         coverage,
@@ -255,6 +310,7 @@ fn provider_usage_notes(observed_model_usage_scope: &str) -> Vec<&'static str> {
         "read, write, rgai/search, and command filters share the same cumulative HZR-owned history",
         "a bypassed operation delivers as many tokens as it consumed, so it cancels out of the reduction ratio instead of lowering it",
         "context selection, memory recall, and response contracts receive no savings credit without a measured counterfactual",
+        "accounting completeness applies only to observed channels; a host-native tool without an installed observer is outside the denominator",
     ];
     notes.push(match observed_model_usage_scope {
         "project_matched" => {
@@ -270,7 +326,38 @@ fn provider_usage_notes(observed_model_usage_scope: &str) -> Vec<&'static str> {
     notes
 }
 
-fn bypass_report(bypass: BypassSummary) -> BypassReport {
+fn bypass_report(
+    bypass: BypassSummary,
+    reveal_command_details: bool,
+    recovery: String,
+) -> BypassReport {
+    let mut by_tool = bypass
+        .by_tool
+        .into_iter()
+        .map(|tool| BypassToolReport {
+            example_command: if reveal_command_details {
+                normalize_command(&tool.example_command)
+            } else {
+                format!("hzr raw {} <arguments omitted>", tool.tool)
+            },
+            replacement: if reveal_command_details {
+                tool.replacement
+            } else {
+                tool.replacement
+                    .map(|_| "available; use `hzr stats --json --all` for exact details".to_owned())
+            },
+            tool: tool.tool,
+            executions: tool.executions,
+            delivered_tokens_estimated: tool.delivered_tokens_estimated,
+            rationale: tool.rationale,
+        })
+        .collect::<Vec<_>>();
+    let by_tool_total = by_tool.len();
+    if !reveal_command_details {
+        by_tool.truncate(DEFAULT_BYPASS_TOOL_LIMIT);
+    }
+    let by_tool_omitted = by_tool_total.saturating_sub(by_tool.len());
+
     BypassReport {
         operations: bypass.lifetime.operations,
         total_operations: bypass.lifetime.total_operations,
@@ -278,18 +365,10 @@ fn bypass_report(bypass: BypassSummary) -> BypassReport {
         delivered_tokens_estimated: bypass.lifetime.delivered_tokens_estimated,
         total_delivered_tokens_estimated: bypass.lifetime.total_delivered_tokens_estimated,
         token_share_pct: bypass.lifetime.token_share_pct(),
-        by_tool: bypass
-            .by_tool
-            .into_iter()
-            .map(|tool| BypassToolReport {
-                tool: tool.tool,
-                executions: tool.executions,
-                delivered_tokens_estimated: tool.delivered_tokens_estimated,
-                example_command: tool.example_command,
-                replacement: tool.replacement,
-                rationale: tool.rationale,
-            })
-            .collect(),
+        by_tool,
+        by_tool_total,
+        by_tool_omitted,
+        by_tool_recovery: recovery,
     }
 }
 
@@ -302,6 +381,22 @@ fn normalize_command(command: &str) -> String {
     command
         .strip_prefix("rtk ")
         .map_or_else(|| command.to_owned(), |rest| format!("hzr {rest}"))
+}
+
+fn command_label(command: &str, reveal_command_details: bool) -> String {
+    let normalized = normalize_command(command);
+    if reveal_command_details {
+        return normalized;
+    }
+
+    let classification = classify_operation(command);
+    if classification.route == OperationRoute::Bypassed {
+        return format!("hzr raw {} <arguments omitted>", classification.operation);
+    }
+    if normalized.contains(['\r', '\n']) || normalized.len() > 160 {
+        return format!("hzr {} <arguments omitted>", classification.operation);
+    }
+    normalized
 }
 
 fn signed_percentage(part: i64, total: u64) -> f64 {
@@ -328,7 +423,10 @@ mod tests {
 
     use hzr_core::LedgerSummary;
 
-    use super::{build_report, classify_command, normalize_command};
+    use super::{
+        DEFAULT_BYPASS_TOOL_LIMIT, DEFAULT_COMMAND_LIMIT, build_report, classify_command,
+        normalize_command,
+    };
     use crate::hook_runner::AccountingCoverage;
     use hzr_core::{
         BypassSummary, BypassTool, BypassWindow, EfficiencyCommandSummary, EfficiencySummary,
@@ -489,8 +587,59 @@ mod tests {
         assert_eq!(report.bypass.by_tool.len(), 1);
         assert_eq!(
             report.bypass.by_tool[0].replacement.as_deref(),
-            Some("hzr rtk -- read src/lib.rs --from 1 --to 80")
+            Some("available; use `hzr stats --json --all` for exact details")
         );
+    }
+
+    #[test]
+    fn test_default_report_redacts_unbounded_command_details() {
+        let sensitive_payload = "secret=value\n".repeat(40);
+        let gain = EfficiencySummary {
+            by_command: vec![EfficiencyCommandSummary {
+                command: format!("rtk rgai {sensitive_payload}"),
+                executions: 1,
+                baseline_tokens_estimated: 10,
+                delivered_tokens_estimated: 5,
+                gross_avoided_tokens_estimated: 5,
+                regression_tokens_estimated: 0,
+                net_avoided_tokens_estimated: 5,
+                avg_time_ms: 1,
+            }],
+            ..EfficiencySummary::default()
+        };
+        let bypass = BypassSummary {
+            lifetime: BypassWindow {
+                operations: 1,
+                total_operations: 1,
+                delivered_tokens_estimated: 5,
+                total_delivered_tokens_estimated: 5,
+            },
+            by_tool: vec![BypassTool {
+                tool: "sed".into(),
+                executions: 1,
+                delivered_tokens_estimated: 5,
+                example_command: format!("rtk proxy sed {sensitive_payload}"),
+                replacement: Some(format!("hzr rtk -- read {sensitive_payload}")),
+                rationale: Some("bounded read".into()),
+            }],
+        };
+
+        let report = build_report(
+            gain,
+            LedgerSummary::default(),
+            "global_lifetime",
+            AccountingCoverage::default_complete(),
+            bypass,
+            "global lifetime".into(),
+        );
+
+        assert_eq!(report.by_command[0].command, "hzr rgai <arguments omitted>");
+        assert_eq!(
+            report.bypass.by_tool[0].example_command,
+            "hzr raw sed <arguments omitted>"
+        );
+        let encoded = serde_json::to_string(&report).expect("report JSON");
+        assert!(!encoded.contains("secret=value"));
     }
 
     /// The headline ratio is honest only when it is read next to the bypass share, so the
@@ -558,5 +707,82 @@ mod tests {
         );
 
         assert_eq!(report.traffic_coverage.by_channel.get("mcp"), Some(&0));
+    }
+
+    #[test]
+    fn test_default_report_bounds_command_history_and_names_recovery() {
+        let by_command = (0..75)
+            .map(|index| EfficiencyCommandSummary {
+                command: format!("rtk command-{index}"),
+                executions: 1,
+                baseline_tokens_estimated: 10,
+                delivered_tokens_estimated: 5,
+                gross_avoided_tokens_estimated: 5,
+                regression_tokens_estimated: 0,
+                net_avoided_tokens_estimated: 5,
+                avg_time_ms: 1,
+            })
+            .collect();
+        let report = build_report(
+            EfficiencySummary {
+                by_command,
+                ..EfficiencySummary::default()
+            },
+            LedgerSummary::default(),
+            "global_lifetime",
+            AccountingCoverage::default_complete(),
+            BypassSummary::default(),
+            "global lifetime".into(),
+        );
+
+        assert_eq!(report.by_command.len(), DEFAULT_COMMAND_LIMIT);
+        assert_eq!(report.by_command_total, 75);
+        assert_eq!(report.by_command_omitted, 75 - DEFAULT_COMMAND_LIMIT);
+        assert_eq!(report.by_command_recovery, "hzr stats --json --all");
+    }
+
+    #[test]
+    fn test_default_report_bounds_bypass_tools_and_total_json_cost() {
+        let bypass = BypassSummary {
+            lifetime: BypassWindow {
+                operations: 75,
+                total_operations: 75,
+                delivered_tokens_estimated: 750,
+                total_delivered_tokens_estimated: 750,
+            },
+            by_tool: (0..75)
+                .map(|index| BypassTool {
+                    tool: format!("tool-{index}"),
+                    executions: 1,
+                    delivered_tokens_estimated: 10,
+                    example_command: format!("rtk proxy tool-{index} secret=value"),
+                    replacement: None,
+                    rationale: None,
+                })
+                .collect(),
+        };
+        let report = build_report(
+            EfficiencySummary::default(),
+            LedgerSummary::default(),
+            "global_lifetime",
+            AccountingCoverage::default_complete(),
+            bypass,
+            "global lifetime".into(),
+        );
+
+        assert_eq!(report.bypass.by_tool.len(), DEFAULT_BYPASS_TOOL_LIMIT);
+        assert_eq!(report.bypass.by_tool_total, 75);
+        assert_eq!(
+            report.bypass.by_tool_omitted,
+            75 - DEFAULT_BYPASS_TOOL_LIMIT
+        );
+        assert_eq!(report.bypass.by_tool_recovery, "hzr stats --json --all");
+        let encoded = serde_json::to_vec(&report).expect("report JSON");
+        assert!(
+            encoded.len() / 4 < 4_000,
+            "default report exceeded the 4,000-token estimate: {} bytes",
+            encoded.len()
+        );
+        assert!(!encoded.windows(12).any(|window| window == b"secret=value"));
     }
 }

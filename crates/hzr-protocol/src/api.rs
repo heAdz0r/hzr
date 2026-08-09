@@ -355,6 +355,10 @@ pub struct OperationApiRequest {
     pub channel: AccountingChannel,
     pub measurement: AccountingMeasurement,
     pub route: AccountingRoute,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

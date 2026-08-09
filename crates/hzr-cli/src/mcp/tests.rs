@@ -24,6 +24,8 @@ fn test_mcp_accounting_is_neutral_and_explicitly_tagged() {
         "retrieval is coverage, not claimed savings"
     );
     assert!(request.delivered_tokens_estimated > 0);
+    let encoded = serde_json::to_value(request).expect("accounting JSON");
+    assert_eq!(encoded["agent"], "mcp");
 }
 
 /// Mirror of the notification rule in `handle_line`, which cannot be exercised

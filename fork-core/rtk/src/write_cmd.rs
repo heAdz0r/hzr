@@ -373,17 +373,17 @@ where
 }
 
 /// Build tracking arguments for write operations.
-/// Returns (native_estimate, rtk_output, normalized_cmd).
-/// - native_estimate: file content (what native Edit/sed would show in LLM context)
+/// Returns (neutral_baseline, rtk_output, normalized_cmd).
+/// - neutral_baseline: compact output repeated because no comparable native response was observed
 /// - rtk_output: compact message rtk actually printed
 /// - normalized_cmd: always "rtk write" for gain grouping
 fn write_tracking_args<'a>(
     op: &str,
-    file_content: &'a str,
+    file_content: &str,
     rtk_msg: &'a str,
 ) -> (&'a str, &'a str, &'static str) {
-    let _ = op; // op is not used — all write ops normalize to same cmd // changed: unified grouping
-    (file_content, rtk_msg, "rtk write")
+    let _ = (op, file_content); // all write ops normalize to one savings-neutral command
+    (rtk_msg, rtk_msg, "rtk write")
 }
 
 fn write_tracking_enabled() -> bool {
@@ -2047,23 +2047,19 @@ mod tests {
     // --- Tracking semantics tests ---
 
     #[test]
-    fn tracking_input_represents_native_cost() {
-        // input must be file content (native cost), not the updated content
-        // output must be the compact rtk message, not updated file content
+    fn tracking_does_not_credit_an_unobserved_native_counterfactual() {
+        // A complete file is not an observed native Edit response. Until a host provides a
+        // comparable response, write utilization is neutral in the direct-savings ledger.
         let content = "a".repeat(1000); // 1000 chars ~ 250 tokens
         let rtk_msg = "OK replace applied=1"; // ~5 tokens
         let (input, output, cmd) = write_tracking_args("replace", &content, rtk_msg);
-        assert_eq!(input, content, "input should be file content (native cost)");
+        assert_eq!(input, rtk_msg, "unobserved native output receives no credit");
         assert_eq!(output, rtk_msg, "output should be compact rtk message");
         assert_eq!(
             cmd, "rtk write",
             "rtk_cmd should be normalized to 'rtk write'"
         );
-        // Token savings: input ~250 tokens, output ~5 tokens → ~98% savings
-        assert!(
-            input.len() > output.len() * 10,
-            "must show significant savings"
-        );
+        assert_eq!(input, output, "write utilization must be savings-neutral");
     }
 
     #[test]

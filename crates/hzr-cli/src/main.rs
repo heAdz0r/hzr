@@ -531,8 +531,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Stats { workspace } => show_stats(&config, workspace.as_deref(), cli.json).await,
-        Command::Savings => show_stats(&config, None, cli.json).await,
+        Command::Stats { workspace, all } => {
+            show_stats(&config, workspace.as_deref(), cli.json, all).await
+        }
+        Command::Savings => show_stats(&config, None, cli.json, false).await,
         Command::Migrate { command } => match command {
             MigrateCommand::Scan { workspace } => {
                 let workspace = canonical_directory(workspace.as_deref())?;
@@ -1816,11 +1818,16 @@ async fn execute_agent(config: &Config, command: AgentCommand, json: bool) -> Re
     Ok(ExitCode::SUCCESS)
 }
 
-async fn show_stats(config: &Config, workspace: Option<&Path>, json: bool) -> Result<ExitCode> {
+async fn show_stats(
+    config: &Config,
+    workspace: Option<&Path>,
+    json: bool,
+    include_all_commands: bool,
+) -> Result<ExitCode> {
     let workspace = workspace
         .map(|path| canonical_directory(Some(path)))
         .transpose()?;
-    let report = stats::collect(config, workspace.as_deref())?;
+    let report = stats::collect(config, workspace.as_deref(), include_all_commands)?;
     if json {
         print_json(&report)?;
     } else {
@@ -1881,7 +1888,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.9-test");
+        let release = directory.path().join("versions/v0.4.0-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -1901,7 +1908,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.3.9-test");
+        let release = directory.path().join("versions/v0.4.0-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))
@@ -1919,7 +1926,7 @@ mod tests {
     #[test]
     fn public_binary_symlink_resolves_to_the_versioned_source_directory() {
         let directory = tempdir().expect("temporary directory");
-        let release_bin = directory.path().join("versions/v0.3.9-test/bin");
+        let release_bin = directory.path().join("versions/v0.4.0-test/bin");
         let release_binary = release_bin.join("hzr");
         let public_bin = directory.path().join("bin");
         std::fs::create_dir_all(&release_bin).expect("release bin");

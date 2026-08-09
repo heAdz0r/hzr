@@ -636,6 +636,14 @@ fn mcp_operation_request(
         channel: hzr_protocol::AccountingChannel::Mcp,
         measurement: hzr_protocol::AccountingMeasurement::Estimated,
         route: hzr_protocol::AccountingRoute::Optimized,
+        agent: Some("mcp".to_owned()),
+        session_id: ["CODEX_THREAD_ID", "CLAUDE_SESSION_ID"]
+            .into_iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            }),
     })
 }
 

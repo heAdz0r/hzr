@@ -330,23 +330,32 @@ pub fn run_changed(file: &Path, revision: Option<&str>, context: usize, verbose:
 
     let hunks = read_changed::git_diff_hunks(file, revision, context)?;
     let output = read_changed::render_changed_hunks(&hunks, file);
+    let content = std::fs::read(file)
+        .with_context(|| format!("Failed to read file: {}", file.display()))?;
+    let content = String::from_utf8_lossy(&content);
+    let (baseline, shown) = changed_tracking_view(&content, &output);
 
-    print!("{output}");
+    print!("{shown}");
 
     let mode_label = if revision.is_some() {
         "since"
     } else {
         "changed"
     };
-    let input_estimate = std::fs::read_to_string(file).map(|s| s.len()).unwrap_or(0);
-    let input_marker = format!("[file:{} bytes]", input_estimate);
     timer.track(
         &format!("cat {}", file.display()),
         &format!("rtk read --{mode_label}"),
-        &input_marker,
-        &output,
+        baseline,
+        shown,
     );
     Ok(())
+}
+
+fn changed_tracking_view<'a>(file_content: &'a str, rendered_hunks: &'a str) -> (&'a str, &'a str) {
+    (
+        file_content,
+        crate::guard::never_worse(file_content, rendered_hunks),
+    )
 }
 
 /// Run outline or symbols mode for a file.
@@ -551,6 +560,15 @@ mod tests {
     #[test]
     fn test_keep_tail_lines_more_than_content() {
         assert_eq!(keep_tail_lines("a\nb\n", 10), "a\nb\n");
+    }
+
+    #[test]
+    fn changed_view_uses_the_real_file_baseline_and_never_grows() {
+        let file_content = "one\n";
+        let rendered_hunks = "@@ -1 +1 @@\n-one\n+two\n";
+        let (baseline, shown) = changed_tracking_view(file_content, rendered_hunks);
+        assert_eq!(baseline, file_content);
+        assert_eq!(shown, file_content, "changed mode must honor never-worse output");
     }
 
     #[test]

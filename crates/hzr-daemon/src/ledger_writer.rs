@@ -39,6 +39,8 @@ pub struct OperationRecord {
     pub channel: OperationChannel,
     pub measurement: OperationMeasurement,
     pub route: OperationRoute,
+    pub agent: Option<String>,
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -72,8 +74,8 @@ impl LedgerWriter {
                                 record.execution_ms,
                                 OperationAttribution {
                                     project_path: &record.project_path,
-                                    agent: None,
-                                    session_id: None,
+                                    agent: record.agent.as_deref(),
+                                    session_id: record.session_id.as_deref(),
                                     channel: record.channel,
                                     measurement: record.measurement,
                                     route: record.route,

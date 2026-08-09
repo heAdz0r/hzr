@@ -4,17 +4,36 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-10
+
 ### Added
 
+- `hzr stats --all` explicitly recovers the complete exact per-command history when an
+  operator needs it; the default JSON and human reports now state how many rows were omitted
+  and name that recovery command.
 - `hzr doctor --fix` transactionally migrates one unambiguous legacy `.grepai`, retains
   the verified backup and manifest, then reports the post-repair health state. Duplicate or
   conflicting indexes fail without mutation.
 
 ### Fixed
 
+- `rtk write` no longer treats the target file as an observed native Edit response. New and
+  historical write rows are savings-neutral, so utilization cannot manufacture avoided tokens.
+- `rtk read --changed` now compares a rendered diff with the real file baseline and falls back
+  to the file when the diff would be larger, eliminating the marker-versus-diff regression.
+- MCP operation accounting carries typed agent and inherited session attribution through the
+  daemon into the canonical ledger.
 - Search and context planning no longer surface HTTP 503 when a project has a legacy local
   index. HZR stays inside its single control plane and uses the fork-core builtin fallback
   without activating or modifying the legacy index.
+
+### Changed
+
+- Default `hzr stats` output is bounded to 12 command groups and 12 bypass-tool groups, redacts
+  long, multiline, and raw command payloads, and describes runtime completeness as applying only
+  to observed channels.
+- Local output reduction remains explicitly separate from provider-billed usage. The release
+  makes no economic-savings claim without paired provider receipts and accepted-task quality.
 
 ## [0.3.9] - 2026-08-08
 
@@ -545,6 +564,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.4.0]: https://github.com/heAdz0r/hzr/compare/v0.3.9...v0.4.0
 [0.3.9]: https://github.com/heAdz0r/hzr/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/heAdz0r/hzr/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/heAdz0r/hzr/compare/v0.3.6...v0.3.7
