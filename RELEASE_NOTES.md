@@ -1,43 +1,54 @@
-# HZR 0.3.9 — Optional TDD for token-aware agent work
+# HZR 0.4.0 — Honest token-economy accounting
 
-HZR 0.3.9 makes test-first development an explicit choice instead of a mandatory step for every
-agent implementation. Use `hzr tdd` when the user or repository requires it, or when regression
-risk justifies test-first overhead. When token or time efficiency matters, agents may implement
-without manufacturing a RED phase and use proportionate verification instead.
+HZR 0.4.0 removes two counterfactuals that made local token-reduction telemetry look more
+economical than the evidence supported. It also makes the observability path bounded by default,
+so inspecting HZR does not itself flood an agent context.
 
-This changes workflow selection, not the standard of verification. Repository-required tests and
-quality gates still apply. Once TDD is selected, its RED, GREEN, and REFACTOR evidence remains strict.
+This is an accounting-integrity release. It does not claim provider-billed savings: a valid
+economic claim still requires paired tasks, actual provider receipts, and an accepted-task
+quality guardrail.
 
 ## What changed
 
-- `hzr tdd --json` now reports `required: false`. Its existing `strict: true` field continues to
-  describe the selected workflow, so consumers can distinguish optional activation from strict
-  execution.
-- Human `hzr tdd` output explains when to opt in, when token/time cost can justify skipping, and
-  that repository-required quality gates remain in force.
-- The bundled `hzr-tdd` skill advances to managed contract `hzr-tdd-v2` and no longer auto-activates
-  for every implementation, bug fix, behavior change, or refactor.
-- Root `HZR.md`, managed Claude/Codex instruction blocks, MCP initialization guidance, awareness
-  files, CLI help, README, and contributor guidance share the same opt-in policy.
-- A selected TDD cycle still requires an observed relevant RED, the identical focused command
-  passing at GREEN, and refactoring while green. Post-hoc tests remain regression coverage, not TDD.
+- `rtk write` is savings-neutral. HZR has no observed native Edit response to compare with, so it
+  no longer treats the full target file as an avoided response. The ledger query applies the same
+  rule to historical write rows.
+- `rtk read --changed` uses the real file as its baseline and invokes the never-worse guard. When
+  the rendered diff is larger than the file, the file is delivered and no artificial regression
+  is recorded.
+- `hzr stats` bounds the default history to 12 command groups and 12 bypass-tool groups, redacts
+  long, multiline, and raw payloads, reports omitted counts, and points to
+  `hzr stats --json --all` for explicit recovery.
+- Runtime accounting status is labelled **complete for observed channels**. Host-native tools
+  without an installed observer remain outside the denominator instead of being implied complete.
+- MCP accounting forwards typed `agent` and inherited session attribution into the canonical
+  ledger.
+- The token-economy PRD records the audited `hzr` and `anonymous_bot` call histories, root causes,
+  target KPIs, routing requirements, and the remaining provider-economy proof gate.
 
 ## Upgrade impact
 
-No ledger, index, memory, or activation rewrite is required. Restart open agent sessions after
-upgrading so they load the new bundled contract. Repository-local instructions may still require
-TDD; HZR now treats that as an explicit local policy rather than a universal default.
+The SQLite schema is unchanged. Existing `rtk write` rows are reinterpreted conservatively when
+reports are generated; no destructive ledger migration is required. Existing exact command
+history is retained and remains available only through the explicit `--all` report mode.
 
 Upgrade and verify with:
 
 ```bash
 hzr update
 hzr --version
-hzr tdd --json
+hzr stats --json
 hzr install --force
 ```
 
-Restart already-open agent sessions after upgrading so they reload managed hook and MCP contracts.
+Restart open agent sessions after upgrading so they reload the managed contract and MCP
+registration.
+
+## Economic evidence boundary
+
+The audited repositories contained no provider-billed task receipts, so
+`economic_claim_ready=false` remains correct. The 0.4.0 changes repair local measurement and
+utilization telemetry; they do not substitute estimated UTF-8 byte counts for a provider bill.
 
 ## Verification
 
@@ -47,9 +58,9 @@ The release was checked with:
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
+scripts/verify-fork-core.sh --test
 scripts/build-bundle.sh /absolute/path/to/hzr-dist
 ```
 
-Focused CLI, managed-instruction, skill consistency, and MCP handshake tests cover the optional
-selection contract. Provider-backed benchmarks were not regenerated because this release changes
-agent workflow policy, not model fidelity or billed-token measurement.
+Focused RED/GREEN tests cover write neutrality, changed-read never-worse accounting, bounded and
+redacted stats, MCP attribution, and observed-channel coverage wording.
