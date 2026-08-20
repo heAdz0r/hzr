@@ -6,12 +6,13 @@ use axum::Json;
 use axum::extract::{Path as AxumPath, State};
 use hzr_context::{ContextError, PlanRequest, SearchRequest};
 use hzr_core::{
-    Ledger, LedgerRecord, ProjectOperationRoute, ProjectOperationSummary, locked_engines,
+    Ledger, LedgerRecord, ProjectOperationRoute, ProjectOperationSummary, explicit_raw_fidelity,
+    first_class_replacement, locked_engines, managed_raw_payload,
 };
 use hzr_exec::{
     CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent, ExecutionEnvelope,
-    ExecutionOutcome, ForkCoreInvocation, NotStarted, PINNED_RTK_VERSION, RewriteDecision,
-    RewriteSource, StdinSpec, TerminationCause,
+    ExecutionOutcome, ForkCoreInvocation, NotStarted, PINNED_RTK_VERSION, PinnedRtkAdapter,
+    RewriteDecision, RewriteSource, StdinSpec, TerminationCause,
 };
 use hzr_index::{
     Deadlines, IndexCoordinatorSnapshot, IndexWatcherState, Workspace, WorkspaceRegistration,
@@ -43,6 +44,8 @@ use hzr_protocol::{
 use crate::approval::PendingApproval;
 use crate::error::ApiError;
 use crate::state::{AppState, MemoryStartState};
+
+const MAX_CALLER_PATH_BYTES: usize = 32 * 1024;
 
 pub async fn health(State(state): State<AppState>) -> Result<Json<HealthResponse>, ApiError> {
     let (memory_health, _) = memory_engine_health(&state).await;
@@ -1357,10 +1360,15 @@ pub async fn exec_run(
         return Err(ApiError::bad_request("command must not be empty"));
     }
     validate_exec_timeout(request.timeout_ms)?;
+    validate_caller_path(request.caller_path.as_deref())?;
     let budget = ManagedExecutionBudget::new(&state, request.timeout_ms)?;
     let cwd = canonical_workspace(&request.cwd)?;
-    let command = CanonicalCommand::shell(request.command);
-    let decision = match state.rtk.decide_in(&command, Some(&cwd)).await {
+    let command = CanonicalCommand::shell(request.command.clone());
+    let decision = enforce_first_class(
+        &request.command,
+        fork_decision_with_managed_unwrap(&state.rtk, &request.command, &cwd).await,
+    );
+    let decision = match decision {
         RewriteDecision::Ask { proposed, reason } => {
             let timeout_ms = Some(budget.limit_ms());
             let decision_id = if let Some(proposed_command) = proposed.clone() {
@@ -1372,6 +1380,7 @@ pub async fn exec_run(
                             proposed: proposed_command,
                             cwd,
                             timeout_ms,
+                            caller_path: request.caller_path,
                         })
                         .await,
                 )
@@ -1393,6 +1402,7 @@ pub async fn exec_run(
     envelope.decision = decision;
     envelope.cwd = Some(cwd);
     envelope.timeout_ms = Some(budget.remaining_ms()?);
+    apply_caller_path(&mut envelope, request.caller_path);
     state
         .executor
         .execute(envelope)
@@ -1426,11 +1436,13 @@ pub async fn exec_approval(
         command: pending.proposed,
         source: RewriteSource::Rtk {
             version: PINNED_RTK_VERSION.into(),
+            route: hzr_exec::RtkRewriteRoute::Optimized,
         },
         reason: "user approved the pending fork-core command".into(),
     };
     envelope.cwd = Some(pending.cwd);
     envelope.timeout_ms = pending.timeout_ms;
+    apply_caller_path(&mut envelope, pending.caller_path);
     state
         .executor
         .execute(envelope)
@@ -1576,8 +1588,51 @@ pub async fn exec_rewrite(
     }
     validate_exec_timeout(request.timeout_ms)?;
     let cwd = canonical_workspace(&request.cwd)?;
-    let command = CanonicalCommand::shell(request.command);
-    Ok(Json(state.rtk.decide_in(&command, Some(&cwd)).await))
+    let decision = fork_decision_with_managed_unwrap(&state.rtk, &request.command, &cwd).await;
+    Ok(Json(enforce_first_class(&request.command, decision)))
+}
+
+async fn fork_decision_with_managed_unwrap(
+    rtk: &PinnedRtkAdapter,
+    raw: &str,
+    cwd: &Path,
+) -> RewriteDecision {
+    if explicit_raw_fidelity(raw) {
+        return RewriteDecision::allow_raw(
+            "explicit HZR_RAW_FIDELITY=1 request requires unfiltered output",
+        );
+    }
+    let command = managed_raw_payload(raw).unwrap_or(raw);
+    rtk.decide_in(&CanonicalCommand::shell(command), Some(cwd))
+        .await
+}
+
+fn enforce_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision {
+    if !matches!(
+        decision,
+        RewriteDecision::AllowRaw { .. }
+            | RewriteDecision::AllowRewrite {
+                source: RewriteSource::Rtk {
+                    route: hzr_exec::RtkRewriteRoute::Proxy,
+                    ..
+                },
+                ..
+            }
+    ) {
+        return decision;
+    }
+    let Some(replacement) = first_class_replacement(raw) else {
+        return decision;
+    };
+    RewriteDecision::AllowRewrite {
+        command: CanonicalCommand::shell(replacement.suggestion.clone()),
+        source: RewriteSource::HzrPolicy,
+        reason: format!(
+            "`{}` reaches the shell unfiltered and is recorded as an optimizer bypass. \
+             {}. HZR automatically selected the first-class route.",
+            replacement.tool, replacement.rationale
+        ),
+    }
 }
 
 pub async fn codec_compile(
@@ -1680,6 +1735,21 @@ fn validate_exec_timeout(timeout_ms: Option<u64>) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+fn validate_caller_path(caller_path: Option<&str>) -> Result<(), ApiError> {
+    if caller_path.is_some_and(|path| path.len() > MAX_CALLER_PATH_BYTES || path.contains('\0')) {
+        return Err(ApiError::bad_request(
+            "caller PATH must not exceed 32768 bytes or contain NUL",
+        ));
+    }
+    Ok(())
+}
+
+fn apply_caller_path(envelope: &mut ExecutionEnvelope, caller_path: Option<String>) {
+    if let Some(path) = caller_path {
+        envelope.environment.set.insert("PATH".into(), path);
+    }
 }
 
 struct ManagedExecutionBudget {
@@ -2070,15 +2140,22 @@ fn memory_ready_state(has_embedder: bool) -> (EngineState, String) {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, Instant};
 
     use super::{
-        ManagedExecutionBudget, caveman_engine_health, dashboard_index_state,
+        ManagedExecutionBudget, apply_caller_path, caveman_engine_health, dashboard_index_state,
         dashboard_memory_detail, dashboard_overall_state, dashboard_search_activity,
-        memory_mutation_targets, memory_ready_state, overall_engine_state,
-        validate_managed_fork_tool,
+        enforce_first_class, fork_decision_with_managed_unwrap, memory_mutation_targets,
+        memory_ready_state, overall_engine_state, validate_caller_path, validate_managed_fork_tool,
     };
     use hzr_core::{ProjectOperationRoute, ProjectOperationSummary};
+    use hzr_exec::{
+        CanonicalCommand, CapturedContent, ExecutionEnvelope, ExecutionOutcome, ExecutionPipeline,
+        ForkRuntimePaths, PINNED_RTK_VERSION, PinnedRtkAdapter, RewriteDecision, RewriteSource,
+        RtkAdapterConfig,
+    };
     use hzr_index::IndexWatcherState;
     use hzr_memory::{Importance, MemoryRecord, MemoryScope, MemorySource, ProjectMemoryDetail};
     use hzr_protocol::{
@@ -2087,6 +2164,211 @@ mod tests {
     };
 
     const PROJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn acceptance_gate_no_raw_for_optimizable_exec_commands() {
+        for command in [
+            "hzr rtk -- raw nl -ba src/main.rs",
+            "hzr rtk -- raw sed -n 40,80p src/main.rs",
+            "hzr rtk -- raw rg -n needle src",
+        ] {
+            let decision = enforce_first_class(command, RewriteDecision::allow_raw("fork raw"));
+            assert!(
+                matches!(
+                    decision,
+                    RewriteDecision::AllowRewrite {
+                        command: CanonicalCommand::Shell { .. },
+                        source: RewriteSource::HzrPolicy,
+                        ..
+                    }
+                ),
+                "{command} remained raw: {decision:?}"
+            );
+        }
+
+        let decision = enforce_first_class(
+            "hzr rtk -- raw nl -ba src/main.rs",
+            RewriteDecision::AllowRewrite {
+                command: CanonicalCommand::shell("rtk proxy nl -ba src/main.rs"),
+                source: RewriteSource::Rtk {
+                    version: PINNED_RTK_VERSION.into(),
+                    route: hzr_exec::RtkRewriteRoute::Proxy,
+                },
+                reason: "fork selected tracked raw proxy".into(),
+            },
+        );
+        assert!(matches!(
+            decision,
+            RewriteDecision::AllowRewrite {
+                command: CanonicalCommand::Shell { ref command, .. },
+                source: RewriteSource::HzrPolicy,
+                ..
+            } if command == "hzr rtk -- read src/main.rs -n"
+        ));
+
+        let specialized = RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("rtk rg -n RewriteDecision crates/hzr-exec"),
+            source: RewriteSource::Rtk {
+                version: PINNED_RTK_VERSION.into(),
+                route: hzr_exec::RtkRewriteRoute::Optimized,
+            },
+            reason: "fork-core approved and produced the managed command".into(),
+        };
+        assert_eq!(
+            enforce_first_class(
+                "hzr rtk -- raw rg -n RewriteDecision crates/hzr-exec",
+                specialized.clone(),
+            ),
+            specialized,
+            "a specialized fork-core filter must not be replaced by indexed search"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn acceptance_gate_no_raw_fork_families_finish_as_rewrites() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let binary = directory.path().join("rtk");
+        let script = format!(
+            r#"#!/bin/sh
+if test "${{1:-}}" = --version; then
+  printf 'rtk %s\n' '{PINNED_RTK_VERSION}'
+  exit 0
+fi
+if test "${{1:-}}" = rewrite && test "${{2:-}}" = --help; then
+  printf 'Usage: rtk rewrite [ARGS]... Raw command to rewrite\n'
+  exit 0
+fi
+if test "${{1:-}}" = proxy && test "${{2:-}}" = --help; then
+  printf 'Usage: rtk proxy [ARGS]... Execute command without filtering\n'
+  exit 0
+fi
+if test "${{1:-}}" = rewrite; then
+  case "${{2:-}}" in
+    bun\ *|cargo\ *|ssh\ *|git\ *|gh\ *|find\ *|wget\ *|ps\ *)
+      printf 'rtk filtered'
+      exit 0
+      ;;
+    hzr\ rtk\ --\ raw\ *)
+      exit 2
+      ;;
+  esac
+  exit 1
+fi
+exit 64
+"#
+        );
+        fs::write(&binary, script).expect("fake fork-core");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("fake fork-core permissions");
+        let adapter = PinnedRtkAdapter::detect(RtkAdapterConfig {
+            binary,
+            runtime_paths: Some(ForkRuntimePaths::from_data_root(
+                &directory.path().join("data"),
+            )),
+            ..RtkAdapterConfig::default()
+        })
+        .await;
+
+        for command in [
+            "hzr rtk -- raw bun test",
+            "hzr rtk -- raw cargo test --workspace",
+            "hzr rtk -- raw ssh host docker-ps",
+            "hzr rtk -- raw git status --short",
+            "hzr rtk -- raw gh run list",
+            "hzr rtk -- raw find src -type f",
+            "hzr rtk -- raw wget https://example.test",
+            "hzr rtk -- raw ps aux",
+        ] {
+            let decision =
+                fork_decision_with_managed_unwrap(&adapter, command, directory.path()).await;
+            assert!(
+                matches!(decision, RewriteDecision::AllowRewrite { .. }),
+                "{command} remained raw: {decision:?}"
+            );
+        }
+
+        let exact = fork_decision_with_managed_unwrap(
+            &adapter,
+            "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.json",
+            directory.path(),
+        )
+        .await;
+        assert!(matches!(exact, RewriteDecision::AllowRaw { .. }));
+    }
+
+    #[test]
+    fn first_class_gate_keeps_raw_when_no_safe_reconstructed_route_exists() {
+        let decision = enforce_first_class(
+            "hzr rtk -- raw sh -c 'printf complete-output'",
+            RewriteDecision::allow_raw("fork raw"),
+        );
+
+        assert!(matches!(decision, RewriteDecision::AllowRaw { .. }));
+    }
+
+    #[test]
+    fn first_class_gate_does_not_reconstruct_quoted_or_shell_grammar() {
+        for command in [
+            "hzr rtk -- raw nl -ba \"src/file with spaces.rs\"",
+            "hzr rtk -- raw rg -n \"two words\" src",
+            "hzr rtk -- raw rg -n needle src | head -n 20",
+        ] {
+            let decision = enforce_first_class(command, RewriteDecision::allow_raw("fork raw"));
+            assert!(
+                matches!(decision, RewriteDecision::AllowRaw { .. }),
+                "{command} was reconstructed: {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn exec_caller_path_is_validated_and_applied_to_the_envelope() {
+        assert!(validate_caller_path(Some("/toolchain/bin:/usr/bin")).is_ok());
+        assert!(validate_caller_path(Some(&"x".repeat(32 * 1024 + 1))).is_err());
+        assert!(validate_caller_path(Some("/bin\0/usr/bin")).is_err());
+
+        let mut envelope = ExecutionEnvelope::allow_raw(CanonicalCommand::shell("cargo test"));
+        apply_caller_path(&mut envelope, Some("/toolchain/bin:/usr/bin".to_owned()));
+        assert_eq!(
+            envelope.environment.set.get("PATH").map(String::as_str),
+            Some("/toolchain/bin:/usr/bin")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn exec_caller_path_resolves_a_caller_only_executable() -> Result<(), std::io::Error> {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let binary = directory.path().join("caller-only");
+        fs::write(&binary, "#!/bin/sh\nprintf caller-path\n").expect("caller executable");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("caller executable permissions");
+
+        let mut envelope = ExecutionEnvelope::allow_raw(CanonicalCommand::shell("caller-only"));
+        apply_caller_path(
+            &mut envelope,
+            Some(directory.path().to_string_lossy().into_owned()),
+        );
+        let outcome = ExecutionPipeline
+            .execute(envelope)
+            .await
+            .expect("managed execution");
+        let result = match outcome {
+            ExecutionOutcome::Completed { result } => result,
+            ExecutionOutcome::NotStarted { disposition } => {
+                return Err(std::io::Error::other(format!(
+                    "caller executable did not start: {disposition:?}"
+                )));
+            }
+        };
+        let bytes = match result.stdout.content {
+            CapturedContent::Inline { bytes } => bytes,
+            CapturedContent::Spilled { path } => fs::read(path)?,
+        };
+        assert_eq!(bytes, b"caller-path");
+        Ok(())
+    }
 
     fn memory(id: &str, topic: &str, weight: f32) -> MemoryRecord {
         MemoryRecord {

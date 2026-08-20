@@ -92,3 +92,5 @@ license = "MIT"
 binary = ""
 package = "@juliusbrussee/caveman-code"
 integrity = "sha512-rs7sOI7WCycpBq8qNQ3MQagxfiXAgymfyj2BjPnoaVNNPsgtFK08calhYGEhMkrH0N6prHt0KHJm4AOuuMNEpw=="
+patches = ["integrations/caveman-code/vendor/SHA256SUMS"]
+patch_sha256 = ["dc8d9f6d6b26bee37d6e0ccf563789e4325cfffae3f9910feef8333c52968e46"]

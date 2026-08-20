@@ -1733,6 +1733,7 @@ fn exec_request(arguments: ExecArgs) -> Result<ExecApiRequest> {
         cwd: cwd.to_string_lossy().into_owned(),
         command: arguments.command,
         timeout_ms: arguments.timeout_ms,
+        caller_path: std::env::var("PATH").ok(),
     })
 }
 
@@ -1888,7 +1889,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.0-test");
+        let release = directory.path().join("versions/v0.4.1-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -1908,7 +1909,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.0-test");
+        let release = directory.path().join("versions/v0.4.1-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))
@@ -1926,7 +1927,7 @@ mod tests {
     #[test]
     fn public_binary_symlink_resolves_to_the_versioned_source_directory() {
         let directory = tempdir().expect("temporary directory");
-        let release_bin = directory.path().join("versions/v0.4.0-test/bin");
+        let release_bin = directory.path().join("versions/v0.4.1-test/bin");
         let release_binary = release_bin.join("hzr");
         let public_bin = directory.path().join("bin");
         std::fs::create_dir_all(&release_bin).expect("release bin");

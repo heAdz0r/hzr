@@ -1,6 +1,6 @@
 # Third-party notices
 
-HZR 0.3.3 preserves the complete heAdz0r RTK fork baseline as its runtime execution lineage and composes
+HZR 0.4.1 preserves the complete heAdz0r RTK fork baseline as its runtime execution lineage and composes
 additional pinned engines plus a private Node.js runtime without removing their provenance.
 
 | Component | Version | License | Source | Role |
@@ -11,6 +11,7 @@ additional pinned engines plus a private Node.js runtime without removing their 
 | grepai | 0.35.0 | MIT | https://github.com/yoanbernabeu/grepai | patched runtime |
 | Caveman design-derived codec | 1.9.1 reference | MIT | https://github.com/JuliusBrussee/caveman | design reference |
 | caveman-code managed SDK | 0.65.2 | MIT | https://github.com/JuliusBrussee/caveman-code | managed runtime |
+| extract-zip hardened compatibility fork | 2.0.2 | BSD-2-Clause | https://github.com/max-mapper/extract-zip | rejects archive path and symlink escape in the managed Caveman runtime |
 | Node.js official binary distribution | 22.17.1 | MIT and bundled dependency licenses | https://nodejs.org/download/release/v22.17.1/ | private runtime for caveman-code |
 
 The RTK runtime descends from the exact 516-entry snapshot recorded in `fork-core/SNAPSHOT.toml`. Its canonical
@@ -50,3 +51,14 @@ HZR applies `patches/icm/0.10.61-refresh-workspace-lock.patch` to the pinned ICM
 only brings the `icm-cli` package version in upstream's committed `Cargo.lock` from `0.10.54` to the
 source package version `0.10.61`, allowing the otherwise unchanged source to build under `--locked`.
 Patch SHA-256: `cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586`.
+
+HZR replaces caveman-code's vulnerable `extract-zip` 2.0.1 dependency with the vendored
+BSD-2-Clause compatibility fork under `integrations/caveman-code/vendor/extract-zip`. The fork
+preserves the API used by caveman-code for fresh extraction roots while validating lexical and
+canonical containment, rejecting non-empty roots and symlink path components before directory
+creation, rejecting symlink targets outside the extraction root, bounding symlink target size, and
+using exclusive file creation to prevent write-through. This addresses
+`GHSA-jmr9-qjv8-65gv`, for which upstream lists no patched release. The build runs a malicious
+symlink regression fixture and then requires a clean high-severity npm audit. The complete vendored
+runtime tree is pinned by `vendor/SHA256SUMS`; manifest SHA-256:
+`dc8d9f6d6b26bee37d6e0ccf563789e4325cfffae3f9910feef8333c52968e46`.

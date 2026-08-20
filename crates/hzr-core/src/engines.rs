@@ -96,6 +96,14 @@ mod tests {
             "4700b8fad23e45cedbb1a850f03ee9e2d4d49116"
         );
         assert!(caveman_code.integrity.is_some());
+        assert_eq!(
+            caveman_code.patches,
+            ["integrations/caveman-code/vendor/SHA256SUMS"]
+        );
+        assert_eq!(
+            caveman_code.patch_sha256,
+            ["dc8d9f6d6b26bee37d6e0ccf563789e4325cfffae3f9910feef8333c52968e46"]
+        );
 
         let node = manifest
             .engine

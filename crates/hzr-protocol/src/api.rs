@@ -255,6 +255,8 @@ pub struct ExecApiRequest {
     pub command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -674,8 +676,8 @@ pub struct CodecApiRequest {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContextPlanApiRequest, MemoryImportance, MemoryPruneApiRequest, MemoryRecallApiRequest,
-        MemoryStoreApiRequest, SearchApiRequest, SearchMode,
+        ContextPlanApiRequest, ExecApiRequest, MemoryImportance, MemoryPruneApiRequest,
+        MemoryRecallApiRequest, MemoryStoreApiRequest, SearchApiRequest, SearchMode,
     };
 
     #[test]
@@ -726,5 +728,22 @@ mod tests {
                 .expect("memory prune request parses");
 
         assert!(request.dry_run);
+    }
+
+    #[test]
+    fn exec_request_accepts_legacy_payloads_and_carries_caller_path() {
+        let legacy: ExecApiRequest =
+            serde_json::from_str(r#"{"cwd":"/repo","command":"cargo test"}"#)
+                .expect("legacy exec request parses");
+        assert!(legacy.caller_path.is_none());
+
+        let request = ExecApiRequest {
+            cwd: "/repo".into(),
+            command: "cargo test".into(),
+            timeout_ms: Some(1_000),
+            caller_path: Some("/toolchain/bin:/usr/bin".into()),
+        };
+        let value = serde_json::to_value(request).expect("exec request serializes");
+        assert_eq!(value["caller_path"], "/toolchain/bin:/usr/bin");
     }
 }

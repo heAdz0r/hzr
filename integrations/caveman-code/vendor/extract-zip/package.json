@@ -1,0 +1,14 @@
+{
+  "name": "extract-zip",
+  "version": "2.0.2",
+  "description": "HZR-hardened compatibility fork of extract-zip",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "BSD-2-Clause",
+  "engines": {
+    "node": ">=20.18.1 <26"
+  },
+  "dependencies": {
+    "yauzl": "2.10.0"
+  }
+}

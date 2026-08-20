@@ -12,8 +12,8 @@
 //! would re-attach to the previous bundle and keep serving its engines.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -29,6 +29,9 @@ const VERIFIED_ENGINES: [(&str, &[&str], &str); 4] = [
     ("icm", &["--version"], "0.10.61"),
     ("node", &["--version"], "22.17.1"),
 ];
+const DAEMON_VERSION_TIMEOUT: Duration = Duration::from_secs(15);
+const DAEMON_VERSION_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+const DAEMON_VERSION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct EngineCheck {
@@ -132,22 +135,66 @@ fn read_version(binary: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn wait_for_daemon_version(binary: &Path, expected: &str) -> Result<()> {
-    for _ in 0..50 {
-        let output = Command::new(binary)
-            .args(["daemon", "status", "--json"])
-            .output();
-        if let Ok(output) = output {
-            let reported = serde_json::from_slice::<serde_json::Value>(&output.stdout)
-                .ok()
-                .and_then(|status| status["hzr_version"].as_str().map(str::to_owned));
-            if output.status.success() && reported.as_deref() == Some(expected) {
-                return Ok(());
+fn daemon_reports_version(binary: &Path, expected: &str, timeout: Duration) -> bool {
+    let mut child = match Command::new(binary)
+        .args(["daemon", "status", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let Ok(output) = child.wait_with_output() else {
+                    return false;
+                };
+                let reported = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+                    .ok()
+                    .and_then(|status| status["hzr_version"].as_str().map(str::to_owned));
+                return output.status.success() && reported.as_deref() == Some(expected);
             }
+            Ok(None) => {}
+            Err(_) => return false,
         }
-        std::thread::sleep(Duration::from_millis(100));
+        let now = Instant::now();
+        if now >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return false;
+        }
+        std::thread::sleep((deadline - now).min(Duration::from_millis(10)));
     }
-    bail!("restarted daemon did not report HZR {expected} within five seconds")
+}
+
+fn wait_for_daemon_version_with_timeout(
+    binary: &Path,
+    expected: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if daemon_reports_version(
+            binary,
+            expected,
+            remaining.min(DAEMON_VERSION_PROBE_TIMEOUT),
+        ) {
+            return Ok(());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if !remaining.is_zero() {
+            std::thread::sleep(remaining.min(DAEMON_VERSION_POLL_INTERVAL));
+        }
+    }
+    bail!("restarted daemon did not report HZR {expected} within fifteen seconds")
+}
+
+fn wait_for_daemon_version(binary: &Path, expected: &str) -> Result<()> {
+    wait_for_daemon_version_with_timeout(binary, expected, DAEMON_VERSION_TIMEOUT)
 }
 
 fn restart_installed_service(binary: &Path) -> Result<()> {
@@ -315,7 +362,10 @@ pub fn run(options: BuildOptions) -> Result<BuildReport> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildReport, EngineCheck, VERIFIED_ENGINES, platform};
+    use super::{
+        BuildReport, DAEMON_VERSION_TIMEOUT, EngineCheck, VERIFIED_ENGINES, platform,
+        wait_for_daemon_version_with_timeout,
+    };
 
     fn check(name: &str, ok: bool) -> EngineCheck {
         EngineCheck {
@@ -328,10 +378,10 @@ mod tests {
 
     fn report(engines: Vec<EngineCheck>) -> BuildReport {
         BuildReport {
-            version: "0.4.0".to_owned(),
+            version: "0.4.1".to_owned(),
             platform: "darwin-arm64".to_owned(),
             bundle: "/tmp/dist".into(),
-            version_root: "/tmp/versions/v0.4.0-darwin-arm64".into(),
+            version_root: "/tmp/versions/v0.4.1-darwin-arm64".into(),
             current: "/tmp/current".into(),
             previous_target: None,
             switched: true,
@@ -375,5 +425,37 @@ mod tests {
     fn test_platform_is_recognized_on_this_host() {
         let resolved = platform().expect("the test host must be a supported platform");
         assert!(resolved.starts_with("darwin-") || resolved.starts_with("linux-"));
+    }
+
+    #[test]
+    fn test_daemon_restart_wait_covers_slow_launchd_replacement() {
+        assert_eq!(DAEMON_VERSION_TIMEOUT, std::time::Duration::from_secs(15));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_daemon_restart_wait_kills_a_hung_status_probe_at_the_wall_deadline() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Instant;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let binary = directory.path().join("hung-hzr");
+        fs::write(&binary, "#!/bin/sh\nexec sleep 60\n").expect("fake status binary");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("fake status permissions");
+        let started = Instant::now();
+        let error = wait_for_daemon_version_with_timeout(
+            &binary,
+            "0.4.1",
+            std::time::Duration::from_millis(150),
+        )
+        .expect_err("hung status must time out");
+
+        assert!(error.to_string().contains("within fifteen seconds"));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "hung status exceeded the bounded wall-clock deadline"
+        );
     }
 }

@@ -164,7 +164,9 @@ pub fn classify_operation(command: &str) -> OperationClassification {
         OperationRoute::Bypassed => OperationClassification {
             route,
             subsystem: OperationSubsystem::Bypass,
-            replacement: replacement_for(head, &payload[payload.len().min(1)..]),
+            replacement: unambiguous_shell_command(command)
+                .then(|| replacement_for(head, &payload[payload.len().min(1)..]))
+                .flatten(),
             operation,
         },
         OperationRoute::Optimized => OperationClassification {
@@ -183,6 +185,9 @@ pub fn classify_operation(command: &str) -> OperationClassification {
 /// carries a bypass prefix — the hook sees `sed -n 1,20p f` and the ledger sees
 /// `rtk proxy sed -n 1,20p f`, and both must be told the same thing.
 pub fn first_class_replacement(command: &str) -> Option<RawReplacement> {
+    if !unambiguous_shell_command(command) {
+        return None;
+    }
     let words = shell_words(command);
     let (route, payload) = strip_bypass_prefix(&words);
     let payload = match route {
@@ -192,6 +197,44 @@ pub fn first_class_replacement(command: &str) -> Option<RawReplacement> {
     };
     let head = payload.first().map(String::as_str)?;
     replacement_for(head, &payload[1..])
+}
+
+/// Return an explicit managed raw/proxy payload without reparsing or reconstructing it.
+///
+/// Fork-core gets one more chance to apply its typed command families to this exact byte
+/// slice. Commands without a recognized HZR/RTK wrapper are not candidates for a retry.
+pub fn managed_raw_payload(command: &str) -> Option<&str> {
+    let command = command.trim_start_matches([' ', '\t']);
+    for prefix in BYPASS_PREFIXES {
+        let Some(remainder) = command.strip_prefix(prefix) else {
+            continue;
+        };
+        if !remainder.starts_with([' ', '\t']) {
+            continue;
+        }
+        let payload = &remainder[1..];
+        if !payload.trim().is_empty() {
+            return Some(payload);
+        }
+    }
+    None
+}
+
+/// Return whether `command` explicitly requests unfiltered fidelity.
+///
+/// Managed agent wrappers are normally removed before fork-core policy runs. The fixed
+/// environment prefix is the deliberate exception for checksums, parsers, and other tasks
+/// where filtered output is not an effective route. Requiring a separate marker prevents an
+/// agent's habitual `raw` wrapper from silently opting out of the acceptance gate.
+pub fn explicit_raw_fidelity(command: &str) -> bool {
+    let command = command.trim_start_matches([' ', '\t']);
+    let Some(remainder) = command.strip_prefix("HZR_RAW_FIDELITY=1") else {
+        return false;
+    };
+    if !remainder.starts_with([' ', '\t']) {
+        return false;
+    }
+    managed_raw_payload(remainder.trim_start_matches([' ', '\t'])).is_some()
 }
 
 /// A SQL `WHERE` fragment selecting the bypassed rows of `column`, generated from the
@@ -214,6 +257,35 @@ fn shell_words(command: &str) -> Vec<String> {
         .split_whitespace()
         .map(|word| word.trim_matches(['\'', '"']).to_owned())
         .collect()
+}
+
+fn unambiguous_shell_command(command: &str) -> bool {
+    !command.chars().any(|character| {
+        matches!(
+            character,
+            '\'' | '"'
+                | '\\'
+                | '`'
+                | '$'
+                | '|'
+                | '&'
+                | ';'
+                | '<'
+                | '>'
+                | '*'
+                | '?'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '!'
+                | '#'
+                | '\n'
+                | '\r'
+        )
+    })
 }
 
 /// Split a command into "did it bypass the optimizer" and the payload that follows.
@@ -288,8 +360,8 @@ fn replacement_for(tool: &str, arguments: &[String]) -> Option<RawReplacement> {
         "grep" => search_replacement("grep", arguments),
         "ag" => search_replacement("ag", arguments),
         "ack" => search_replacement("ack", arguments),
-        "cat" => file_replacement("cat", arguments, ""),
-        "nl" => file_replacement("nl", arguments, " -n"),
+        "cat" => file_replacement("cat", arguments, " --level none"),
+        "nl" => nl_replacement(arguments),
         "head" => bounded_replacement("head", arguments, "--max-lines"),
         "tail" => bounded_replacement("tail", arguments, "--tail-lines"),
         _ => None,
@@ -302,21 +374,48 @@ const SEARCH_RATIONALE: &str =
     "hzr search returns ranked matches through the shared index instead of raw output";
 
 fn sed_replacement(arguments: &[String]) -> Option<RawReplacement> {
+    let mut quiet = false;
     let mut span = None;
     let mut file = None;
+    let mut expect_expression = false;
+    let mut parse_options = true;
     for argument in arguments {
-        if argument.starts_with('-') {
+        if expect_expression {
+            span = Some(parse_sed_span(argument)?);
+            expect_expression = false;
             continue;
         }
-        if span.is_none() {
-            if let Some(parsed) = parse_sed_span(argument) {
-                span = Some(parsed);
-                continue;
+        if parse_options {
+            match argument.as_str() {
+                "--" => {
+                    parse_options = false;
+                    continue;
+                }
+                "-n" | "--quiet" | "--silent" => {
+                    quiet = true;
+                    continue;
+                }
+                "-e" | "--expression" => {
+                    if span.is_some() {
+                        return None;
+                    }
+                    expect_expression = true;
+                    continue;
+                }
+                _ if argument.starts_with('-') => return None,
+                _ => {}
             }
         }
-        if file.is_none() {
+        if span.is_none() {
+            span = Some(parse_sed_span(argument)?);
+        } else if file.is_none() && argument != "-" {
             file = Some(argument.clone());
+        } else {
+            return None;
         }
+    }
+    if expect_expression || !quiet {
+        return None;
     }
     let file = file?;
     let (from, to) = span?;
@@ -329,33 +428,38 @@ fn sed_replacement(arguments: &[String]) -> Option<RawReplacement> {
 
 fn parse_sed_span(argument: &str) -> Option<(u64, u64)> {
     let body = argument.strip_suffix('p')?;
-    match body.split_once(',') {
-        Some((from, to)) => Some((from.parse().ok()?, to.parse().ok()?)),
+    let (from, to) = match body.split_once(',') {
+        Some((from, to)) => (from.parse().ok()?, to.parse().ok()?),
         None => {
             let line = body.parse().ok()?;
-            Some((line, line))
+            (line, line)
         }
-    }
+    };
+    (from > 0 && to >= from).then_some((from, to))
 }
-
-/// Flags that consume the following word, so it is never mistaken for the pattern.
-const SEARCH_VALUE_FLAGS: [&str; 8] = ["-C", "-A", "-B", "-m", "-g", "-t", "-e", "--glob"];
 
 fn search_replacement(tool: &'static str, arguments: &[String]) -> Option<RawReplacement> {
     let mut pattern = None;
     let mut paths = Vec::new();
-    let mut skip_value = false;
+    let mut parse_options = true;
     for argument in arguments {
-        if skip_value {
-            skip_value = false;
+        if parse_options && argument == "--" {
+            parse_options = false;
             continue;
         }
-        if argument.starts_with('-') {
-            skip_value = SEARCH_VALUE_FLAGS.contains(&argument.as_str());
-            continue;
+        if parse_options && argument.starts_with('-') {
+            if matches!(argument.as_str(), "-n" | "--line-number") {
+                continue;
+            }
+            return None;
         }
         if pattern.is_none() {
+            if argument.starts_with('-') || !literal_search_pattern(argument) {
+                return None;
+            }
             pattern = Some(argument.clone());
+        } else if argument.starts_with('-') {
+            return None;
         } else {
             paths.push(argument.clone());
         }
@@ -372,17 +476,86 @@ fn search_replacement(tool: &'static str, arguments: &[String]) -> Option<RawRep
     })
 }
 
+fn literal_search_pattern(pattern: &str) -> bool {
+    !pattern.is_empty()
+        && !pattern.chars().any(|character| {
+            matches!(
+                character,
+                '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'
+            )
+        })
+}
+
 fn file_replacement(
     tool: &'static str,
     arguments: &[String],
     suffix: &str,
 ) -> Option<RawReplacement> {
-    let file = arguments
-        .iter()
-        .find(|argument| !argument.starts_with('-'))?;
+    let mut file = None;
+    let mut parse_options = true;
+    for argument in arguments {
+        if parse_options && argument == "--" {
+            parse_options = false;
+            continue;
+        }
+        if parse_options && argument.starts_with('-') {
+            return None;
+        }
+        if argument == "-" || argument.starts_with('-') || file.replace(argument).is_some() {
+            return None;
+        }
+    }
+    let file = file?;
     Some(RawReplacement {
         tool,
         suggestion: format!("hzr rtk -- read {file}{suffix}"),
+        rationale: READ_RATIONALE,
+    })
+}
+
+fn nl_replacement(arguments: &[String]) -> Option<RawReplacement> {
+    let mut number_all = false;
+    let mut expect_body_style = false;
+    let mut file = None;
+    let mut parse_options = true;
+    for argument in arguments {
+        if expect_body_style {
+            if argument != "a" {
+                return None;
+            }
+            number_all = true;
+            expect_body_style = false;
+            continue;
+        }
+        if parse_options {
+            match argument.as_str() {
+                "--" => {
+                    parse_options = false;
+                    continue;
+                }
+                "-ba" | "--body-numbering=a" => {
+                    number_all = true;
+                    continue;
+                }
+                "-b" | "--body-numbering" => {
+                    expect_body_style = true;
+                    continue;
+                }
+                _ if argument.starts_with('-') => return None,
+                _ => {}
+            }
+        }
+        if argument == "-" || argument.starts_with('-') || file.replace(argument).is_some() {
+            return None;
+        }
+    }
+    if expect_body_style || !number_all {
+        return None;
+    }
+    let file = file?;
+    Some(RawReplacement {
+        tool: "nl",
+        suggestion: format!("hzr rtk -- read {file} -n"),
         rationale: READ_RATIONALE,
     })
 }
@@ -395,26 +568,42 @@ fn bounded_replacement(
     let mut lines = None;
     let mut file = None;
     let mut expect_lines = false;
+    let mut parse_options = true;
     for argument in arguments {
         if expect_lines {
             expect_lines = false;
-            lines = argument.parse::<u64>().ok();
+            let value = argument.parse::<u64>().ok()?;
+            if value == 0 {
+                return None;
+            }
+            lines = Some(value);
             continue;
         }
-        if argument == "-n" {
-            expect_lines = true;
+        if parse_options && argument == "--" {
+            parse_options = false;
             continue;
         }
-        if let Some(inline) = argument.strip_prefix("-n") {
-            lines = inline.parse::<u64>().ok();
+        if parse_options && argument.starts_with('-') {
+            if argument == "-n" || argument == "--lines" {
+                expect_lines = true;
+                continue;
+            }
+            let inline = argument
+                .strip_prefix("-n")
+                .or_else(|| argument.strip_prefix("--lines="))?;
+            let value = inline.parse::<u64>().ok()?;
+            if value == 0 {
+                return None;
+            }
+            lines = Some(value);
             continue;
         }
-        if argument.starts_with('-') {
-            continue;
+        if argument == "-" || argument.starts_with('-') || file.replace(argument).is_some() {
+            return None;
         }
-        if file.is_none() {
-            file = Some(argument.clone());
-        }
+    }
+    if expect_lines {
+        return None;
     }
     let file = file?;
     let lines = lines.unwrap_or(10);
@@ -438,14 +627,9 @@ mod tests {
     }
 
     #[test]
-    fn test_search_value_flags_do_not_become_the_pattern() {
+    fn test_search_semantic_flags_are_not_reconstructed() {
         let classification = classify_operation("rtk proxy rg -n -C 5 needle src");
-        let replacement = classification.replacement.expect("rg replacement");
-
-        assert_eq!(
-            replacement.suggestion,
-            "hzr search 'needle' --mode exact --path src"
-        );
+        assert_eq!(classification.replacement, None);
     }
 
     #[test]

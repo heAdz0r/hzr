@@ -19,8 +19,8 @@ pub use executor::{ExecutionHandle, ExecutionPipeline};
 pub use model::{
     CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent, CapturedStream, Environment,
     ExecutionEnvelope, ExecutionEvent, ExecutionOutcome, ExecutionResult, ExecutionStream,
-    NeverWorseChoice, NotStarted, RewriteDecision, RewriteSource, StdinSpec, Termination,
-    TerminationCause,
+    NeverWorseChoice, NotStarted, RewriteDecision, RewriteSource, RtkRewriteRoute, StdinSpec,
+    Termination, TerminationCause,
 };
 pub use shell::{ShellSafety, analyze_shell, parse_simple_shell};
 
@@ -41,7 +41,9 @@ pub fn choose_never_worse(raw: &[u8], candidate: &[u8]) -> NeverWorseChoice {
 mod tests {
     use serde_json::json;
 
-    use super::{NeverWorseChoice, RewriteDecision, choose_never_worse};
+    use super::{
+        NeverWorseChoice, RewriteDecision, RewriteSource, RtkRewriteRoute, choose_never_worse,
+    };
 
     #[test]
     fn test_choose_never_worse_selects_strictly_smaller_candidate() {
@@ -74,6 +76,28 @@ mod tests {
                 "reason": "exact fallback"
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_legacy_rtk_decision_without_route_defaults_to_optimized() -> serde_json::Result<()> {
+        let decision: RewriteDecision = serde_json::from_value(json!({
+            "decision": "allow_rewrite",
+            "command": {"kind": "shell", "shell": "/bin/sh", "command": "rtk rg needle"},
+            "source": {"source": "rtk", "version": "0.44.1-fork.1"},
+            "reason": "legacy payload"
+        }))?;
+
+        assert!(matches!(
+            decision,
+            RewriteDecision::AllowRewrite {
+                source: RewriteSource::Rtk {
+                    route: RtkRewriteRoute::Optimized,
+                    ..
+                },
+                ..
+            }
+        ));
         Ok(())
     }
 }

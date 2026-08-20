@@ -19,6 +19,6 @@ pub use ledger::{
 };
 pub use operation::{
     OperationChannel, OperationClassification, OperationMeasurement, OperationRoute,
-    OperationSubsystem, RawReplacement, classify_operation, first_class_replacement,
-    raw_route_sql_predicate,
+    OperationSubsystem, RawReplacement, classify_operation, explicit_raw_fidelity,
+    first_class_replacement, managed_raw_payload, raw_route_sql_predicate,
 };

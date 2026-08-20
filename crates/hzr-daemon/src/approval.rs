@@ -16,6 +16,7 @@ pub struct PendingApproval {
     pub proposed: CanonicalCommand,
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
+    pub caller_path: Option<String>,
 }
 
 struct StoredApproval {
@@ -79,6 +80,7 @@ mod tests {
             proposed: CanonicalCommand::shell("rtk cargo test"),
             cwd: std::env::current_dir().expect("current directory"),
             timeout_ms: Some(1_000),
+            caller_path: Some("/toolchain/bin:/usr/bin".into()),
         };
         let decision_id = store.insert(pending).await;
 

@@ -25,7 +25,7 @@ Run the fast checks while developing:
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
-bun --cwd visualizer install --frozen-lockfile
+bun install --cwd visualizer --frozen-lockfile
 bun --cwd visualizer test
 bun --cwd visualizer run typecheck
 bun --cwd visualizer run build

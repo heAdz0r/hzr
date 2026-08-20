@@ -7,8 +7,8 @@
 //! optimizer entirely.
 
 use hzr_core::{
-    OperationRoute, OperationSubsystem, RawReplacement, classify_operation,
-    first_class_replacement, raw_route_sql_predicate,
+    OperationRoute, OperationSubsystem, RawReplacement, classify_operation, explicit_raw_fidelity,
+    first_class_replacement, managed_raw_payload, raw_route_sql_predicate,
 };
 
 /// The hook needs the same answer for a command the agent typed directly, before any
@@ -45,6 +45,69 @@ fn test_commands_without_an_equivalent_are_left_alone() {
         "an in-place edit is not a read and hzr read cannot replace it"
     );
     assert_eq!(first_class_replacement(""), None);
+}
+
+#[test]
+fn test_ambiguous_shell_syntax_is_never_reconstructed_for_automatic_execution() {
+    for command in [
+        "hzr rtk -- raw nl -ba \"src/file with spaces.rs\"",
+        "hzr rtk -- raw rg -n \"two words\" src",
+        "hzr rtk -- raw rg -n needle src | head -n 20",
+        "hzr rtk -- raw rg -n 'a.*b' src",
+        "hzr rtk -- raw cat src/*.rs",
+    ] {
+        assert_eq!(
+            first_class_replacement(command),
+            None,
+            "ambiguous command was reconstructed: {command}"
+        );
+    }
+}
+
+#[test]
+fn acceptance_gate_no_raw_commands_have_a_first_class_route() {
+    for (command, expected) in [
+        (
+            "hzr rtk -- raw nl -ba src/main.rs",
+            "hzr rtk -- read src/main.rs -n",
+        ),
+        (
+            "hzr rtk -- raw sed -n 40,80p src/main.rs",
+            "hzr rtk -- read src/main.rs --from 40 --to 80",
+        ),
+        (
+            "hzr rtk -- raw rg -n needle src",
+            "hzr search 'needle' --mode exact --path src",
+        ),
+    ] {
+        let replacement = first_class_replacement(command)
+            .expect("optimizable command must have a first-class route");
+        assert_eq!(replacement.suggestion, expected);
+    }
+
+    for (command, expected_payload) in [
+        ("hzr rtk -- raw bun test", "bun test"),
+        (
+            "hzr rtk -- raw ssh host \"docker ps --format '{{.Names}}'\"",
+            "ssh host \"docker ps --format '{{.Names}}'\"",
+        ),
+        ("hzr rtk -- raw git status --short", "git status --short"),
+        (
+            "hzr rtk -- raw cargo test --workspace",
+            "cargo test --workspace",
+        ),
+    ] {
+        assert_eq!(
+            managed_raw_payload(command),
+            Some(expected_payload),
+            "managed wrapper did not preserve its payload: {command}"
+        );
+    }
+
+    assert!(explicit_raw_fidelity(
+        "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.json"
+    ));
+    assert!(!explicit_raw_fidelity("hzr rtk -- raw cat artifact.json"));
 }
 
 #[test]
@@ -120,7 +183,7 @@ fn test_bypassed_reads_and_searches_carry_their_first_class_replacement() {
     let cat = classify_operation("rtk proxy cat README.md");
     assert_eq!(
         cat.replacement.map(|replacement| replacement.suggestion),
-        Some("hzr rtk -- read README.md".to_owned())
+        Some("hzr rtk -- read README.md --level none".to_owned())
     );
 
     let nl = classify_operation("rtk proxy nl -ba crates/hzr-cli/src/main.rs");

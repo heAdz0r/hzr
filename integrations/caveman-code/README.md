@@ -4,7 +4,7 @@ This directory pins `@juliusbrussee/caveman-code` 0.65.2 and adapts its SDK into
 HZR's single-owner runtime. Build or packaging must run `npm ci`; HZR refuses to
 launch if the runtime bridge differs byte-for-byte from the bridge embedded in
 the Rust build, or if `package-lock.json` differs from the compiled SHA-256 pin
-`f35932ef45e5b218ec3c065660b12db4e800ed85b356f636cd3b64dbbb2c3e98`.
+`eb69240102b5373d35d59ad3c5eefa1a719c4fd57ea54f0228b2311ca29a6ab6`.
 The exact lock digest covers every transitive version and registry integrity,
 while preflight separately verifies the installed Caveman Code manifest.
 

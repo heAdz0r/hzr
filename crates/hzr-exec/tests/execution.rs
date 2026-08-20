@@ -262,6 +262,7 @@ async fn test_pipeline_never_bypasses_fork_when_managed_spawn_fails() -> Result<
         )?,
         source: RewriteSource::Rtk {
             version: hzr_exec::PINNED_RTK_VERSION.to_owned(),
+            route: hzr_exec::RtkRewriteRoute::Optimized,
         },
         reason: "managed fork-core".to_owned(),
     };

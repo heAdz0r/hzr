@@ -220,6 +220,13 @@ install -m 0755 "${HZR_FORK_TARGET}/release/rtk" "${HZR_ENGINE_OUTPUT}/rtk"
 
 HZR_CAVEMAN_STAGE="${HZR_BUILD_TEMP}/caveman-code"
 hzr_build_stage "Installing the pinned Caveman runtime"
+verify_sha256 \
+  "dc8d9f6d6b26bee37d6e0ccf563789e4325cfffae3f9910feef8333c52968e46" \
+  "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/vendor/SHA256SUMS"
+(
+  cd "${HZR_REPOSITORY_ROOT}/integrations/caveman-code"
+  shasum -a 256 -c vendor/SHA256SUMS >/dev/null
+)
 mkdir -p "${HZR_CAVEMAN_STAGE}"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/bridge.mjs" \
   "${HZR_CAVEMAN_STAGE}/bridge.mjs"
@@ -227,11 +234,20 @@ install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/package.json" 
   "${HZR_CAVEMAN_STAGE}/package.json"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/package-lock.json" \
   "${HZR_CAVEMAN_STAGE}/package-lock.json"
+cp -R "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/vendor" \
+  "${HZR_CAVEMAN_STAGE}/vendor"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/verify-safe-extract.mjs" \
+  "${HZR_CAVEMAN_STAGE}/verify-safe-extract.mjs"
+(
+  cd "${HZR_CAVEMAN_STAGE}"
+  shasum -a 256 -c vendor/SHA256SUMS >/dev/null
+)
 PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ci --omit=dev \
   --prefix "${HZR_CAVEMAN_STAGE}"
 PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" audit \
   --omit=dev --audit-level=high \
   --prefix "${HZR_CAVEMAN_STAGE}"
+"${HZR_NODE_BINARY}" "${HZR_CAVEMAN_STAGE}/verify-safe-extract.mjs"
 "${HZR_NODE_BINARY}" --check "${HZR_CAVEMAN_STAGE}/bridge.mjs"
 if [[ -e "${HZR_CAVEMAN_OUTPUT}" ]]; then
   echo "refusing to merge a managed Caveman runtime into existing output: ${HZR_CAVEMAN_OUTPUT}" >&2

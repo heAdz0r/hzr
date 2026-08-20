@@ -26,6 +26,11 @@ jobs:
           git rev-parse --verify 'refs/tags/v0.1.0^{commit}' >/dev/null
           grep -F "HZR_VERSION=\"\${HZR_VERSION:-${version}}\"" install.sh >/dev/null
           scripts/verify-fork-core.sh
+      - name: Enforce first-class routing for optimizable commands
+        run: |
+          cargo test --locked -p hzr-core --test operation_classification acceptance_gate_no_raw
+          cargo test --locked -p hzr-cli acceptance_gate_no_raw
+          cargo test --locked -p hzr-daemon acceptance_gate_no_raw
 
   native-bundles:
     needs: preflight

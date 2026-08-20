@@ -4,6 +4,47 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-21
+
+### Added
+
+- A High Critical release acceptance gate now fails publication when a command with a safe
+  first-class HZR route can remain RAW in core classification, the hook, or daemon execution.
+- The all-workspace RAW-utilization review records the frozen ledger snapshot, per-workspace
+  exposure, highest-cost command families, safety boundary, and release criteria.
+
+### Changed
+
+- Managed Codex and Claude instructions now route ordinary shell work through
+  `hzr exec run '<shell command>'`. RAW is an explicit byte-for-byte recovery path rather than
+  the default wrapper for SSH, JSON, pipelines, or unfamiliar arguments.
+- Unmarked managed RAW/proxy wrappers are removed byte-for-byte before fork-core rewrite, so
+  existing `bun`, `cargo`, `ssh`, `git`, `gh`, `find`, `wget`, `ps`, and other
+  first-class handlers remain the single command-support authority.
+- Exact unfiltered recovery now requires the explicit `HZR_RAW_FIDELITY=1` marker; this preserves
+  a real fidelity escape hatch without letting habitual RAW wrappers bypass managed policy.
+- Managed execution carries the caller's `PATH` into the daemon envelope without forwarding
+  unrelated environment variables, so launchd/systemd service environments can still resolve
+  user toolchains.
+
+### Fixed
+
+- Safe text replacements for `nl`, ranged `sed`, and literal `rg` are applied
+  automatically instead of leaving an avoidable RAW decision or tracked raw proxy for the agent.
+- Automatic replacement refuses quoted arguments, regex/glob syntax, nested shell grammar,
+  unsupported flags, and ambiguous multi-file commands rather than reconstructing them through
+  whitespace tokenization.
+- Automatic `cat` replacement selects `hzr rtk -- read --level none`, preserving exact Markdown
+  content instead of applying the default digest.
+- `hzr exec run` no longer loses tools such as `cargo` when the daemon was started with a
+  restricted service `PATH`; approved rewrites preserve the same validated caller path.
+- The managed Caveman runtime replaces vulnerable `extract-zip` 2.0.1 with a vendored compatible
+  fork that rejects non-empty roots, escaping archive paths, and symlink components or targets
+  before directory creation. Bundle builds attest the complete vendor tree, exercise a malicious
+  symlink fixture, and retain the high-severity npm audit gate.
+- Release deployment allows fifteen seconds for launchd/systemd to replace the daemon, avoiding a
+  false failure after a successful bundle switch while retaining a bounded version-health gate.
+
 ## [0.4.0] - 2026-08-10
 
 ### Added
@@ -564,6 +605,7 @@ First public HZR release.
 
 - Established the independent HZR repository and immutable baseline of the complete proven engine.
 
+[0.4.1]: https://github.com/heAdz0r/hzr/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/heAdz0r/hzr/compare/v0.3.9...v0.4.0
 [0.3.9]: https://github.com/heAdz0r/hzr/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/heAdz0r/hzr/compare/v0.3.7...v0.3.8

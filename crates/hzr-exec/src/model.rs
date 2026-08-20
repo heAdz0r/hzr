@@ -62,11 +62,23 @@ const fn default_shell() -> &'static str {
     "cmd.exe"
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RtkRewriteRoute {
+    #[default]
+    Optimized,
+    Proxy,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case")]
 pub enum RewriteSource {
     HzrPolicy,
-    Rtk { version: String },
+    Rtk {
+        version: String,
+        #[serde(default)]
+        route: RtkRewriteRoute,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

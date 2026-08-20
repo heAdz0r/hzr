@@ -1,6 +1,6 @@
 {
   "name": "@headz0r/hzr-caveman-code-bridge",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,9 +8,14 @@
   },
   "dependencies": {
     "@juliusbrussee/caveman-code": "0.65.2",
-    "@sinclair/typebox": "0.34.49"
+    "@sinclair/typebox": "0.34.49",
+    "adm-zip": "0.6.0",
+    "extract-zip": "file:vendor/extract-zip"
   },
   "overrides": {
-    "adm-zip": "0.6.0"
+    "adm-zip": "$adm-zip",
+    "@juliusbrussee/caveman-code": {
+      "extract-zip": "$extract-zip"
+    }
   }
 }

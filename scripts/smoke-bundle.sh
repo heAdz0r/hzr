@@ -55,7 +55,16 @@ if [[ ! -L "${HZR_ENGINE_ROOT}/node" || \
   exit 1
 fi
 
-for HZR_RUNTIME_FILE in bridge.mjs package.json package-lock.json; do
+for HZR_RUNTIME_FILE in \
+  bridge.mjs \
+  package.json \
+  package-lock.json \
+  verify-safe-extract.mjs \
+  vendor/SHA256SUMS \
+  vendor/extract-zip/index.js \
+  vendor/extract-zip/index.d.ts \
+  vendor/extract-zip/package.json \
+  vendor/extract-zip/LICENSE; do
   if [[ ! -f "${HZR_CAVEMAN_ROOT}/${HZR_RUNTIME_FILE}" ]]; then
     echo "managed Caveman runtime file is missing: ${HZR_RUNTIME_FILE}" >&2
     exit 1
@@ -122,16 +131,25 @@ verify_sha256() {
 }
 
 verify_sha256 \
-  "e759104a015c348c1c194efcece1655711400859be4bc6a0f6c3c99c69715b4d" \
+  "25f7f5c2bb956a3e4ae6a8d76d6281d870055e23e7470814e7a95afbe3ae4807" \
   "${HZR_CAVEMAN_ROOT}/bridge.mjs"
 verify_sha256 \
-  "408c5607f420a85627c5f8fa1e3cab016b9f9dbec145c4fe3f3e7d4e26fb3d59" \
+  "597e687a865f95b4fd46a9b11aef189a81c071049fe9f426ea74ccf245e9a9b2" \
   "${HZR_CAVEMAN_ROOT}/package.json"
 verify_sha256 \
-  "f35932ef45e5b218ec3c065660b12db4e800ed85b356f636cd3b64dbbb2c3e98" \
+  "eb69240102b5373d35d59ad3c5eefa1a719c4fd57ea54f0228b2311ca29a6ab6" \
   "${HZR_CAVEMAN_ROOT}/package-lock.json"
 verify_sha256 \
-  "d66e2e2cebac811bbc23896645b3a3e25b635cb7358b1a0e36599008e10cd5ec" \
+  "a59d764d9dc37eafb32f11d3dea0262a0711a59dfe469777025d858653954f28" \
+  "${HZR_CAVEMAN_ROOT}/verify-safe-extract.mjs"
+verify_sha256 \
+  "dc8d9f6d6b26bee37d6e0ccf563789e4325cfffae3f9910feef8333c52968e46" \
+  "${HZR_CAVEMAN_ROOT}/vendor/SHA256SUMS"
+verify_sha256 \
+  "caa31d7dfbd9292ed71ecf2a4955b7b228c0faadb7e5bdf66e558a28c42d69b0" \
+  "${HZR_CAVEMAN_ROOT}/vendor/extract-zip/index.js"
+verify_sha256 \
+  "673e3c1b195fb488f3f670cdcebe21f424ba23794ca4fadcd751143dcab5b08f" \
   "${HZR_PROVENANCE_ROOT}/engines.lock.toml"
 verify_sha256 \
   "f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16" \
@@ -175,6 +193,11 @@ verify_sha256 \
   "${HZR_BUNDLE_ROOT}/licenses/caveman-code-MIT.txt"
 
 "${HZR_NODE_BINARY}" --check "${HZR_CAVEMAN_ROOT}/bridge.mjs"
+(
+  cd "${HZR_CAVEMAN_ROOT}"
+  shasum -a 256 -c vendor/SHA256SUMS >/dev/null
+)
+"${HZR_NODE_BINARY}" "${HZR_CAVEMAN_ROOT}/verify-safe-extract.mjs"
 "${HZR_NODE_BINARY}" -e '
   const manifest = require(process.argv[1]);
   if (manifest.version !== "0.65.2") process.exit(1);
@@ -182,7 +205,7 @@ verify_sha256 \
 PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ls \
   --omit=dev --all --prefix "${HZR_CAVEMAN_ROOT}" >/dev/null
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.4.0" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.4.1" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
@@ -328,7 +351,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-  if (report.protocol_version !== 1 || report.hzr_version !== "0.4.0") {
+  if (report.protocol_version !== 1 || report.hzr_version !== "0.4.1") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -368,7 +391,7 @@ fi
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
       const ids = new Set(report.services.map((service) => service.id));
-      if (response.status !== 200 || report.hzr_version !== "0.4.0" ||
+      if (response.status !== 200 || report.hzr_version !== "0.4.1" ||
           !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
         throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
       }

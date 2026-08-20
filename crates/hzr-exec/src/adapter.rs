@@ -263,6 +263,7 @@ impl ForkCoreRunner {
             command,
             source: RewriteSource::Rtk {
                 version: PINNED_RTK_VERSION.to_owned(),
+                route: crate::RtkRewriteRoute::Optimized,
             },
             reason: "direct managed fork-core invocation".to_owned(),
         };
@@ -453,6 +454,7 @@ impl PinnedRtkAdapter {
                 command: proposed,
                 source: RewriteSource::Rtk {
                     version: PINNED_RTK_VERSION.to_owned(),
+                    route: crate::RtkRewriteRoute::Optimized,
                 },
                 reason: "fork-core approved and produced the managed command".to_owned(),
             }
@@ -472,6 +474,7 @@ impl PinnedRtkAdapter {
             command: proxy,
             source: RewriteSource::Rtk {
                 version: PINNED_RTK_VERSION.to_owned(),
+                route: crate::RtkRewriteRoute::Proxy,
             },
             reason: "fork-core selected tracked raw proxy execution".to_owned(),
         }

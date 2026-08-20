@@ -71,8 +71,9 @@ Literal  -> hzr search "<pattern>" --mode exact [--path FILE|DIR ...]
 Ranked   -> hzr search "<terms>" --mode auto
 Read     -> hzr rtk -- read <file> [--from N --to M | --outline | --symbols | --changed | -n]
 Write    -> hzr rtk -- write patch|replace|set|create|batch ...
+Shell    -> hzr exec run '<shell command>'   (default policy route; preserves shell grammar)
 Density  -> hzr codec compile --profile shadow|adaptive|compact
-Raw      -> hzr rtk -- raw <command...>   (escape hatch — see the cost below)
+Exact raw -> HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>   (explicit unfiltered fidelity only)
 TDD      -> hzr tdd                  (optional; strict when selected)
 MCP      -> hzr mcp serve            (launched by a client, never by hand)
 Config   -> hzr mcp config --client codex|claude-desktop  (prints a snippet)
@@ -84,6 +85,10 @@ Gains    -> hzr stats [--workspace DIR]
 Project build -> hzr build <args>    (your project, token-optimized output)
 HZR release   -> hzr release --force (rebuild and reinstall HZR itself)
 ```
+
+Managed execution forwards the caller's validated `PATH` to the daemon, including through an
+approval, but does not copy the rest of the caller environment. Commands that need explicit
+environment values must continue to declare them in the command itself.
 
 ## Update notices
 
@@ -167,6 +172,19 @@ terms are ranked. Use it to *locate* code you cannot name exactly.
 
 `--path` accepts several directories: `--path crates fork-core/src`.
 
+## Default shell routing
+
+For agent-originated shell work, use `hzr exec run '<shell command>'`. It sends the complete
+shell string through the canonical policy, so supported commands such as `ssh`, `curl`, `bun`,
+`git`, `find`, and `rg` reach their filtered first-class implementations. Pipes, redirects,
+globs, and remote command strings remain part of the one quoted shell command.
+
+Use `hzr exec rewrite '<shell command>'` for a read-only routing check. When the decision is
+`allow_rewrite`, using `raw` for that command is forbidden: HZR already has an effective route.
+Do not choose `raw` merely because a command uses SSH, JSON, pipes, redirects, or unfamiliar
+arguments. If no filter exists, `hzr exec run` still performs the tracked fallback; agents do not
+need to select `raw` themselves.
+
 ## The cost of `raw`
 
 `hzr rtk -- raw <cmd> <args...>` directly spawns the first argument and forwards its argv
@@ -178,11 +196,14 @@ baseline and delivered estimates. Inherited stdio that cannot be captured is mar
 `unmeasured`, never invented as zero output, and reduces the coverage share shown by
 `hzr stats`.
 
-Raw is correct for checksums, parsers, generated files, complete logs and machine-readable
-data. It is *not* correct for reading a file, searching for a symbol, or numbering lines —
-the hook will offer you the first-class command with the arguments already filled in, and
-you can accept it or re-run the original. Reaching for `sed -n`, `nl`, `cat`, `head`, `tail`
-or `rg` through `raw` is the single largest recorded source of wasted tokens.
+Exact operator/debug recovery uses
+`HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>`. The separate marker makes byte-for-byte intent
+explicit and prevents a habitual RAW wrapper from bypassing managed routing. Checksums, parsers,
+generated files, complete logs, or machine-readable data may require that fidelity, but their
+normal agent route is still `hzr exec run`. Unmarked managed RAW wrappers are removed before
+fork-core policy runs. Raw is *never* correct when policy reports a safe first-class replacement.
+Reaching for `sed -n`, `nl`, `cat`, `head`, `tail`, `rg`, `ssh`, `curl`, `bun`, `git`, or `find`
+through `raw` when a filtered route exists is avoidable token waste.
 
 ## Memory scopes
 

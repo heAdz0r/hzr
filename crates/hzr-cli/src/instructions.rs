@@ -106,9 +106,15 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          | `Edit`/`Write` | `hzr rtk -- write patch\\|replace\\|set\\|create\\|batch ...` |\n\
          | memory | `hzr memory recall\\|store` |\n\
          | context | `hzr context plan \"<intent>\"` |\n\
-         | exact/raw output | `hzr rtk -- raw <command...>` |\n\
+         | shell command | `hzr exec run '<shell command>'`; canonical policy selects the filtered route and preserves shell grammar |\n\
+         | explicit unfiltered recovery | `HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>` only when exact byte-for-byte output is required and no safe first-class route can satisfy it |\n\
          | optional TDD | `hzr tdd` only when user/repository policy or regression risk justifies test-first overhead |\n\
          | build this project | `hzr build <args>` (not `hzr release`, which rebuilds HZR) |\n\n\
+         For agent-originated shell work, `hzr exec run` is the default. If\n\
+         `hzr exec rewrite '<shell command>'` returns `allow_rewrite`, `raw` is forbidden.\n\
+         Do not choose `raw` merely because a command uses SSH, JSON, pipes, redirects or\n\
+         unfamiliar arguments. When no filter exists, `hzr exec run` performs the tracked\n\
+         fallback without requiring the agent to select `raw`.\n\n\
          TDD is opt-in, not the default. When token or time efficiency matters, skip it\n\
          and use proportionate verification; repository-required quality gates still apply.\n\n\
          `read -n` defaults to exact content and preserves source coordinates, including\n\
@@ -142,8 +148,9 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          `hzr mcp config --client codex\\|claude-desktop --workspace <dir> --apply` writes a pinned registration; omit `--apply` to print a paste snippet. Never\n\
          register `icm`, `grepai` or `rtk` as your own MCP server: each direct launch adds\n\
          another writer to the store HZR supervises and leaks orphans when the session dies.\n\n\
-         `hzr rtk -- raw <command> <args...>` directly spawns the first argument; it does\n\
-         not interpret pipes, redirects or globs unless an explicit shell is the command.\n\n\
+         `hzr rtk -- raw <command> <args...>` directly spawns the first argument and receives\n\
+         zero savings credit. It is an explicit fidelity escape hatch, not the default shell\n\
+         wrapper; normal agent shell work goes through `hzr exec run '<shell command>'`.\n\n\
          The installed `PreToolUse` hook routes Bash through the managed daemon and\n\
          falls back to the same pinned fork-core when the daemon is down. A degraded\n\
          rewrite keeps command policy but is absent from the usage ledger; `hzr doctor`\n\
@@ -623,6 +630,17 @@ mod tests {
         );
         assert!(out.contains("independent file groups can fail separately"));
         assert!(!out.contains("Register the server with `hzr mcp config"));
+    }
+
+    #[test]
+    fn test_managed_block_forbids_raw_when_policy_can_rewrite() {
+        let out = compose("", Surface::Codex, contract()).0;
+
+        assert!(out.contains("shell command | `hzr exec run '<shell command>'`"));
+        assert!(out.contains("returns `allow_rewrite`, `raw` is forbidden"));
+        assert!(out.contains("When no filter exists, `hzr exec run` performs the tracked"));
+        assert!(out.contains("`HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>`"));
+        assert!(!out.contains("| exact/raw output |"));
     }
 
     #[test]

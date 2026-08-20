@@ -6,10 +6,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use hzr_core::{
     Config, Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-    first_class_replacement,
+    explicit_raw_fidelity, first_class_replacement, managed_raw_payload,
 };
 use hzr_exec::{
-    CanonicalCommand, ForkRuntimePaths, PinnedRtkAdapter, RewriteDecision, RtkAdapterConfig,
+    CanonicalCommand, ForkRuntimePaths, PinnedRtkAdapter, RewriteDecision, RewriteSource,
+    RtkAdapterConfig,
 };
 use hzr_protocol::{ContextPlanApiRequest, ExecApiRequest};
 use serde_json::{Value, json};
@@ -124,6 +125,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         cwd: cwd.to_string_lossy().into_owned(),
         command: raw.to_owned(),
         timeout_ms: Some(HOOK_TIMEOUT.as_millis() as u64),
+        caller_path: std::env::var("PATH").ok(),
     };
     let managed = if let Ok(client) = DaemonClient::from_config(config) {
         timeout(HOOK_TIMEOUT, client.exec_rewrite(&request))
@@ -148,25 +150,34 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     write_decision(input, steer_to_first_class(raw, decision))
 }
 
-/// Offer the first-class HZR command when the agent is about to reach the shell unfiltered.
+/// Enforce the first-class HZR command when the agent is about to reach the shell unfiltered
+/// or fork-core selected its tracked raw proxy instead of a safe specialized route.
 ///
-/// This is the counterpart to the bypass panel in `hzr stats`: measurement alone changes
-/// nothing if the agent never learns the replacement. The decision is deliberately `Ask`
-/// and not `Deny` — raw is the correct tool for checksums, generated files and complete
-/// logs, so the escape hatch stays one keystroke away. Nothing is proposed when the engine
-/// has already rewritten the command, or when no equivalent exists.
+/// Raw remains available when no safe equivalent exists. Once the central operation policy
+/// identifies an equivalent, asking leaves the avoidable bypass as the default action.
 fn steer_to_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision {
-    if !matches!(decision, RewriteDecision::AllowRaw { .. }) {
+    if !matches!(
+        decision,
+        RewriteDecision::AllowRaw { .. }
+            | RewriteDecision::AllowRewrite {
+                source: RewriteSource::Rtk {
+                    route: hzr_exec::RtkRewriteRoute::Proxy,
+                    ..
+                },
+                ..
+            }
+    ) {
         return decision;
     }
     let Some(replacement) = first_class_replacement(raw) else {
         return decision;
     };
-    RewriteDecision::Ask {
-        proposed: Some(CanonicalCommand::shell(replacement.suggestion.clone())),
+    RewriteDecision::AllowRewrite {
+        command: CanonicalCommand::shell(replacement.suggestion.clone()),
+        source: RewriteSource::HzrPolicy,
         reason: format!(
             "`{}` reaches the shell unfiltered and is recorded as an optimizer bypass. \
-             {}. Accept the proposed command, or re-run the original to keep raw output.",
+             {}. HZR automatically selected the first-class route.",
             replacement.tool, replacement.rationale
         ),
     }
@@ -180,8 +191,14 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RewriteDec
         rewrite_timeout_ms: HOOK_TIMEOUT.as_millis() as u64,
     })
     .await;
+    if explicit_raw_fidelity(raw) {
+        return RewriteDecision::allow_raw(
+            "explicit HZR_RAW_FIDELITY=1 request requires unfiltered output",
+        );
+    }
+    let command = managed_raw_payload(raw).unwrap_or(raw);
     adapter
-        .decide_in(&CanonicalCommand::shell(raw), Some(cwd))
+        .decide_in(&CanonicalCommand::shell(command), Some(cwd))
         .await
 }
 
@@ -523,14 +540,18 @@ pub fn degraded_rewrite_coverage(config: &Config) -> Result<AccountingCoverage> 
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     use hzr_core::{Config, Ledger};
     use tempfile::tempdir;
 
-    use hzr_exec::{CanonicalCommand, RewriteDecision, RewriteSource};
+    use hzr_exec::{CanonicalCommand, PINNED_RTK_VERSION, RewriteDecision, RewriteSource};
 
     use super::{
-        clear_reconciled_rewrites, context_brief, degraded_rewrite_coverage, observe_input,
-        record_degraded_rewrite_at, steer_to_first_class,
+        clear_reconciled_rewrites, context_brief, degraded_rewrite_coverage, fallback_decision,
+        observe_input, record_degraded_rewrite_at, steer_to_first_class,
     };
 
     #[test]
@@ -613,8 +634,8 @@ mod tests {
 
     fn proposed(decision: &RewriteDecision) -> Option<String> {
         match decision {
-            RewriteDecision::Ask {
-                proposed: Some(CanonicalCommand::Shell { command, .. }),
+            RewriteDecision::AllowRewrite {
+                command: CanonicalCommand::Shell { command, .. },
                 ..
             } => Some(command.clone()),
             _ => None,
@@ -647,13 +668,140 @@ mod tests {
         );
     }
 
-    /// `Ask`, never `Deny`: raw stays reachable in one keystroke because it is the correct
-    /// tool for checksums, generated files and complete logs.
     #[test]
-    fn test_steering_asks_rather_than_denying() {
+    fn test_safe_replacement_is_automatic() {
         let decision = steer_to_first_class("cat README.md", allow_raw());
 
-        assert!(matches!(decision, RewriteDecision::Ask { .. }));
+        assert!(matches!(
+            decision,
+            RewriteDecision::AllowRewrite {
+                source: RewriteSource::HzrPolicy,
+                ..
+            }
+        ));
+
+        let specialized = RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("rtk rg -n RewriteDecision crates/hzr-exec"),
+            source: RewriteSource::Rtk {
+                version: PINNED_RTK_VERSION.into(),
+                route: hzr_exec::RtkRewriteRoute::Optimized,
+            },
+            reason: "fork-core approved and produced the managed command".into(),
+        };
+        assert_eq!(
+            steer_to_first_class(
+                "hzr rtk -- raw rg -n RewriteDecision crates/hzr-exec",
+                specialized.clone(),
+            ),
+            specialized,
+            "a specialized fork-core filter must not be replaced by indexed search"
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_no_raw_for_optimizable_hook_commands() {
+        for command in [
+            "hzr rtk -- raw nl -ba src/main.rs",
+            "hzr rtk -- raw sed -n 40,80p src/main.rs",
+            "hzr rtk -- raw rg -n needle src",
+        ] {
+            let decision = steer_to_first_class(command, allow_raw());
+            assert!(
+                matches!(decision, RewriteDecision::AllowRewrite { .. }),
+                "{command} remained raw: {decision:?}"
+            );
+        }
+
+        let decision = steer_to_first_class(
+            "hzr rtk -- raw nl -ba src/main.rs",
+            RewriteDecision::AllowRewrite {
+                command: CanonicalCommand::shell("rtk proxy nl -ba src/main.rs"),
+                source: RewriteSource::Rtk {
+                    version: PINNED_RTK_VERSION.into(),
+                    route: hzr_exec::RtkRewriteRoute::Proxy,
+                },
+                reason: "fork selected tracked raw proxy".into(),
+            },
+        );
+        assert_eq!(
+            proposed(&decision).as_deref(),
+            Some("hzr rtk -- read src/main.rs -n")
+        );
+        assert!(matches!(
+            decision,
+            RewriteDecision::AllowRewrite {
+                source: RewriteSource::HzrPolicy,
+                ..
+            }
+        ));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn acceptance_gate_no_raw_for_fork_families_in_degraded_hook() {
+        let directory = tempdir().expect("temporary directory");
+        let engines = directory.path().join("engines");
+        fs::create_dir(&engines).expect("engine directory");
+        let binary = engines.join("rtk");
+        let script = format!(
+            r#"#!/bin/sh
+if test "${{1:-}}" = --version; then
+  printf 'rtk %s\n' '{PINNED_RTK_VERSION}'
+  exit 0
+fi
+if test "${{1:-}}" = rewrite && test "${{2:-}}" = --help; then
+  printf 'Usage: rtk rewrite [ARGS]... Raw command to rewrite\n'
+  exit 0
+fi
+if test "${{1:-}}" = proxy && test "${{2:-}}" = --help; then
+  printf 'Usage: rtk proxy [ARGS]... Execute command without filtering\n'
+  exit 0
+fi
+if test "${{1:-}}" = rewrite; then
+  case "${{2:-}}" in
+    bun\ *|cargo\ *|ssh\ *|git\ *|gh\ *|find\ *|wget\ *|ps\ *)
+      printf 'rtk filtered'
+      exit 0
+      ;;
+    hzr\ rtk\ --\ raw\ *)
+      exit 2
+      ;;
+  esac
+  exit 1
+fi
+exit 64
+"#
+        );
+        fs::write(&binary, script).expect("fake fork-core");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("fake fork-core permissions");
+        let mut config = config(directory.path());
+        config.engines.directory = Some(engines);
+
+        for command in [
+            "hzr rtk -- raw bun test",
+            "hzr rtk -- raw cargo test --workspace",
+            "hzr rtk -- raw ssh host docker-ps",
+            "hzr rtk -- raw git status --short",
+            "hzr rtk -- raw gh run list",
+            "hzr rtk -- raw find src -type f",
+            "hzr rtk -- raw wget https://example.test",
+            "hzr rtk -- raw ps aux",
+        ] {
+            let decision = fallback_decision(&config, command, directory.path()).await;
+            assert!(
+                matches!(decision, RewriteDecision::AllowRewrite { .. }),
+                "{command} remained raw: {decision:?}"
+            );
+        }
+
+        let exact = fallback_decision(
+            &config,
+            "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.json",
+            directory.path(),
+        )
+        .await;
+        assert!(matches!(exact, RewriteDecision::AllowRaw { .. }));
     }
 
     #[test]
@@ -661,6 +809,21 @@ mod tests {
         let decision = steer_to_first_class("cargo clippy --workspace", allow_raw());
 
         assert!(matches!(decision, RewriteDecision::AllowRaw { .. }));
+    }
+
+    #[test]
+    fn test_ambiguous_shell_commands_are_not_reconstructed_by_the_hook() {
+        for command in [
+            "hzr rtk -- raw nl -ba \"src/file with spaces.rs\"",
+            "hzr rtk -- raw rg -n \"two words\" src",
+            "hzr rtk -- raw rg -n needle src | head -n 20",
+        ] {
+            let decision = steer_to_first_class(command, allow_raw());
+            assert!(
+                matches!(decision, RewriteDecision::AllowRaw { .. }),
+                "{command} was reconstructed: {decision:?}"
+            );
+        }
     }
 
     /// When the pinned engine already rewrote the command there is nothing to steer, and
