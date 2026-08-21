@@ -31,6 +31,7 @@ use directories::BaseDirs;
 use hzr_core::Config;
 use hzr_index::IndexPlacement;
 use hzr_protocol::{
+    AccountingAttribution, AccountingOperationKind, AccountingOperationMode, AccountingStage,
     CodecApiRequest, CodecProfile, ContextPlanApiRequest, FidelityClass, MemoryForgetApiRequest,
     MemoryImportance, MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector,
     MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope, RiskClass, SearchApiRequest,
@@ -584,7 +585,7 @@ async fn call_tool(
     match outcome {
         Ok(value) => {
             if name != "hzr_codec" {
-                if let Ok(accounting) = mcp_operation_request(name, workspace, &value) {
+                if let Ok(accounting) = mcp_operation_request(name, workspace, &arguments, &value) {
                     if client.record_operation(&accounting).await.is_err() {
                         let _ = crate::hook_runner::record_daemon_unavailable_operation(config);
                     }
@@ -621,11 +622,15 @@ async fn call_tool(
 fn mcp_operation_request(
     tool_name: &str,
     workspace: &str,
+    arguments: &Value,
     response: &Value,
 ) -> Result<hzr_protocol::OperationApiRequest> {
     let bytes = serde_json::to_vec(response)?.len();
     let delivered = u64::try_from(bytes / 4).unwrap_or(u64::MAX).max(1);
     let command = tool_name.replace('_', " ");
+    let attribution = (tool_name == "hzr_search")
+        .then(|| search_accounting_attribution(arguments))
+        .transpose()?;
     Ok(hzr_protocol::OperationApiRequest {
         original_command: command.clone(),
         recorded_command: command,
@@ -644,6 +649,33 @@ fn mcp_operation_request(
                     .ok()
                     .filter(|value| !value.trim().is_empty())
             }),
+        attribution,
+    })
+}
+
+fn search_accounting_attribution(arguments: &Value) -> Result<AccountingAttribution> {
+    let mode = optional_enum(
+        arguments,
+        "mode",
+        SearchMode::Auto,
+        parse_mode,
+        "auto, semantic, exact",
+    )?;
+    Ok(AccountingAttribution {
+        operation: AccountingOperationKind::Search,
+        mode: match mode {
+            SearchMode::Auto => AccountingOperationMode::SearchAuto,
+            SearchMode::Semantic => AccountingOperationMode::SearchSemantic,
+            SearchMode::Exact => AccountingOperationMode::SearchExact,
+        },
+        stage: AccountingStage::FinalDelivery,
+        include_content: Some(optional_bool(arguments, "include_content", false)?),
+        limit: Some(u64::try_from(bounded_usize(arguments, "limit", 10, 50)?)?),
+        path_scope_count: Some(u64::from(optional_string(arguments, "path")?.is_some())),
+        filter_level: None,
+        from_line: None,
+        to_line: None,
+        source_bytes: None,
     })
 }
 

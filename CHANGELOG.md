@@ -4,6 +4,36 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-21
+
+### Added
+
+- Typed, non-sensitive read/search attribution records operation mode, accounting stage, bounds,
+  filter level, result limit, include-content choice, and path-scope count. Stats exposes mode
+  aggregates while legacy rows remain unattributed.
+- Acceptance gates cover bounded managed reads, explicit whole-file fidelity, removal of forced
+  full-contract bootstrap, stale instruction detection/repair, legacy RTK block retirement, and
+  stable GitHub Latest publication.
+
+### Changed
+
+- Managed Claude and Codex instructions use the embedded ordinary-work contract and direct
+  HZR-policy investigations to an outline followed by relevant ranges instead of importing or
+  reading the complete `HZR.md` on every task.
+- Unbounded managed `read --level none` uses the smart format-aware view. Ranges, numbered reads,
+  structural modes, changed hunks, and `HZR_EXACT_FIDELITY=1` preserve exact semantics.
+- Search guidance uses semantic/auto discovery for unknown implementations and reserves exact
+  mode for known literals, symbols, errors, keys, and audits.
+- `hzr init --if-needed` refreshes the active managed instruction scope and migrates detected
+  delimited legacy RTK blocks without changing clean project files.
+
+### Fixed
+
+- `hzr doctor` now rejects a stale managed region or a conflicting local RTK/ICM directive rather
+  than treating marker presence as current policy.
+- GitHub tag releases are published as stable and explicitly marked Latest; `v0.4.1` metadata was
+  corrected without replacing its tag or assets.
+
 ## [0.4.1] - 2026-08-21
 
 ### Added

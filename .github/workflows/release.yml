@@ -26,11 +26,25 @@ jobs:
           git rev-parse --verify 'refs/tags/v0.1.0^{commit}' >/dev/null
           grep -F "HZR_VERSION=\"\${HZR_VERSION:-${version}}\"" install.sh >/dev/null
           scripts/verify-fork-core.sh
-      - name: Enforce first-class routing for optimizable commands
+      - name: Enforce first-class and bounded routing acceptance gates
         run: |
-          cargo test --locked -p hzr-core --test operation_classification acceptance_gate_no_raw
-          cargo test --locked -p hzr-cli acceptance_gate_no_raw
-          cargo test --locked -p hzr-daemon acceptance_gate_no_raw
+          cargo test --locked -p hzr-core acceptance_gate_
+          cargo test --locked -p hzr-cli acceptance_gate_
+          cargo test --locked -p hzr-daemon acceptance_gate_
+      - name: Enforce stable Latest release policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workflow = Path(".github/workflows/release.yml").read_text()
+          prerelease_flag = "--pre" + "release"
+          if prerelease_flag in workflow:
+              raise SystemExit("release workflow must not publish HZR tags as prereleases")
+          if "--latest" not in workflow:
+              raise SystemExit("release workflow must explicitly mark a stable tag Latest")
+          PY
 
   native-bundles:
     needs: preflight
@@ -118,7 +132,7 @@ jobs:
             head -n 1 RELEASE_NOTES.md >&2
             exit 1
           }
-      - name: Publish GitHub pre-release
+      - name: Publish stable GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
@@ -126,6 +140,6 @@ jobs:
           release-assets/*.tar.gz release-assets/SHA256SUMS
           --repo "${GITHUB_REPOSITORY}"
           --verify-tag
-          --prerelease
+          --latest
           --notes-file RELEASE_NOTES.md
           --title "HZR ${GITHUB_REF_NAME#v}"

@@ -11,14 +11,14 @@ pub use config::{
 };
 pub use engines::{EngineManifest, EnginePin, locked_engines};
 pub use ledger::{
-    BypassSummary, BypassTool, BypassWindow, EfficiencyCommandSummary, EfficiencySummary, Ledger,
-    LedgerError, LedgerRecord, LedgerSummary, LegacyEfficiencyMigration, LegacyEfficiencySource,
-    OperationAttribution, OperationContext, PriceTable, ProjectActivitySummary,
-    ProjectOperationRoute, ProjectOperationSummary, discover_legacy_rtk_history,
-    inspect_legacy_efficiency,
+    BypassSummary, BypassTool, BypassWindow, DetailedOperationAttribution,
+    EfficiencyCommandSummary, EfficiencySummary, Ledger, LedgerError, LedgerRecord, LedgerSummary,
+    LegacyEfficiencyMigration, LegacyEfficiencySource, OperationAttribution, OperationContext,
+    OperationModeSummary, PriceTable, ProjectActivitySummary, ProjectOperationRoute,
+    ProjectOperationSummary, discover_legacy_rtk_history, inspect_legacy_efficiency,
 };
 pub use operation::{
     OperationChannel, OperationClassification, OperationMeasurement, OperationRoute,
-    OperationSubsystem, RawReplacement, classify_operation, explicit_raw_fidelity,
-    first_class_replacement, managed_raw_payload, raw_route_sql_predicate,
+    OperationSubsystem, RawReplacement, classify_operation, efficient_route_replacement,
+    explicit_raw_fidelity, first_class_replacement, managed_raw_payload, raw_route_sql_predicate,
 };

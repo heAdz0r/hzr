@@ -6,7 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use hzr_core::{
     Config, Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-    explicit_raw_fidelity, first_class_replacement, managed_raw_payload,
+    efficient_route_replacement, explicit_raw_fidelity, first_class_replacement,
+    managed_raw_payload,
 };
 use hzr_exec::{
     CanonicalCommand, ForkRuntimePaths, PinnedRtkAdapter, RewriteDecision, RewriteSource,
@@ -156,6 +157,14 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
 /// Raw remains available when no safe equivalent exists. Once the central operation policy
 /// identifies an equivalent, asking leaves the avoidable bypass as the default action.
 fn steer_to_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision {
+    if matches!(
+        decision,
+        RewriteDecision::AllowRaw { .. } | RewriteDecision::AllowRewrite { .. }
+    ) {
+        if let Some(replacement) = efficient_route_replacement(raw) {
+            return hzr_policy_rewrite(replacement);
+        }
+    }
     if !matches!(
         decision,
         RewriteDecision::AllowRaw { .. }
@@ -172,12 +181,16 @@ fn steer_to_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision
     let Some(replacement) = first_class_replacement(raw) else {
         return decision;
     };
+    hzr_policy_rewrite(replacement)
+}
+
+fn hzr_policy_rewrite(replacement: hzr_core::RawReplacement) -> RewriteDecision {
     RewriteDecision::AllowRewrite {
         command: CanonicalCommand::shell(replacement.suggestion.clone()),
         source: RewriteSource::HzrPolicy,
         reason: format!(
-            "`{}` reaches the shell unfiltered and is recorded as an optimizer bypass. \
-             {}. HZR automatically selected the first-class route.",
+            "`{}` selected a higher-output route. {}. HZR automatically selected the \
+             lower-output first-class route.",
             replacement.tool, replacement.rationale
         ),
     }
@@ -734,6 +747,35 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn acceptance_gate_no_unbounded_exact_read_in_hook() {
+        let filtered = RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("rtk read src/main.rs --level none"),
+            source: RewriteSource::Rtk {
+                version: PINNED_RTK_VERSION.into(),
+                route: hzr_exec::RtkRewriteRoute::Optimized,
+            },
+            reason: "fork-core accepted the explicit read".into(),
+        };
+        let decision =
+            steer_to_first_class("hzr rtk -- read src/main.rs --level none", filtered.clone());
+        assert_eq!(
+            proposed(&decision).as_deref(),
+            Some("hzr rtk -- read src/main.rs")
+        );
+
+        for command in [
+            "hzr rtk -- read src/main.rs --from 40 --to 80 --level none",
+            "HZR_EXACT_FIDELITY=1 hzr rtk -- read src/main.rs --level none",
+        ] {
+            assert_eq!(
+                steer_to_first_class(command, filtered.clone()),
+                filtered,
+                "bounded or explicit exact read was changed: {command}"
+            );
+        }
     }
 
     #[cfg(unix)]

@@ -47,8 +47,8 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     #[command(
-        about = "Register workspace data layout and service",
-        long_about = "Initialize the workspace registry, private data layout, and visualizer service."
+        about = "Register workspace data and refresh agent instructions",
+        long_about = "Initialize the workspace registry, private data layout, visualizer service, and the current managed agent contract for the configured activation scope."
     )]
     Init {
         /// Re-run initialization even when the workspace is already registered
@@ -154,7 +154,7 @@ pub enum Command {
         command: HooksCommand,
     },
     #[command(
-        about = "Verify pins, ownership, and daemon health",
+        about = "Verify instructions, pins, ownership, and daemon health",
         long_about = DOCTOR_LONG_ABOUT,
         after_help = DOCTOR_AFTER_HELP
     )]

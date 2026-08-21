@@ -847,6 +847,43 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     )
 }
 
+/// Reconcile the instruction scope selected by activation policy. SessionStart calls
+/// `init --if-needed`, so upgrades repair stale managed blocks without duplicating them.
+/// Only HZR's delimited region is changed; repository and user-authored rules remain intact.
+fn reconcile_agent_instructions(
+    config: &Config,
+    workspace_root: &Path,
+) -> Result<Vec<instructions::InstructionReport>> {
+    let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
+    let contract = contract_asset_path(&executable_source_directory(&executable)?);
+    let targets = match config.activation.mode {
+        hzr_core::ActivationMode::All => {
+            let mut targets = [instructions::Surface::Claude, instructions::Surface::Codex]
+                .into_iter()
+                .map(|surface| surface.default_path().map(|path| (surface, path)))
+                .collect::<Result<Vec<_>>>()?;
+            // Global instructions cover ordinary repositories. A pre-HZR local contract can
+            // override them, so migrate only local files that already contain an HZR block or
+            // a known conflicting RTK/ICM mandate. Clean projects remain byte-for-byte intact.
+            for (surface, path) in activation::local_instruction_paths(workspace_root) {
+                let audit = instructions::audit(surface, &path)?;
+                if audit.installed || !audit.conflicting_mandates.is_empty() {
+                    targets.push((surface, path));
+                }
+            }
+            targets
+        }
+        hzr_core::ActivationMode::Selected => {
+            activation::local_instruction_paths(workspace_root).to_vec()
+        }
+    };
+
+    targets
+        .into_iter()
+        .map(|(surface, path)| instructions::install(surface, &path, &contract, false, true))
+        .collect()
+}
+
 /// Locate `HZR.md`. An assembled bundle ships it under `share/hzr/`; a development
 /// tree has it at the repository root. Both are resolved relative to the binary so
 /// the reference written into `CLAUDE.md` stays valid after relocation.
@@ -1088,8 +1125,10 @@ async fn initialize(
     }
     config.ensure_layout()?;
     config.write(path)?;
+    let workspace_root = canonical_directory(None)?;
+    let instruction_reports = reconcile_agent_instructions(&config, &workspace_root)?;
     let (workspace, outcome, changed, git_backed, registration) =
-        initialize_workspace(&config).await?;
+        initialize_workspace_at(&config, &workspace_root).await?;
     let dashboard = format!("http://{}", config.daemon.bind);
     let service_report = if skip_service {
         None
@@ -1109,6 +1148,7 @@ async fn initialize(
             "worktree_id": workspace.identity.worktree_id,
             "index": workspace.index.directory,
             "registration": registration,
+            "instructions": instruction_reports,
             "dashboard": dashboard,
             "daemon_service": service_report,
             "mcp": mcp::lifecycle_metadata(),
@@ -1119,6 +1159,14 @@ async fn initialize(
         writeln!(output, "initialized {}", path.display())?;
         writeln!(output, "data root {}", config.data_dir.display())?;
         writeln!(output, "{outcome} {}", workspace.identity.root.display())?;
+        for report in instruction_reports.iter().filter(|report| report.changed) {
+            writeln!(
+                output,
+                "updated {} instructions {}",
+                report.surface.as_str(),
+                report.path.display()
+            )?;
+        }
         writeln!(output, "visualizer {dashboard} (served by hzrd)")?;
         if let Some(report) = &service_report {
             writeln!(
@@ -1171,26 +1219,28 @@ async fn initialize_if_needed(
         (config, true)
     };
 
-    if config.activation.mode == hzr_core::ActivationMode::Selected {
-        let workspace = canonical_directory(None)?;
-        if !activation::is_enabled(&config, &workspace)
+    let workspace_root = canonical_directory(None)?;
+    if config.activation.mode == hzr_core::ActivationMode::Selected
+        && !activation::is_enabled(&config, &workspace_root)
             .await
             .unwrap_or(false)
-        {
-            if json {
-                print_json(&serde_json::json!({
-                    "outcome": "disabled",
-                    "workspace": workspace,
-                    "changed": false,
-                    "config_created": config_created,
-                }))?;
-            }
-            return Ok(ExitCode::SUCCESS);
+    {
+        if json {
+            print_json(&serde_json::json!({
+                "outcome": "disabled",
+                "workspace": workspace_root,
+                "changed": false,
+                "config_created": config_created,
+            }))?;
         }
+        return Ok(ExitCode::SUCCESS);
     }
 
+    // Instruction repair is independent from index health. A conflicting local RTK block must
+    // not survive merely because duplicate or legacy index state correctly blocks registration.
+    let instruction_reports = reconcile_agent_instructions(&config, &workspace_root)?;
     let (workspace, outcome, changed, git_backed, registration) =
-        initialize_workspace(&config).await?;
+        initialize_workspace_at(&config, &workspace_root).await?;
     let dashboard = format!("http://{}", config.daemon.bind);
     let service_report = if skip_service {
         None
@@ -1209,6 +1259,7 @@ async fn initialize_if_needed(
             "worktree_id": workspace.identity.worktree_id,
             "index": workspace.index.directory,
             "registration": registration,
+            "instructions": instruction_reports,
             "dashboard": dashboard,
             "daemon_service": service_report,
             "mcp": mcp::lifecycle_metadata(),
@@ -1217,6 +1268,14 @@ async fn initialize_if_needed(
         let stdout = io::stdout();
         let mut output = stdout.lock();
         writeln!(output, "{outcome} {}", workspace.identity.root.display())?;
+        for report in instruction_reports.iter().filter(|report| report.changed) {
+            writeln!(
+                output,
+                "updated {} instructions {}",
+                report.surface.as_str(),
+                report.path.display()
+            )?;
+        }
         writeln!(output, "visualizer {dashboard} (served by hzrd)")?;
         if let Some(report) = &service_report {
             writeln!(
@@ -1389,13 +1448,6 @@ async fn set_workspace_activation(
         );
     }
     Ok(ExitCode::SUCCESS)
-}
-
-async fn initialize_workspace(
-    config: &Config,
-) -> Result<(Workspace, &'static str, bool, bool, WorkspaceRegistration)> {
-    let workspace_path = canonical_directory(None)?;
-    initialize_workspace_at(config, &workspace_path).await
 }
 
 async fn initialize_workspace_at(
@@ -1889,7 +1941,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.1-test");
+        let release = directory.path().join("versions/v0.4.2-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -1909,7 +1961,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.1-test");
+        let release = directory.path().join("versions/v0.4.2-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))
@@ -1927,7 +1979,7 @@ mod tests {
     #[test]
     fn public_binary_symlink_resolves_to_the_versioned_source_directory() {
         let directory = tempdir().expect("temporary directory");
-        let release_bin = directory.path().join("versions/v0.4.1-test/bin");
+        let release_bin = directory.path().join("versions/v0.4.2-test/bin");
         let release_binary = release_bin.join("hzr");
         let public_bin = directory.path().join("bin");
         std::fs::create_dir_all(&release_bin).expect("release bin");

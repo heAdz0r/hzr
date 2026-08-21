@@ -558,7 +558,7 @@ mod tests {
     fn report(usage: LedgerSummary, commands: Vec<CommandSavings>) -> StatsReport {
         let by_command_total = commands.len();
         StatsReport {
-            hzr_version: "0.4.1",
+            hzr_version: "0.4.2",
             scope: "global lifetime".into(),
             direct_savings: DirectSavings {
                 operations: 42,
@@ -579,6 +579,7 @@ mod tests {
                 net_avoided_tokens_estimated: 8_000,
                 share_pct: 80.0,
             }],
+            by_mode: Vec::new(),
             by_command: commands,
             by_command_total,
             by_command_omitted: 0,

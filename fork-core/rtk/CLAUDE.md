@@ -328,63 +328,10 @@ GitHub Actions workflow (.github/workflows/release.yml):
 - Automated releases on version tags (v*)
 - Checksums for binary verification
 
-<!-- rtk-instructions v4 -->
-# RTK - Token-Optimized Shell Commands
+## HZR-owned fork routing
 
-RTK filters supported shell-command output before it enters the agent context.
-Unsupported commands pass through unchanged. The installed Bash hook delegates
-rewrite decisions to `rtk rewrite`; native Read/Grep/Edit/Write/Task tools remain
-available and are outside that hook.
-
-## Operational Rules
-
-- Normal shell commands may be used; the hook rewrites supported commands.
-- Use `rtk` explicitly for `gain`, `discover`, `raw`/`proxy`, `rgai`, and compact reads.
-- Use `rtk raw <cmd>` when exact output is required; `raw` is an alias for `proxy`.
-- Check `rtk --help` instead of relying on a copied command catalog.
-
-## Exact Output
-
-RTK output can contain summaries such as `[100 more lines]`. Hook bypass applies
-to native commands; explicit `rtk rg ... > file` stays filtered. Use `rtk raw`
-for source data, checksums, line counts, or machine parsing.
-
-```bash
-rg pattern . > matches.txt          # Hook detects stdout redirection; stays native/raw
-rtk raw rg pattern . > matches.txt  # Explicit raw mode with RTK usage tracking
-rtk raw ssh host 'rg pattern /srv' > matches.txt
-```
-
-Use explicit raw mode for exact pipelines even when they do not redirect:
-
-```bash
-rtk raw rg pattern . | awk '{print $1}'
-```
-
-## Search
-
-```bash
-rtk rgai "intent query"   # Semantic discovery; grepai-backed when available
-rtk rg <pattern> [path]   # Ripgrep flags and regex semantics
-rtk grep <pattern> [path] # POSIX/BSD grep flags and regex semantics
-```
-
-`rtk rg` and `rtk grep` are distinct engines. Do not translate flags between
-them. Prefer semantic search for intent and exact search for known symbols/text.
-
-## Files
-
-```bash
-rtk read <file>                         # Automatic compact level
-rtk read <file> --from <N> --to <M>    # Exact line range
-rtk write patch <file> --old @old --new @new
-rtk write replace <file> --from old --to new
-rtk write set <file> --key a.b --value value
-```
-
-Range reads automatically preserve exact content. `rtk write` is useful for
-atomic, idempotent transformations; native editing tools are still valid.
-
-The never-worse guard emits raw output whenever filtering would use more
-estimated tokens, so compression cannot make a supported result larger.
-<!-- /rtk-instructions -->
+This source tree is HZR's private fork-core engine. Invoke it only through the
+repository-level HZR contract; do not launch a separately installed `rtk` binary.
+Use `hzr exec run` for ordinary shell work, smart or bounded `hzr rtk -- read`
+for files, and the explicit fidelity markers only when the whole unfiltered result
+is materially required.

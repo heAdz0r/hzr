@@ -52,9 +52,10 @@ Examples:
 ";
 
 pub const DOCTOR_LONG_ABOUT: &str = "\
-Verify pins, ownership, daemon health, and duplicate indexes for one workspace. \
+Verify current managed instructions, pins, ownership, daemon health, and duplicate indexes for one workspace. \
 Use `--fix` to transactionally migrate one unambiguous legacy index with a retained backup. \
-Duplicate or conflicting indexes remain unchanged and fail with their exact paths.";
+Duplicate or conflicting indexes remain unchanged and fail with their exact paths. Stale \
+instructions remain read-only here and are repaired by `hzr init --if-needed`.";
 
 pub const DOCTOR_AFTER_HELP: &str = "\
 Examples:

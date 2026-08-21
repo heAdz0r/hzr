@@ -1,5 +1,7 @@
 use hzr_core::Config;
-use hzr_protocol::{AccountingChannel, AccountingRoute, SearchMode};
+use hzr_protocol::{
+    AccountingChannel, AccountingOperationMode, AccountingRoute, AccountingStage, SearchMode,
+};
 use serde_json::{Value, json};
 
 use crate::cli::McpClientArg;
@@ -13,9 +15,16 @@ use super::{
 
 #[test]
 fn test_mcp_accounting_is_neutral_and_explicitly_tagged() {
+    let arguments = json!({
+        "query": "secret search text",
+        "path": "private/source",
+        "mode": "exact",
+        "limit": 7,
+        "include_content": true
+    });
     let response = json!({"hits": [{"path": "src/lib.rs"}]});
-    let request =
-        mcp_operation_request("hzr_search", "/work", &response).expect("accounting request");
+    let request = mcp_operation_request("hzr_search", "/work", &arguments, &response)
+        .expect("accounting request");
 
     assert_eq!(request.channel, AccountingChannel::Mcp);
     assert_eq!(request.route, AccountingRoute::Optimized);
@@ -24,8 +33,16 @@ fn test_mcp_accounting_is_neutral_and_explicitly_tagged() {
         "retrieval is coverage, not claimed savings"
     );
     assert!(request.delivered_tokens_estimated > 0);
-    let encoded = serde_json::to_value(request).expect("accounting JSON");
+    let encoded = serde_json::to_value(&request).expect("accounting JSON");
     assert_eq!(encoded["agent"], "mcp");
+    let attribution = request.attribution.expect("search attribution");
+    assert_eq!(attribution.mode, AccountingOperationMode::SearchExact);
+    assert_eq!(attribution.stage, AccountingStage::FinalDelivery);
+    assert_eq!(attribution.limit, Some(7));
+    assert_eq!(attribution.path_scope_count, Some(1));
+    let encoded = serde_json::to_string(&attribution).expect("attribution JSON");
+    assert!(!encoded.contains("secret search text"));
+    assert!(!encoded.contains("private/source"));
 }
 
 /// Mirror of the notification rule in `handle_line`, which cannot be exercised

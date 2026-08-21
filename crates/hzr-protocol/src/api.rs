@@ -346,6 +346,141 @@ pub enum AccountingRoute {
     NativeUnaccounted,
 }
 
+/// Non-sensitive operation family recorded independently from command payloads.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountingOperationKind {
+    Search,
+    Read,
+}
+
+impl AccountingOperationKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Search => "search",
+            Self::Read => "read",
+        }
+    }
+}
+
+/// Requested operation mode. Family-prefixed variants remain unambiguous when persisted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountingOperationMode {
+    SearchAuto,
+    SearchSemantic,
+    SearchExact,
+    SearchBuiltin,
+    ReadFull,
+    ReadFiltered,
+    ReadRange,
+    ReadHead,
+    ReadTail,
+    ReadOutline,
+    ReadSymbols,
+    ReadChanged,
+    ReadSince,
+}
+
+impl AccountingOperationMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SearchAuto => "search_auto",
+            Self::SearchSemantic => "search_semantic",
+            Self::SearchExact => "search_exact",
+            Self::SearchBuiltin => "search_builtin",
+            Self::ReadFull => "read_full",
+            Self::ReadFiltered => "read_filtered",
+            Self::ReadRange => "read_range",
+            Self::ReadHead => "read_head",
+            Self::ReadTail => "read_tail",
+            Self::ReadOutline => "read_outline",
+            Self::ReadSymbols => "read_symbols",
+            Self::ReadChanged => "read_changed",
+            Self::ReadSince => "read_since",
+        }
+    }
+
+    #[must_use]
+    pub const fn operation(self) -> AccountingOperationKind {
+        match self {
+            Self::SearchAuto | Self::SearchSemantic | Self::SearchExact | Self::SearchBuiltin => {
+                AccountingOperationKind::Search
+            }
+            Self::ReadFull
+            | Self::ReadFiltered
+            | Self::ReadRange
+            | Self::ReadHead
+            | Self::ReadTail
+            | Self::ReadOutline
+            | Self::ReadSymbols
+            | Self::ReadChanged
+            | Self::ReadSince => AccountingOperationKind::Read,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountingStage {
+    InternalTransport,
+    FinalDelivery,
+}
+
+impl AccountingStage {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InternalTransport => "internal_transport",
+            Self::FinalDelivery => "final_delivery",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountingFilterLevel {
+    None,
+    Minimal,
+    Aggressive,
+}
+
+impl AccountingFilterLevel {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Aggressive => "aggressive",
+        }
+    }
+}
+
+/// Typed observability dimensions only. Query text, paths, file contents, and secrets are
+/// deliberately absent from this transport contract.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AccountingAttribution {
+    pub operation: AccountingOperationKind,
+    pub mode: AccountingOperationMode,
+    pub stage: AccountingStage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_content: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_scope_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter_level: Option<AccountingFilterLevel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_line: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_line: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_bytes: Option<u64>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OperationApiRequest {
     pub original_command: String,
@@ -361,6 +496,8 @@ pub struct OperationApiRequest {
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<AccountingAttribution>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -676,8 +813,9 @@ pub struct CodecApiRequest {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContextPlanApiRequest, ExecApiRequest, MemoryImportance, MemoryPruneApiRequest,
-        MemoryRecallApiRequest, MemoryStoreApiRequest, SearchApiRequest, SearchMode,
+        AccountingAttribution, ContextPlanApiRequest, ExecApiRequest, MemoryImportance,
+        MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryStoreApiRequest, OperationApiRequest,
+        SearchApiRequest, SearchMode,
     };
 
     #[test]
@@ -745,5 +883,20 @@ mod tests {
         };
         let value = serde_json::to_value(request).expect("exec request serializes");
         assert_eq!(value["caller_path"], "/toolchain/bin:/usr/bin");
+    }
+
+    #[test]
+    fn operation_request_accepts_legacy_payload_without_attribution() {
+        let request: OperationApiRequest = serde_json::from_str(
+            r#"{"original_command":"hzr search","recorded_command":"hzr search","baseline_tokens_estimated":1,"delivered_tokens_estimated":1,"execution_ms":0,"project_path":"/repo","channel":"mcp","measurement":"estimated","route":"optimized"}"#,
+        )
+        .expect("legacy operation request parses");
+        assert!(request.attribution.is_none());
+    }
+
+    #[test]
+    fn operation_attribution_rejects_arbitrary_filter_text() {
+        let request = r#"{"operation":"read","mode":"read_filtered","stage":"internal_transport","filter_level":"secret=value"}"#;
+        assert!(serde_json::from_str::<AccountingAttribution>(request).is_err());
     }
 }

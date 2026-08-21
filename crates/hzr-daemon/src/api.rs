@@ -6,8 +6,9 @@ use axum::Json;
 use axum::extract::{Path as AxumPath, State};
 use hzr_context::{ContextError, PlanRequest, SearchRequest};
 use hzr_core::{
-    Ledger, LedgerRecord, ProjectOperationRoute, ProjectOperationSummary, explicit_raw_fidelity,
-    first_class_replacement, locked_engines, managed_raw_payload,
+    Ledger, LedgerRecord, ProjectOperationRoute, ProjectOperationSummary,
+    efficient_route_replacement, explicit_raw_fidelity, first_class_replacement, locked_engines,
+    managed_raw_payload,
 };
 use hzr_exec::{
     CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent, ExecutionEnvelope,
@@ -1573,6 +1574,7 @@ pub async fn operation(
             route,
             agent: request.agent,
             session_id: request.session_id,
+            attribution: request.attribution,
         })
         .await
         .map_err(|error| ApiError::internal(format!("operation ledger write failed: {error}")))?;
@@ -1608,6 +1610,14 @@ async fn fork_decision_with_managed_unwrap(
 }
 
 fn enforce_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision {
+    if matches!(
+        decision,
+        RewriteDecision::AllowRaw { .. } | RewriteDecision::AllowRewrite { .. }
+    ) {
+        if let Some(replacement) = efficient_route_replacement(raw) {
+            return hzr_policy_rewrite(replacement);
+        }
+    }
     if !matches!(
         decision,
         RewriteDecision::AllowRaw { .. }
@@ -1624,12 +1634,16 @@ fn enforce_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision 
     let Some(replacement) = first_class_replacement(raw) else {
         return decision;
     };
+    hzr_policy_rewrite(replacement)
+}
+
+fn hzr_policy_rewrite(replacement: hzr_core::RawReplacement) -> RewriteDecision {
     RewriteDecision::AllowRewrite {
         command: CanonicalCommand::shell(replacement.suggestion.clone()),
         source: RewriteSource::HzrPolicy,
         reason: format!(
-            "`{}` reaches the shell unfiltered and is recorded as an optimizer bypass. \
-             {}. HZR automatically selected the first-class route.",
+            "`{}` selected a higher-output route. {}. HZR automatically selected the \
+             lower-output first-class route.",
             replacement.tool, replacement.rationale
         ),
     }
@@ -1691,6 +1705,7 @@ async fn record_codec_operation(
             agent: matches!(request.channel, Some(hzr_protocol::AccountingChannel::Mcp))
                 .then(|| "mcp".to_owned()),
             session_id: None,
+            attribution: None,
         })
         .await;
 }
@@ -2222,6 +2237,39 @@ mod tests {
             specialized,
             "a specialized fork-core filter must not be replaced by indexed search"
         );
+    }
+
+    #[test]
+    fn acceptance_gate_no_unbounded_exact_read_in_exec() {
+        let filtered = RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("rtk read src/main.rs --level none"),
+            source: RewriteSource::Rtk {
+                version: PINNED_RTK_VERSION.into(),
+                route: hzr_exec::RtkRewriteRoute::Optimized,
+            },
+            reason: "fork-core accepted the explicit read".into(),
+        };
+        let decision =
+            enforce_first_class("hzr rtk -- read src/main.rs --level none", filtered.clone());
+        assert!(matches!(
+            decision,
+            RewriteDecision::AllowRewrite {
+                command: CanonicalCommand::Shell { ref command, .. },
+                source: RewriteSource::HzrPolicy,
+                ..
+            } if command == "hzr rtk -- read src/main.rs"
+        ));
+
+        for command in [
+            "hzr rtk -- read src/main.rs --from 40 --to 80 --level none",
+            "HZR_EXACT_FIDELITY=1 hzr rtk -- read src/main.rs --level none",
+        ] {
+            assert_eq!(
+                enforce_first_class(command, filtered.clone()),
+                filtered,
+                "bounded or explicit exact read was changed: {command}"
+            );
+        }
     }
 
     #[cfg(unix)]

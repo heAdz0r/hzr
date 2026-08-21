@@ -199,6 +199,41 @@ pub fn first_class_replacement(command: &str) -> Option<RawReplacement> {
     replacement_for(head, &payload[1..])
 }
 
+/// Return a lower-output route for an already managed command when the requested fidelity
+/// is unbounded and the existing first-class default is sufficient.
+///
+/// Exact ranges, numbered reads, bounded heads/tails, and structural modes already carry
+/// evidence for their fidelity or scope. Only a bare full-file `--level none` is reduced.
+pub fn efficient_route_replacement(command: &str) -> Option<RawReplacement> {
+    let (exact_fidelity, command) = exact_fidelity_command(command);
+    if exact_fidelity || !unambiguous_shell_command(command) {
+        return None;
+    }
+    let words = shell_words(command);
+    let (route, payload) = strip_bypass_prefix(&words);
+    let payload = match route {
+        OperationRoute::Bypassed => payload,
+        OperationRoute::Optimized => strip_wrappers(payload),
+        OperationRoute::NativeUnaccounted => payload,
+    };
+    if payload.first().map(String::as_str) != Some("read") {
+        return None;
+    }
+    unbounded_exact_read_replacement(&payload[1..])
+}
+
+fn exact_fidelity_command(command: &str) -> (bool, &str) {
+    let command = command.trim_start_matches([' ', '\t']);
+    let Some(remainder) = command.strip_prefix("HZR_EXACT_FIDELITY=") else {
+        return (false, command);
+    };
+    let Some(boundary) = remainder.find([' ', '\t']) else {
+        return (false, command);
+    };
+    let (value, payload) = remainder.split_at(boundary);
+    (value == "1", payload.trim_start_matches([' ', '\t']))
+}
+
 /// Return an explicit managed raw/proxy payload without reparsing or reconstructing it.
 ///
 /// Fork-core gets one more chance to apply its typed command families to this exact byte
@@ -372,6 +407,50 @@ const READ_RATIONALE: &str =
     "hzr read streams the requested span with filtering instead of the whole slice";
 const SEARCH_RATIONALE: &str =
     "hzr search returns ranked matches through the shared index instead of raw output";
+const SMART_READ_RATIONALE: &str =
+    "hzr read selects its format-aware bounded default instead of an unbounded full-file read";
+
+fn unbounded_exact_read_replacement(arguments: &[String]) -> Option<RawReplacement> {
+    let mut file = None;
+    let mut exact = false;
+    let mut expect_level = false;
+    for argument in arguments {
+        if expect_level {
+            if argument != "none" {
+                return None;
+            }
+            exact = true;
+            expect_level = false;
+            continue;
+        }
+        match argument.as_str() {
+            "--level" | "-l" => {
+                if exact {
+                    return None;
+                }
+                expect_level = true;
+            }
+            "--level=none" | "-lnone" => {
+                if exact {
+                    return None;
+                }
+                exact = true;
+            }
+            _ if argument.starts_with('-') => return None,
+            _ if file.replace(argument).is_some() => return None,
+            _ => {}
+        }
+    }
+    if expect_level || !exact {
+        return None;
+    }
+    let file = file?;
+    Some(RawReplacement {
+        tool: "read",
+        suggestion: format!("hzr rtk -- read {file}"),
+        rationale: SMART_READ_RATIONALE,
+    })
+}
 
 fn sed_replacement(arguments: &[String]) -> Option<RawReplacement> {
     let mut quiet = false;

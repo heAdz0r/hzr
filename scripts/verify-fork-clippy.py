@@ -17,11 +17,10 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 141
-# Recomputed for the 0.3.7 accounting and bounded-read delta. The inherited warning set
+# Recomputed for the 0.4.1 typed read/search attribution delta. The inherited warning set
 # remains 141 hits with no new lint codes; only recorded line positions in tracking.rs,
-# read.rs, read_digest.rs, rgai_cmd.rs, and memory_layer moved. The ratchet still rejects
-# later drift.
-EXPECTED_SHA256 = "1acd4d83614e70c681f1c2975196c16fc4abe0c198e5a98dfdd6f1fe24e7bab1"
+# read.rs, and rgai_cmd.rs moved. The ratchet still rejects later drift.
+EXPECTED_SHA256 = "2438d99c815bb397a7f26acac8ac98137ef50893af7a69505e982bb376c2a9a9"
 
 
 def main() -> int:

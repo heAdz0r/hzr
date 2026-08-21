@@ -7,11 +7,12 @@ use uuid::Uuid;
 mod api;
 
 pub use api::{
-    AccountingChannel, AccountingMeasurement, AccountingRoute, CodecApiRequest, CommandTermination,
-    ContextPlanApiRequest, ContextPlanApiResponse, ContextWarning, ContextWarningCode,
-    DashboardEstimatedEfficiency, DashboardHelpCommand, DashboardIndexArtifacts,
-    DashboardIndexObservatory, DashboardIndexWatcher, DashboardLocalActivity,
-    DashboardLocalOperation, DashboardMemoryDetail, DashboardMemoryEdge,
+    AccountingAttribution, AccountingChannel, AccountingFilterLevel, AccountingMeasurement,
+    AccountingOperationKind, AccountingOperationMode, AccountingRoute, AccountingStage,
+    CodecApiRequest, CommandTermination, ContextPlanApiRequest, ContextPlanApiResponse,
+    ContextWarning, ContextWarningCode, DashboardEstimatedEfficiency, DashboardHelpCommand,
+    DashboardIndexArtifacts, DashboardIndexObservatory, DashboardIndexWatcher,
+    DashboardLocalActivity, DashboardLocalOperation, DashboardMemoryDetail, DashboardMemoryEdge,
     DashboardMemoryObservatory, DashboardMemoryRetrieval, DashboardMemoryTopic,
     DashboardMemoryTopicDetails, DashboardObservedUsage, DashboardOperationRoute, DashboardProject,
     DashboardProjectArtifacts, DashboardProjectState, DashboardProviderReceiptState,

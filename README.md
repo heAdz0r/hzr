@@ -4,14 +4,14 @@
 
 ![HZR control-plane banner](docs/assets/hzr-hero.png)
 
-[![Version](https://img.shields.io/badge/version-0.4.1-e64a19)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.4.2-e64a19)](Cargo.toml)
 [![CI](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg)](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/heAdz0r/hzr?include_prereleases&color=ef6c00)](https://github.com/heAdz0r/hzr/releases)
+[![Release](https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00)](https://github.com/heAdz0r/hzr/releases)
 [![License](https://img.shields.io/badge/control_plane-Apache--2.0-37474f)](LICENSE)
 
 HZR is an independent product from heAdz0r that turns disparate layers of agent optimization into one controlled execution path. A single control plane handles search, memory, context budget, execution, response density, and usage accounting—without rework or competing loops.
 
-**The core invariant of the 0.4.1 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
+**The core invariant of the 0.4.2 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
 
 > HZR does not claim unverified percentage savings. Functional and supply-chain gates are defined and repeatedly tested before release; the end-to-end economic effect must still be measured through paired, provider-billed benchmarks on identical tasks.
 
@@ -19,7 +19,7 @@ HZR is an independent product from heAdz0r that turns disparate layers of agent 
 
 HZR optimizes for an agent reaching the correct next action, not for the smallest output in isolation. A bounded response must say what it represents, what was omitted, how much source it covers, and how to recover exact evidence. Mutations need the same discipline: exact preconditions, atomic replacement, idempotent retries, dry-run, and structured outcomes.
 
-| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.4.1` |
+| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.4.2` |
 |---|---|---|---|
 | Understand a large Markdown file quickly | no common bounded contract | full file in the recorded case | self-described digest: bounded lead prose, omitted-content marker, source lines/bytes, section coverage, exact recovery hint |
 | Recover authoritative content | command-specific full output | full output | `--level none` is byte-exact; `--from`/`--to` gives an exact focused range |
@@ -85,13 +85,13 @@ Published artifacts:
 | macOS | Apple Silicon | Available | native release workflow + clean-install smoke |
 | macOS | Intel | Available | native release workflow + clean-install smoke |
 
-No Windows artifact is provided in 0.4.1. Release scripts build native artifacts rather than cross-compiling them.
+No Windows artifact is provided in 0.4.2. Release scripts build native artifacts rather than cross-compiling them.
 
 Download the installer, review it, then run it:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.4.1/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.4.2/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -104,7 +104,7 @@ The installer downloads the platform artifact and `SHA256SUMS` from GitHub Relea
 
 ```text
 ~/.local/share/hzr/
-  versions/v0.4.1-<platform>/   # version-scoped self-contained bundle
+  versions/v0.4.2-<platform>/   # version-scoped self-contained bundle
   current -> versions/...
 
 ~/.local/bin/
@@ -139,7 +139,7 @@ binaries are not required.
 
 | Component | Pin | Distribution role |
 |---|---:|---|
-| HZR | 0.4.1 | public CLI + daemon |
+| HZR | 0.4.2 | public CLI + daemon |
 | HZR fork-core RTK | 0.44.1-fork.1 | private native engine; complete inherited surface |
 | grepai | 0.35.0 + ownership patch | private native engine |
 | ICM | 0.10.61 + lockfile patch | private native engine |
@@ -161,9 +161,11 @@ hzr daemon service status
 hzr daemon status
 ```
 
-`hzr doctor` is read-only by default. `--fix` uses the same transactional index migration as
-`hzr migrate apply`, retains a byte-verified backup, and refuses duplicate or conflicting indexes
-without mutation.
+`hzr doctor` is read-only by default. It verifies that the active global or project-local managed
+blocks exactly match the running HZR contract and reports legacy local RTK/ICM directives that
+would override it. `hzr init --if-needed` refreshes those owned regions while preserving project
+rules. `doctor --fix` is limited to the transactional index migration used by `hzr migrate apply`:
+it retains a byte-verified backup and refuses duplicate or conflicting indexes without mutation.
 
 Release installer creates a user service (`launchd` on macOS, `systemd --user` on Linux)
 and binds it to stable `current/bin/hzrd`. For source-only foreground development
@@ -186,8 +188,8 @@ redacted project-scoped memory topology; full record content is available only f
 bearer-authenticated memory-detail API. An operation expands into the exact ledger command, route, working directory, latency,
 and observed agent/session attribution. Historical attribution remains explicitly `Unattributed`.
 RAW operations are visible, receive zero savings credit, and show a first-class HZR replacement
-when one exists. `hzr init` refreshes
-the current project's private `workspace.json` registration and ensures the production
+when one exists. `hzr init` refreshes the active managed instruction scope, migrates a detected
+legacy local RTK block, updates the current project's private `workspace.json` registration, and ensures the production
 service is running when invoked from an installed bundle. Source builds never install a
 user service implicitly; use `hzr daemon serve`. `HZR_INSTALL_SERVICE=0` remains the explicit
 opt-out for release installation.
@@ -323,7 +325,7 @@ imports each source row once, and saves the content-addressed snapshot with a JS
 ## Basic commands
 
 ```text
-hzr init                              workspace registry + data layout + visualizer service
+hzr init                              workspace data + managed instructions + visualizer service
 hzr enable|disable                    project-only activation for one workspace
 hzr activation status                 list activation mode and enabled workspaces
 hzr install|uninstall                 adoption, hooks, instructions, and service startup
@@ -504,7 +506,7 @@ contract is in [HZR.md](HZR.md).
 Standards baseline: [MCP 2025-11-25 lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
 and [tool contracts](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
 
-The MCP layer in 0.4.1 is a stateless stdio gateway: it stores no data of its own
+The MCP layer in 0.4.2 is a stateless stdio gateway: it stores no data of its own
 and does not spawn internal engines. Each client process terminates at EOF,
 while durable ownership remains with production `hzrd`; the installer migrates direct ICM
 registrations, and `hzr doctor` verifies the service lifecycle.
@@ -542,7 +544,7 @@ Contributors need Rust 1.85+, Go (CI pin 1.24.2), Git, Bash, curl and standard U
 scripts/build-bundle.sh "$PWD/dist"
 scripts/package-release.sh "$PWD/dist" "$PWD/dist-release"
 HZR_RELEASE_ARCHIVE="$(find "$PWD/dist-release" -maxdepth 1 \
-  -name 'hzr-v0.4.1-*.tar.gz' -print -quit)"
+  -name 'hzr-v0.4.2-*.tar.gz' -print -quit)"
 scripts/smoke-install.sh "$HZR_RELEASE_ARCHIVE" "$PWD/dist-release/SHA256SUMS"
 ```
 
@@ -568,7 +570,7 @@ Do not run `cargo test` directly inside `fork-core/rtk`: the official gate creat
 
 ## Verifiable guarantees and fair boundaries
 
-|Guarantee|Status 0.4.1|
+|Guarantee|Status 0.4.2|
 |---|---|
 |Full fork baseline and current engine have verifiable identity|implemented|
 |Stock RTK is missing from the production path|implemented|

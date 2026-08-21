@@ -17,7 +17,9 @@ use tokio::time::timeout;
 
 use crate::cli::ServiceCommand;
 use crate::client::DaemonClient;
-use crate::{adoption, client_config, foreign, hook_runner, instructions, prefix, service};
+use crate::{
+    activation, adoption, client_config, foreign, hook_runner, instructions, prefix, service,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -102,6 +104,49 @@ fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
     }
 }
 
+fn instruction_health_check(
+    name: &str,
+    surface: instructions::Surface,
+    path: &Path,
+) -> DoctorCheck {
+    match instructions::audit(surface, path) {
+        Ok(report) if report.healthy() => check(name, CheckStatus::Pass, report.path.display()),
+        Ok(report) => {
+            let mut reasons = Vec::new();
+            if !report.installed {
+                reasons.push("HZR contract block is absent".to_owned());
+            }
+            if report.installed && !report.current {
+                reasons.push("managed routing policy is stale".to_owned());
+            }
+            if report.installed && !report.contract_readable {
+                reasons.push(match &report.contract_path {
+                    Some(contract) => {
+                        format!("referenced contract {} is unreadable", contract.display())
+                    }
+                    None => "block references no contract asset".to_owned(),
+                });
+            }
+            if !report.conflicting_mandates.is_empty() {
+                reasons.push(format!(
+                    "legacy directives still active outside the managed block: {}",
+                    report.conflicting_mandates.join(", ")
+                ));
+            }
+            check(
+                name,
+                CheckStatus::Error,
+                format!(
+                    "{}: {}; run `hzr init --if-needed`",
+                    report.path.display(),
+                    reasons.join("; ")
+                ),
+            )
+        }
+        Err(error) => check(name, CheckStatus::Warning, error),
+    }
+}
+
 pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> DoctorReport {
     let mut checks = Vec::new();
     match adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
@@ -156,52 +201,71 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         Err(error) => checks.push(check("hzr_on_path", CheckStatus::Warning, error)),
     }
     // Agent instructions are what make an agent *prefer* hzr; hooks alone only
-    // rewrite Bash, so a missing contract is a real adoption gap, not cosmetic.
-    for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
-        let name = match surface {
-            instructions::Surface::Claude => "claude_instructions",
-            instructions::Surface::Codex => "codex_instructions",
-        };
-        // A BEGIN marker alone is not adoption: the referenced contract must be readable
-        // and no legacy mandate may survive beside it. Marker + conflict is a failure.
-        match surface
-            .default_path()
-            .and_then(|path| instructions::audit(&path))
-        {
-            Ok(report) if report.healthy() => {
-                checks.push(check(name, CheckStatus::Pass, report.path.display()))
+    // rewrite Bash. All-project activation uses the two global surfaces. Selected
+    // activation uses workspace-local surfaces so disabled projects stay untouched.
+    let workspace_enabled = activation::is_enabled(config, workspace)
+        .await
+        .unwrap_or(false);
+    match config.activation.mode {
+        hzr_core::ActivationMode::All => {
+            for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
+                let name = match surface {
+                    instructions::Surface::Claude => "claude_instructions",
+                    instructions::Surface::Codex => "codex_instructions",
+                };
+                match surface.default_path() {
+                    Ok(path) => checks.push(instruction_health_check(name, surface, &path)),
+                    Err(error) => checks.push(check(name, CheckStatus::Warning, error)),
+                }
             }
-            Ok(report) => {
-                let mut reasons = Vec::new();
-                if !report.installed {
-                    reasons.push("HZR contract block is absent".to_owned());
+            // A leftover local block or legacy RTK/ICM mandate overrides the global contract.
+            // Absence is the normal all-project state and does not need another check.
+            for (surface, path) in activation::local_instruction_paths(workspace) {
+                match instructions::audit(surface, &path) {
+                    Ok(report) if report.installed => checks.push(instruction_health_check(
+                        match surface {
+                            instructions::Surface::Claude => "workspace_claude_instructions",
+                            instructions::Surface::Codex => "workspace_codex_instructions",
+                        },
+                        surface,
+                        &path,
+                    )),
+                    Ok(report) if !report.conflicting_mandates.is_empty() => checks.push(check(
+                        match surface {
+                            instructions::Surface::Claude => "workspace_claude_instructions",
+                            instructions::Surface::Codex => "workspace_codex_instructions",
+                        },
+                        CheckStatus::Error,
+                        format!(
+                            "{}: legacy directives override the global HZR contract: {}; run `hzr init --if-needed`",
+                            path.display(),
+                            report.conflicting_mandates.join(", ")
+                        ),
+                    )),
+                    Ok(_) => {}
+                    Err(error) => {
+                        checks.push(check("workspace_instructions", CheckStatus::Warning, error))
+                    }
                 }
-                if report.installed && !report.contract_readable {
-                    reasons.push(match &report.contract_path {
-                        Some(contract) => {
-                            format!("referenced contract {} is unreadable", contract.display())
-                        }
-                        None => "block references no contract asset".to_owned(),
-                    });
-                }
-                if !report.conflicting_mandates.is_empty() {
-                    reasons.push(format!(
-                        "legacy directives still active outside the managed block: {}",
-                        report.conflicting_mandates.join(", ")
-                    ));
-                }
-                checks.push(check(
-                    name,
-                    CheckStatus::Error,
-                    format!(
-                        "{}: {}; run `hzr install --force`",
-                        report.path.display(),
-                        reasons.join("; ")
-                    ),
+            }
+        }
+        hzr_core::ActivationMode::Selected if workspace_enabled => {
+            for (surface, path) in activation::local_instruction_paths(workspace) {
+                checks.push(instruction_health_check(
+                    match surface {
+                        instructions::Surface::Claude => "workspace_claude_instructions",
+                        instructions::Surface::Codex => "workspace_codex_instructions",
+                    },
+                    surface,
+                    &path,
                 ));
             }
-            Err(error) => checks.push(check(name, CheckStatus::Warning, error)),
         }
+        hzr_core::ActivationMode::Selected => checks.push(check(
+            "workspace_instructions",
+            CheckStatus::Pass,
+            "workspace is disabled; no local HZR contract is required",
+        )),
     }
     // Direct client ICM registration is a second memory writer regardless of what the
     // instruction files say, so it is audited separately from the text.
@@ -988,12 +1052,32 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use crate::client_config::{Client, ClientMcpStatus};
+    use crate::instructions::{self, Surface};
 
     use super::{
         CheckStatus, attest_active_bundle, bounded, claude_code_mcp_check,
         direct_icm_registration_detail, hook_ownership_check, index_readiness_check,
-        integration_layout, repair_legacy_index, workspace_binding_check,
+        instruction_health_check, integration_layout, repair_legacy_index, workspace_binding_check,
     };
+
+    #[test]
+    fn acceptance_gate_doctor_rejects_stale_managed_instructions() {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let contract = fixture.path().join("HZR.md");
+        let target = fixture.path().join("AGENTS.md");
+        fs::write(&contract, "contract").expect("contract fixture");
+        instructions::install(Surface::Codex, &target, &contract, false, true)
+            .expect("managed instruction fixture");
+        let stale = fs::read_to_string(&target)
+            .expect("managed instructions")
+            .replace("raw` is forbidden", "raw` is preferred");
+        fs::write(&target, stale).expect("stale instructions");
+
+        let result = instruction_health_check("codex_instructions", Surface::Codex, &target);
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.detail.contains("managed routing policy is stale"));
+        assert!(result.detail.contains("hzr init --if-needed"));
+    }
 
     fn index_status(
         initialized: bool,

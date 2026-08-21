@@ -12,6 +12,47 @@ use anyhow::{Context, Result};
 use std::io::Write as IoWrite;
 use std::path::Path;
 
+fn tracked_filter_level(level: FilterLevel) -> tracking::ReadFilterLevel {
+    match level {
+        FilterLevel::None => tracking::ReadFilterLevel::None,
+        FilterLevel::Minimal => tracking::ReadFilterLevel::Minimal,
+        FilterLevel::Aggressive => tracking::ReadFilterLevel::Aggressive,
+    }
+}
+
+fn read_attribution(
+    level: FilterLevel,
+    from: Option<usize>,
+    to: Option<usize>,
+    max_lines: Option<usize>,
+    tail_lines: Option<usize>,
+    source_bytes: Option<u64>,
+) -> tracking::OperationAttribution {
+    let mode = if from.is_some() || to.is_some() {
+        tracking::OperationMode::ReadRange
+    } else if max_lines.is_some() {
+        tracking::OperationMode::ReadHead
+    } else if tail_lines.is_some() {
+        tracking::OperationMode::ReadTail
+    } else if level == FilterLevel::None {
+        tracking::OperationMode::ReadFull
+    } else {
+        tracking::OperationMode::ReadFiltered
+    };
+    tracking::OperationAttribution {
+        operation: tracking::OperationKind::Read,
+        mode,
+        stage: tracking::AccountingStage::InternalTransport,
+        include_content: None,
+        limit: None,
+        path_scope_count: None,
+        filter_level: Some(tracked_filter_level(level)),
+        from_line: from,
+        to_line: to,
+        source_bytes,
+    }
+}
+
 // Re-export ReadMode from read_types for backward compat with main.rs
 pub use crate::read_types::ReadMode;
 
@@ -41,6 +82,14 @@ pub fn run(
 ) -> Result<()> {
     let run_start = std::time::Instant::now();
     let timer = tracking::TimedExecution::start();
+    let attribution = read_attribution(
+        level,
+        from,
+        to,
+        max_lines,
+        tail_lines,
+        std::fs::metadata(file).ok().map(|metadata| metadata.len()),
+    );
 
     if verbose > 0 {
         eprintln!("Reading: {} (filter: {})", file.display(), level);
@@ -84,12 +133,13 @@ pub fn run(
             let output_tokens = tracking::estimate_tokens(&output);
             let elapsed_ms = run_start.elapsed().as_millis() as u64;
             if let Ok(tracker) = tracking::Tracker::new() {
-                let _ = tracker.record(
-                    &format!("cat {}", file.display()),
+                let _ = tracker.record_attributed(
+                    "read <path omitted>",
                     "rtk read (cache)",
                     input_tokens,
                     output_tokens,
                     elapsed_ms,
+                    attribution,
                 );
             }
             return Ok(());
@@ -124,11 +174,12 @@ pub fn run(
         let preview = read_source::format_binary_preview(&content_bytes);
         println!("{preview}");
         let input_marker = format!("[binary:{} bytes]", content_bytes.len());
-        timer.track(
-            &format!("cat {}", file.display()),
+        timer.track_attributed(
+            "read <path omitted>",
             "rtk read",
             &input_marker,
             &preview,
+            attribution,
         );
         return Ok(());
     }
@@ -151,11 +202,12 @@ pub fn run(
             if let Some(key) = cache_key.as_deref() {
                 read_cache::store_read_cache(key, &shown);
             }
-            timer.track(
-                &format!("cat {}", file.display()),
+            timer.track_attributed(
+                "read <path omitted>",
                 "rtk read",
                 &content_str,
                 &shown,
+                attribution,
             );
             return Ok(());
         }
@@ -178,11 +230,12 @@ pub fn run(
                     if let Some(key) = cache_key.as_deref() {
                         read_cache::store_read_cache(key, &shown);
                     }
-                    timer.track(
-                        &format!("cat {}", file.display()),
+                    timer.track_attributed(
+                        "read <path omitted>",
                         "rtk read",
                         &input,
                         &shown,
+                        attribution,
                     );
                     return Ok(());
                 }
@@ -202,11 +255,12 @@ pub fn run(
             .write_all(&content_bytes)
             .context("Failed to write output")?;
         let input = String::from_utf8_lossy(&content_bytes);
-        timer.track(
-            &format!("cat {}", file.display()),
+        timer.track_attributed(
+            "read <path omitted>",
             "rtk read",
             &input,
             &input,
+            attribution,
         );
         return Ok(());
     }
@@ -304,11 +358,12 @@ pub fn run(
         }
         println!("{notice}");
     }
-    timer.track(
-        &format!("cat {}", file.display()),
+    timer.track_attributed(
+        "read <path omitted>",
         "rtk read",
         &content,
         &shown,
+        attribution,
     );
     Ok(())
 }
@@ -330,8 +385,8 @@ pub fn run_changed(file: &Path, revision: Option<&str>, context: usize, verbose:
 
     let hunks = read_changed::git_diff_hunks(file, revision, context)?;
     let output = read_changed::render_changed_hunks(&hunks, file);
-    let content = std::fs::read(file)
-        .with_context(|| format!("Failed to read file: {}", file.display()))?;
+    let content =
+        std::fs::read(file).with_context(|| format!("Failed to read file: {}", file.display()))?;
     let content = String::from_utf8_lossy(&content);
     let (baseline, shown) = changed_tracking_view(&content, &output);
 
@@ -342,11 +397,27 @@ pub fn run_changed(file: &Path, revision: Option<&str>, context: usize, verbose:
     } else {
         "changed"
     };
-    timer.track(
-        &format!("cat {}", file.display()),
+    timer.track_attributed(
+        "read <path omitted>",
         &format!("rtk read --{mode_label}"),
         baseline,
         shown,
+        tracking::OperationAttribution {
+            operation: tracking::OperationKind::Read,
+            mode: if revision.is_some() {
+                tracking::OperationMode::ReadSince
+            } else {
+                tracking::OperationMode::ReadChanged
+            },
+            stage: tracking::AccountingStage::InternalTransport,
+            include_content: None,
+            limit: None,
+            path_scope_count: None,
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: Some(content.len() as u64),
+        },
     );
     Ok(())
 }
@@ -401,8 +472,8 @@ pub fn run_symbols(file: &Path, mode: &ReadMode, verbose: u8) -> Result<()> {
 
     println!("{output}");
 
-    timer.track(
-        &format!("cat {}", file.display()),
+    timer.track_attributed(
+        "read <path omitted>",
         &format!(
             "rtk read --{}",
             if matches!(mode, ReadMode::Outline) {
@@ -413,6 +484,22 @@ pub fn run_symbols(file: &Path, mode: &ReadMode, verbose: u8) -> Result<()> {
         ),
         &content,
         &output,
+        tracking::OperationAttribution {
+            operation: tracking::OperationKind::Read,
+            mode: if matches!(mode, ReadMode::Outline) {
+                tracking::OperationMode::ReadOutline
+            } else {
+                tracking::OperationMode::ReadSymbols
+            },
+            stage: tracking::AccountingStage::InternalTransport,
+            include_content: None,
+            limit: None,
+            path_scope_count: None,
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: Some(content.len() as u64),
+        },
     );
     Ok(())
 }
@@ -434,12 +521,26 @@ pub fn run_stdin(
 
     // Read stdin bytes
     let bytes = read_source::read_stdin_bytes()?;
+    let attribution = read_attribution(
+        level,
+        from,
+        to,
+        max_lines,
+        tail_lines,
+        Some(bytes.len() as u64),
+    );
 
     if read_source::looks_binary(&bytes) {
         let preview = read_source::format_binary_preview(&bytes);
         println!("{preview}");
         let input_marker = format!("[binary:{} bytes]", bytes.len());
-        timer.track("cat - (stdin)", "rtk read -", &input_marker, &preview);
+        timer.track_attributed(
+            "read stdin",
+            "rtk read -",
+            &input_marker,
+            &preview,
+            attribution,
+        );
         return Ok(());
     }
 
@@ -451,7 +552,7 @@ pub fn run_stdin(
             .write_all(&ranged)
             .context("Failed to write output")?;
         let input = String::from_utf8_lossy(&ranged);
-        timer.track("cat - (stdin)", "rtk read -", &input, &input);
+        timer.track_attributed("read stdin", "rtk read -", &input, &input, attribution);
         return Ok(());
     }
 
@@ -504,7 +605,7 @@ pub fn run_stdin(
     let shown = crate::guard::never_worse(&raw, &rtk_output);
     print!("{shown}");
 
-    timer.track("cat - (stdin)", "rtk read -", &raw, shown);
+    timer.track_attributed("read stdin", "rtk read -", &raw, shown, attribution);
     Ok(())
 }
 
@@ -540,6 +641,31 @@ mod tests {
     }
 
     #[test]
+    fn read_attribution_distinguishes_full_filter_range_and_bounds() {
+        let full = read_attribution(FilterLevel::None, None, None, None, None, Some(100));
+        assert_eq!(full.mode, tracking::OperationMode::ReadFull);
+        assert_eq!(full.filter_level, Some(tracking::ReadFilterLevel::None));
+        assert_eq!(full.source_bytes, Some(100));
+
+        assert_eq!(
+            read_attribution(FilterLevel::Minimal, None, None, None, None, None).mode,
+            tracking::OperationMode::ReadFiltered
+        );
+        assert_eq!(
+            read_attribution(FilterLevel::None, Some(3), Some(9), None, None, None).mode,
+            tracking::OperationMode::ReadRange
+        );
+        assert_eq!(
+            read_attribution(FilterLevel::None, None, None, Some(10), None, None).mode,
+            tracking::OperationMode::ReadHead
+        );
+        assert_eq!(
+            read_attribution(FilterLevel::None, None, None, None, Some(10), None).mode,
+            tracking::OperationMode::ReadTail
+        );
+    }
+
+    #[test]
     fn test_keep_tail_lines_no_trailing_newline() {
         assert_eq!(keep_tail_lines("a\nb\nc", 2), "b\nc");
     }
@@ -568,7 +694,10 @@ mod tests {
         let rendered_hunks = "@@ -1 +1 @@\n-one\n+two\n";
         let (baseline, shown) = changed_tracking_view(file_content, rendered_hunks);
         assert_eq!(baseline, file_content);
-        assert_eq!(shown, file_content, "changed mode must honor never-worse output");
+        assert_eq!(
+            shown, file_content,
+            "changed mode must honor never-worse output"
+        );
     }
 
     #[test]

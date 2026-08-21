@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use directories::BaseDirs;
-use hzr_protocol::{TraceId, Usage};
+use hzr_protocol::{
+    AccountingAttribution, AccountingOperationKind, AccountingOperationMode, AccountingStage,
+    TraceId, Usage,
+};
 
 use crate::operation::{
     OperationChannel, OperationMeasurement, OperationRoute, classify_operation,
@@ -60,7 +63,17 @@ pub struct EfficiencySummary {
     pub native_unaccounted_operations: u64,
     pub unmeasured_bypass_operations: u64,
     pub by_channel: BTreeMap<String, u64>,
+    pub by_mode: Vec<OperationModeSummary>,
     pub by_command: Vec<EfficiencyCommandSummary>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OperationModeSummary {
+    pub operation: AccountingOperationKind,
+    pub mode: AccountingOperationMode,
+    pub stage: AccountingStage,
+    pub operations: u64,
+    pub delivered_tokens_estimated: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -138,6 +151,12 @@ pub struct OperationAttribution<'a> {
     pub route: OperationRoute,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct DetailedOperationAttribution<'a> {
+    pub attribution: OperationAttribution<'a>,
+    pub detail: Option<&'a AccountingAttribution>,
+}
+
 /// Operations that never reached the optimizer, split out of the reduction ratio they
 /// would otherwise silently dilute.
 ///
@@ -177,6 +196,41 @@ fn percentage_of(part: u64, whole: u64) -> f64 {
         return 0.0;
     }
     part as f64 * 100.0 / whole as f64
+}
+
+fn parse_operation_kind(value: &str) -> Option<AccountingOperationKind> {
+    match value {
+        "search" => Some(AccountingOperationKind::Search),
+        "read" => Some(AccountingOperationKind::Read),
+        _ => None,
+    }
+}
+
+fn parse_operation_mode(value: &str) -> Option<AccountingOperationMode> {
+    match value {
+        "search_auto" => Some(AccountingOperationMode::SearchAuto),
+        "search_semantic" => Some(AccountingOperationMode::SearchSemantic),
+        "search_exact" => Some(AccountingOperationMode::SearchExact),
+        "search_builtin" => Some(AccountingOperationMode::SearchBuiltin),
+        "read_full" => Some(AccountingOperationMode::ReadFull),
+        "read_filtered" => Some(AccountingOperationMode::ReadFiltered),
+        "read_range" => Some(AccountingOperationMode::ReadRange),
+        "read_head" => Some(AccountingOperationMode::ReadHead),
+        "read_tail" => Some(AccountingOperationMode::ReadTail),
+        "read_outline" => Some(AccountingOperationMode::ReadOutline),
+        "read_symbols" => Some(AccountingOperationMode::ReadSymbols),
+        "read_changed" => Some(AccountingOperationMode::ReadChanged),
+        "read_since" => Some(AccountingOperationMode::ReadSince),
+        _ => None,
+    }
+}
+
+fn parse_accounting_stage(value: &str) -> Option<AccountingStage> {
+    match value {
+        "internal_transport" => Some(AccountingStage::InternalTransport),
+        "final_delivery" => Some(AccountingStage::FinalDelivery),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -324,7 +378,17 @@ impl Ledger {
                     session_id TEXT,
                     channel TEXT NOT NULL DEFAULT 'hook_cli',
                     measurement TEXT NOT NULL DEFAULT 'estimated',
-                    route TEXT
+                    route TEXT,
+                    operation_kind TEXT,
+                    operation_mode TEXT,
+                    accounting_stage TEXT,
+                    search_include_content INTEGER,
+                    result_limit INTEGER,
+                    path_scope_count INTEGER,
+                    filter_level TEXT,
+                    range_from INTEGER,
+                    range_to INTEGER,
+                    source_bytes INTEGER
                  );
                  CREATE INDEX IF NOT EXISTS idx_timestamp ON commands(timestamp);
                  CREATE INDEX IF NOT EXISTS idx_project_path_timestamp
@@ -368,6 +432,20 @@ impl Ledger {
             [],
         );
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN route TEXT", []);
+        for column in [
+            "operation_kind TEXT",
+            "operation_mode TEXT",
+            "accounting_stage TEXT",
+            "search_include_content INTEGER",
+            "result_limit INTEGER",
+            "path_scope_count INTEGER",
+            "filter_level TEXT",
+            "range_from INTEGER",
+            "range_to INTEGER",
+            "source_bytes INTEGER",
+        ] {
+            let _ = connection.execute(&format!("ALTER TABLE commands ADD COLUMN {column}"), []);
+        }
         // Идемпотентно: существующие БД получают колонку; повторный ALTER безопасно игнорируется.
         let _ = connection.execute(
             "ALTER TABLE usage_records ADD COLUMN project_path TEXT NOT NULL DEFAULT ''",
@@ -558,6 +636,7 @@ impl Ledger {
                         native_unaccounted_operations: 0,
                         unmeasured_bypass_operations: 0,
                         by_channel: BTreeMap::new(),
+                        by_mode: Vec::new(),
                         by_command: Vec::new(),
                     })
                 },
@@ -650,7 +729,57 @@ impl Ledger {
             .map_err(LedgerError::Database)?
             .collect::<Result<BTreeMap<_, _>, _>>()
             .map_err(LedgerError::Database)?;
+        summary.by_mode = self.operation_modes_summary(project_path)?;
         Ok(summary)
+    }
+
+    fn operation_modes_summary(
+        &self,
+        project_path: Option<&str>,
+    ) -> Result<Vec<OperationModeSummary>, LedgerError> {
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT operation_kind, operation_mode, accounting_stage, COUNT(*),
+                        COALESCE(SUM(output_tokens), 0)
+                   FROM commands
+                  WHERE operation_kind IS NOT NULL
+                    AND operation_mode IS NOT NULL
+                    AND accounting_stage IS NOT NULL
+                    AND (?1 IS NULL OR project_path = ?1
+                         OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                  GROUP BY operation_kind, operation_mode, accounting_stage
+                  ORDER BY operation_kind, operation_mode, accounting_stage",
+            )
+            .map_err(LedgerError::Database)?;
+        let rows = statement
+            .query_map(
+                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, u64>(3)?,
+                        row.get::<_, u64>(4)?,
+                    ))
+                },
+            )
+            .map_err(LedgerError::Database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LedgerError::Database)?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(operation, mode, stage, operations, delivered)| {
+                Some(OperationModeSummary {
+                    operation: parse_operation_kind(&operation)?,
+                    mode: parse_operation_mode(&mode)?,
+                    stage: parse_accounting_stage(&stage)?,
+                    operations,
+                    delivered_tokens_estimated: delivered,
+                })
+            })
+            .collect())
     }
 
     /// Record one HZR-owned operation in the same table the pinned engine writes to.
@@ -719,11 +848,40 @@ impl Ledger {
         execution_ms: u64,
         attribution: OperationAttribution<'_>,
     ) -> Result<(), LedgerError> {
+        self.record_operation_attributed_with_detail(
+            original_command,
+            recorded_command,
+            input_tokens,
+            output_tokens,
+            execution_ms,
+            DetailedOperationAttribution {
+                attribution,
+                detail: None,
+            },
+        )
+    }
+
+    pub fn record_operation_attributed_with_detail(
+        &self,
+        original_command: &str,
+        recorded_command: &str,
+        input_tokens: u64,
+        output_tokens: u64,
+        execution_ms: u64,
+        accounting: DetailedOperationAttribution<'_>,
+    ) -> Result<(), LedgerError> {
+        let attribution = accounting.attribution;
+        let detail = accounting.detail;
         if attribution.measurement == OperationMeasurement::Unmeasured
             && (input_tokens != 0 || output_tokens != 0)
         {
             return Err(LedgerError::InvalidOperation(
                 "unmeasured operations cannot carry invented token counts".into(),
+            ));
+        }
+        if detail.is_some_and(|detail| detail.mode.operation() != detail.operation) {
+            return Err(LedgerError::InvalidOperation(
+                "operation mode does not match its operation family".into(),
             ));
         }
         let saved = input_tokens.saturating_sub(output_tokens);
@@ -737,9 +895,12 @@ impl Ledger {
                 "INSERT INTO commands (
                     timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
                     saved_tokens, savings_pct, exec_time_ms, project_path, agent, session_id,
-                    channel, measurement, route
+                    channel, measurement, route, operation_kind, operation_mode,
+                    accounting_stage, search_include_content, result_limit, path_scope_count,
+                    filter_level, range_from, range_to, source_bytes
                  ) VALUES (
-                    datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13
+                    datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                    ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
                  )",
                 params![
                     original_command,
@@ -755,6 +916,16 @@ impl Ledger {
                     attribution.channel.as_str(),
                     attribution.measurement.as_str(),
                     attribution.route.as_str(),
+                    detail.map(|detail| detail.operation.as_str()),
+                    detail.map(|detail| detail.mode.as_str()),
+                    detail.map(|detail| detail.stage.as_str()),
+                    detail.and_then(|detail| detail.include_content),
+                    detail.and_then(|detail| detail.limit),
+                    detail.and_then(|detail| detail.path_scope_count),
+                    detail.and_then(|detail| detail.filter_level.map(|level| level.as_str())),
+                    detail.and_then(|detail| detail.from_line),
+                    detail.and_then(|detail| detail.to_line),
+                    detail.and_then(|detail| detail.source_bytes),
                 ],
             )
             .map_err(LedgerError::Database)?;
@@ -1503,14 +1674,109 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::operation::{OperationChannel, OperationMeasurement, OperationRoute};
-    use hzr_protocol::{ActualUsage, EstimatedUsage, TraceId, Usage};
+    use hzr_protocol::{
+        AccountingAttribution, AccountingOperationKind, AccountingOperationMode, AccountingStage,
+        ActualUsage, EstimatedUsage, TraceId, Usage,
+    };
     use rusqlite::Connection;
     use tempfile::tempdir;
 
     use super::{
-        Ledger, LedgerRecord, OperationAttribution, PriceTable, ProjectOperationRoute,
-        operation_identity,
+        DetailedOperationAttribution, Ledger, LedgerRecord, OperationAttribution, PriceTable,
+        ProjectOperationRoute, operation_identity,
     };
+
+    #[test]
+    fn operation_attribution_migrates_and_reports_without_sensitive_payloads() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("ledger.sqlite");
+        let legacy = Connection::open(&path).expect("legacy database");
+        legacy
+            .execute_batch(
+                "CREATE TABLE commands (
+                    id INTEGER PRIMARY KEY, timestamp TEXT NOT NULL, original_cmd TEXT NOT NULL,
+                    rtk_cmd TEXT NOT NULL, input_tokens INTEGER NOT NULL,
+                    output_tokens INTEGER NOT NULL, saved_tokens INTEGER NOT NULL,
+                    savings_pct REAL NOT NULL, exec_time_ms INTEGER DEFAULT 0,
+                    project_path TEXT DEFAULT '', agent TEXT, session_id TEXT,
+                    channel TEXT NOT NULL DEFAULT 'hook_cli',
+                    measurement TEXT NOT NULL DEFAULT 'estimated', route TEXT
+                 );",
+            )
+            .expect("legacy schema");
+        drop(legacy);
+
+        let ledger = Ledger::open(&path).expect("migrated ledger");
+        let detail = AccountingAttribution {
+            operation: AccountingOperationKind::Search,
+            mode: AccountingOperationMode::SearchExact,
+            stage: AccountingStage::FinalDelivery,
+            include_content: Some(false),
+            limit: Some(7),
+            path_scope_count: Some(1),
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: None,
+        };
+        ledger
+            .record_operation_attributed_with_detail(
+                "hzr search <query omitted>",
+                "hzr search",
+                12,
+                8,
+                2,
+                DetailedOperationAttribution {
+                    attribution: OperationAttribution {
+                        project_path: "/work",
+                        agent: Some("mcp"),
+                        session_id: Some("session"),
+                        channel: OperationChannel::Mcp,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Optimized,
+                    },
+                    detail: Some(&detail),
+                },
+            )
+            .expect("attributed operation");
+
+        let persisted: (String, String, String, bool, u64, u64) = ledger
+            .connection
+            .query_row(
+                "SELECT operation_kind, operation_mode, accounting_stage,
+                        search_include_content, result_limit, path_scope_count FROM commands",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("persisted dimensions");
+        assert_eq!(
+            persisted,
+            (
+                "search".into(),
+                "search_exact".into(),
+                "final_delivery".into(),
+                false,
+                7,
+                1,
+            )
+        );
+        let summary = ledger.efficiency_summary().expect("efficiency summary");
+        assert_eq!(summary.by_mode.len(), 1);
+        assert_eq!(
+            summary.by_mode[0].mode,
+            AccountingOperationMode::SearchExact
+        );
+        assert_eq!(summary.by_mode[0].delivered_tokens_estimated, 8);
+    }
 
     #[test]
     fn test_accounting_dimensions_are_migrated_and_reported_without_faking_zero_output() {
@@ -1851,7 +2117,7 @@ mod tests {
             retries: 0,
             latency_ms: 10,
             outcome: "accepted".into(),
-            policy_version: "0.4.1".into(),
+            policy_version: "0.4.2".into(),
             cost_microusd: Some(50),
             project_path: String::new(),
         };
@@ -1891,7 +2157,7 @@ mod tests {
             retries: 0,
             latency_ms: 1,
             outcome: "completed".into(),
-            policy_version: "0.4.1".into(),
+            policy_version: "0.4.2".into(),
             cost_microusd: Some(10),
             project_path: path.to_owned(),
         };
@@ -1988,7 +2254,7 @@ mod tests {
                 retries: 0,
                 latency_ms: 1,
                 outcome: "completed".into(),
-                policy_version: "0.4.1".into(),
+                policy_version: "0.4.2".into(),
                 cost_microusd: Some(1),
                 project_path: "/work/a".into(),
             })

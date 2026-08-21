@@ -1,59 +1,58 @@
-# HZR 0.4.1 — First-class routing by default
+# HZR 0.4.2 — Bounded reads and current instructions
 
-HZR 0.4.1 fixes a High Critical utilization defect: managed instructions made RAW the visible
-default for ordinary shell commands, especially in Codex where Claude's `PreToolUse` hook is not
-available. The all-workspace audit found 27,878,506 estimated RAW-delivered tokens, or 43.8128% of
-all observed tool output. In the final seven-day window RAW delivered 7,236,207 tokens versus
-4,442,871 through optimized routes.
+HZR 0.4.2 closes a second High Critical utilization gap: agents could request exact search and
+complete file output as a habit even when semantic discovery, outlines, changed hunks, or exact
+ranges were sufficient. It also makes installed instruction freshness an executable lifecycle
+invariant instead of trusting a managed-block marker.
 
-These are local UTF-8-size estimates, not provider-billed savings. `economic_claim_ready=false`
-remains correct because the audited history contains no provider task receipts.
+The historical ledger cannot produce an exact abuse count because older rows did not preserve
+search/read modes. The frozen audit therefore reports bounds, not billed savings: 11,632 generic
+reads delivered 18,230,797 estimated tokens, including 798 reads above 4,096 tokens that produced
+38.0% of that output. By comparison, 770 outline reads reduced 3,996,067 baseline tokens to
+146,059. The HZR-owned full-contract bootstrap alone caused 114 complete reads and 384,950
+estimated delivered tokens. These are UTF-8-size estimates, not provider billing.
 
 ## What changed
 
-- Agent-originated shell work now defaults to `hzr exec run '<shell command>'`. The canonical
-  policy selects existing filters for `bun`, `cargo`, `ssh`, `git`, `gh`, `find`,
-  `wget`, `ps`, `rg`, and other supported commands while preserving pipes, redirects, and
-  remote command strings.
-- `hzr exec rewrite '<shell command>'` remains the read-only route preview. When it reports an
-  effective first-class route, policy no longer leaves RAW as the agent's default action.
-- Unmarked managed RAW/proxy wrappers are removed byte-for-byte and the untouched payload is sent
-  directly through fork-core rewrite. HZR does not maintain a second list of supported command
-  families. Exact recovery requires the explicit `HZR_RAW_FIDELITY=1` marker.
-- `hzr exec run` forwards only the caller's validated `PATH` into managed execution and preserves
-  it across approval, so a restricted launchd/systemd daemon environment can resolve user
-  toolchains without receiving unrelated environment variables.
-- Conservative text mappings automatically replace simple `nl`, ranged `sed`, and literal
-  `rg` invocations. They reject quoted arguments, regexes, globs, nested shell grammar,
-  unsupported flags, and ambiguous files rather than risk changing command semantics. A safe
-  HZR mapping also takes priority when fork-core would otherwise select its tracked raw proxy.
-- Automatic `cat` replacement uses exact `read --level none`; Markdown content never becomes a
-  digest merely because policy selected the first-class read route.
-- Bundle assembly replaces vulnerable `extract-zip` 2.0.1 in the managed Caveman runtime with a
-  vendored compatible fork that rejects non-empty roots, escaping paths, and symlink components
-  or targets before directory creation. A pinned full-vendor manifest and malicious-archive
-  regression run before the unchanged high-severity npm audit gate.
-- The tag workflow runs the `acceptance_gate_no_raw` matrix in `hzr-core`, `hzr-cli`, and
-  `hzr-daemon` before any release artifacts can be published.
-- The audit report documents per-workspace exposure, top RAW families, attribution gaps, and the
-  exact fidelity boundary.
+- Claude and Codex managed blocks no longer import or bootstrap the complete `HZR.md` on every
+  task. They contain the ordinary routing contract, retain the canonical contract path, and
+  direct HZR-policy investigations to an outline followed by only the relevant exact ranges.
+- Unbounded managed `read --level none` is reduced to the format-aware smart default. Exact
+  ranges, numbered/bounded reads, outlines, symbols, changed hunks, and the explicit
+  `HZR_EXACT_FIDELITY=1` whole-file escape preserve their requested semantics.
+- Search guidance now uses `auto` or semantic discovery for unknown implementations and reserves
+  `--mode exact` for a known literal, symbol, error, key, or audit target. Exact literal recall is
+  not heuristically weakened.
+- New search/read ledger attribution records typed operation mode, accounting stage, bounds,
+  filter level, result limit, include-content choice, and path-scope count without storing query
+  text, paths, file contents, or secrets. `stats` exposes mode aggregates; old rows remain
+  explicitly unattributed.
+- `hzr init --if-needed` refreshes the managed instruction scope on every idempotent lifecycle
+  pass. In all-project mode it also retires a detected local legacy RTK block that would override
+  the global HZR contract, while leaving clean repository instruction files untouched.
+- `hzr doctor` remains read-only and now verifies exact managed-policy currency, contract
+  readability, activation scope, and conflicting local RTK/ICM directives. It directs stale
+  instruction repair to `hzr init --if-needed`; `doctor --fix` remains limited to safe legacy
+  index migration.
+- The release workflow publishes stable tags explicitly as GitHub Latest. Existing `v0.4.1` was
+  corrected from prerelease to stable without changing its tag or artifacts.
 
 ## Upgrade impact
 
-The SQLite schema and historical ledger are unchanged. Existing RAW rows remain auditable; this
-release changes future routing and the installed agent contract. Exact RAW remains available as
-`HZR_RAW_FIDELITY=1 hzr rtk -- raw ...` when no effective filtered route can satisfy the task.
+The ledger migration only adds nullable attribution columns, so historical data remains readable.
+The active bundle, hooks, daemon, MCP registrations, and instruction contract continue to resolve
+through `~/.local/share/hzr/current`.
 
-Upgrade and refresh every managed instruction surface with:
+Upgrade and refresh the current workspace with:
 
 ```bash
 hzr update
 hzr --version
-hzr install --force
+hzr init --if-needed
 hzr doctor
 ```
 
-Restart open agent sessions after installation so they reload the new shell-routing contract.
+Restart open agent sessions after installation so they reload the bounded routing contract.
 
 ## Verification
 
@@ -67,6 +66,6 @@ scripts/verify-fork-core.sh --test
 scripts/build-bundle.sh /absolute/path/to/hzr-dist
 ```
 
-The dedicated acceptance gate covers core replacement classification, automatic hook routing,
-daemon `exec rewrite/run`, byte-preserving managed-wrapper removal, and refusal to reconstruct
-ambiguous shell syntax.
+Dedicated acceptance gates cover stale instruction detection and repair, complete legacy RTK
+block retirement, removal of forced full-contract bootstrap, exact-full fidelity escape,
+automatic smart-read routing, typed search/read attribution, and stable GitHub Latest policy.

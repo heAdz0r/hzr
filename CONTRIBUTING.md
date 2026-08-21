@@ -84,7 +84,8 @@ git push origin vX.Y.Z
 ```
 
 The workflow builds Linux and macOS bundles for x64 and ARM64, attests build provenance, and
-publishes a pre-release whose description is `RELEASE_NOTES.md` verbatim. Do not write the
+publishes a stable release marked as GitHub Latest whose description is `RELEASE_NOTES.md`
+verbatim. Do not write the
 release description in the GitHub UI: it would immediately disagree with the repository.
 
 ## Pull requests

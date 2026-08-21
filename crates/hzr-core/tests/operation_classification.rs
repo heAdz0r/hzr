@@ -7,8 +7,9 @@
 //! optimizer entirely.
 
 use hzr_core::{
-    OperationRoute, OperationSubsystem, RawReplacement, classify_operation, explicit_raw_fidelity,
-    first_class_replacement, managed_raw_payload, raw_route_sql_predicate,
+    OperationRoute, OperationSubsystem, RawReplacement, classify_operation,
+    efficient_route_replacement, explicit_raw_fidelity, first_class_replacement,
+    managed_raw_payload, raw_route_sql_predicate,
 };
 
 /// The hook needs the same answer for a command the agent typed directly, before any
@@ -45,6 +46,42 @@ fn test_commands_without_an_equivalent_are_left_alone() {
         "an in-place edit is not a read and hzr read cannot replace it"
     );
     assert_eq!(first_class_replacement(""), None);
+}
+
+#[test]
+fn acceptance_gate_no_unbounded_exact_read_defaults() {
+    for command in [
+        "hzr rtk -- read src/main.rs --level none",
+        "rtk read README.md -l none",
+        "hzr rtk -- raw read src/lib.rs --level=none",
+    ] {
+        let replacement = efficient_route_replacement(command)
+            .expect("unbounded exact read must select the smart default");
+        assert!(!replacement.suggestion.contains("--level none"));
+    }
+
+    for command in [
+        "hzr rtk -- read src/main.rs --from 40 --to 80 --level none",
+        "hzr rtk -- read src/main.rs -n --level none",
+        "hzr rtk -- read src/main.rs --max-lines 80 --level none",
+        "hzr rtk -- read src/main.rs --outline --level none",
+        "HZR_EXACT_FIDELITY=1 hzr rtk -- read src/main.rs --level none",
+        "hzr search RewriteDecision --mode exact",
+    ] {
+        assert_eq!(
+            efficient_route_replacement(command),
+            None,
+            "bounded or explicit fidelity route was changed: {command}"
+        );
+    }
+
+    assert!(
+        efficient_route_replacement(
+            "HZR_EXACT_FIDELITY=10 hzr rtk -- read src/main.rs --level none"
+        )
+        .is_some(),
+        "an invalid fidelity marker must not be interpreted as the exact escape hatch"
+    );
 }
 
 #[test]

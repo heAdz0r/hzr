@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use hzr_core::{
-    Ledger, LedgerError, LedgerRecord, OperationAttribution, OperationChannel,
-    OperationMeasurement, OperationRoute,
+    DetailedOperationAttribution, Ledger, LedgerError, LedgerRecord, OperationAttribution,
+    OperationChannel, OperationMeasurement, OperationRoute,
 };
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -23,7 +23,7 @@ enum WriteCommand {
     /// An HZR-owned reduction, written to the same table the pinned engine uses so it is
     /// summarized by exactly the same queries.
     Operation {
-        record: OperationRecord,
+        record: Box<OperationRecord>,
         reply: oneshot::Sender<Result<(), LedgerError>>,
     },
 }
@@ -41,6 +41,7 @@ pub struct OperationRecord {
     pub route: OperationRoute,
     pub agent: Option<String>,
     pub session_id: Option<String>,
+    pub attribution: Option<hzr_protocol::AccountingAttribution>,
 }
 
 #[derive(Debug, Error)]
@@ -66,19 +67,22 @@ impl LedgerWriter {
                             let _ = reply.send(ledger.record(&record));
                         }
                         WriteCommand::Operation { record, reply } => {
-                            let _ = reply.send(ledger.record_operation_attributed(
+                            let _ = reply.send(ledger.record_operation_attributed_with_detail(
                                 &record.original_command,
                                 &record.recorded_command,
                                 record.input_tokens,
                                 record.output_tokens,
                                 record.execution_ms,
-                                OperationAttribution {
-                                    project_path: &record.project_path,
-                                    agent: record.agent.as_deref(),
-                                    session_id: record.session_id.as_deref(),
-                                    channel: record.channel,
-                                    measurement: record.measurement,
-                                    route: record.route,
+                                DetailedOperationAttribution {
+                                    attribution: OperationAttribution {
+                                        project_path: &record.project_path,
+                                        agent: record.agent.as_deref(),
+                                        session_id: record.session_id.as_deref(),
+                                        channel: record.channel,
+                                        measurement: record.measurement,
+                                        route: record.route,
+                                    },
+                                    detail: record.attribution.as_ref(),
                                 },
                             ));
                         }
@@ -105,7 +109,10 @@ impl LedgerWriter {
     pub async fn record_operation(&self, record: OperationRecord) -> Result<(), LedgerWriterError> {
         let (reply, result) = oneshot::channel();
         self.sender
-            .send(WriteCommand::Operation { record, reply })
+            .send(WriteCommand::Operation {
+                record: Box::new(record),
+                reply,
+            })
             .await
             .map_err(|_| LedgerWriterError::Unavailable)?;
         result.await.map_err(|_| LedgerWriterError::Unavailable)??;

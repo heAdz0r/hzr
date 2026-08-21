@@ -18,6 +18,8 @@ use crate::adoption::{atomic_write, backup_path, commit, read_optional, sha256};
 /// handle for idempotent reinstall and for clean removal.
 const BEGIN: &str = "<!-- hzr:begin managed agent contract — do not edit inside -->";
 const END: &str = "<!-- hzr:end managed agent contract -->";
+const LEGACY_RTK_BEGIN: &str = "<!-- rtk-instructions";
+const LEGACY_RTK_END: &str = "<!-- /rtk-instructions -->";
 
 /// Legacy references retired when the HZR block is installed. `@RTK.md` is the
 /// import directive; the prose lines are matched separately so a user who wrote
@@ -68,6 +70,7 @@ pub struct InstructionReport {
     pub changed: bool,
     pub installed: bool,
     pub legacy_rtk_imports_removed: usize,
+    pub legacy_rtk_blocks_removed: usize,
     pub legacy_directives_migrated: usize,
     pub backup_path: Option<PathBuf>,
     pub before_sha256: String,
@@ -76,17 +79,17 @@ pub struct InstructionReport {
 
 /// The managed block. `contract_path` is the absolute `HZR.md` shipped with the
 /// installation, referenced rather than inlined so a single file stays canonical.
-fn managed_block(surface: Surface, contract_path: &Path) -> String {
-    let import = match surface {
-        // Claude resolves `@path` imports relative to the configuration file, so an
-        // absolute path is the only form that survives a relocated bundle.
-        Surface::Claude => format!("@{}\n\n", contract_path.display()),
-        // Codex has no import directive; it reads AGENTS.md literally.
-        Surface::Codex => format!(
-            "Bootstrap by reading `{0}` with `hzr rtk -- read {0} --level none` before other tool use.\n\n",
-            contract_path.display(),
+fn managed_block(_surface: Surface, contract_path: &Path) -> String {
+    let contract_pointer = format!(
+        concat!(
+            "Read the full contract at `{0}` only when a bounded lookup cannot resolve ",
+            "HZR-policy ambiguity.\n",
+            "Ordinary tasks must not import or read it in full. Start with ",
+            "`hzr rtk -- read {0} --outline`, then read only the relevant ",
+            "`--from`/`--to` range.\n\n",
         ),
-    };
+        contract_path.display(),
+    );
 
     format!(
         "{BEGIN}\n\n\
@@ -98,11 +101,11 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          This managed region defines tool routing only. Keep repository-specific roles,\n\
          source paths and test commands in that repository's root instruction file, not\n\
          in a user-global instruction file.\n\n\
-         {import}\
+         {contract_pointer}\
          | Instead of | Use |\n\
          |---|---|\n\
-         | `Read` | `hzr rtk -- read <file>`; Markdown defaults to a digest, `--level none` is exact |\n\
-         | `Grep` | `hzr rgai \"<intent>\"` (semantic) or `hzr search \"<pattern>\" --mode exact` |\n\
+         | `Read` | `hzr rtk -- read <file>` uses the smart default; use `--outline` first for structure and ranges for exact evidence |\n\
+         | `Grep` | `hzr rgai \"<intent>\"` or `hzr search \"<intent>\" --mode auto`; use `--mode exact` only for a known literal |\n\
          | `Edit`/`Write` | `hzr rtk -- write patch\\|replace\\|set\\|create\\|batch ...` |\n\
          | memory | `hzr memory recall\\|store` |\n\
          | context | `hzr context plan \"<intent>\"` |\n\
@@ -115,6 +118,12 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          Do not choose `raw` merely because a command uses SSH, JSON, pipes, redirects or\n\
          unfamiliar arguments. When no filter exists, `hzr exec run` performs the tracked\n\
          fallback without requiring the agent to select `raw`.\n\n\
+         Unbounded `read --level none` defeats the smart default and is automatically reduced.\n\
+         Prefer `--outline` for structure and `--from`/`--to` for exact evidence. Use\n\
+         `HZR_EXACT_FIDELITY=1 hzr rtk -- read <file> --level none` only when the whole file\n\
+         is authoritative input that cannot be bounded. Search defaults to `--mode auto` for\n\
+         discovery; `--mode exact` remains the escape hatch for a known symbol, error, key, or\n\
+         audit literal.\n\n\
          TDD is opt-in, not the default. When token or time efficiency matters, skip it\n\
          and use proportionate verification; repository-required quality gates still apply.\n\n\
          `read -n` defaults to exact content and preserves source coordinates, including\n\
@@ -183,6 +192,27 @@ fn strip_managed_block(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// Remove complete RTK v1/v2 instruction regions left by the predecessor installer.
+/// Unterminated regions remain untouched so user content is never truncated.
+fn strip_legacy_rtk_blocks(text: &str) -> (String, usize) {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut removed = 0;
+    while let Some(start) = rest.find(LEGACY_RTK_BEGIN) {
+        let after = &rest[start..];
+        let Some(end_offset) = after.find(LEGACY_RTK_END) else {
+            break;
+        };
+        out.push_str(&rest[..start]);
+        rest = &after[end_offset + LEGACY_RTK_END.len()..];
+        rest = rest.strip_prefix('\n').unwrap_or(rest);
+        rest = rest.strip_prefix('\n').unwrap_or(rest);
+        removed += 1;
+    }
+    out.push_str(rest);
+    (out, removed)
 }
 
 /// Drop legacy RTK import directives. Only whole-line matches are removed so
@@ -275,9 +305,14 @@ fn migrate_legacy_directives(text: &str) -> (String, usize) {
     (migrated, changes)
 }
 
-fn compose(existing: &str, surface: Surface, contract_path: &Path) -> (String, usize, usize) {
+fn compose(
+    existing: &str,
+    surface: Surface,
+    contract_path: &Path,
+) -> (String, usize, usize, usize) {
     let without_block = strip_managed_block(existing);
-    let (body, removed) = strip_legacy_imports(&without_block);
+    let (without_legacy_blocks, legacy_blocks_removed) = strip_legacy_rtk_blocks(&without_block);
+    let (body, removed) = strip_legacy_imports(&without_legacy_blocks);
     let (body, migrated) = migrate_legacy_directives(&body);
     let block = managed_block(surface, contract_path);
     let trimmed = body.trim_end();
@@ -287,7 +322,7 @@ fn compose(existing: &str, surface: Surface, contract_path: &Path) -> (String, u
         // Managed block goes last: user intent stays at the top of their own file.
         format!("{trimmed}\n\n{block}\n")
     };
-    (composed, removed, migrated)
+    (composed, removed, legacy_blocks_removed, migrated)
 }
 
 pub fn is_installed(path: &Path) -> Result<bool> {
@@ -300,7 +335,8 @@ pub fn is_installed(path: &Path) -> Result<bool> {
 /// These are matched outside the managed region only, because the HZR block itself
 /// legitimately mentions `rtk` (as `hzr rtk -- ...`) and names the engines it forbids
 /// calling directly. Matching the whole file would flag HZR's own text.
-const LEGACY_MANDATES: [(&str, &str); 6] = [
+const LEGACY_MANDATES: [(&str, &str); 7] = [
+    ("rtk-managed-block", LEGACY_RTK_BEGIN),
     (
         "rtk-instead-of-native-tools",
         "you MUST use Bash tool with `rtk`",
@@ -316,6 +352,9 @@ const LEGACY_MANDATES: [(&str, &str); 6] = [
 pub struct InstructionAudit {
     pub path: PathBuf,
     pub installed: bool,
+    /// The delimited region exactly matches the block generated by this HZR build.
+    /// Marker presence alone cannot prove current routing policy.
+    pub current: bool,
     /// The referenced canonical contract exists and is readable. A block pointing at a
     /// missing `HZR.md` teaches the agent nothing, so presence of the marker is not proof.
     pub contract_readable: bool,
@@ -325,10 +364,13 @@ pub struct InstructionAudit {
 }
 
 impl InstructionAudit {
-    /// Healthy means installed, contract reachable, and no surviving legacy mandate.
+    /// Healthy means current, contract reachable, and no surviving legacy mandate.
     /// A marker sitting next to a conflicting mandate is a failure, never a pass.
     pub fn healthy(&self) -> bool {
-        self.installed && self.contract_readable && self.conflicting_mandates.is_empty()
+        self.installed
+            && self.current
+            && self.contract_readable
+            && self.conflicting_mandates.is_empty()
     }
 }
 
@@ -355,7 +397,7 @@ fn referenced_contract(block: &str) -> Option<PathBuf> {
     None
 }
 
-pub fn audit(path: &Path) -> Result<InstructionAudit> {
+pub fn audit(surface: Surface, path: &Path) -> Result<InstructionAudit> {
     let bytes = read_optional(path)?;
     let text = String::from_utf8_lossy(&bytes).to_string();
     let installed = text.contains(BEGIN);
@@ -368,24 +410,30 @@ pub fn audit(path: &Path) -> Result<InstructionAudit> {
         .map(|(id, _)| (*id).to_owned())
         .collect();
 
-    let contract_path = if installed {
-        text.find(BEGIN)
-            .and_then(|start| {
-                let region = &text[start..];
-                region.find(END).map(|end| &region[..end])
-            })
-            .and_then(referenced_contract)
+    let managed_region = if installed {
+        text.find(BEGIN).and_then(|start| {
+            let region = &text[start..];
+            region
+                .find(END)
+                .map(|end| &region[..end.saturating_add(END.len())])
+        })
     } else {
         None
     };
+    let contract_path = managed_region.and_then(referenced_contract);
     let contract_readable = contract_path
         .as_ref()
         .map(|contract| contract.is_file())
+        .unwrap_or(false);
+    let current = managed_region
+        .zip(contract_path.as_deref())
+        .map(|(actual, contract)| actual == managed_block(surface, contract))
         .unwrap_or(false);
 
     Ok(InstructionAudit {
         path: path.to_path_buf(),
         installed,
+        current,
         contract_readable,
         contract_path,
         conflicting_mandates,
@@ -402,13 +450,15 @@ pub fn install(
     let before = read_optional(path)?;
     let existing = String::from_utf8(before.clone())
         .with_context(|| format!("{} is not UTF-8; HZR will not rewrite it", path.display()))?;
-    let (after, legacy_removed, directives_migrated) = compose(&existing, surface, contract_path);
+    let (after, legacy_removed, legacy_blocks_removed, directives_migrated) =
+        compose(&existing, surface, contract_path);
     apply(
         surface,
         path,
         &before,
         after,
         legacy_removed,
+        legacy_blocks_removed,
         directives_migrated,
         dry_run,
         confirmed,
@@ -430,6 +480,7 @@ pub fn uninstall(
             changed: false,
             installed: false,
             legacy_rtk_imports_removed: 0,
+            legacy_rtk_blocks_removed: 0,
             legacy_directives_migrated: 0,
             before_sha256: sha256(&before),
             after_sha256: sha256(&before),
@@ -453,6 +504,7 @@ pub fn uninstall(
         after,
         0,
         0,
+        0,
         dry_run,
         confirmed,
         "uninstallation",
@@ -466,6 +518,7 @@ fn apply(
     before: &[u8],
     after: String,
     legacy_removed: usize,
+    legacy_blocks_removed: usize,
     directives_migrated: usize,
     dry_run: bool,
     confirmed: bool,
@@ -502,6 +555,7 @@ fn apply(
         changed,
         installed: after.contains(BEGIN),
         legacy_rtk_imports_removed: legacy_removed,
+        legacy_rtk_blocks_removed: legacy_blocks_removed,
         legacy_directives_migrated: directives_migrated,
         before_sha256: sha256(before),
         after_sha256: sha256(after.as_bytes()),
@@ -524,14 +578,16 @@ mod tests {
 
     #[test]
     fn test_install_preserves_user_content_and_appends_managed_block() {
-        let (out, removed, migrated) =
+        let (out, removed, blocks_removed, migrated) =
             compose("# My rules\n\nBe careful.\n", Surface::Claude, contract());
         assert_eq!(removed, 0);
+        assert_eq!(blocks_removed, 0);
         assert_eq!(migrated, 0);
         assert!(out.starts_with("# My rules\n\nBe careful."));
         assert!(out.contains(BEGIN));
         assert!(out.contains(END));
-        assert!(out.contains("@/opt/hzr/share/hzr/HZR.md"));
+        assert!(out.contains("`/opt/hzr/share/hzr/HZR.md`"));
+        assert!(!out.contains("@/opt/hzr/share/hzr/HZR.md"));
     }
 
     #[test]
@@ -544,10 +600,28 @@ mod tests {
 
     #[test]
     fn test_install_retires_legacy_rtk_import() {
-        let (out, removed, _) = compose("# Mine\n\n@RTK.md\n", Surface::Claude, contract());
+        let (out, removed, _, _) = compose("# Mine\n\n@RTK.md\n", Surface::Claude, contract());
         assert_eq!(removed, 1);
         assert!(!out.contains("@RTK.md"));
         assert!(out.contains("# Mine"));
+    }
+
+    #[test]
+    fn acceptance_gate_install_retires_complete_legacy_rtk_block() {
+        let legacy = "# Project rules\n\nKeep this.\n\n<!-- rtk-instructions v2 -->\n\
+# RTK\n\nAlways use `rtk rgai` and `rtk read <file>`.\n\
+<!-- /rtk-instructions -->\n";
+        let (out, imports_removed, blocks_removed, migrated) =
+            compose(legacy, Surface::Claude, contract());
+
+        assert_eq!(imports_removed, 0);
+        assert_eq!(blocks_removed, 1);
+        assert_eq!(migrated, 0, "removed block must not be rewritten in place");
+        assert!(out.contains("# Project rules"));
+        assert!(out.contains("Keep this."));
+        assert!(!out.contains("rtk-instructions"));
+        assert!(!out.contains("Always use `rtk rgai`"));
+        assert!(out.contains(BEGIN));
     }
 
     #[test]
@@ -561,7 +635,7 @@ mod tests {
     fn test_install_migrates_legacy_commands_without_touching_hzr_block() {
         let legacy = "Use `rtk read <file>` and `rtk rgai <query>`. Recall with \
                       `icm_memory_recall`.\n";
-        let (out, _, migrated) = compose(legacy, Surface::Claude, contract());
+        let (out, _, _, migrated) = compose(legacy, Surface::Claude, contract());
 
         assert_eq!(migrated, 3);
         assert!(out.contains("`hzr rtk -- read <file>`"));
@@ -584,7 +658,7 @@ mod tests {
                       (icm_memory_recall). For covered work you MUST use Bash tool with \
                       `hzr` commands INSTEAD of native tools. Apply the plan in a single \
                       Bash call, atomic, idempotent.\n";
-        let (out, _, migrated) = compose(legacy, Surface::Codex, contract());
+        let (out, _, _, migrated) = compose(legacy, Surface::Codex, contract());
 
         assert_eq!(migrated, 4);
         assert!(out.contains("`hzr search --mode exact` (literal, case-sensitive)"));
@@ -606,15 +680,14 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_surface_uses_literal_reference_not_claude_import() {
+    fn test_managed_surface_uses_bounded_contract_pointer_not_an_import() {
         let out = compose("", Surface::Codex, contract()).0;
-        assert!(out.contains(
-            "Bootstrap by reading `/opt/hzr/share/hzr/HZR.md` with `hzr rtk -- read /opt/hzr/share/hzr/HZR.md --level none` before other tool use"
-        ));
-        assert!(
-            !out.contains("\n@/opt/hzr"),
-            "Codex has no @import directive"
-        );
+        assert!(out.contains("Read the full contract at `/opt/hzr/share/hzr/HZR.md` only when"));
+        assert!(out.contains("hzr rtk -- read /opt/hzr/share/hzr/HZR.md --outline"));
+        assert!(out.contains("relevant `--from`/`--to` range"));
+        assert!(!out.contains("\n@/opt/hzr"));
+        assert!(!out.contains("Bootstrap by reading"));
+        assert!(!out.contains("HZR.md --level none` before other tool use"));
     }
 
     #[test]
@@ -644,6 +717,23 @@ mod tests {
     }
 
     #[test]
+    fn acceptance_gate_no_unbounded_exact_defaults_in_managed_contract() {
+        for surface in [Surface::Claude, Surface::Codex] {
+            let out = compose("", surface, contract()).0;
+
+            assert!(out.contains("`hzr search \"<intent>\" --mode auto`"));
+            assert!(out.contains("use `--mode exact` only for a known literal"));
+            assert!(out.contains("Prefer `--outline` for structure"));
+            assert!(out.contains("`--from`/`--to` for exact evidence"));
+            assert!(out.contains("`HZR_EXACT_FIDELITY=1 hzr rtk -- read"));
+            assert!(!out.contains("Markdown defaults to a digest, `--level none` is exact"));
+            assert!(!out.contains("\n@/opt/hzr"));
+            assert!(!out.contains("Bootstrap by reading"));
+            assert!(out.contains("HZR.md --outline"));
+        }
+    }
+
+    #[test]
     fn test_codex_audit_resolves_the_executable_bootstrap_contract() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let contract = directory.path().join("HZR.md");
@@ -652,10 +742,29 @@ mod tests {
         std::fs::write(&instructions, compose("", Surface::Codex, &contract).0)
             .expect("instruction fixture");
 
-        let report = super::audit(&instructions).expect("instruction audit");
+        let report = super::audit(Surface::Codex, &instructions).expect("instruction audit");
         assert_eq!(report.contract_path.as_deref(), Some(contract.as_path()));
         assert!(report.contract_readable);
+        assert!(report.current);
         assert!(report.healthy());
+    }
+
+    #[test]
+    fn acceptance_gate_instruction_audit_rejects_stale_managed_policy() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let contract = directory.path().join("HZR.md");
+        let instructions = directory.path().join("AGENTS.md");
+        std::fs::write(&contract, "contract").expect("contract fixture");
+        let stale = compose("", Surface::Codex, &contract)
+            .0
+            .replace("raw` is forbidden", "raw` is preferred");
+        std::fs::write(&instructions, stale).expect("stale instruction fixture");
+
+        let report = super::audit(Surface::Codex, &instructions).expect("instruction audit");
+        assert!(report.installed);
+        assert!(report.contract_readable);
+        assert!(!report.current);
+        assert!(!report.healthy());
     }
 
     #[test]

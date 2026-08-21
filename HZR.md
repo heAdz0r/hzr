@@ -8,6 +8,11 @@ do not invoke a separately installed `rtk` binary.
 second engine process costs tokens twice and can disagree with itself. Route
 through HZR and there is exactly one of each.
 
+Managed agent blocks contain the default routing policy and point back to this canonical
+contract. Ordinary tasks must not import or read this whole file. When a routing question is
+not answered by the managed block, read this file with `--outline`, then retrieve only the
+relevant `--from`/`--to` range. Full exact content is reserved for material contract audits.
+
 ## If you have HZR MCP tools
 
 When your client is configured with the HZR MCP server (`hzr mcp serve`), prefer
@@ -150,8 +155,12 @@ hzr rtk -- read <file> --max-lines N         # head(1)
 hzr rtk -- read <file> --tail-lines N        # tail(1)
 ```
 
-Markdown defaults to a bounded digest; use `--level none` for exact full content or
-`--from N --to M` for an exact range. `-n` defaults to exact content and prints original
+Markdown defaults to a bounded digest and code defaults to its minimal view. Unbounded
+`--level none` is automatically reduced to that smart default; use `--outline` first for
+structure and `--from N --to M` for exact evidence. When the complete file is itself the
+authoritative input, use
+`HZR_EXACT_FIDELITY=1 hzr rtk -- read <file> --level none`. `-n` defaults to exact content
+and prints original
 source coordinates, including for ranges and tails. `--max-lines N` returns the first N
 lines followed by the file total, omitted count, and an exact recovery command; tails and
 explicit ranges carry the same bound evidence. `--outline` emits ATX Markdown headings (`#` through `######`) with source
@@ -166,7 +175,8 @@ the repository. Use it for symbols, error strings, config keys and audits. If th
 begins with `-`, terminate option parsing first: `hzr search --mode exact -- "--outline"`.
 Literal matching is per source line; a multi-line signature is not one literal match.
 
-`--mode semantic` and `--mode auto` use the ranked term model: the query is lowercased,
+`--mode semantic` and `--mode auto` use the ranked term model and are the discovery default:
+the query is lowercased,
 split on non-alphanumeric characters, stripped of stop words and stemmed, and the surviving
 terms are ranked. Use it to *locate* code you cannot name exactly.
 

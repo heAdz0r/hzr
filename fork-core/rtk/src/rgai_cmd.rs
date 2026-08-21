@@ -99,6 +99,31 @@ pub struct RgaiOptions<'a> {
     pub verbose: u8,
 }
 
+fn search_attribution(
+    literal: bool,
+    builtin: bool,
+    max_results: usize,
+) -> tracking::OperationAttribution {
+    tracking::OperationAttribution {
+        operation: tracking::OperationKind::Search,
+        mode: if literal {
+            tracking::OperationMode::SearchExact
+        } else if builtin {
+            tracking::OperationMode::SearchBuiltin
+        } else {
+            tracking::OperationMode::SearchSemantic
+        },
+        stage: tracking::AccountingStage::InternalTransport,
+        include_content: None,
+        limit: Some(max_results),
+        path_scope_count: Some(1),
+        filter_level: None,
+        from_line: None,
+        to_line: None,
+        source_bytes: None,
+    }
+}
+
 pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
     let RgaiOptions {
         path,
@@ -115,6 +140,7 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
         verbose,
     } = options;
     let timer = tracking::TimedExecution::start();
+    let attribution = search_attribution(literal, builtin, max_results);
 
     let query = query.trim();
     if query.is_empty() {
@@ -147,11 +173,12 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
             verbose,
         )? {
             print!("{}", filtered);
-            timer.track(
-                &format!("grepai search '{}' {}", query, path),
+            timer.track_attributed(
+                "search <query and path omitted>",
                 "rtk rgai (grepai)",
                 &raw,
                 &filtered,
+                attribution,
             );
             return Ok(());
         }
@@ -253,11 +280,12 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
             rendered.push_str(&format!("🧠 0 for '{}'\n", query));
         }
         print!("{}", rendered);
-        timer.track(
-            &format!("grepai search '{}' {}", query, path),
+        timer.track_attributed(
+            "search <query and path omitted>",
             tracking_label,
             &outcome.raw_output,
             &rendered,
+            attribution,
         );
         return Ok(());
     }
@@ -304,11 +332,12 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
         }))?;
         rendered.push('\n');
         print!("{}", rendered);
-        timer.track(
-            &format!("grepai search '{}' {}", query, path),
+        timer.track_attributed(
+            "search <query and path omitted>",
             tracking_label,
             &outcome.raw_output,
             &rendered,
+            attribution,
         );
         return Ok(());
     }
@@ -335,11 +364,12 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
     }
 
     print!("{}", rendered);
-    timer.track(
-        &format!("grepai search '{}' {}", query, path),
+    timer.track_attributed(
+        "search <query and path omitted>",
         tracking_label,
         &outcome.raw_output,
         &rendered,
+        attribution,
     );
 
     Ok(())
@@ -1685,6 +1715,22 @@ fn truncate_chars(input: &str, max_len: usize) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn search_attribution_distinguishes_exact_builtin_and_semantic_without_payloads() {
+        let exact = search_attribution(true, false, 7);
+        assert_eq!(exact.mode, tracking::OperationMode::SearchExact);
+        assert_eq!(exact.limit, Some(7));
+        assert_eq!(exact.path_scope_count, Some(1));
+        assert_eq!(
+            search_attribution(false, true, 10).mode,
+            tracking::OperationMode::SearchBuiltin
+        );
+        assert_eq!(
+            search_attribution(false, false, 10).mode,
+            tracking::OperationMode::SearchSemantic
+        );
+    }
 
     #[test]
     fn build_query_model_removes_stop_words() {

@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 use hzr_core::{
     BypassSummary, Config, EfficiencySummary, Ledger, LedgerSummary, OperationChannel,
-    OperationRoute, classify_operation,
+    OperationModeSummary, OperationRoute, classify_operation,
 };
 use serde::Serialize;
 
@@ -19,6 +19,7 @@ pub struct StatsReport {
     pub scope: String,
     pub direct_savings: DirectSavings,
     pub by_subsystem: Vec<SubsystemSavings>,
+    pub by_mode: Vec<OperationModeSummary>,
     pub by_command: Vec<CommandSavings>,
     pub by_command_total: usize,
     pub by_command_omitted: usize,
@@ -178,6 +179,7 @@ fn build_report_with_command_limit(
     scope: String,
     command_limit: Option<usize>,
 ) -> StatsReport {
+    let by_mode = gain.by_mode.clone();
     let reveal_command_details = command_limit.is_none();
     let traffic_coverage = TrafficCoverage {
         observability_scope: "observed_channels_only",
@@ -288,6 +290,7 @@ fn build_report_with_command_limit(
             measurement: "estimated_utf8_bytes_div_4_v1",
         },
         by_subsystem,
+        by_mode,
         by_command: commands,
         by_command_total,
         by_command_omitted,
@@ -430,7 +433,9 @@ mod tests {
     use crate::hook_runner::AccountingCoverage;
     use hzr_core::{
         BypassSummary, BypassTool, BypassWindow, EfficiencyCommandSummary, EfficiencySummary,
+        OperationModeSummary,
     };
+    use hzr_protocol::{AccountingOperationKind, AccountingOperationMode, AccountingStage};
 
     #[test]
     fn test_build_report_keeps_estimated_savings_separate_from_actual_usage() {
@@ -495,6 +500,32 @@ mod tests {
                 .iter()
                 .any(|note| note.contains("never mixed with provider usage"))
         );
+    }
+
+    #[test]
+    fn test_report_exposes_typed_internal_and_final_mode_attribution() {
+        let report = build_report(
+            EfficiencySummary {
+                by_mode: vec![OperationModeSummary {
+                    operation: AccountingOperationKind::Search,
+                    mode: AccountingOperationMode::SearchExact,
+                    stage: AccountingStage::FinalDelivery,
+                    operations: 2,
+                    delivered_tokens_estimated: 8,
+                }],
+                ..EfficiencySummary::default()
+            },
+            LedgerSummary::default(),
+            "global_lifetime",
+            AccountingCoverage::default_complete(),
+            BypassSummary::default(),
+            "global lifetime".into(),
+        );
+
+        assert_eq!(report.by_mode.len(), 1);
+        let encoded = serde_json::to_string(&report).expect("stats JSON");
+        assert!(encoded.contains("search_exact"));
+        assert!(encoded.contains("final_delivery"));
     }
 
     #[test]

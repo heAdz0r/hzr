@@ -173,6 +173,103 @@ pub struct Tracker {
 struct RecordAccounting<'a> {
     measurement: &'a str,
     route: Option<&'a str>,
+    attribution: Option<OperationAttribution>,
+}
+
+/// Non-sensitive dimensions shared with HZR's ledger schema. This intentionally cannot carry
+/// query text, paths, file contents, or arbitrary metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperationKind {
+    Search,
+    Read,
+}
+
+impl OperationKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Search => "search",
+            Self::Read => "read",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OperationMode {
+    SearchSemantic,
+    SearchExact,
+    SearchBuiltin,
+    ReadFull,
+    ReadFiltered,
+    ReadRange,
+    ReadHead,
+    ReadTail,
+    ReadOutline,
+    ReadSymbols,
+    ReadChanged,
+    ReadSince,
+}
+
+impl OperationMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::SearchSemantic => "search_semantic",
+            Self::SearchExact => "search_exact",
+            Self::SearchBuiltin => "search_builtin",
+            Self::ReadFull => "read_full",
+            Self::ReadFiltered => "read_filtered",
+            Self::ReadRange => "read_range",
+            Self::ReadHead => "read_head",
+            Self::ReadTail => "read_tail",
+            Self::ReadOutline => "read_outline",
+            Self::ReadSymbols => "read_symbols",
+            Self::ReadChanged => "read_changed",
+            Self::ReadSince => "read_since",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountingStage {
+    InternalTransport,
+}
+
+impl AccountingStage {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::InternalTransport => "internal_transport",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadFilterLevel {
+    None,
+    Minimal,
+    Aggressive,
+}
+
+impl ReadFilterLevel {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Aggressive => "aggressive",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct OperationAttribution {
+    pub operation: OperationKind,
+    pub mode: OperationMode,
+    pub stage: AccountingStage,
+    pub include_content: Option<bool>,
+    pub limit: Option<usize>,
+    pub path_scope_count: Option<usize>,
+    pub filter_level: Option<ReadFilterLevel>,
+    pub from_line: Option<usize>,
+    pub to_line: Option<usize>,
+    pub source_bytes: Option<u64>,
 }
 
 /// Individual command record from tracking history.
@@ -394,6 +491,20 @@ impl Tracker {
             [],
         );
         let _ = conn.execute("ALTER TABLE commands ADD COLUMN route TEXT", []);
+        for column in [
+            "operation_kind TEXT",
+            "operation_mode TEXT",
+            "accounting_stage TEXT",
+            "search_include_content INTEGER",
+            "result_limit INTEGER",
+            "path_scope_count INTEGER",
+            "filter_level TEXT",
+            "range_from INTEGER",
+            "range_to INTEGER",
+            "source_bytes INTEGER",
+        ] {
+            let _ = conn.execute(&format!("ALTER TABLE commands ADD COLUMN {column}"), []);
+        }
         // One-time migration: normalize NULLs from pre-default schema // changed: guarded with EXISTS
         let has_nulls: bool = conn
             .query_row(
@@ -472,6 +583,30 @@ impl Tracker {
             RecordAccounting {
                 measurement: "estimated",
                 route: None,
+                attribution: None,
+            },
+        )
+    }
+
+    pub fn record_attributed(
+        &self,
+        original_cmd: &str,
+        rtk_cmd: &str,
+        input_tokens: usize,
+        output_tokens: usize,
+        exec_time_ms: u64,
+        attribution: OperationAttribution,
+    ) -> Result<()> {
+        self.record_with_accounting(
+            original_cmd,
+            rtk_cmd,
+            input_tokens,
+            output_tokens,
+            exec_time_ms,
+            RecordAccounting {
+                measurement: "estimated",
+                route: None,
+                attribution: Some(attribution),
             },
         )
     }
@@ -499,10 +634,12 @@ impl Tracker {
             "INSERT INTO commands (
                 timestamp, original_cmd, rtk_cmd, project_path, agent, session_id,
                 input_tokens, output_tokens, saved_tokens, savings_pct, exec_time_ms,
-                channel, measurement, route
+                channel, measurement, route, operation_kind, operation_mode, accounting_stage,
+                search_include_content, result_limit, path_scope_count, filter_level, range_from,
+                range_to, source_bytes
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
-                'hook_cli', ?12, ?13
+                'hook_cli', ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
              )",
             params![
                 Utc::now().to_rfc3339(),
@@ -518,6 +655,22 @@ impl Tracker {
                 exec_time_ms as i64,
                 accounting.measurement,
                 accounting.route,
+                accounting.attribution.map(|value| value.operation.as_str()),
+                accounting.attribution.map(|value| value.mode.as_str()),
+                accounting.attribution.map(|value| value.stage.as_str()),
+                accounting
+                    .attribution
+                    .and_then(|value| value.include_content),
+                accounting.attribution.and_then(|value| value.limit),
+                accounting
+                    .attribution
+                    .and_then(|value| value.path_scope_count),
+                accounting
+                    .attribution
+                    .and_then(|value| value.filter_level.map(ReadFilterLevel::as_str)),
+                accounting.attribution.and_then(|value| value.from_line),
+                accounting.attribution.and_then(|value| value.to_line),
+                accounting.attribution.and_then(|value| value.source_bytes),
             ],
         )?;
 
@@ -1304,6 +1457,29 @@ impl TimedExecution {
         });
     }
 
+    pub fn track_attributed(
+        &self,
+        original_cmd: &str,
+        rtk_cmd: &str,
+        input: &str,
+        output: &str,
+        attribution: OperationAttribution,
+    ) {
+        if tracking_disabled() {
+            return;
+        }
+        with_cached_tracker(|tracker| {
+            let _ = tracker.record_attributed(
+                original_cmd,
+                rtk_cmd,
+                estimate_tokens(input),
+                estimate_tokens(output),
+                self.start.elapsed().as_millis() as u64,
+                attribution,
+            );
+        });
+    }
+
     fn track_with(
         &self,
         tracker: &Tracker,
@@ -1366,6 +1542,7 @@ impl TimedExecution {
             RecordAccounting {
                 measurement: "unmeasured",
                 route: Some("bypassed"),
+                attribution: None,
             },
         )
     }
@@ -1540,6 +1717,63 @@ mod tests {
             )
             .expect("Timed execution record not found");
         assert!(elapsed_ms >= 10);
+    }
+
+    #[test]
+    fn attributed_operation_migrates_and_persists_only_typed_dimensions() {
+        let temp = tempfile::tempdir().expect("temporary database directory");
+        let tracker = Tracker::open(&temp.path().join("history.db")).expect("isolated tracker");
+        tracker
+            .record_attributed(
+                "search <query and path omitted>",
+                "rtk rgai",
+                100,
+                20,
+                5,
+                OperationAttribution {
+                    operation: OperationKind::Search,
+                    mode: OperationMode::SearchExact,
+                    stage: AccountingStage::InternalTransport,
+                    include_content: None,
+                    limit: Some(7),
+                    path_scope_count: Some(1),
+                    filter_level: None,
+                    from_line: None,
+                    to_line: None,
+                    source_bytes: None,
+                },
+            )
+            .expect("attributed record");
+
+        let persisted: (String, String, String, String, u64, u64) = tracker
+            .conn
+            .query_row(
+                "SELECT original_cmd, operation_kind, operation_mode, accounting_stage,
+                        result_limit, path_scope_count FROM commands",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("typed dimensions");
+        assert_eq!(
+            persisted,
+            (
+                "search <query and path omitted>".into(),
+                "search".into(),
+                "search_exact".into(),
+                "internal_transport".into(),
+                7,
+                1,
+            )
+        );
     }
 
     // 6. TimedExecution::track_passthrough marks output as unmeasured instead of claiming zero
