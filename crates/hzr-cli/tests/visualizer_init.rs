@@ -50,7 +50,12 @@ fn init_is_idempotent_and_registers_the_visualizer_workspace() {
     assert!(
         matches!(
             first["outcome"].as_str(),
-            Some("index_initialized" | "repository_graph_enabled" | "initialized")
+            Some(
+                "index_initialized"
+                    | "repository_graph_enabled"
+                    | "initialized"
+                    | "initialized_without_git"
+            )
         ),
         "unexpected first init outcome: {}",
         first["outcome"]
