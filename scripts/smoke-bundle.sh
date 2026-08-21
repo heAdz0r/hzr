@@ -131,13 +131,13 @@ verify_sha256() {
 }
 
 verify_sha256 \
-  "e3de1ba2ee1572d5ebb47effe6b6d480efd97e60043682ecef9598582d6e3171" \
+  "8e20a545975569cc53e78ed570341a7365c6b3d2a96942d3118ffde4ca2af09c" \
   "${HZR_CAVEMAN_ROOT}/bridge.mjs"
 verify_sha256 \
-  "d45691c5e0feca8afffeb6d6e54eedc962a5fc6ccbd72f3fb6e46d05395520f1" \
+  "c929cdeed7efc36fbb4bf37d35d2cd43786fd7d2fb3869f175d7a2c982020942" \
   "${HZR_CAVEMAN_ROOT}/package.json"
 verify_sha256 \
-  "4af6cb22fae9ebdb0e6c051b1942426e6c48e1fc6cdaed598102454f07f2cd45" \
+  "7004ac84db7c71a999a03caf27ef06b0d5d72b29881439623296118047919052" \
   "${HZR_CAVEMAN_ROOT}/package-lock.json"
 verify_sha256 \
   "a59d764d9dc37eafb32f11d3dea0262a0711a59dfe469777025d858653954f28" \
@@ -205,7 +205,7 @@ verify_sha256 \
 PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ls \
   --omit=dev --all --prefix "${HZR_CAVEMAN_ROOT}" >/dev/null
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.4.3" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.4.4" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
@@ -351,7 +351,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-  if (report.protocol_version !== 1 || report.hzr_version !== "0.4.3") {
+  if (report.protocol_version !== 1 || report.hzr_version !== "0.4.4") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -391,7 +391,7 @@ fi
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
       const ids = new Set(report.services.map((service) => service.id));
-      if (response.status !== 200 || report.hzr_version !== "0.4.3" ||
+      if (response.status !== 200 || report.hzr_version !== "0.4.4" ||
           !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
         throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
       }

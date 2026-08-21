@@ -6,14 +6,15 @@ use axum::Json;
 use axum::extract::{Path as AxumPath, State};
 use hzr_context::{ContextError, PlanRequest, SearchRequest};
 use hzr_core::{
-    Ledger, LedgerRecord, ProjectOperationRoute, ProjectOperationSummary,
-    efficient_route_replacement, explicit_raw_fidelity, first_class_replacement, locked_engines,
-    managed_raw_payload,
+    FidelityAllowance, FidelityBudget, FidelityPreflight, Ledger, LedgerRecord,
+    ProjectOperationRoute, ProjectOperationSummary, RawFidelityReason, RawFidelityRequest,
+    efficient_route_replacement, fidelity_preflight_required, first_class_replacement,
+    locked_engines, privacy_identity_hash, raw_fidelity_request,
 };
 use hzr_exec::{
     CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent, ExecutionEnvelope,
     ExecutionOutcome, ForkCoreInvocation, NotStarted, PINNED_RTK_VERSION, PinnedRtkAdapter,
-    RewriteDecision, RewriteSource, StdinSpec, TerminationCause,
+    RewriteDecision, RewriteSource, RtkRewriteOutcome, StdinSpec, TerminationCause,
 };
 use hzr_index::{
     Deadlines, IndexCoordinatorSnapshot, IndexWatcherState, Workspace, WorkspaceRegistration,
@@ -34,17 +35,22 @@ use hzr_protocol::{
     DashboardMemoryTopicDetails, DashboardObservedUsage, DashboardOperationRoute, DashboardProject,
     DashboardProjectArtifacts, DashboardProjectState, DashboardProviderReceiptState,
     DashboardProviderReceipts, DashboardResponse, DashboardSearchActivity, DashboardService,
-    DashboardState, EngineHealth, EngineState, ExecApiRequest, ExecApprovalApiRequest,
+    DashboardState, EnforcementTier, EngineHealth, EngineState, EvasionAttribution, EvasionClass,
+    EvasionPathForm, ExecApiRequest, ExecApprovalApiRequest, FidelityReason, FidelityValidation,
     ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryForgetApiRequest,
     MemoryImportance, MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
     MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope,
-    PROTOCOL_VERSION, SearchApiRequest, SearchApiResponse, TraceId, UsageApiRequest,
-    UsageApiResponse,
+    PROTOCOL_VERSION, PolicyDecision, SearchApiRequest, SearchApiResponse, TraceId,
+    UsageApiRequest, UsageApiResponse,
 };
 
 use crate::approval::PendingApproval;
 use crate::error::ApiError;
 use crate::state::{AppState, MemoryStartState};
+
+#[cfg(test)]
+#[path = "../../../fork-core/rtk/tests/fixtures/anti_evasion_fixture.rs"]
+mod anti_evasion_fixture;
 
 const MAX_CALLER_PATH_BYTES: usize = 32 * 1024;
 
@@ -305,7 +311,9 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
         memory_observatory,
         index_observatory,
         local_activity: DashboardLocalActivity {
-            project: selected.as_ref().map(registration_name),
+            project: selected.as_ref().map(|registration| {
+                privacy_identity_hash("project", &registration.root.to_string_lossy())
+            }),
             operations: activity.operations,
             optimized_operations: activity.optimized_operations,
             raw_operations: activity.raw_operations,
@@ -337,11 +345,12 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
                             DashboardOperationRoute::NativeUnaccounted
                         }
                     },
-                    original_command: operation.original_command,
-                    recorded_command: operation.recorded_command,
-                    working_directory: operation.working_directory,
+                    command_hash: operation.command_hash,
+                    project_hash: operation.project_hash,
                     agent: operation.agent,
-                    session_id: operation.session_id,
+                    session_hash: operation.session_hash,
+                    producer_version: operation.producer_version,
+                    policy_version: operation.policy_version,
                     baseline_tokens_estimated: operation.baseline_tokens_estimated,
                     delivered_tokens_estimated: operation.delivered_tokens_estimated,
                     net_avoided_tokens_estimated: operation.net_avoided_tokens_estimated,
@@ -775,10 +784,11 @@ fn dashboard_search_activity(operations: &[ProjectOperationSummary]) -> Dashboar
             state: DashboardState::Standby,
             ledger_id: None,
             observed_at: None,
-            command: None,
-            working_directory: None,
+            operation: None,
+            command_hash: None,
+            project_hash: None,
             agent: None,
-            session_id: None,
+            session_hash: None,
             route: None,
             execution_ms: None,
             detail: "No routed HZR search is present in the recent project ledger window".into(),
@@ -789,10 +799,11 @@ fn dashboard_search_activity(operations: &[ProjectOperationSummary]) -> Dashboar
         state: DashboardState::Ready,
         ledger_id: Some(operation.ledger_id),
         observed_at: Some(operation.timestamp.clone()),
-        command: Some(operation.original_command.clone()),
-        working_directory: Some(operation.working_directory.clone()),
+        operation: Some(operation.operation.clone()),
+        command_hash: Some(operation.command_hash.clone()),
+        project_hash: Some(operation.project_hash.clone()),
         agent: operation.agent.clone(),
-        session_id: operation.session_id.clone(),
+        session_hash: operation.session_hash.clone(),
         route: Some(DashboardOperationRoute::Optimized),
         execution_ms: Some(operation.execution_ms),
         detail: "Observed from a real HZR-routed search recorded in the project ledger".into(),
@@ -827,13 +838,7 @@ fn elapsed_ms(started_at: Instant) -> u64 {
 }
 
 fn registration_name(registration: &WorkspaceRegistration) -> String {
-    registration
-        .root
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("workspace")
-        .to_owned()
+    privacy_identity_hash("project", &registration.root.to_string_lossy())
 }
 
 fn dashboard_service(health: &EngineHealth) -> DashboardService {
@@ -899,16 +904,10 @@ fn dashboard_project(registration: &WorkspaceRegistration) -> Result<DashboardPr
     } else {
         DashboardProjectState::Registered
     };
-    let name = registration
-        .root
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(root)
-        .to_owned();
+    let identity = privacy_identity_hash("project", root);
     Ok(DashboardProject {
-        name,
-        root: root.to_owned(),
+        name: identity.clone(),
+        root: identity,
         repository_id: registration.repository_id.clone(),
         worktree_id: registration.worktree_id.clone(),
         git_backed: registration.git_backed,
@@ -917,7 +916,7 @@ fn dashboard_project(registration: &WorkspaceRegistration) -> Result<DashboardPr
         registered_at_ms: registration.registered_at_ms,
         last_seen_at_ms: registration.last_seen_at_ms,
         artifacts,
-        command: format!("hzr index status --workspace {}", shell_quote(root)),
+        command: "hzr index status --workspace <workspace>".into(),
     })
 }
 
@@ -994,10 +993,6 @@ fn dashboard_help() -> Vec<DashboardHelpCommand> {
         command: command.into(),
     })
     .collect()
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn signed_percentage(part: i64, total: u64) -> f64 {
@@ -1365,10 +1360,24 @@ pub async fn exec_run(
     let budget = ManagedExecutionBudget::new(&state, request.timeout_ms)?;
     let cwd = canonical_workspace(&request.cwd)?;
     let command = CanonicalCommand::shell(request.command.clone());
-    let decision = enforce_first_class(
-        &request.command,
-        fork_decision_with_managed_unwrap(&state.rtk, &request.command, &cwd).await,
-    );
+    let preflight = daemon_fidelity_preflight(&state.ledger, &request, &cwd).await;
+    let mut plan = match &preflight {
+        FidelityPreflight::Ask { evasion, reason } => RtkRewriteOutcome {
+            decision: RewriteDecision::Ask {
+                proposed: Some(command.clone()),
+                reason: reason.clone(),
+            },
+            evasion: Some(*evasion),
+        },
+        FidelityPreflight::NotRequested | FidelityPreflight::Allow { .. } => {
+            fork_outcome_with_managed_unwrap(&state.rtk, &request.command, &cwd).await
+        }
+    };
+    if let FidelityPreflight::Allow { evasion, .. } = preflight {
+        plan.evasion = Some(evasion);
+    }
+    let decision = enforce_first_class(&request.command, plan.decision.clone());
+    record_exec_policy_event(&state, &request, &cwd, plan.evasion.as_ref(), &decision).await?;
     let decision = match decision {
         RewriteDecision::Ask { proposed, reason } => {
             let timeout_ms = Some(budget.limit_ms());
@@ -1378,7 +1387,11 @@ pub async fn exec_run(
                         .approvals
                         .insert(PendingApproval {
                             requested: command.clone(),
-                            proposed: proposed_command,
+                            approved_decision: approved_execution_decision(
+                                proposed_command,
+                                plan.evasion.as_ref(),
+                            ),
+                            evasion: plan.evasion,
                             cwd,
                             timeout_ms,
                             caller_path: request.caller_path,
@@ -1403,6 +1416,12 @@ pub async fn exec_run(
     envelope.decision = decision;
     envelope.cwd = Some(cwd);
     envelope.timeout_ms = Some(budget.remaining_ms()?);
+    RtkRewriteOutcome {
+        decision: envelope.decision.clone(),
+        evasion: plan.evasion,
+    }
+    .apply_evasion_environment(&mut envelope.environment)
+    .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
     apply_caller_path(&mut envelope, request.caller_path);
     state
         .executor
@@ -1410,6 +1429,24 @@ pub async fn exec_run(
         .await
         .map(Json)
         .map_err(|error| ApiError::service("execution_failed", error.to_string(), true))
+}
+
+fn approved_execution_decision(
+    proposed: CanonicalCommand,
+    evasion: Option<&EvasionAttribution>,
+) -> RewriteDecision {
+    if evasion.is_some_and(|evasion| evasion.class == EvasionClass::E7FidelityHatch) {
+        RewriteDecision::allow_raw("user approved the pending T4 fidelity command")
+    } else {
+        RewriteDecision::AllowRewrite {
+            command: proposed,
+            source: RewriteSource::Rtk {
+                version: PINNED_RTK_VERSION.into(),
+                route: hzr_exec::RtkRewriteRoute::Optimized,
+            },
+            reason: "user approved the pending fork-core command".into(),
+        }
+    }
 }
 
 pub async fn exec_approval(
@@ -1433,16 +1470,15 @@ pub async fn exec_approval(
         }));
     }
     let mut envelope = ExecutionEnvelope::allow_raw(pending.requested);
-    envelope.decision = RewriteDecision::AllowRewrite {
-        command: pending.proposed,
-        source: RewriteSource::Rtk {
-            version: PINNED_RTK_VERSION.into(),
-            route: hzr_exec::RtkRewriteRoute::Optimized,
-        },
-        reason: "user approved the pending fork-core command".into(),
-    };
+    envelope.decision = pending.approved_decision;
     envelope.cwd = Some(pending.cwd);
     envelope.timeout_ms = pending.timeout_ms;
+    RtkRewriteOutcome {
+        decision: envelope.decision.clone(),
+        evasion: pending.evasion,
+    }
+    .apply_evasion_environment(&mut envelope.environment)
+    .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
     apply_caller_path(&mut envelope, pending.caller_path);
     state
         .executor
@@ -1590,23 +1626,210 @@ pub async fn exec_rewrite(
     }
     validate_exec_timeout(request.timeout_ms)?;
     let cwd = canonical_workspace(&request.cwd)?;
-    let decision = fork_decision_with_managed_unwrap(&state.rtk, &request.command, &cwd).await;
-    Ok(Json(enforce_first_class(&request.command, decision)))
+    let preflight = daemon_fidelity_preflight(&state.ledger, &request, &cwd).await;
+    let mut outcome = match &preflight {
+        FidelityPreflight::Ask { evasion, reason } => RtkRewriteOutcome {
+            decision: RewriteDecision::Ask {
+                proposed: Some(CanonicalCommand::shell(request.command.clone())),
+                reason: reason.clone(),
+            },
+            evasion: Some(*evasion),
+        },
+        FidelityPreflight::NotRequested | FidelityPreflight::Allow { .. } => {
+            fork_outcome_with_managed_unwrap(&state.rtk, &request.command, &cwd).await
+        }
+    };
+    if let FidelityPreflight::Allow { evasion, .. } = preflight {
+        outcome.evasion = Some(evasion);
+    }
+    let decision = enforce_first_class(&request.command, outcome.decision);
+    record_exec_policy_event(&state, &request, &cwd, outcome.evasion.as_ref(), &decision).await?;
+    Ok(Json(decision))
 }
 
-async fn fork_decision_with_managed_unwrap(
+async fn daemon_fidelity_preflight(
+    ledger: &crate::ledger_writer::LedgerWriter,
+    request: &ExecApiRequest,
+    cwd: &Path,
+) -> FidelityPreflight {
+    if !fidelity_preflight_required(&request.command) {
+        return FidelityPreflight::NotRequested;
+    }
+    let budget = match request
+        .session_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        Some(session_id) => ledger
+            .fidelity_session_usage(session_id.to_owned(), FidelityAllowance::default())
+            .await
+            .ok()
+            .map(|usage| FidelityBudget {
+                remaining_operations: usage.remaining_operations,
+                remaining_tokens: usage.remaining_tokens,
+                exhausted: usage.exhausted,
+            }),
+        None => None,
+    };
+    hzr_core::fidelity_preflight(&request.command, cwd, budget)
+}
+
+async fn record_exec_policy_event(
+    state: &AppState,
+    request: &ExecApiRequest,
+    cwd: &Path,
+    evasion: Option<&EvasionAttribution>,
+    decision: &RewriteDecision,
+) -> Result<(), ApiError> {
+    let Some(evasion) = evasion.copied() else {
+        return Ok(());
+    };
+    let decision = match decision {
+        RewriteDecision::Ask { .. } => PolicyDecision::Ask,
+        RewriteDecision::Deny { .. } => PolicyDecision::Deny,
+        RewriteDecision::AllowRewrite { .. } => PolicyDecision::Correction,
+        RewriteDecision::AllowRaw { .. } => return Ok(()),
+    };
+    state
+        .ledger
+        .record_policy_event(crate::ledger_writer::PolicyEventRecord {
+            project_path: cwd.to_string_lossy().into_owned(),
+            agent: request.agent.clone(),
+            session_id: request.session_id.clone(),
+            evasion,
+            decision,
+            replacement_family: None,
+        })
+        .await
+        .map_err(|error| ApiError::internal(format!("policy event ledger write failed: {error}")))
+}
+
+async fn fork_outcome_with_managed_unwrap(
     rtk: &PinnedRtkAdapter,
     raw: &str,
     cwd: &Path,
-) -> RewriteDecision {
-    if explicit_raw_fidelity(raw) {
-        return RewriteDecision::allow_raw(
-            "explicit HZR_RAW_FIDELITY=1 request requires unfiltered output",
+) -> RtkRewriteOutcome {
+    let fidelity = raw_fidelity_request(raw);
+    let mut policy_evasion = raw_policy_evasion(raw, fidelity);
+    let command = match fidelity {
+        RawFidelityRequest::NotRequested => hzr_core::managed_raw_payload(raw).unwrap_or(raw),
+        RawFidelityRequest::MissingReason => {
+            return RtkRewriteOutcome {
+                decision: RewriteDecision::Ask {
+                    proposed: None,
+                    reason: "HZR_RAW_FIDELITY=1 requires a closed HZR_RAW_FIDELITY_REASON".into(),
+                },
+                evasion: policy_evasion,
+            };
+        }
+        RawFidelityRequest::InvalidReason => {
+            return RtkRewriteOutcome {
+                decision: RewriteDecision::Ask {
+                    proposed: None,
+                    reason: "HZR_RAW_FIDELITY_REASON is not an allowed fidelity reason".into(),
+                },
+                evasion: policy_evasion,
+            };
+        }
+        RawFidelityRequest::Authorized { payload, .. } => {
+            if let Some(replacement) = first_class_replacement(raw) {
+                if let Some(evasion) = policy_evasion.as_mut() {
+                    evasion.avoidable = true;
+                    evasion.fidelity_validation = FidelityValidation::ProvenEquivalent;
+                }
+                return RtkRewriteOutcome {
+                    decision: hzr_policy_rewrite(replacement),
+                    evasion: policy_evasion,
+                };
+            }
+            payload
+        }
+    };
+    let authorized = matches!(fidelity, RawFidelityRequest::Authorized { .. });
+    let canonical = CanonicalCommand::shell(command);
+    let mut outcome = if authorized {
+        rtk.decide_byte_fidelity_with_plan_in(&canonical, Some(cwd))
+            .await
+    } else {
+        rtk.decide_with_plan_in(&canonical, Some(cwd)).await
+    };
+    if authorized
+        && matches!(
+            &outcome.decision,
+            RewriteDecision::AllowRewrite {
+                source: RewriteSource::Rtk {
+                    route: hzr_exec::RtkRewriteRoute::Proxy,
+                    ..
+                },
+                ..
+            }
+        )
+    {
+        outcome.decision = RewriteDecision::allow_raw(
+            "authorized raw fidelity request has no byte-faithful managed equivalent",
         );
     }
-    let command = managed_raw_payload(raw).unwrap_or(raw);
-    rtk.decide_in(&CanonicalCommand::shell(command), Some(cwd))
-        .await
+    if policy_evasion.is_some() {
+        outcome.evasion = policy_evasion;
+    }
+    outcome
+}
+
+fn raw_policy_evasion(raw: &str, fidelity: RawFidelityRequest<'_>) -> Option<EvasionAttribution> {
+    let (reason, validation, hatch_marker, avoidable, tier) = match fidelity {
+        RawFidelityRequest::Authorized { reason, .. } => (
+            Some(protocol_fidelity_reason(reason)),
+            FidelityValidation::Valid,
+            true,
+            false,
+            EnforcementTier::T4HatchQuarantine,
+        ),
+        RawFidelityRequest::MissingReason => (
+            None,
+            FidelityValidation::MissingReason,
+            true,
+            true,
+            EnforcementTier::T4HatchQuarantine,
+        ),
+        RawFidelityRequest::InvalidReason => (
+            None,
+            FidelityValidation::InvalidReason,
+            true,
+            true,
+            EnforcementTier::T4HatchQuarantine,
+        ),
+        RawFidelityRequest::NotRequested if hzr_core::managed_raw_payload(raw).is_some() => (
+            None,
+            FidelityValidation::NotRequested,
+            false,
+            true,
+            EnforcementTier::T1NamedCorrection,
+        ),
+        RawFidelityRequest::NotRequested => return None,
+    };
+    Some(EvasionAttribution {
+        class: EvasionClass::E7FidelityHatch,
+        wrapper_depth: 1,
+        interpreter: None,
+        path_form: EvasionPathForm::Bare,
+        stage_count: 1,
+        hatch_marker,
+        avoidable,
+        tier,
+        fidelity_reason: reason,
+        fidelity_validation: validation,
+    })
+}
+
+fn protocol_fidelity_reason(reason: RawFidelityReason) -> FidelityReason {
+    match reason {
+        RawFidelityReason::Binary => FidelityReason::Binary,
+        RawFidelityReason::Checksum => FidelityReason::Checksum,
+        RawFidelityReason::MachineProtocol => FidelityReason::MachineProtocol,
+        RawFidelityReason::CompleteLog => FidelityReason::CompleteLog,
+        RawFidelityReason::FullPatch => FidelityReason::FullPatch,
+        RawFidelityReason::VerbatimSource => FidelityReason::VerbatimSource,
+    }
 }
 
 fn enforce_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision {
@@ -2159,33 +2382,191 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, Instant};
 
+    use super::anti_evasion_fixture::{ProbeDecision, ProbeLayer, ProbeSurface};
     use super::{
-        ManagedExecutionBudget, apply_caller_path, caveman_engine_health, dashboard_index_state,
+        ManagedExecutionBudget, apply_caller_path, approved_execution_decision,
+        caveman_engine_health, daemon_fidelity_preflight, dashboard_index_state,
         dashboard_memory_detail, dashboard_overall_state, dashboard_search_activity,
-        enforce_first_class, fork_decision_with_managed_unwrap, memory_mutation_targets,
-        memory_ready_state, overall_engine_state, validate_caller_path, validate_managed_fork_tool,
+        enforce_first_class, fork_outcome_with_managed_unwrap, memory_mutation_targets,
+        memory_ready_state, overall_engine_state, raw_policy_evasion, validate_caller_path,
+        validate_managed_fork_tool,
     };
-    use hzr_core::{ProjectOperationRoute, ProjectOperationSummary};
+    use crate::ledger_writer::{LedgerWriter, PolicyEventRecord};
+    use hzr_core::{
+        DetailedOperationAttribution, FidelityAllowance, FidelityPreflight, Ledger,
+        OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
+        ProjectOperationRoute, ProjectOperationSummary,
+    };
     use hzr_exec::{
         CanonicalCommand, CapturedContent, ExecutionEnvelope, ExecutionOutcome, ExecutionPipeline,
         ForkRuntimePaths, PINNED_RTK_VERSION, PinnedRtkAdapter, RewriteDecision, RewriteSource,
-        RtkAdapterConfig,
+        RtkAdapterConfig, RtkRewriteOutcome,
     };
     use hzr_index::IndexWatcherState;
     use hzr_memory::{Importance, MemoryRecord, MemoryScope, MemorySource, ProjectMemoryDetail};
     use hzr_protocol::{
-        DashboardOperationRoute, DashboardService, DashboardState, EngineHealth, EngineState,
-        MemoryWriteScope,
+        DashboardOperationRoute, DashboardService, DashboardState, EnforcementTier, EngineHealth,
+        EngineState, EvasionAttribution, EvasionClass, EvasionPathForm, ExecApiRequest,
+        FidelityReason, FidelityValidation, MemoryWriteScope, PolicyDecision,
     };
 
     const PROJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+    #[tokio::test]
+    async fn acceptance_gate_daemon_fidelity_budget_contradiction_and_policy_event() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let ledger_path = directory.path().join("ledger.sqlite");
+        let writer = LedgerWriter::open(&ledger_path).expect("ledger writer");
+        let request = ExecApiRequest {
+            cwd: directory.path().to_string_lossy().into_owned(),
+            command: "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw sha256sum artifact.bin".into(),
+            timeout_ms: None,
+            caller_path: None,
+            agent: Some("claude-code:agent-private".into()),
+            session_id: Some("session-fidelity".into()),
+        };
+
+        assert!(matches!(
+            daemon_fidelity_preflight(&writer, &request, directory.path()).await,
+            FidelityPreflight::Allow { .. }
+        ));
+
+        let mut contradicted = request.clone();
+        contradicted.command =
+            "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw cat artifact.bin"
+                .into();
+        assert!(matches!(
+            daemon_fidelity_preflight(&writer, &contradicted, directory.path()).await,
+            FidelityPreflight::Ask {
+                evasion: EvasionAttribution {
+                    fidelity_validation: FidelityValidation::Contradicted,
+                    ..
+                },
+                ..
+            }
+        ));
+
+        let evasion = EvasionAttribution {
+            class: EvasionClass::E7FidelityHatch,
+            wrapper_depth: 1,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 1,
+            hatch_marker: true,
+            avoidable: false,
+            tier: EnforcementTier::T4HatchQuarantine,
+            fidelity_reason: Some(FidelityReason::Checksum),
+            fidelity_validation: FidelityValidation::Valid,
+        };
+        let ledger = Ledger::open(&ledger_path).expect("ledger");
+        for _ in 0..FidelityAllowance::default().max_operations {
+            ledger
+                .record_operation_attributed_with_detail(
+                    "checksum",
+                    "checksum",
+                    1,
+                    1,
+                    0,
+                    DetailedOperationAttribution {
+                        attribution: OperationAttribution {
+                            project_path: directory.path().to_str().expect("utf8 path"),
+                            agent: Some("claude-code:agent-private"),
+                            session_id: Some("session-fidelity"),
+                            channel: OperationChannel::HookCli,
+                            measurement: OperationMeasurement::Estimated,
+                            route: OperationRoute::Bypassed,
+                        },
+                        detail: None,
+                        evasion: Some(&evasion),
+                    },
+                )
+                .expect("fidelity operation");
+        }
+        assert!(matches!(
+            daemon_fidelity_preflight(&writer, &request, directory.path()).await,
+            FidelityPreflight::Ask {
+                evasion: EvasionAttribution {
+                    fidelity_validation: FidelityValidation::BudgetExhausted,
+                    ..
+                },
+                ..
+            }
+        ));
+
+        let operations_before = ledger
+            .efficiency_summary()
+            .expect("efficiency before policy event")
+            .operations;
+        writer
+            .record_policy_event(PolicyEventRecord {
+                project_path: directory.path().to_string_lossy().into_owned(),
+                agent: request.agent.clone(),
+                session_id: request.session_id.clone(),
+                evasion: EvasionAttribution {
+                    fidelity_validation: FidelityValidation::BudgetExhausted,
+                    avoidable: true,
+                    ..evasion
+                },
+                decision: PolicyDecision::Ask,
+                replacement_family: None,
+            })
+            .await
+            .expect("policy event");
+        assert_eq!(
+            ledger
+                .efficiency_summary()
+                .expect("efficiency after policy event")
+                .operations,
+            operations_before,
+            "Ask policy event must not create a second command row"
+        );
+        let score = ledger
+            .session_evasion_summary("session-fidelity", FidelityAllowance::default())
+            .expect("session score");
+        assert_eq!(score.policy_asks, 1);
+    }
+
+    #[test]
+    fn acceptance_gate_approved_checksum_preserves_exact_requested_command() {
+        let raw = "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw sha256sum artifact.bin";
+        let requested = CanonicalCommand::shell(raw);
+        let evasion = EvasionAttribution {
+            class: EvasionClass::E7FidelityHatch,
+            wrapper_depth: 1,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 1,
+            hatch_marker: true,
+            avoidable: true,
+            tier: EnforcementTier::T4HatchQuarantine,
+            fidelity_reason: Some(FidelityReason::Checksum),
+            fidelity_validation: FidelityValidation::BudgetExhausted,
+        };
+        let decision = approved_execution_decision(requested.clone(), Some(&evasion));
+        assert!(matches!(decision, RewriteDecision::AllowRaw { .. }));
+
+        let mut envelope = ExecutionEnvelope::allow_raw(requested.clone());
+        envelope.decision = decision.clone();
+        RtkRewriteOutcome {
+            decision,
+            evasion: Some(evasion),
+        }
+        .apply_evasion_environment(&mut envelope.environment)
+        .expect("closed evasion environment");
+        assert_eq!(envelope.command, requested);
+        assert_eq!(
+            envelope
+                .environment
+                .set
+                .get("HZR_INTERNAL_EVASION_JSON")
+                .and_then(|encoded| serde_json::from_str::<EvasionAttribution>(encoded).ok()),
+            Some(evasion)
+        );
+    }
+
     #[test]
     fn acceptance_gate_no_raw_for_optimizable_exec_commands() {
         for command in [
-            "hzr rtk -- raw nl -ba src/main.rs",
-            "hzr rtk -- raw sed -n 40,80p src/main.rs",
-            "hzr rtk -- raw rg -n needle src",
             "hzr rtk -- raw hzr stats",
             "hzr rtk -- raw hzr search \"two words\" --mode exact",
         ] {
@@ -2203,25 +2584,19 @@ mod tests {
             );
         }
 
-        let decision = enforce_first_class(
-            "hzr rtk -- raw nl -ba src/main.rs",
-            RewriteDecision::AllowRewrite {
-                command: CanonicalCommand::shell("rtk proxy nl -ba src/main.rs"),
-                source: RewriteSource::Rtk {
-                    version: PINNED_RTK_VERSION.into(),
-                    route: hzr_exec::RtkRewriteRoute::Proxy,
-                },
-                reason: "fork selected tracked raw proxy".into(),
+        let proxy = RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("rtk proxy nl -ba src/main.rs"),
+            source: RewriteSource::Rtk {
+                version: PINNED_RTK_VERSION.into(),
+                route: hzr_exec::RtkRewriteRoute::Proxy,
             },
+            reason: "fork selected tracked raw proxy".into(),
+        };
+        let decision = enforce_first_class("hzr rtk -- raw nl -ba src/main.rs", proxy.clone());
+        assert_eq!(
+            decision, proxy,
+            "daemon overrode the canonical Proxy decision"
         );
-        assert!(matches!(
-            decision,
-            RewriteDecision::AllowRewrite {
-                command: CanonicalCommand::Shell { ref command, .. },
-                source: RewriteSource::HzrPolicy,
-                ..
-            } if command == "hzr rtk -- read src/main.rs -n"
-        ));
 
         let specialized = RewriteDecision::AllowRewrite {
             command: CanonicalCommand::shell("rtk rg -n RewriteDecision crates/hzr-exec"),
@@ -2307,11 +2682,31 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn acceptance_gate_no_raw_fork_families_finish_as_rewrites() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let binary = directory.path().join("rtk");
-        let script = format!(
-            r#"#!/bin/sh
+    async fn acceptance_gate_shared_fixture_reaches_daemon_policy() {
+        let probes = super::anti_evasion_fixture::load_anti_evasion_probes();
+        let root_shell = probes
+            .iter()
+            .filter(|probe| probe.layer == ProbeLayer::Root && probe.surface == ProbeSurface::Shell)
+            .collect::<Vec<_>>();
+        assert_eq!(root_shell.len(), 5, "all root shell probes must execute");
+
+        for probe in root_shell {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let binary = directory.path().join("rtk");
+            let plan = match probe.route.as_deref() {
+                Some(route) if route.starts_with("rtk ") => {
+                    serde_json::json!({"decision": "rewrite", "proposed": route})
+                }
+                _ => serde_json::json!({"decision": "proxy"}),
+            };
+            let plan_path = directory.path().join("rewrite-plan.json");
+            fs::write(
+                &plan_path,
+                serde_json::to_vec(&plan).expect("rewrite plan JSON"),
+            )
+            .expect("rewrite plan fixture");
+            let script = format!(
+                r#"#!/bin/sh
 if test "${{1:-}}" = --version; then
   printf 'rtk %s\n' '{PINNED_RTK_VERSION}'
   exit 0
@@ -2324,61 +2719,76 @@ if test "${{1:-}}" = proxy && test "${{2:-}}" = --help; then
   printf 'Usage: rtk proxy [ARGS]... Execute command without filtering\n'
   exit 0
 fi
-if test "${{1:-}}" = rewrite; then
-  case "${{2:-}}" in
-    bun\ *|cargo\ *|npm\ *|pnpm\ *|ssh\ *|git\ *|gh\ *|find\ *|wget\ *|ps\ *)
-      printf 'rtk filtered'
-      exit 0
-      ;;
-    hzr\ rtk\ --\ raw\ *)
-      exit 2
-      ;;
-  esac
-  exit 1
+if test "${{1:-}}" = rewrite-plan; then
+  /bin/cat '{}'
+  exit 0
 fi
 exit 64
-"#
-        );
-        fs::write(&binary, script).expect("fake fork-core");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
-            .expect("fake fork-core permissions");
-        let adapter = PinnedRtkAdapter::detect(RtkAdapterConfig {
-            binary,
-            runtime_paths: Some(ForkRuntimePaths::from_data_root(
-                &directory.path().join("data"),
-            )),
-            ..RtkAdapterConfig::default()
-        })
-        .await;
-
-        for command in [
-            "hzr rtk -- raw bun test",
-            "hzr rtk -- raw cargo test --workspace",
-            "hzr rtk -- raw npm test",
-            "hzr rtk -- raw pnpm test",
-            "hzr rtk -- raw ssh host docker-ps",
-            "hzr rtk -- raw git status --short",
-            "hzr rtk -- raw gh run list",
-            "hzr rtk -- raw find src -type f",
-            "hzr rtk -- raw wget https://example.test",
-            "hzr rtk -- raw ps aux",
-        ] {
-            let decision =
-                fork_decision_with_managed_unwrap(&adapter, command, directory.path()).await;
-            assert!(
-                matches!(decision, RewriteDecision::AllowRewrite { .. }),
-                "{command} remained raw: {decision:?}"
+"#,
+                plan_path.display()
             );
-        }
-
-        for command in [
-            "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.json",
-            "HZR_RAW_FIDELITY=1 hzr rtk -- raw rg -n needle src",
-            "HZR_RAW_FIDELITY=1 hzr rtk -- raw sh -c 'printf complete-output'",
-        ] {
-            let unsupported =
-                fork_decision_with_managed_unwrap(&adapter, command, directory.path()).await;
-            assert!(matches!(unsupported, RewriteDecision::AllowRaw { .. }));
+            fs::write(&binary, script).expect("fake fork-core");
+            fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+                .expect("fake fork-core permissions");
+            let adapter = PinnedRtkAdapter::detect(RtkAdapterConfig {
+                binary,
+                runtime_paths: Some(ForkRuntimePaths::from_data_root(
+                    &directory.path().join("data"),
+                )),
+                ..RtkAdapterConfig::default()
+            })
+            .await;
+            let command = probe.command.as_deref().expect("root shell command");
+            let outcome =
+                fork_outcome_with_managed_unwrap(&adapter, command, directory.path()).await;
+            let decision = enforce_first_class(command, outcome.decision);
+            match probe.decision {
+                ProbeDecision::Rewrite => {
+                    let RewriteDecision::AllowRewrite {
+                        command: CanonicalCommand::Shell { command, .. },
+                        ..
+                    } = decision
+                    else {
+                        assert!(
+                            matches!(
+                                &decision,
+                                RewriteDecision::AllowRewrite {
+                                    command: CanonicalCommand::Shell { .. },
+                                    ..
+                                }
+                            ),
+                            "root probe {} was not rewritten: {decision:?}",
+                            probe.id
+                        );
+                        continue;
+                    };
+                    assert!(
+                        command.ends_with(probe.route.as_deref().expect("rewrite route")),
+                        "root probe {} selected {command}",
+                        probe.id
+                    );
+                }
+                ProbeDecision::Ask => assert!(
+                    matches!(decision, RewriteDecision::Ask { .. }),
+                    "root probe {} was not Ask: {decision:?}",
+                    probe.id
+                ),
+                ProbeDecision::Raw => assert!(
+                    matches!(decision, RewriteDecision::AllowRaw { .. }),
+                    "root probe {} did not preserve fidelity: {decision:?}",
+                    probe.id
+                ),
+                ProbeDecision::Proxy | ProbeDecision::Allow | ProbeDecision::Deny => {
+                    assert!(
+                        matches!(
+                            probe.decision,
+                            ProbeDecision::Rewrite | ProbeDecision::Ask | ProbeDecision::Raw
+                        ),
+                        "invalid root decision for {}",
+                        probe.id
+                    )
+                }
+            }
         }
     }
 
@@ -2408,6 +2818,16 @@ exit 64
     }
 
     #[test]
+    fn first_class_gate_preserves_an_ambiguous_shell_ask() {
+        let ask = RewriteDecision::Ask {
+            proposed: None,
+            reason: "fork-core could not safely decompose an opaque shell wrapper".into(),
+        };
+
+        assert_eq!(enforce_first_class("sh -c 'git status", ask.clone()), ask);
+    }
+
+    #[test]
     fn exec_caller_path_is_validated_and_applied_to_the_envelope() {
         assert!(validate_caller_path(Some("/toolchain/bin:/usr/bin")).is_ok());
         assert!(validate_caller_path(Some(&"x".repeat(32 * 1024 + 1))).is_err());
@@ -2419,6 +2839,87 @@ exit 64
             envelope.environment.set.get("PATH").map(String::as_str),
             Some("/toolchain/bin:/usr/bin")
         );
+    }
+
+    #[test]
+    fn acceptance_gate_exec_plan_carries_only_closed_evasion_metadata() {
+        let mut envelope = ExecutionEnvelope::allow_raw(CanonicalCommand::shell("cargo test"));
+        let evasion = EvasionAttribution {
+            class: EvasionClass::E2ShellWrapper,
+            wrapper_depth: 1,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 1,
+            hatch_marker: false,
+            avoidable: true,
+            tier: EnforcementTier::T1NamedCorrection,
+            fidelity_reason: None,
+            fidelity_validation: FidelityValidation::NotRequested,
+        };
+        RtkRewriteOutcome {
+            decision: envelope.decision.clone(),
+            evasion: Some(evasion),
+        }
+        .apply_evasion_environment(&mut envelope.environment)
+        .expect("closed evasion environment");
+        let encoded = envelope
+            .environment
+            .set
+            .get("HZR_INTERNAL_EVASION_JSON")
+            .expect("evasion environment");
+        assert_eq!(
+            serde_json::from_str::<EvasionAttribution>(encoded).expect("closed attribution"),
+            evasion
+        );
+        assert!(!encoded.contains("cargo test"));
+    }
+
+    #[test]
+    fn acceptance_gate_raw_fidelity_is_typed_before_wrapper_removal() {
+        let cases = [
+            (
+                "hzr rtk -- raw cat file.txt",
+                FidelityValidation::NotRequested,
+                false,
+                true,
+                None,
+            ),
+            (
+                "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat file.txt",
+                FidelityValidation::MissingReason,
+                true,
+                true,
+                None,
+            ),
+            (
+                "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=private-value hzr rtk -- raw cat file.txt",
+                FidelityValidation::InvalidReason,
+                true,
+                true,
+                None,
+            ),
+            (
+                "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw sha256sum file.txt",
+                FidelityValidation::Valid,
+                true,
+                false,
+                Some(FidelityReason::Checksum),
+            ),
+        ];
+        for (command, validation, hatch_marker, avoidable, reason) in cases {
+            let attribution = raw_policy_evasion(command, hzr_core::raw_fidelity_request(command))
+                .expect("raw policy attribution");
+            assert_eq!(attribution.class, EvasionClass::E7FidelityHatch);
+            assert_eq!(attribution.fidelity_validation, validation);
+            assert_eq!(attribution.hatch_marker, hatch_marker);
+            assert_eq!(attribution.avoidable, avoidable);
+            assert_eq!(attribution.fidelity_reason, reason);
+            assert!(
+                !serde_json::to_string(&attribution)
+                    .expect("closed attribution")
+                    .contains("private-value")
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -2671,11 +3172,12 @@ exit 64
                 timestamp: "2026-08-02T16:00:00Z".into(),
                 operation: "read".into(),
                 route: ProjectOperationRoute::Optimized,
-                original_command: "read README.md".into(),
-                recorded_command: "rtk read".into(),
-                working_directory: "/work/hzr".into(),
+                command_hash: "sha256:read".into(),
+                project_hash: "sha256:project".into(),
                 agent: Some("codex".into()),
-                session_id: Some("task-42".into()),
+                session_hash: Some("sha256:session-42".into()),
+                producer_version: Some("hzr-core/test".into()),
+                policy_version: Some("privacy_typed_v1".into()),
                 baseline_tokens_estimated: 10,
                 delivered_tokens_estimated: 5,
                 net_avoided_tokens_estimated: 5,
@@ -2688,11 +3190,12 @@ exit 64
                 timestamp: "2026-08-02T15:59:00Z".into(),
                 operation: "rgai".into(),
                 route: ProjectOperationRoute::Optimized,
-                original_command: "grepai search 'real routed query' .".into(),
-                recorded_command: "rtk rgai".into(),
-                working_directory: "/work/hzr".into(),
+                command_hash: "sha256:search".into(),
+                project_hash: "sha256:project".into(),
                 agent: Some("codex".into()),
-                session_id: Some("task-41".into()),
+                session_hash: Some("sha256:session-41".into()),
+                producer_version: Some("hzr-core/test".into()),
+                policy_version: Some("privacy_typed_v1".into()),
                 baseline_tokens_estimated: 120,
                 delivered_tokens_estimated: 30,
                 net_avoided_tokens_estimated: 90,
@@ -2706,14 +3209,16 @@ exit 64
 
         assert_eq!(activity.state, DashboardState::Ready);
         assert_eq!(activity.ledger_id, Some(41));
-        assert_eq!(
-            activity.command.as_deref(),
-            Some("grepai search 'real routed query' .")
-        );
+        assert_eq!(activity.operation.as_deref(), Some("rgai"));
+        assert_eq!(activity.command_hash.as_deref(), Some("sha256:search"));
         assert_eq!(activity.route, Some(DashboardOperationRoute::Optimized));
         assert_eq!(activity.agent.as_deref(), Some("codex"));
-        assert_eq!(activity.session_id.as_deref(), Some("task-41"));
+        assert_eq!(activity.session_hash.as_deref(), Some("sha256:session-41"));
         assert_eq!(activity.execution_ms, Some(17));
+        let encoded = serde_json::to_string(&activity).expect("activity JSON");
+        for sensitive in ["real routed query", "/work/hzr", "task-41"] {
+            assert!(!encoded.contains(sensitive), "dashboard leaked {sensitive}");
+        }
     }
 
     #[test]
@@ -2722,7 +3227,7 @@ exit 64
 
         assert_eq!(activity.state, DashboardState::Standby);
         assert_eq!(activity.ledger_id, None);
-        assert_eq!(activity.command, None);
+        assert_eq!(activity.operation, None);
         assert!(activity.detail.contains("No routed HZR search"));
     }
 

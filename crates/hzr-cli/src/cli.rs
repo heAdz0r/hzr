@@ -29,6 +29,13 @@ pub struct StatsDuration {
     label: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum AccountingVersion {
+    #[default]
+    Current,
+    All,
+}
+
 impl StatsDuration {
     pub const fn seconds(&self) -> u64 {
         self.seconds
@@ -174,6 +181,9 @@ pub enum Command {
         /// Enable HZR only for the current workspace; hooks become no-ops elsewhere
         #[arg(long)]
         project_only: bool,
+        /// Native file-tool policy. New installs default to steer; upgrades retain observe.
+        #[arg(long, value_enum, value_name = "MODE")]
+        native_tool_mode: Option<crate::adoption::NativeToolMode>,
         /// Pin Codex/Claude Desktop MCP registrations to this project (default: install cwd).
         /// Those clients keep one global MCP entry, so only one project can be pinned at a time;
         /// re-run install or `hzr mcp config --apply --workspace <dir>` to retarget.
@@ -310,6 +320,8 @@ pub enum Command {
         long_about = "Build your project through the inherited fork-core build wrapper with token-optimized output. Deliberately kept as `build` rather than folded into `hzr rtk -- build` so RTK muscle memory keeps working. Building the HZR distribution itself is `hzr release`."
     )]
     Build(ForkForwardArgs),
+    #[command(about = "Run tests through the inherited failure-first filter")]
+    Test(ForkForwardArgs),
     #[command(about = "Read files through bounded HZR filtering")]
     Read(ForkForwardArgs),
     #[command(about = "Write files atomically through HZR")]
@@ -326,9 +338,15 @@ pub enum Command {
         /// Emit every per-command row. Default JSON is bounded to protect agent context.
         #[arg(long)]
         all: bool,
+        /// Show privacy-safe evasion and fidelity-budget aggregates
+        #[arg(long)]
+        evasion: bool,
         /// Limit all ledger summaries to records observed within this window (for example 24h, 7d, or 4w)
         #[arg(long, value_name = "DURATION", value_parser = parse_stats_duration)]
         since: Option<StatsDuration>,
+        /// Select current privacy-typed accounting or an explicitly labeled compatibility view
+        #[arg(long, value_enum, default_value_t)]
+        accounting_version: AccountingVersion,
     },
     #[command(hide = true)]
     Savings,
@@ -408,9 +426,17 @@ pub enum HooksCommand {
     #[command(about = "Report HZR, legacy RTK, and external ICM hook ownership")]
     Status,
     #[command(hide = true)]
-    Dispatch,
+    Dispatch {
+        #[arg(long, value_enum, default_value = "observe")]
+        native_mode: crate::adoption::NativeToolMode,
+    },
     #[command(hide = true)]
-    Observe,
+    Observe {
+        #[arg(long, value_enum, default_value = "observe")]
+        native_mode: crate::adoption::NativeToolMode,
+    },
+    #[command(hide = true)]
+    Feedback,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1385,6 +1411,38 @@ mod tests {
     }
 
     #[test]
+    fn acceptance_gate_test_and_native_policy_have_first_class_cli_surfaces() {
+        let test = Cli::try_parse_from(["hzr", "test", "bun", "test", "--watch"])
+            .expect("first-class test alias");
+        assert!(matches!(
+            test.command,
+            Command::Test(ref arguments)
+                if arguments.args
+                    == [
+                        std::ffi::OsString::from("bun"),
+                        std::ffi::OsString::from("test"),
+                        std::ffi::OsString::from("--watch"),
+                    ]
+        ));
+
+        let install = Cli::try_parse_from([
+            "hzr",
+            "install",
+            "--dry-run",
+            "--native-tool-mode",
+            "strict",
+        ])
+        .expect("strict native mode");
+        assert!(matches!(
+            install.command,
+            Command::Install {
+                native_tool_mode: Some(crate::adoption::NativeToolMode::Strict),
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn test_cli_parses_adoption_and_idempotent_init_surface() {
         let install =
             Cli::try_parse_from(["hzr", "install", "--dry-run"]).expect("valid install preview");
@@ -1483,6 +1541,20 @@ mod tests {
                 "duration {value:?} must be rejected deterministically"
             );
         }
+    }
+
+    #[test]
+    fn acceptance_gate_stats_exposes_bounded_evasion_view() {
+        let cli = Cli::try_parse_from(["hzr", "stats", "--evasion", "--since", "7d"])
+            .expect("evasion stats");
+        assert!(matches!(
+            cli.command,
+            Command::Stats {
+                evasion: true,
+                since: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]

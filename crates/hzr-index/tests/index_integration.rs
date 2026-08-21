@@ -298,7 +298,7 @@ async fn test_managed_discovery_adopts_legacy_project_index_without_second_datab
         .await
         .expect("legacy index adoption must succeed");
 
-    assert_eq!(outcome, InitOutcome::AlreadyInitialized);
+    assert_eq!(outcome, InitOutcome::RepositoryGraphEnabled);
     assert!(!data.path().join("workspaces").exists());
     assert!(repo.path().join(".grepai/config.yaml").is_file());
 }
@@ -465,6 +465,7 @@ async fn test_coordinator_status_proves_index_artifacts_and_live_watcher() {
     assert!(snapshot.index.initialized);
     assert!(snapshot.index.vectors_present);
     assert!(snapshot.index.symbols_present);
+    assert!(snapshot.index.repository_graph_present);
     assert_eq!(snapshot.watcher.state, IndexWatcherState::Live);
     assert!(snapshot.watcher.pid.is_some());
     coordinator.shutdown().await.expect("coordinator shutdown");
@@ -485,6 +486,85 @@ async fn test_connect_rejects_unpinned_grepai_version() {
             ..
         })
     ));
+}
+
+#[tokio::test]
+async fn acceptance_gate_managed_initialization_enables_local_repository_graph() {
+    let repo = git_repo();
+    let index = repo.path().join(".grepai");
+    fs::create_dir_all(&index).expect("index directory");
+    fs::write(
+        index.join("config.yaml"),
+        "version: 1\nrpg:\n    enabled: false\n    feature_mode: local\n",
+    )
+    .expect("disabled graph config");
+    fs::write(index.join("index.gob"), b"").expect("vector index");
+    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.35.0")).await;
+
+    let outcome = engine
+        .initialize(&InitOptions::default())
+        .await
+        .expect("managed initialization must enable graph-first indexing");
+    let config = fs::read_to_string(index.join("config.yaml")).expect("updated config");
+
+    assert_eq!(outcome, InitOutcome::RepositoryGraphEnabled);
+    assert!(config.contains("rpg:\n    enabled: true\n"));
+    assert!(!config.contains("enabled: false"));
+}
+
+#[tokio::test]
+async fn test_managed_initialization_rejects_ambiguous_repository_graph_setting() {
+    let repo = git_repo();
+    let index = repo.path().join(".grepai");
+    fs::create_dir_all(&index).expect("index directory");
+    fs::write(
+        index.join("config.yaml"),
+        "version: 1\nrpg:\n    enabled: sometimes\n",
+    )
+    .expect("invalid graph config");
+    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.35.0")).await;
+
+    let result = engine.initialize(&InitOptions::default()).await;
+
+    assert!(matches!(
+        result,
+        Err(IndexError::InvalidInput {
+            field: "rpg.enabled",
+            ..
+        })
+    ));
+    assert_eq!(
+        fs::read_to_string(index.join("config.yaml")).expect("unchanged config"),
+        "version: 1\nrpg:\n    enabled: sometimes\n"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_managed_initialization_rejects_symlinked_grepai_config() {
+    use std::os::unix::fs::symlink;
+
+    let repo = git_repo();
+    let index = repo.path().join(".grepai");
+    let outside = repo.path().join("outside.yaml");
+    fs::create_dir_all(&index).expect("index directory");
+    fs::write(&outside, "version: 1\nrpg:\n    enabled: false\n").expect("outside config");
+    symlink(&outside, index.join("config.yaml")).expect("config symlink");
+    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.35.0")).await;
+
+    let result = engine.initialize(&InitOptions::default()).await;
+
+    assert!(matches!(
+        result,
+        Err(IndexError::InvalidInput {
+            field: "grepai config",
+            ..
+        })
+    ));
+    assert_eq!(
+        fs::read_to_string(outside).expect("outside config unchanged"),
+        "version: 1\nrpg:\n    enabled: false\n"
+    );
 }
 
 fn git_repo() -> TempDir {
@@ -538,7 +618,7 @@ case "$command_name" in
     ;;
   init)
     mkdir -p .grepai
-    printf 'version: 1\n' > .grepai/config.yaml
+    printf 'version: 1\nrpg:\n    enabled: false\n' > .grepai/config.yaml
     : > .grepai/index.gob
     : > .grepai/symbols.gob
     ;;
@@ -578,6 +658,9 @@ case "$command_name" in
       exit 0
     fi
     mkdir -p "$log_dir"
+    if grep -q 'enabled: true' .grepai/config.yaml; then
+      : > .grepai/rpg.gob
+    fi
     printf '%s\n' "$$" > "$log_dir/fake.pid"
     printf 'ready\n%s\n' "$$" > "$log_dir/fake.ready"
     cleanup() {{ rm -f "$log_dir/fake.pid" "$log_dir/fake.ready"; exit 0; }}

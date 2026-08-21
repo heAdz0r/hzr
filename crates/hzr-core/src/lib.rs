@@ -11,15 +11,21 @@ pub use config::{
 };
 pub use engines::{EngineManifest, EnginePin, locked_engines};
 pub use ledger::{
-    BypassSummary, BypassTool, BypassWindow, DetailedOperationAttribution,
-    EfficiencyCommandSummary, EfficiencySummary, Ledger, LedgerError, LedgerRecord, LedgerSummary,
+    BypassSummary, BypassTool, BypassWindow, CURRENT_ACCOUNTING_POLICY_VERSION,
+    CURRENT_PRODUCER_VERSION, DEFAULT_FIDELITY_OPERATION_ALLOWANCE,
+    DEFAULT_FIDELITY_TOKEN_ALLOWANCE, DetailedOperationAttribution, EfficiencyCommandSummary,
+    EfficiencySummary, EvasionClassSummary, EvasionSummary, FidelityAllowance,
+    FidelitySessionUsage, Ledger, LedgerError, LedgerRecord, LedgerSummary,
     LegacyEfficiencyMigration, LegacyEfficiencySource, OperationAttribution, OperationContext,
-    OperationFamilySummary, OperationModeSummary, PriceTable, ProjectActivitySummary,
-    ProjectOperationRoute, ProjectOperationSummary, StatsCollection, StatsQuery, StatsSnapshot,
-    discover_legacy_rtk_history, inspect_legacy_efficiency,
+    OperationFamilySummary, OperationModeSummary, PolicyEvent, PolicyEventSummary, PriceTable,
+    ProjectActivitySummary, ProjectOperationRoute, ProjectOperationSummary, ReadPipelineSummary,
+    SessionEvasionSummary, StatsCollection, StatsQuery, StatsSnapshot, discover_legacy_rtk_history,
+    inspect_legacy_efficiency, privacy_identity_hash,
 };
 pub use operation::{
-    OperationChannel, OperationClassification, OperationMeasurement, OperationRoute,
-    OperationSubsystem, RawReplacement, classify_operation, efficient_route_replacement,
-    explicit_raw_fidelity, first_class_replacement, managed_raw_payload, raw_route_sql_predicate,
+    FidelityBudget, FidelityPreflight, OperationChannel, OperationClassification,
+    OperationMeasurement, OperationRoute, OperationSubsystem, RawFidelityReason,
+    RawFidelityRequest, RawReplacement, classify_operation, efficient_route_replacement,
+    explicit_raw_fidelity, fidelity_preflight, fidelity_preflight_required,
+    first_class_replacement, managed_raw_payload, raw_fidelity_request, raw_route_sql_predicate,
 };

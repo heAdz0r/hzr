@@ -10,8 +10,10 @@ use anyhow::{Result, anyhow, bail};
 use hzr_exec::{
     CanonicalCommand, CapturedContent, ExecutionEnvelope, ExecutionOutcome, ExecutionPipeline,
     ForkCoreInvocation, ForkRuntimePaths, PINNED_RTK_VERSION, PinnedRtkAdapter, RewriteDecision,
-    RtkAdapterConfig, RtkRewriteInterface, StdinSpec, TerminationCause,
+    RewriteSource, RtkAdapterConfig, RtkRewriteInterface, RtkRewriteRoute, StdinSpec,
+    TerminationCause,
 };
+use hzr_protocol::{EnforcementTier, EvasionClass, EvasionPathForm, FidelityValidation};
 use tempfile::TempDir;
 
 static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -49,8 +51,9 @@ if test "${{1:-}}" = proxy && test "${{2:-}}" = --help; then
   printf '%s\n' 'Usage: rtk proxy [ARGS]... Execute command without filtering'
   exit 0
 fi
-if test "${{1:-}}" = rewrite; then
+if test "${{1:-}}" = rewrite-plan; then
   {rewrite_body}
+  exit $?
 fi
 if test "${{1:-}}" = proxy; then
   shift
@@ -129,7 +132,10 @@ async fn execute_decision(
 #[tokio::test]
 async fn test_adapter_exit_zero_executes_exact_pinned_fork() -> Result<()> {
     let _guard = TEST_LOCK.lock().await;
-    let fork = FakeFork::new(PINNED_RTK_VERSION, "printf 'rtk filtered'; exit 0")?;
+    let fork = FakeFork::new(
+        PINNED_RTK_VERSION,
+        r#"printf '{"decision":"rewrite","proposed":"rtk filtered"}'"#,
+    )?;
     let decoy_directory = TempDir::new()?;
     let decoy = decoy_directory.path().join("rtk");
     fs::write(&decoy, "#!/bin/sh\nprintf 'wrong-rtk'\n")?;
@@ -153,9 +159,49 @@ async fn test_adapter_exit_zero_executes_exact_pinned_fork() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_adapter_consumes_typed_payload_free_evasion_plan() -> Result<()> {
+    let _guard = TEST_LOCK.lock().await;
+    let fork = FakeFork::new(
+        PINNED_RTK_VERSION,
+        r#"printf '{"decision":"rewrite","proposed":"rtk read README.md","attribution":{"class":"e2_shell_wrapper","wrapper_depth":1,"path_form":"bare","stage_count":1,"hatch_marker":false,"avoidable":true,"tier":"t1_named_correction","fidelity_validation":"not_requested"}}'"#,
+    )?;
+    let adapter = PinnedRtkAdapter::detect(fork.config()).await;
+    let outcome = adapter
+        .decide_with_plan_in(&CanonicalCommand::shell("sh -c 'cat README.md'"), None)
+        .await;
+    assert!(
+        outcome.evasion.is_some(),
+        "missing attribution: {outcome:?}"
+    );
+    let evasion = outcome.evasion.expect("typed evasion attribution");
+
+    assert_eq!(evasion.class, EvasionClass::E2ShellWrapper);
+    assert_eq!(evasion.wrapper_depth, 1);
+    assert_eq!(evasion.path_form, EvasionPathForm::Bare);
+    assert_eq!(evasion.tier, EnforcementTier::T1NamedCorrection);
+    assert_eq!(
+        evasion.fidelity_validation,
+        FidelityValidation::NotRequested
+    );
+    assert!(matches!(
+        outcome.decision,
+        RewriteDecision::AllowRewrite { .. }
+    ));
+    let mut environment = hzr_exec::Environment::default();
+    outcome.apply_evasion_environment(&mut environment)?;
+    let internal = environment
+        .set
+        .get(hzr_exec::INTERNAL_EVASION_ENV)
+        .expect("internal attribution environment");
+    assert!(!internal.contains("README.md"));
+    assert!(!internal.contains("sh -c"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_adapter_exit_one_uses_proxy_and_propagates_child_exit() -> Result<()> {
     let _guard = TEST_LOCK.lock().await;
-    let fork = FakeFork::new(PINNED_RTK_VERSION, "exit 1")?;
+    let fork = FakeFork::new(PINNED_RTK_VERSION, r#"printf '{"decision":"proxy"}'"#)?;
     let adapter = PinnedRtkAdapter::detect(fork.config()).await;
     let requested = CanonicalCommand::argv("/bin/sh", vec!["-c".to_owned(), "exit 7".to_owned()])?;
     let decision = adapter.decide(&requested).await;
@@ -171,7 +217,10 @@ async fn test_adapter_exit_one_uses_proxy_and_propagates_child_exit() -> Result<
 #[tokio::test]
 async fn test_adapter_exit_two_returns_typed_deny() -> Result<()> {
     let _guard = TEST_LOCK.lock().await;
-    let fork = FakeFork::new(PINNED_RTK_VERSION, "exit 2")?;
+    let fork = FakeFork::new(
+        PINNED_RTK_VERSION,
+        r#"printf '{"decision":"deny","reason":"permission_policy"}'"#,
+    )?;
     let adapter = PinnedRtkAdapter::detect(fork.config()).await;
 
     assert!(matches!(
@@ -184,7 +233,10 @@ async fn test_adapter_exit_two_returns_typed_deny() -> Result<()> {
 #[tokio::test]
 async fn test_adapter_exit_three_preserves_fork_approval() -> Result<()> {
     let _guard = TEST_LOCK.lock().await;
-    let fork = FakeFork::new(PINNED_RTK_VERSION, "printf 'rtk filtered'; exit 3")?;
+    let fork = FakeFork::new(
+        PINNED_RTK_VERSION,
+        r#"printf '{"decision":"ask","proposed":"rtk filtered","reason":"permission_policy"}'"#,
+    )?;
     let adapter = PinnedRtkAdapter::detect(fork.config()).await;
 
     assert!(matches!(
@@ -198,11 +250,62 @@ async fn test_adapter_exit_three_preserves_fork_approval() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_adapter_exit_four_asks_without_reconstructing_opaque_shell() -> Result<()> {
+    let _guard = TEST_LOCK.lock().await;
+    let fork = FakeFork::new(
+        PINNED_RTK_VERSION,
+        r#"printf '{"decision":"ask","reason":"canonical_policy"}'"#,
+    )?;
+    let adapter = PinnedRtkAdapter::detect(fork.config()).await;
+
+    assert!(matches!(
+        adapter
+            .decide(&CanonicalCommand::shell("sh -c 'git status"))
+            .await,
+        RewriteDecision::Ask { proposed: None, .. }
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_byte_fidelity_mode_requires_the_fork_to_select_proxy() -> Result<()> {
+    let _guard = TEST_LOCK.lock().await;
+    let fork = FakeFork::new(
+        PINNED_RTK_VERSION,
+        r#"if test "${HZR_INTERNAL_BYTE_FIDELITY:-}" = 1; then printf '{"decision":"proxy"}'; else printf '{"decision":"rewrite","proposed":"rtk filtered"}'; fi"#,
+    )?;
+    let adapter = PinnedRtkAdapter::detect(fork.config()).await;
+    let command = CanonicalCommand::shell("rg -n needle src");
+
+    assert!(matches!(
+        adapter.decide_byte_fidelity_in(&command, None).await,
+        RewriteDecision::AllowRewrite {
+            source: RewriteSource::Rtk {
+                route: RtkRewriteRoute::Proxy,
+                ..
+            },
+            ..
+        }
+    ));
+    assert!(matches!(
+        adapter.decide_in(&command, None).await,
+        RewriteDecision::AllowRewrite {
+            source: RewriteSource::Rtk {
+                route: RtkRewriteRoute::Optimized,
+                ..
+            },
+            ..
+        }
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_adapter_preserves_compound_fork_rewrite() -> Result<()> {
     let _guard = TEST_LOCK.lock().await;
     let fork = FakeFork::new(
         PINNED_RTK_VERSION,
-        "printf 'rtk first && rtk second'; exit 0",
+        r#"printf '{"decision":"rewrite","proposed":"rtk first && rtk second"}'"#,
     )?;
     let adapter = PinnedRtkAdapter::detect(fork.config()).await;
     let requested = CanonicalCommand::shell("git status && cargo test");
@@ -219,7 +322,9 @@ async fn test_adapter_passes_complete_shell_program_to_fork_rewrite() -> Result<
     let directory = TempDir::new()?;
     let marker = directory.path().join("raw-command");
     let marker_text = marker.to_string_lossy().replace('\'', "'\\''");
-    let body = format!("printf '%s' \"$2\" > '{marker_text}'; exit 2");
+    let body = format!(
+        "printf '%s' \"$2\" > '{marker_text}'; printf '{{\"decision\":\"deny\",\"reason\":\"permission_policy\"}}'"
+    );
     let fork = FakeFork::new(PINNED_RTK_VERSION, &body)?;
     let adapter = PinnedRtkAdapter::detect(fork.config()).await;
     let cases = [
@@ -374,7 +479,10 @@ async fn test_decide_in_runs_fork_policy_from_requested_cwd() -> Result<()> {
     let _guard = TEST_LOCK.lock().await;
     let directory = TempDir::new()?;
     let marker = directory.path().join("rewrite-cwd");
-    let body = format!("pwd > {}; exit 1", marker.display());
+    let body = format!(
+        "pwd > {}; printf '{{\"decision\":\"proxy\"}}'",
+        marker.display()
+    );
     let fork = FakeFork::new(PINNED_RTK_VERSION, &body)?;
     let adapter = PinnedRtkAdapter::detect(fork.config()).await;
 

@@ -98,11 +98,15 @@ pub fn filter_ps(output: &str, args: &[String], verbose: u8) -> String {
         return rest.join("\n");
     }
 
-    // Parse header columns
-    let col_pid = find_col_offset(&header, "PID");
-    let col_cpu = find_col_offset(&header, "%CPU");
-    let col_mem = find_col_offset(&header, "%MEM");
-    let col_cmd = find_col_offset(&header, "COMMAND").or_else(|| find_col_offset(&header, "CMD"));
+    // Parse logical columns, not byte offsets. `ps` right-aligns values beneath
+    // short headers on macOS, so the byte position of `PID` can point inside the
+    // value (`1234` -> `234`). The whitespace-delimited field order is stable.
+    let header_fields: Vec<&str> = header.split_whitespace().collect();
+    let col_pid = find_col_index(&header_fields, "PID");
+    let col_cpu = find_col_index(&header_fields, "%CPU");
+    let col_mem = find_col_index(&header_fields, "%MEM");
+    let col_cmd =
+        find_col_index(&header_fields, "COMMAND").or_else(|| find_col_index(&header_fields, "CMD"));
 
     let (col_pid, col_cmd) = match (col_pid, col_cmd) {
         (Some(p), Some(c)) => (p, c),
@@ -120,29 +124,29 @@ pub fn filter_ps(output: &str, args: &[String], verbose: u8) -> String {
             continue;
         }
 
-        let command = if col_cmd < line.len() {
-            line[col_cmd..].trim()
-        } else {
-            line.split_whitespace().last().unwrap_or("")
-        };
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let command = fields
+            .get(col_cmd..)
+            .map(|parts| parts.join(" "))
+            .unwrap_or_default();
 
         // Skip obvious system processes in compact mode
-        if verbose == 0 && is_system_process(command) {
+        if verbose == 0 && is_system_process(&command) {
             continue;
         }
 
-        let pid = extract_field(line, col_pid).unwrap_or_default();
+        let pid = fields.get(col_pid).copied().unwrap_or_default().to_string();
         let cpu = col_cpu
-            .and_then(|c| extract_field(line, c))
+            .and_then(|column| fields.get(column).copied())
             .and_then(|v| v.parse::<f32>().ok())
             .unwrap_or(0.0);
         let mem = col_mem
-            .and_then(|c| extract_field(line, c))
+            .and_then(|column| fields.get(column).copied())
             .and_then(|v| v.parse::<f32>().ok())
             .unwrap_or(0.0);
 
         // Truncate long commands
-        let cmd_display = truncate_command(command, 60);
+        let cmd_display = truncate_command(&command, 60);
 
         rows.push(PsRow {
             pid,
@@ -203,14 +207,8 @@ struct PsRow {
     cmd: String,
 }
 
-fn find_col_offset(header: &str, name: &str) -> Option<usize> {
-    header.find(name)
-}
-
-fn extract_field(line: &str, start: usize) -> Option<String> {
-    let slice = line.get(start..)?;
-    let token = slice.split_whitespace().next()?;
-    Some(token.to_string())
+fn find_col_index(header_fields: &[&str], name: &str) -> Option<usize> {
+    header_fields.iter().position(|field| *field == name)
 }
 
 fn is_system_process(command: &str) -> bool {
@@ -281,6 +279,19 @@ mod tests {
         let result = filter_ps(sample_ps_output(), &args, 0);
         assert!(result.contains("go run"), "should show go server");
         assert!(result.contains("node"), "should show node process");
+    }
+
+    #[test]
+    fn test_filter_ps_preserves_right_aligned_macos_pid_and_command() {
+        let output = "USER               PID  %CPU %MEM      VSZ    RSS   TT  STAT STARTED      TIME COMMAND\n\
+                      andrew            1086   9.8  3.6 1949531792 912112   ??  S    Mon12AM 124:32.86 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --flag value\n\
+                      _driverkit         578   1.7  0.2 435309488  44736   ??  Ss   Mon12AM  45:24.77 /System/Library/DriverExtensions/example\n";
+        let result = filter_ps(output, &["aux".to_string()], 1);
+
+        assert!(result.contains("1086"), "full four-digit PID must survive");
+        assert!(result.contains("578"), "full three-digit PID must survive");
+        assert!(result.contains("ChatGPT --flag value"));
+        assert!(!result.contains("nd       "));
     }
 
     #[test]

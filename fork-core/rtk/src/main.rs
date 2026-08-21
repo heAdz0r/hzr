@@ -15,6 +15,7 @@ mod diff_cmd;
 mod discover;
 mod display_helpers;
 mod env_cmd;
+mod fidelity;
 mod filter;
 mod find_cmd;
 mod format_cmd;
@@ -59,16 +60,19 @@ mod read_render; // PR-2: extracted render helpers
 mod read_source; // PR-2: extracted source I/O and line-range logic
 mod read_symbols; // PR-3: symbol model and extraction traits
 mod read_types; // PR-2: shared read types (ReadMode, ReadRequest)
+mod remote_logs_cmd;
 mod rewrite_cmd; // fork: single source of truth for hook rewrites
 mod rgai_cmd; // semantic search command (grepai-style intent matching)
 mod ruff_cmd;
 mod runner;
 mod search;
 mod session_stats; // cache compounding savings calculator
+mod sqlite_cmd;
 mod ssh_cmd;
 mod stream;
 mod summary;
 mod symbols_regex; // PR-3: regex-based symbol extractor
+mod tar_cmd;
 mod tee; // upstream sync: tee raw output to file for LLM re-read
 mod toml_filter; // fork: declarative TOML filter engine (upstream v0.42.4)
 mod tracking;
@@ -156,6 +160,18 @@ enum Commands {
     Read {
         /// File to read
         file: PathBuf,
+        /// Additional files for --batch, kept in caller order
+        #[arg(value_name = "FILE")]
+        additional_files: Vec<PathBuf>,
+        /// Read several files under one total output budget
+        #[arg(long, requires = "max_tokens")]
+        batch: bool,
+        /// Maximum estimated output tokens across a batch
+        #[arg(long, requires = "batch")]
+        max_tokens: Option<usize>,
+        /// Maximum estimated output tokens for each file in a batch
+        #[arg(long, requires = "batch")]
+        per_file_tokens: Option<usize>,
         /// Filter level: none (exact), minimal (strips blanks/comments), aggressive.
         /// Default: auto — none if --from/--to given (edit mode), minimal for code, none for config/data. // changed: smart default level
         #[arg(short, long)]
@@ -671,6 +687,50 @@ enum Commands {
         args: Vec<String>,
     },
 
+    /// Read-only SQLite SELECT with bounded rows, columns, and output
+    Sqlite3 {
+        /// SQLite database path
+        database: PathBuf,
+        /// One SELECT statement
+        query: String,
+        /// Project these result columns (comma-separated or repeated)
+        #[arg(long, value_delimiter = ',')]
+        columns: Vec<String>,
+        /// Maximum rows (1-500); one extra row is probed for recovery reporting
+        #[arg(long, default_value_t = 50)]
+        max_rows: usize,
+        /// Maximum estimated output tokens (64-8192)
+        #[arg(long, default_value_t = 2_048)]
+        max_tokens: usize,
+    },
+
+    /// List archive members with a bounded entry count
+    Tar {
+        /// Maximum listed entries (1-1000)
+        #[arg(long, default_value_t = tar_cmd::default_max_entries())]
+        max_entries: usize,
+        /// Native tar listing arguments (-tf/-tzf/--list only)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        args: Vec<String>,
+    },
+
+    /// Fetch a bounded tail from Docker logs over an SSH host alias
+    Logs {
+        /// SSH destination or configured host alias
+        host: String,
+        /// Docker container name or ID
+        container: String,
+        /// Remote docker log tail (1-1000)
+        #[arg(long, default_value_t = 100)]
+        tail: usize,
+        /// Docker --since duration or timestamp
+        #[arg(long)]
+        since: Option<String>,
+        /// Include Docker timestamps
+        #[arg(long)]
+        timestamps: bool,
+    },
+
     /// Discover missed RTK savings from Claude Code history
     Discover {
         /// Filter by project path (substring match)
@@ -846,6 +906,14 @@ enum Commands {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+
+    /// Emit one typed JSON rewrite decision for managed callers
+    #[command(name = "rewrite-plan", hide = true)]
+    RewritePlan {
+        /// Raw command to classify and rewrite
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -963,6 +1031,12 @@ enum GitCommands {
     /// Compact worktree listing
     Worktree {
         /// Git worktree arguments (add, remove, prune, or empty for list)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Grouped blame ranges with commit, author, date, and summary
+    Blame {
+        /// Git blame arguments, including -L ranges and pathspecs
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -1858,6 +1932,8 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    tracking::initialize_internal_evasion();
+
     #[cfg(unix)]
     // SAFETY: SIGPIPE is restored before threads or child processes start.
     unsafe {
@@ -1887,6 +1963,10 @@ fn main() -> Result<()> {
 
         Commands::Read {
             file,
+            additional_files,
+            batch,
+            max_tokens,
+            per_file_tokens,
             level,
             from,
             to,
@@ -1900,6 +1980,55 @@ fn main() -> Result<()> {
             diff_context,
             dedup,
         } => {
+            if batch {
+                let mut incompatible = Vec::new();
+                if level.is_some() {
+                    incompatible.push("--level");
+                }
+                if from.is_some() {
+                    incompatible.push("--from");
+                }
+                if to.is_some() {
+                    incompatible.push("--to");
+                }
+                if max_lines.is_some() {
+                    incompatible.push("--max-lines");
+                }
+                if tail_lines.is_some() {
+                    incompatible.push("--tail-lines");
+                }
+                if line_numbers {
+                    incompatible.push("--line-numbers");
+                }
+                if outline {
+                    incompatible.push("--outline");
+                }
+                if symbols {
+                    incompatible.push("--symbols");
+                }
+                if changed {
+                    incompatible.push("--changed");
+                }
+                if since.is_some() {
+                    incompatible.push("--since");
+                }
+                if dedup {
+                    incompatible.push("--dedup");
+                }
+                if !incompatible.is_empty() {
+                    anyhow::bail!("{} incompatible with --batch", incompatible.join(", "));
+                }
+                let mut files = Vec::with_capacity(additional_files.len() + 1);
+                files.push(file);
+                files.extend(additional_files);
+                let max_tokens = max_tokens.ok_or_else(|| {
+                    anyhow::anyhow!("--batch requires an explicit --max-tokens budget")
+                })?;
+                return read::run_batch(&files, max_tokens, per_file_tokens, cli.verbose);
+            }
+            if !additional_files.is_empty() {
+                anyhow::bail!("multiple files require --batch and --max-tokens");
+            }
             // Determine ReadMode from flags
             let mode = if outline {
                 read::ReadMode::Outline
@@ -2176,6 +2305,15 @@ fn main() -> Result<()> {
                         &global_args,
                     )?;
                 }
+                GitCommands::Blame { args } => {
+                    git::run(
+                        git::GitCommand::Blame,
+                        &args,
+                        None,
+                        cli.verbose,
+                        &global_args,
+                    )?;
+                }
                 GitCommands::Other(args) => {
                     git::run_passthrough(&args, cli.verbose, &global_args)?;
                 }
@@ -2362,13 +2500,11 @@ fn main() -> Result<()> {
         },
 
         Commands::Err { command } => {
-            let cmd = command.join(" ");
-            runner::run_err(&cmd, cli.verbose)?;
+            runner::run_err(&command, cli.verbose)?;
         }
 
         Commands::Test { command } => {
-            let cmd = command.join(" ");
-            runner::run_test(&cmd, cli.verbose)?;
+            runner::run_test(&command, cli.verbose)?;
         }
 
         Commands::Json { file, depth } => {
@@ -2791,6 +2927,44 @@ fn main() -> Result<()> {
             ps_cmd::run(&args, cli.verbose)?;
         }
 
+        Commands::Sqlite3 {
+            database,
+            query,
+            columns,
+            max_rows,
+            max_tokens,
+        } => {
+            sqlite_cmd::run(
+                &database,
+                &query,
+                &columns,
+                max_rows,
+                max_tokens,
+                cli.verbose,
+            )?;
+        }
+
+        Commands::Tar { max_entries, args } => {
+            tar_cmd::run(&args, max_entries, cli.verbose)?;
+        }
+
+        Commands::Logs {
+            host,
+            container,
+            tail,
+            since,
+            timestamps,
+        } => {
+            remote_logs_cmd::run(
+                &host,
+                &container,
+                tail,
+                since.as_deref(),
+                timestamps,
+                cli.verbose,
+            )?;
+        }
+
         Commands::Discover {
             project,
             limit,
@@ -3090,6 +3264,11 @@ fn main() -> Result<()> {
         Commands::Rewrite { args } => {
             let cmd = args.join(" ");
             rewrite_cmd::run(&cmd)?;
+        }
+
+        Commands::RewritePlan { args } => {
+            let cmd = args.join(" ");
+            rewrite_cmd::run_plan(&cmd)?;
         }
 
         Commands::Proxy { args } => {

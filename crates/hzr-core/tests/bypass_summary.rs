@@ -16,8 +16,10 @@ fn seed(path: &std::path::Path, rows: &[(&str, &str, u64, u64, &str)]) {
             .execute(
                 "INSERT INTO commands (
                     timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
-                    saved_tokens, savings_pct, exec_time_ms, project_path
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    saved_tokens, savings_pct, exec_time_ms, project_path,
+                    producer_version, accounting_policy_version
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                           'test', 'privacy_typed_v1')",
                 rusqlite::params![
                     timestamp,
                     command,
@@ -111,10 +113,10 @@ fn test_bypass_summary_groups_by_tool_and_carries_the_replacement() {
 
     assert_eq!(sed.executions, 2);
     assert_eq!(sed.delivered_tokens_estimated, 400);
+    assert_eq!(sed.example_command, "rtk raw sed");
     assert_eq!(
-        sed.replacement.as_deref(),
-        Some("hzr rtk -- read b.rs --from 30 --to 40"),
-        "the heaviest example drives the suggestion"
+        sed.replacement, None,
+        "privacy-safe aggregates never retain path-bearing suggestions"
     );
 
     let cargo = summary

@@ -4,6 +4,48 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-08-21
+
+### Added
+
+- A canonical typed anti-evasion plan normalizes POSIX shell launchers, environment and utility
+  prefixes, quoted ranges, absolute executable paths and bounded pipelines before policy. A
+  committed 85-case E1–E10 matrix gates the fork, hook, daemon, degraded and native-tool paths.
+- Privacy-safe policy events record Ask, Deny and Correction without inflating command counts,
+  delivered tokens or savings. `hzr stats --evasion` reports bounded class/session aggregates,
+  producer and accounting-policy versions, and a separate fidelity allowance.
+- Compact first-class routes cover grouped `git blame`, ordered budgeted batch reads, SELECT-only
+  SQLite, tar listings and bounded remote Docker logs. `hzr test` forwards exact test argv.
+- Native file-tool policy exposes `observe`, `steer` and `strict`; new installations use `steer`,
+  while legacy upgrades retain `observe` and receive a doctor warning.
+
+### Changed
+
+- RAW fidelity requires a compatible closed reason and is limited to five operations or 100,000
+  estimated tokens per session. Missing, unknown, contradictory or provably replaceable requests
+  Ask before execution and never echo the supplied value.
+- `hzr init` enables repository-graph indexing and installs managed project-local `CLAUDE.md` and
+  `AGENTS.md` regions while preserving user-authored text. Doctor reports contract drift, native
+  mode and fidelity allowance.
+- Telemetry persists only closed dimensions and keyed pseudonyms. Commands, paths, queries, SQL,
+  heredocs, environment values, raw agent IDs and session IDs are scrubbed before persistence;
+  unbounded `stats --json --all` is refused.
+- Read accounting now separates source selection from delivery transforms, and current-policy
+  reporting excludes unattributed legacy rows instead of mixing incompatible accounting models.
+
+### Fixed
+
+- Quoted `sed`/`nl`, `/bin/sh -c`, nested shell wrappers, safe prefixes and known interpreter read
+  idioms can no longer fall through to silent proxy merely because their spelling changed.
+- Temp-log laundering, private HZR-ledger reads and malformed/deep wrappers receive typed policy
+  responses; genuine computation without an equivalent remains unpunished E10.
+- The macOS `ps aux` formatter now parses logical fields rather than header byte offsets, keeping
+  complete PIDs and command text.
+- Generic `hzr test` and `rtk test|err` routes now execute the supplied argv without shell
+  reconstruction and return the child's exact nonzero exit code instead of masking failures.
+- Policy attribution reaches the existing fork tracking row through a validated, consumed
+  internal value, avoiding both payload leakage and duplicate operation accounting.
+
 ## [0.4.3] - 2026-08-21
 
 ### Added

@@ -17,11 +17,12 @@ pub use api::{
     DashboardMemoryTopic, DashboardMemoryTopicDetails, DashboardObservedUsage,
     DashboardOperationRoute, DashboardProject, DashboardProjectArtifacts, DashboardProjectState,
     DashboardProviderReceiptState, DashboardProviderReceipts, DashboardResponse,
-    DashboardSearchActivity, DashboardService, DashboardState, ExecApiRequest,
-    ExecApprovalApiRequest, ForkPlannerMetadata, ForkRunApiRequest, ForkRunApiResponse,
+    DashboardSearchActivity, DashboardService, DashboardState, EnforcementTier, EvasionAttribution,
+    EvasionClass, EvasionInterpreter, EvasionPathForm, ExecApiRequest, ExecApprovalApiRequest,
+    FidelityReason, FidelityValidation, ForkPlannerMetadata, ForkRunApiRequest, ForkRunApiResponse,
     MemoryForgetApiRequest, MemoryImportance, MemoryMutationApiResponse, MemoryPruneApiRequest,
     MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest,
-    MemoryWriteScope, OperationApiRequest, OperationApiResponse, SearchApiRequest,
+    MemoryWriteScope, OperationApiRequest, OperationApiResponse, PolicyDecision, SearchApiRequest,
     SearchApiResponse, SearchFallbackCode, SearchHit, SearchLine, SearchMode, SearchSnippet,
     SearchStrategy, UsageApiRequest, UsageApiResponse,
 };
@@ -281,7 +282,10 @@ pub struct ErrorResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActualUsage, EstimatedUsage, TokenCount, Usage};
+    use super::{
+        ActualUsage, EnforcementTier, EstimatedUsage, EvasionAttribution, EvasionClass,
+        EvasionInterpreter, EvasionPathForm, FidelityReason, FidelityValidation, TokenCount, Usage,
+    };
 
     #[test]
     fn test_usage_keeps_actual_and_estimated_separate() {
@@ -305,5 +309,60 @@ mod tests {
     fn test_token_count_tracks_measurement_source() {
         assert!(TokenCount::provider(5).is_actual());
         assert!(!TokenCount::estimate(5).is_actual());
+    }
+
+    #[test]
+    fn evasion_wire_contract_is_closed_and_payload_free_for_every_class_and_reason() {
+        let sentinel = "SENTINEL /private/path SELECT * FROM secrets";
+        let classes = [
+            EvasionClass::E1QuotedCoveredCommand,
+            EvasionClass::E2ShellWrapper,
+            EvasionClass::E3InterpreterRead,
+            EvasionClass::E4ExecutablePath,
+            EvasionClass::E5PipelineOrRedirect,
+            EvasionClass::E6NestedUnboundedReader,
+            EvasionClass::E7FidelityHatch,
+            EvasionClass::E8NativeTool,
+            EvasionClass::E9DiagnosticBypass,
+            EvasionClass::E10CapabilityGap,
+        ];
+        let reasons = [
+            FidelityReason::Binary,
+            FidelityReason::Checksum,
+            FidelityReason::MachineProtocol,
+            FidelityReason::CompleteLog,
+            FidelityReason::FullPatch,
+            FidelityReason::VerbatimSource,
+        ];
+        for (index, class) in classes.into_iter().enumerate() {
+            let attribution = EvasionAttribution {
+                class,
+                wrapper_depth: u8::try_from(index).expect("small index"),
+                interpreter: Some(EvasionInterpreter::Shell),
+                path_form: EvasionPathForm::AbsoluteSystem,
+                stage_count: 2,
+                hatch_marker: class == EvasionClass::E7FidelityHatch,
+                avoidable: class != EvasionClass::E10CapabilityGap,
+                tier: EnforcementTier::T1NamedCorrection,
+                fidelity_reason: Some(reasons[index % reasons.len()]),
+                fidelity_validation: FidelityValidation::Valid,
+            };
+            let encoded = serde_json::to_string(&attribution).expect("serialize attribution");
+            let decoded: EvasionAttribution =
+                serde_json::from_str(&encoded).expect("deserialize attribution");
+            assert_eq!(decoded, attribution);
+            assert!(!encoded.contains(sentinel));
+            for forbidden_key in [
+                "original_command",
+                "recorded_command",
+                "query",
+                "content",
+                "environment",
+                "sql",
+                "heredoc",
+            ] {
+                assert!(!encoded.contains(forbidden_key));
+            }
+        }
     }
 }

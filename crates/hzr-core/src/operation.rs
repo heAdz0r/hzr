@@ -7,6 +7,13 @@
 //! report a healthy reduction ratio while half of the delivered tokens had bypassed the
 //! optimizer entirely. Every caller now routes through this module.
 
+use std::io::Read;
+use std::path::{Path, PathBuf};
+
+use hzr_protocol::{
+    EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, FidelityReason,
+    FidelityValidation,
+};
 use serde::{Deserialize, Serialize};
 
 /// The words that mean "HZR handed this straight to the shell".
@@ -131,12 +138,62 @@ impl OperationSubsystem {
 /// The first-class HZR command an agent should have reached for.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct RawReplacement {
-    /// The shell tool that was invoked instead (`sed`, `rg`, `cat`, …).
+    /// The redundant HZR wrapper or top-level alias being corrected.
     pub tool: &'static str,
-    /// A ready-to-run replacement, reconstructed from the bypassed arguments.
+    /// A ready-to-run HZR command preserved from the original byte slice.
     pub suggestion: String,
     /// Why the replacement is cheaper. Shown to agents, so it states the mechanism.
     pub rationale: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RawFidelityReason {
+    Binary,
+    Checksum,
+    MachineProtocol,
+    CompleteLog,
+    FullPatch,
+    VerbatimSource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RawFidelityRequest<'a> {
+    NotRequested,
+    MissingReason,
+    InvalidReason,
+    Authorized {
+        reason: RawFidelityReason,
+        payload: &'a str,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FidelityBudget {
+    pub remaining_operations: u64,
+    pub remaining_tokens: u64,
+    pub exhausted: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FidelityPreflight {
+    NotRequested,
+    Allow {
+        evasion: EvasionAttribution,
+        output_tokens_upper_bound: u64,
+    },
+    Ask {
+        evasion: EvasionAttribution,
+        reason: String,
+    },
+}
+
+impl FidelityPreflight {
+    pub const fn evasion(&self) -> Option<&EvasionAttribution> {
+        match self {
+            Self::NotRequested => None,
+            Self::Allow { evasion, .. } | Self::Ask { evasion, .. } => Some(evasion),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -145,7 +202,7 @@ pub struct OperationClassification {
     pub subsystem: OperationSubsystem,
     /// Short stable identity for dashboards: the tool name with the wrappers removed.
     pub operation: String,
-    /// Present only when the bypassed tool has a first-class HZR equivalent.
+    /// Present only when a redundant wrapper already contains a first-class HZR command.
     pub replacement: Option<RawReplacement>,
 }
 
@@ -164,11 +221,7 @@ pub fn classify_operation(command: &str) -> OperationClassification {
         OperationRoute::Bypassed => OperationClassification {
             route,
             subsystem: OperationSubsystem::Bypass,
-            replacement: managed_hzr_replacement(command).or_else(|| {
-                unambiguous_shell_command(command)
-                    .then(|| replacement_for(head, &payload[payload.len().min(1)..]))
-                    .flatten()
-            }),
+            replacement: managed_hzr_replacement(command),
             operation,
         },
         OperationRoute::Optimized => OperationClassification {
@@ -181,30 +234,13 @@ pub fn classify_operation(command: &str) -> OperationClassification {
     }
 }
 
-/// The first-class HZR command that replaces `command`, if one exists.
-///
-/// Unlike [`classify_operation`] this answers for any shell command, whether or not it
-/// carries a bypass prefix — the hook sees `sed -n 1,20p f` and the ledger sees
-/// `rtk proxy sed -n 1,20p f`, and both must be told the same thing.
+/// Remove a redundant wrapper around an existing HZR command or retain a typed HZR file alias.
+/// Shell-tool routing belongs exclusively to fork-core's typed rewrite plan.
 pub fn first_class_replacement(command: &str) -> Option<RawReplacement> {
     if let Some(replacement) = direct_hzr_alias_replacement(command) {
         return Some(replacement);
     }
-    if let Some(replacement) = managed_hzr_replacement(command) {
-        return Some(replacement);
-    }
-    if !unambiguous_shell_command(command) {
-        return None;
-    }
-    let words = shell_words(command);
-    let (route, payload) = strip_bypass_prefix(&words);
-    let payload = match route {
-        OperationRoute::Bypassed => payload,
-        OperationRoute::Optimized => strip_wrappers(payload),
-        OperationRoute::NativeUnaccounted => payload,
-    };
-    let head = payload.first().map(String::as_str)?;
-    replacement_for(head, &payload[1..])
+    managed_hzr_replacement(command)
 }
 
 /// Keep the public read/write aliases on HZR's typed path when fork-core does not know
@@ -242,7 +278,13 @@ fn command_suffix<'a>(command: &'a str, word: &str) -> Option<&'a str> {
 /// search text and shell grammar are not tokenized and reconstructed. Nested raw/proxy
 /// wrappers are excluded so the replacement cannot merely hide another bypass.
 fn managed_hzr_replacement(command: &str) -> Option<RawReplacement> {
-    let payload = managed_raw_payload(command)?.trim_start_matches([' ', '\t']);
+    let payload = match raw_fidelity_request(command) {
+        RawFidelityRequest::Authorized { payload, .. } => payload,
+        RawFidelityRequest::NotRequested
+        | RawFidelityRequest::MissingReason
+        | RawFidelityRequest::InvalidReason => managed_raw_payload(command)?,
+    }
+    .trim_start_matches([' ', '\t']);
     let suffix = payload.strip_prefix("hzr")?;
     if !suffix.is_empty() && !suffix.starts_with([' ', '\t']) {
         return None;
@@ -320,14 +362,351 @@ pub fn managed_raw_payload(command: &str) -> Option<&str> {
 /// where filtered output is not an effective route. Requiring a separate marker prevents an
 /// agent's habitual `raw` wrapper from silently opting out of the acceptance gate.
 pub fn explicit_raw_fidelity(command: &str) -> bool {
-    let command = command.trim_start_matches([' ', '\t']);
-    let Some(remainder) = command.strip_prefix("HZR_RAW_FIDELITY=1") else {
+    matches!(
+        raw_fidelity_request(command),
+        RawFidelityRequest::Authorized { .. }
+    )
+}
+
+pub fn raw_fidelity_request(command: &str) -> RawFidelityRequest<'_> {
+    let mut rest = command.trim_start_matches([' ', '\t']);
+    let mut requested = false;
+    let mut reason = None;
+    let mut invalid_reason = false;
+
+    loop {
+        let boundary = rest.find([' ', '\t']).unwrap_or(rest.len());
+        let word = &rest[..boundary];
+        let next = rest[boundary..].trim_start_matches([' ', '\t']);
+        if word == "HZR_RAW_FIDELITY=1" {
+            requested = true;
+        } else if let Some(value) = word.strip_prefix("HZR_RAW_FIDELITY_REASON=") {
+            match parse_raw_fidelity_reason(value) {
+                Some(value) if reason.is_none() => reason = Some(value),
+                _ => invalid_reason = true,
+            }
+        } else {
+            break;
+        }
+        rest = next;
+    }
+
+    let Some(payload) = managed_raw_payload(rest) else {
+        return RawFidelityRequest::NotRequested;
+    };
+    if !requested {
+        return RawFidelityRequest::NotRequested;
+    }
+    if invalid_reason {
+        return RawFidelityRequest::InvalidReason;
+    }
+    let Some(reason) = reason else {
+        return RawFidelityRequest::MissingReason;
+    };
+    RawFidelityRequest::Authorized { reason, payload }
+}
+
+fn parse_raw_fidelity_reason(value: &str) -> Option<RawFidelityReason> {
+    match value {
+        "binary" => Some(RawFidelityReason::Binary),
+        "checksum" => Some(RawFidelityReason::Checksum),
+        "machine_protocol" => Some(RawFidelityReason::MachineProtocol),
+        "complete_log" => Some(RawFidelityReason::CompleteLog),
+        "full_patch" => Some(RawFidelityReason::FullPatch),
+        "verbatim_source" => Some(RawFidelityReason::VerbatimSource),
+        _ => None,
+    }
+}
+
+pub fn fidelity_preflight_required(command: &str) -> bool {
+    !matches!(
+        raw_fidelity_request(command),
+        RawFidelityRequest::NotRequested
+    ) || exact_fidelity_command(command).0
+}
+
+pub fn fidelity_preflight(
+    command: &str,
+    cwd: &Path,
+    budget: Option<FidelityBudget>,
+) -> FidelityPreflight {
+    let request = raw_fidelity_request(command);
+    let (reason, payload, mut evasion) = match request {
+        RawFidelityRequest::Authorized { reason, payload } => (
+            reason,
+            payload,
+            fidelity_evasion(reason, FidelityValidation::Valid, false),
+        ),
+        RawFidelityRequest::MissingReason => {
+            return FidelityPreflight::Ask {
+                evasion: fidelity_evasion_without_reason(FidelityValidation::MissingReason),
+                reason: "HZR_RAW_FIDELITY=1 requires a closed HZR_RAW_FIDELITY_REASON".into(),
+            };
+        }
+        RawFidelityRequest::InvalidReason => {
+            return FidelityPreflight::Ask {
+                evasion: fidelity_evasion_without_reason(FidelityValidation::InvalidReason),
+                reason: "HZR_RAW_FIDELITY_REASON is not an allowed fidelity reason".into(),
+            };
+        }
+        RawFidelityRequest::NotRequested => {
+            let (exact, payload) = exact_fidelity_command(command);
+            if !exact {
+                return FidelityPreflight::NotRequested;
+            }
+            (
+                RawFidelityReason::VerbatimSource,
+                payload,
+                fidelity_evasion(
+                    RawFidelityReason::VerbatimSource,
+                    FidelityValidation::Valid,
+                    false,
+                ),
+            )
+        }
+    };
+    if !raw_fidelity_reason_fits(reason, payload, cwd) {
+        evasion.avoidable = true;
+        evasion.fidelity_validation = FidelityValidation::Contradicted;
+        return FidelityPreflight::Ask {
+            evasion,
+            reason: "T4 fidelity reason is contradicted by the requested command".into(),
+        };
+    }
+    let Some(output_tokens_upper_bound) = fidelity_output_tokens_upper_bound(reason, payload, cwd)
+    else {
+        return FidelityPreflight::Ask {
+            evasion,
+            reason: "T4 exact output is remote, non-file, or otherwise not statically bounded"
+                .into(),
+        };
+    };
+    let Some(budget) = budget else {
+        return FidelityPreflight::Ask {
+            evasion,
+            reason: "T4 fidelity preflight cannot audit the per-session allowance".into(),
+        };
+    };
+    if budget.exhausted
+        || budget.remaining_operations == 0
+        || output_tokens_upper_bound > budget.remaining_tokens
+    {
+        evasion.avoidable = true;
+        evasion.fidelity_validation = FidelityValidation::BudgetExhausted;
+        return FidelityPreflight::Ask {
+            evasion,
+            reason: format!(
+                "T4 exact output upper bound is {output_tokens_upper_bound} tokens; remaining allowance is {} operation(s) and {} tokens",
+                budget.remaining_operations, budget.remaining_tokens
+            ),
+        };
+    }
+    FidelityPreflight::Allow {
+        evasion,
+        output_tokens_upper_bound,
+    }
+}
+
+fn fidelity_evasion(
+    reason: RawFidelityReason,
+    validation: FidelityValidation,
+    avoidable: bool,
+) -> EvasionAttribution {
+    EvasionAttribution {
+        class: EvasionClass::E7FidelityHatch,
+        wrapper_depth: 1,
+        interpreter: None,
+        path_form: EvasionPathForm::Bare,
+        stage_count: 1,
+        hatch_marker: true,
+        avoidable,
+        tier: EnforcementTier::T4HatchQuarantine,
+        fidelity_reason: Some(protocol_fidelity_reason(reason)),
+        fidelity_validation: validation,
+    }
+}
+
+fn fidelity_evasion_without_reason(validation: FidelityValidation) -> EvasionAttribution {
+    EvasionAttribution {
+        class: EvasionClass::E7FidelityHatch,
+        wrapper_depth: 1,
+        interpreter: None,
+        path_form: EvasionPathForm::Bare,
+        stage_count: 1,
+        hatch_marker: true,
+        avoidable: true,
+        tier: EnforcementTier::T4HatchQuarantine,
+        fidelity_reason: None,
+        fidelity_validation: validation,
+    }
+}
+
+fn protocol_fidelity_reason(reason: RawFidelityReason) -> FidelityReason {
+    match reason {
+        RawFidelityReason::Binary => FidelityReason::Binary,
+        RawFidelityReason::Checksum => FidelityReason::Checksum,
+        RawFidelityReason::MachineProtocol => FidelityReason::MachineProtocol,
+        RawFidelityReason::CompleteLog => FidelityReason::CompleteLog,
+        RawFidelityReason::FullPatch => FidelityReason::FullPatch,
+        RawFidelityReason::VerbatimSource => FidelityReason::VerbatimSource,
+    }
+}
+
+fn raw_fidelity_reason_fits(reason: RawFidelityReason, payload: &str, cwd: &Path) -> bool {
+    let words = shell_words(payload);
+    let payload_words = strip_wrappers(&words);
+    let tool = payload_words.first().map(String::as_str);
+    match reason {
+        RawFidelityReason::Checksum => {
+            unambiguous_shell_command(payload)
+                && (matches!(
+                    tool,
+                    Some(
+                        "sha256sum" | "sha512sum" | "shasum" | "md5sum" | "md5" | "b2sum" | "cksum"
+                    )
+                ) || tool == Some("openssl")
+                    && payload_words.get(1).map(String::as_str) == Some("dgst"))
+        }
+        RawFidelityReason::MachineProtocol => payload_words.iter().any(|word| {
+            matches!(
+                word.as_str(),
+                "--json" | "--csv" | "--porcelain" | "-0" | "--null"
+            )
+        }),
+        RawFidelityReason::CompleteLog => payload_words
+            .iter()
+            .any(|word| matches!(word.as_str(), "log" | "logs")),
+        RawFidelityReason::FullPatch => payload_words
+            .iter()
+            .any(|word| matches!(word.as_str(), "diff" | "patch")),
+        RawFidelityReason::Binary => {
+            matches!(tool, Some("file" | "xxd" | "hexdump" | "base64"))
+                || local_reader_is_binary(payload, cwd)
+        }
+        RawFidelityReason::VerbatimSource => {
+            local_reader_output_upper_bound(payload, cwd).is_some()
+        }
+    }
+}
+
+fn fidelity_output_tokens_upper_bound(
+    reason: RawFidelityReason,
+    payload: &str,
+    cwd: &Path,
+) -> Option<u64> {
+    let bytes = match reason {
+        RawFidelityReason::Checksum => checksum_output_upper_bound(payload)?,
+        RawFidelityReason::Binary | RawFidelityReason::VerbatimSource => {
+            local_reader_output_upper_bound(payload, cwd)?
+        }
+        RawFidelityReason::MachineProtocol
+        | RawFidelityReason::CompleteLog
+        | RawFidelityReason::FullPatch => return None,
+    };
+    Some(bytes.saturating_add(3) / 4)
+}
+
+fn checksum_output_upper_bound(payload: &str) -> Option<u64> {
+    if !unambiguous_shell_command(payload) {
+        return None;
+    }
+    let words = shell_words(payload);
+    let payload_words = strip_wrappers(&words);
+    let arguments = payload_words.get(1..)?;
+    let targets = arguments
+        .iter()
+        .filter(|word| !word.starts_with('-') && word.as_str() != "dgst")
+        .count()
+        .max(1);
+    let targets = u64::try_from(targets).ok()?;
+    Some(
+        u64::try_from(payload.len())
+            .ok()?
+            .saturating_add(targets.saturating_mul(160)),
+    )
+}
+
+fn local_reader_output_upper_bound(payload: &str, cwd: &Path) -> Option<u64> {
+    local_reader_bound(payload, cwd).map(|bound| bound.bytes)
+}
+
+struct LocalReaderBound {
+    path: PathBuf,
+    bytes: u64,
+}
+
+fn local_reader_bound(payload: &str, cwd: &Path) -> Option<LocalReaderBound> {
+    if !unambiguous_shell_command(payload) {
+        return None;
+    }
+    let words = shell_words(payload);
+    let payload_words = strip_wrappers(&words);
+    let tool = payload_words.first()?.as_str();
+    if !matches!(tool, "cat" | "read" | "head" | "tail") {
+        return None;
+    }
+    let words = payload_words.get(1..)?;
+    let mut byte_cap = None;
+    let mut path = None;
+    let mut index = 0;
+    while index < words.len() {
+        let word = words[index].as_str();
+        if matches!(word, "--level" | "--from" | "--to") {
+            index = index.checked_add(2)?;
+            continue;
+        }
+        if word == "-n" {
+            index = if matches!(tool, "head" | "tail") {
+                index.checked_add(2)?
+            } else {
+                index + 1
+            };
+            continue;
+        }
+        if word == "-c" || word == "--bytes" {
+            byte_cap = Some(words.get(index + 1)?.parse::<u64>().ok()?);
+            index += 2;
+            continue;
+        }
+        if let Some(value) = word.strip_prefix("--bytes=") {
+            byte_cap = Some(value.parse::<u64>().ok()?);
+            index += 1;
+            continue;
+        }
+        if word.starts_with('-') || path.replace(word).is_some() {
+            return None;
+        }
+        index += 1;
+    }
+    let path = Path::new(path?);
+    let path: PathBuf = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let metadata = path.metadata().ok()?;
+    metadata.is_file().then(|| LocalReaderBound {
+        path,
+        bytes: byte_cap.map_or(metadata.len(), |cap| metadata.len().min(cap)),
+    })
+}
+
+fn local_reader_is_binary(payload: &str, cwd: &Path) -> bool {
+    let Some(bound) = local_reader_bound(payload, cwd) else {
         return false;
     };
-    if !remainder.starts_with([' ', '\t']) {
+    let sample_bytes = bound.bytes.min(8 * 1024);
+    let Ok(sample_len) = usize::try_from(sample_bytes) else {
         return false;
-    }
-    managed_raw_payload(remainder.trim_start_matches([' ', '\t'])).is_some()
+    };
+    let mut sample = vec![0; sample_len];
+    let Ok(mut file) = std::fs::File::open(bound.path) else {
+        return false;
+    };
+    let Ok(read) = file.read(&mut sample) else {
+        return false;
+    };
+    sample[..read].contains(&0)
 }
 
 /// A SQL `WHERE` fragment selecting the bypassed rows of `column`, generated from the
@@ -446,25 +825,6 @@ fn optimized_subsystem(head: &str) -> OperationSubsystem {
     }
 }
 
-fn replacement_for(tool: &str, arguments: &[String]) -> Option<RawReplacement> {
-    match tool {
-        "sed" => sed_replacement(arguments),
-        "rg" => search_replacement("rg", arguments),
-        "grep" => search_replacement("grep", arguments),
-        "ag" => search_replacement("ag", arguments),
-        "ack" => search_replacement("ack", arguments),
-        "cat" => file_replacement("cat", arguments, " --level none"),
-        "nl" => nl_replacement(arguments),
-        "head" => bounded_replacement("head", arguments, "--max-lines"),
-        "tail" => bounded_replacement("tail", arguments, "--tail-lines"),
-        _ => None,
-    }
-}
-
-const READ_RATIONALE: &str =
-    "hzr read streams the requested span with filtering instead of the whole slice";
-const SEARCH_RATIONALE: &str =
-    "hzr search returns ranked matches through the shared index instead of raw output";
 const SMART_READ_RATIONALE: &str =
     "hzr read selects its format-aware bounded default instead of an unbounded full-file read";
 
@@ -510,247 +870,6 @@ fn unbounded_exact_read_replacement(arguments: &[String]) -> Option<RawReplaceme
     })
 }
 
-fn sed_replacement(arguments: &[String]) -> Option<RawReplacement> {
-    let mut quiet = false;
-    let mut span = None;
-    let mut file = None;
-    let mut expect_expression = false;
-    let mut parse_options = true;
-    for argument in arguments {
-        if expect_expression {
-            span = Some(parse_sed_span(argument)?);
-            expect_expression = false;
-            continue;
-        }
-        if parse_options {
-            match argument.as_str() {
-                "--" => {
-                    parse_options = false;
-                    continue;
-                }
-                "-n" | "--quiet" | "--silent" => {
-                    quiet = true;
-                    continue;
-                }
-                "-e" | "--expression" => {
-                    if span.is_some() {
-                        return None;
-                    }
-                    expect_expression = true;
-                    continue;
-                }
-                _ if argument.starts_with('-') => return None,
-                _ => {}
-            }
-        }
-        if span.is_none() {
-            span = Some(parse_sed_span(argument)?);
-        } else if file.is_none() && argument != "-" {
-            file = Some(argument.clone());
-        } else {
-            return None;
-        }
-    }
-    if expect_expression || !quiet {
-        return None;
-    }
-    let file = file?;
-    let (from, to) = span?;
-    Some(RawReplacement {
-        tool: "sed",
-        suggestion: format!("hzr rtk -- read {file} --from {from} --to {to}"),
-        rationale: READ_RATIONALE,
-    })
-}
-
-fn parse_sed_span(argument: &str) -> Option<(u64, u64)> {
-    let body = argument.strip_suffix('p')?;
-    let (from, to) = match body.split_once(',') {
-        Some((from, to)) => (from.parse().ok()?, to.parse().ok()?),
-        None => {
-            let line = body.parse().ok()?;
-            (line, line)
-        }
-    };
-    (from > 0 && to >= from).then_some((from, to))
-}
-
-fn search_replacement(tool: &'static str, arguments: &[String]) -> Option<RawReplacement> {
-    let mut pattern = None;
-    let mut paths = Vec::new();
-    let mut parse_options = true;
-    for argument in arguments {
-        if parse_options && argument == "--" {
-            parse_options = false;
-            continue;
-        }
-        if parse_options && argument.starts_with('-') {
-            if matches!(argument.as_str(), "-n" | "--line-number") {
-                continue;
-            }
-            return None;
-        }
-        if pattern.is_none() {
-            if argument.starts_with('-') || !literal_search_pattern(argument) {
-                return None;
-            }
-            pattern = Some(argument.clone());
-        } else if argument.starts_with('-') {
-            return None;
-        } else {
-            paths.push(argument.clone());
-        }
-    }
-    let pattern = pattern?;
-    let mut suggestion = format!("hzr search '{pattern}' --mode exact");
-    for path in paths {
-        suggestion.push_str(&format!(" --path {path}"));
-    }
-    Some(RawReplacement {
-        tool,
-        suggestion,
-        rationale: SEARCH_RATIONALE,
-    })
-}
-
-fn literal_search_pattern(pattern: &str) -> bool {
-    !pattern.is_empty()
-        && !pattern.chars().any(|character| {
-            matches!(
-                character,
-                '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'
-            )
-        })
-}
-
-fn file_replacement(
-    tool: &'static str,
-    arguments: &[String],
-    suffix: &str,
-) -> Option<RawReplacement> {
-    let mut file = None;
-    let mut parse_options = true;
-    for argument in arguments {
-        if parse_options && argument == "--" {
-            parse_options = false;
-            continue;
-        }
-        if parse_options && argument.starts_with('-') {
-            return None;
-        }
-        if argument == "-" || argument.starts_with('-') || file.replace(argument).is_some() {
-            return None;
-        }
-    }
-    let file = file?;
-    Some(RawReplacement {
-        tool,
-        suggestion: format!("hzr rtk -- read {file}{suffix}"),
-        rationale: READ_RATIONALE,
-    })
-}
-
-fn nl_replacement(arguments: &[String]) -> Option<RawReplacement> {
-    let mut number_all = false;
-    let mut expect_body_style = false;
-    let mut file = None;
-    let mut parse_options = true;
-    for argument in arguments {
-        if expect_body_style {
-            if argument != "a" {
-                return None;
-            }
-            number_all = true;
-            expect_body_style = false;
-            continue;
-        }
-        if parse_options {
-            match argument.as_str() {
-                "--" => {
-                    parse_options = false;
-                    continue;
-                }
-                "-ba" | "--body-numbering=a" => {
-                    number_all = true;
-                    continue;
-                }
-                "-b" | "--body-numbering" => {
-                    expect_body_style = true;
-                    continue;
-                }
-                _ if argument.starts_with('-') => return None,
-                _ => {}
-            }
-        }
-        if argument == "-" || argument.starts_with('-') || file.replace(argument).is_some() {
-            return None;
-        }
-    }
-    if expect_body_style || !number_all {
-        return None;
-    }
-    let file = file?;
-    Some(RawReplacement {
-        tool: "nl",
-        suggestion: format!("hzr rtk -- read {file} -n"),
-        rationale: READ_RATIONALE,
-    })
-}
-
-fn bounded_replacement(
-    tool: &'static str,
-    arguments: &[String],
-    flag: &str,
-) -> Option<RawReplacement> {
-    let mut lines = None;
-    let mut file = None;
-    let mut expect_lines = false;
-    let mut parse_options = true;
-    for argument in arguments {
-        if expect_lines {
-            expect_lines = false;
-            let value = argument.parse::<u64>().ok()?;
-            if value == 0 {
-                return None;
-            }
-            lines = Some(value);
-            continue;
-        }
-        if parse_options && argument == "--" {
-            parse_options = false;
-            continue;
-        }
-        if parse_options && argument.starts_with('-') {
-            if argument == "-n" || argument == "--lines" {
-                expect_lines = true;
-                continue;
-            }
-            let inline = argument
-                .strip_prefix("-n")
-                .or_else(|| argument.strip_prefix("--lines="))?;
-            let value = inline.parse::<u64>().ok()?;
-            if value == 0 {
-                return None;
-            }
-            lines = Some(value);
-            continue;
-        }
-        if argument == "-" || argument.starts_with('-') || file.replace(argument).is_some() {
-            return None;
-        }
-    }
-    if expect_lines {
-        return None;
-    }
-    let file = file?;
-    let lines = lines.unwrap_or(10);
-    Some(RawReplacement {
-        tool,
-        suggestion: format!("hzr rtk -- read {file} {flag} {lines}"),
-        rationale: READ_RATIONALE,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -770,13 +889,99 @@ mod tests {
     }
 
     #[test]
-    fn test_head_defaults_to_ten_lines_like_the_shell() {
+    fn test_shell_tools_are_classified_without_a_second_rewrite_authority() {
         let classification = classify_operation("rtk proxy head README.md");
-        let replacement = classification.replacement.expect("head replacement");
+        assert_eq!(classification.replacement, None);
+    }
 
-        assert_eq!(
-            replacement.suggestion,
-            "hzr rtk -- read README.md --max-lines 10"
-        );
+    #[test]
+    fn acceptance_gate_fidelity_checksum_is_bounded_and_budgeted() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let command = "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw sha256sum artifact.bin";
+        let available = FidelityBudget {
+            remaining_operations: 1,
+            remaining_tokens: 100_000,
+            exhausted: false,
+        };
+        let preflight = fidelity_preflight(command, directory.path(), Some(available));
+        assert!(matches!(preflight, FidelityPreflight::Allow { .. }));
+        let FidelityPreflight::Allow {
+            evasion,
+            output_tokens_upper_bound,
+        } = preflight
+        else {
+            return;
+        };
+        assert_eq!(evasion.fidelity_reason, Some(FidelityReason::Checksum));
+        assert_eq!(evasion.fidelity_validation, FidelityValidation::Valid);
+        assert!(output_tokens_upper_bound < 100);
+
+        let exhausted = FidelityBudget {
+            remaining_operations: 0,
+            remaining_tokens: 100_000,
+            exhausted: true,
+        };
+        assert!(matches!(
+            fidelity_preflight(command, directory.path(), Some(exhausted)),
+            FidelityPreflight::Ask {
+                evasion: EvasionAttribution {
+                    fidelity_validation: FidelityValidation::BudgetExhausted,
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn acceptance_gate_fidelity_reason_mismatch_is_contradicted() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        std::fs::write(directory.path().join("artifact.txt"), b"source").expect("source fixture");
+        let budget = FidelityBudget {
+            remaining_operations: 5,
+            remaining_tokens: 100_000,
+            exhausted: false,
+        };
+        for command in [
+            "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw cat artifact.txt",
+            "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=binary hzr rtk -- raw cat artifact.txt",
+        ] {
+            assert!(matches!(
+                fidelity_preflight(command, directory.path(), Some(budget)),
+                FidelityPreflight::Ask {
+                    evasion: EvasionAttribution {
+                        fidelity_validation: FidelityValidation::Contradicted,
+                        avoidable: true,
+                        ..
+                    },
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn acceptance_gate_exact_reader_checks_first_use_token_bound() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        std::fs::write(directory.path().join("oversized.txt"), vec![b'x'; 400_001])
+            .expect("oversized fixture");
+        assert!(matches!(
+            fidelity_preflight(
+                "HZR_EXACT_FIDELITY=1 hzr read oversized.txt --level none",
+                directory.path(),
+                Some(FidelityBudget {
+                    remaining_operations: 5,
+                    remaining_tokens: 100_000,
+                    exhausted: false,
+                }),
+            ),
+            FidelityPreflight::Ask {
+                evasion: EvasionAttribution {
+                    fidelity_validation: FidelityValidation::BudgetExhausted,
+                    ..
+                },
+                ..
+            }
+        ));
     }
 }

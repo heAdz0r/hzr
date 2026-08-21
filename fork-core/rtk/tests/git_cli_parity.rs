@@ -343,3 +343,68 @@ fn parity_git_stash_push_success_side_effects() {
     let rtk_status = git_stdout_ok(rtk.path(), &["status", "--porcelain=v1"]);
     assert_eq!(native_status, rtk_status);
 }
+
+#[test]
+fn blame_default_groups_ranges_below_ten_percent_of_porcelain() {
+    let dir = seed_repo();
+    let repo = dir.path();
+    let content = (1..=100)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    set_file(repo, "README.md", &content);
+    run_git_ok(repo, &["add", "README.md"]);
+    run_git_ok(repo, &["commit", "-m", "bulk", "-q"]);
+
+    let native = git_stdout_ok(repo, &["blame", "--line-porcelain", "README.md"]);
+    let output = run_rtk_git(repo, &["blame", "README.md"]);
+    assert!(output.status.success());
+    let compact = String::from_utf8_lossy(&output.stdout);
+    let commit = git_stdout_ok(repo, &["rev-parse", "HEAD"]);
+
+    assert!(compact.starts_with("1-100 | "));
+    assert!(compact.contains(commit.trim()));
+    assert!(compact.contains("| RTK Test |"));
+    assert!(compact.contains("| bulk"));
+    assert!(compact.len() * 10 <= native.len());
+}
+
+#[test]
+fn blame_explicit_fidelity_preserves_line_porcelain() {
+    let dir = seed_repo();
+    let repo = dir.path();
+    let native = run_git(repo, &["blame", "--line-porcelain", "README.md"]);
+    let managed = rtk_bin()
+        .args(["git", "blame", "--line-porcelain", "README.md"])
+        .env("HZR_RAW_FIDELITY", "1")
+        .env("HZR_RAW_FIDELITY_REASON", "verbatim_source")
+        .current_dir(repo)
+        .output()
+        .expect("run exact rtk git blame");
+
+    assert_eq!(managed.status.code(), native.status.code());
+    assert_eq!(managed.stdout, native.stdout);
+}
+
+#[test]
+fn blame_incremental_requires_explicit_fidelity() {
+    let dir = seed_repo();
+    let output = run_rtk_git(dir.path(), &["blame", "--incremental", "README.md"]);
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("verbatim_source"));
+}
+
+#[test]
+fn blame_marker_without_closed_reason_is_refused() {
+    let dir = seed_repo();
+    let output = rtk_bin()
+        .args(["git", "blame", "--line-porcelain", "README.md"])
+        .env("HZR_RAW_FIDELITY", "1")
+        .current_dir(dir.path())
+        .output()
+        .expect("reject reasonless exact blame");
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("closed HZR_RAW_FIDELITY_REASON"));
+}

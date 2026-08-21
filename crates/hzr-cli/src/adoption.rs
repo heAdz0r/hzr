@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use clap::ValueEnum;
 use directories::BaseDirs;
 use fs2::FileExt;
 use serde::Serialize;
@@ -11,6 +12,7 @@ use sha2::{Digest, Sha256};
 
 const HZR_DISPATCH_SUFFIX: &str = " hooks dispatch";
 const HZR_OBSERVE_SUFFIX: &str = " hooks observe";
+const HZR_FEEDBACK_SUFFIX: &str = " hooks feedback";
 const HZR_INIT_SUFFIX: &str = " init --if-needed --quiet --session-start-hook";
 const HZR_INIT_SKIP_SERVICE_SUFFIX: &str =
     " init --if-needed --quiet --session-start-hook --skip-service";
@@ -26,6 +28,31 @@ const SETTINGS_MISSING_DEFAULT: &[u8] = b"{}\n";
 /// cleaned or the bundle directory is removed, so installing from one is refused.
 const DEV_PATH_MARKERS: [&str; 2] = ["/target/debug/", "/target/release/"];
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeToolMode {
+    Observe,
+    Steer,
+    Strict,
+}
+
+impl NativeToolMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Observe => "observe",
+            Self::Steer => "steer",
+            Self::Strict => "strict",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HookInstallPolicy {
+    pub native_tool_mode: Option<NativeToolMode>,
+    pub dry_run: bool,
+    pub confirmed: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct HookStatus {
     pub settings_path: PathBuf,
@@ -34,6 +61,7 @@ pub struct HookStatus {
     pub external_icm_entries: usize,
     pub installed: bool,
     pub conflict: bool,
+    pub native_tool_mode: Option<NativeToolMode>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -70,11 +98,18 @@ pub fn install(
     adopt_icm: bool,
     start_service: bool,
     project_only: bool,
-    dry_run: bool,
-    confirmed: bool,
+    policy: HookInstallPolicy,
 ) -> Result<AdoptionReport> {
+    let HookInstallPolicy {
+        native_tool_mode,
+        dry_run,
+        confirmed,
+    } = policy;
     let before = read_settings(path)?;
     let mut document = parse_settings(path, &before)?;
+    let native_tool_mode = native_tool_mode
+        .or_else(|| installed_native_tool_mode(&document))
+        .unwrap_or(NativeToolMode::Steer);
     remove_owned_hooks(&mut document, HookOwner::Rtk);
     remove_owned_hooks(&mut document, HookOwner::Hzr);
     if adopt_icm {
@@ -86,7 +121,7 @@ pub fn install(
     }
     add_hzr_hooks(
         &mut document,
-        &managed_commands(binary, start_service, project_only)?,
+        &managed_commands(binary, start_service, project_only, native_tool_mode)?,
     )?;
     let after = render_settings(&document)?;
     let changed = before != after.as_bytes();
@@ -229,8 +264,9 @@ enum HookOwner {
 }
 
 fn owner(command: &str) -> HookOwner {
-    if command.trim_end().ends_with(HZR_DISPATCH_SUFFIX)
-        || command.trim_end().ends_with(HZR_OBSERVE_SUFFIX)
+    if hzr_dispatch_mode(command).is_some()
+        || hzr_observe_mode(command).is_some()
+        || command.trim_end().ends_with(HZR_FEEDBACK_SUFFIX)
         || command.trim_end().ends_with(HZR_INIT_SUFFIX)
         || command.trim_end().ends_with(HZR_INIT_SKIP_SERVICE_SUFFIX)
         || command.trim_end().ends_with(HZR_INIT_ENABLED_SUFFIX)
@@ -267,9 +303,45 @@ fn classify(path: &Path, document: &Value) -> HookStatus {
         hzr_entries,
         rtk_entries,
         external_icm_entries,
-        installed: hzr_entries == 3 && rtk_entries == 0,
+        installed: hzr_entries == 6 && rtk_entries == 0,
         conflict: hzr_entries > 0 && rtk_entries > 0,
+        native_tool_mode: installed_native_tool_mode(document),
     }
+}
+
+fn installed_native_tool_mode(document: &Value) -> Option<NativeToolMode> {
+    let mut mode = None;
+    visit_commands(document, &mut |command| {
+        mode = hzr_dispatch_mode(command).or(mode);
+    });
+    mode
+}
+
+fn hzr_dispatch_mode(command: &str) -> Option<NativeToolMode> {
+    hzr_native_mode(command, HZR_DISPATCH_SUFFIX)
+}
+
+fn hzr_observe_mode(command: &str) -> Option<NativeToolMode> {
+    hzr_native_mode(command, HZR_OBSERVE_SUFFIX)
+}
+
+fn hzr_native_mode(command: &str, command_suffix: &str) -> Option<NativeToolMode> {
+    let command = command.trim_end();
+    for mode in [
+        NativeToolMode::Observe,
+        NativeToolMode::Steer,
+        NativeToolMode::Strict,
+    ] {
+        let suffix = format!("{command_suffix} --native-mode {}", mode.as_str());
+        if command.ends_with(&suffix) {
+            return Some(mode);
+        }
+    }
+    // A pre-enforcement dispatcher is an existing installation. Preserve its behaviour
+    // on upgrade and let doctor advertise the explicit opt-in.
+    command
+        .ends_with(command_suffix)
+        .then_some(NativeToolMode::Observe)
 }
 
 fn visit_commands(value: &Value, visit: &mut impl FnMut(&str)) {
@@ -317,6 +389,7 @@ fn remove_owned_hooks(document: &mut Value, target: HookOwner) {
 struct ManagedCommands {
     dispatch: String,
     observe: String,
+    feedback: String,
     init: String,
 }
 
@@ -376,6 +449,7 @@ fn managed_commands(
     binary: &Path,
     start_service: bool,
     project_only: bool,
+    native_tool_mode: NativeToolMode,
 ) -> Result<ManagedCommands> {
     let executable = shell_word(binary)?;
     let init_suffix = match (project_only, start_service) {
@@ -385,8 +459,15 @@ fn managed_commands(
         (false, false) => HZR_INIT_SKIP_SERVICE_SUFFIX,
     };
     Ok(ManagedCommands {
-        dispatch: format!("{executable}{HZR_DISPATCH_SUFFIX}"),
-        observe: format!("{executable}{HZR_OBSERVE_SUFFIX}"),
+        dispatch: format!(
+            "{executable}{HZR_DISPATCH_SUFFIX} --native-mode {}",
+            native_tool_mode.as_str()
+        ),
+        observe: format!(
+            "{executable}{HZR_OBSERVE_SUFFIX} --native-mode {}",
+            native_tool_mode.as_str()
+        ),
+        feedback: format!("{executable}{HZR_FEEDBACK_SUFFIX}"),
         init: format!("{executable}{init_suffix}"),
     })
 }
@@ -418,7 +499,7 @@ fn add_hzr_hooks(document: &mut Value, commands: &ManagedCommands) -> Result<()>
         hooks,
         "PreToolUse",
         json!({
-            "matcher": "Bash|Agent|Task",
+            "matcher": "Bash|Agent|Task|Read|Grep|Glob|Edit|Write",
             "hooks": [{"type": "command", "command": commands.dispatch, "timeout": 10}]
         }),
     )?;
@@ -430,6 +511,22 @@ fn add_hzr_hooks(document: &mut Value, commands: &ManagedCommands) -> Result<()>
             "hooks": [{"type": "command", "command": commands.observe, "timeout": 10}]
         }),
     )?;
+    append_event(
+        hooks,
+        "UserPromptSubmit",
+        json!({
+            "hooks": [{"type": "command", "command": commands.feedback, "timeout": 10}]
+        }),
+    )?;
+    for event in ["Stop", "SubagentStop"] {
+        append_event(
+            hooks,
+            event,
+            json!({
+                "hooks": [{"type": "command", "command": commands.feedback, "timeout": 10}]
+            }),
+        )?;
+    }
     Ok(())
 }
 
@@ -585,11 +682,21 @@ mod tests {
 
     use std::path::Path;
 
-    use super::{install, resolve_hook_binary, status, uninstall};
+    use super::{
+        HookInstallPolicy, NativeToolMode, install, resolve_hook_binary, status, uninstall,
+    };
 
     /// Stable stand-in for the durable installed binary.
     fn binary() -> &'static Path {
         Path::new("/opt/hzr/bin/hzr")
+    }
+
+    fn policy(dry_run: bool, confirmed: bool) -> HookInstallPolicy {
+        HookInstallPolicy {
+            native_tool_mode: None,
+            dry_run,
+            confirmed,
+        }
     }
 
     #[test]
@@ -616,15 +723,15 @@ mod tests {
         )
         .expect("settings write");
 
-        let first =
-            install(&path, binary(), true, true, false, false, true).expect("first install");
-        let second =
-            install(&path, binary(), true, true, false, false, true).expect("idempotent install");
+        let first = install(&path, binary(), true, true, false, policy(false, true))
+            .expect("first install");
+        let second = install(&path, binary(), true, true, false, policy(false, true))
+            .expect("idempotent install");
         let current = status(&path).expect("hook status");
 
         assert!(first.changed);
         assert!(!second.changed);
-        assert_eq!(current.hzr_entries, 3);
+        assert_eq!(current.hzr_entries, 6);
         assert_eq!(current.rtk_entries, 0);
         assert_eq!(
             current.external_icm_entries, 0,
@@ -634,7 +741,11 @@ mod tests {
         let installed = fs::read_to_string(&path).expect("installed settings");
         assert!(installed.contains("PostToolUse"));
         assert!(installed.contains("Read|Grep|Glob|Edit|Write"));
-        assert!(installed.contains("hooks observe"));
+        assert!(installed.contains("hooks observe --native-mode steer"));
+        assert!(installed.contains("hooks dispatch --native-mode steer"));
+        assert!(installed.contains("UserPromptSubmit"));
+        assert!(installed.contains("SubagentStop"));
+        assert_eq!(current.native_tool_mode, Some(NativeToolMode::Steer));
         assert!(
             installed.contains("/home/u/bin/foreign-hook"),
             "unknown third-party handlers must survive adoption"
@@ -651,17 +762,60 @@ mod tests {
     }
 
     #[test]
+    fn acceptance_gate_upgrade_observes_while_new_install_steers() {
+        let directory = tempdir().expect("temporary directory");
+        let legacy_path = directory.path().join("legacy.json");
+        fs::write(
+            &legacy_path,
+            serde_json::to_vec_pretty(&json!({
+                "hooks": {"PreToolUse": [{"matcher": "Bash|Agent|Task", "hooks": [
+                    {"type": "command", "command": "'/opt/hzr/bin/hzr' hooks dispatch"}
+                ]}]}
+            }))
+            .expect("legacy settings"),
+        )
+        .expect("legacy write");
+        let upgraded = install(
+            &legacy_path,
+            binary(),
+            true,
+            true,
+            false,
+            policy(false, true),
+        )
+        .expect("upgrade");
+        assert_eq!(
+            upgraded.status.native_tool_mode,
+            Some(NativeToolMode::Observe)
+        );
+        assert!(
+            upgraded
+                .rendered_settings
+                .contains("hooks dispatch --native-mode observe")
+        );
+
+        let new_path = directory.path().join("new.json");
+        let installed = install(&new_path, binary(), true, true, false, policy(false, true))
+            .expect("new install");
+        assert_eq!(
+            installed.status.native_tool_mode,
+            Some(NativeToolMode::Steer)
+        );
+    }
+
+    #[test]
     fn dry_run_and_uninstall_are_recoverable() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("settings.json");
         fs::write(&path, b"{}\n").expect("settings write");
 
-        let preview =
-            install(&path, binary(), true, true, false, true, false).expect("dry-run install");
+        let preview = install(&path, binary(), true, true, false, policy(true, false))
+            .expect("dry-run install");
         assert!(preview.changed);
         assert_eq!(fs::read(&path).expect("unchanged settings"), b"{}\n");
 
-        install(&path, binary(), true, true, false, false, true).expect("confirmed install");
+        install(&path, binary(), true, true, false, policy(false, true))
+            .expect("confirmed install");
         let removed = uninstall(&path, false, true).expect("confirmed uninstall");
         assert!(removed.changed);
         assert_eq!(status(&path).expect("hook status").hzr_entries, 0);
@@ -684,7 +838,7 @@ mod tests {
         )
         .expect("settings write");
 
-        install(&path, binary(), false, true, false, false, true)
+        install(&path, binary(), false, true, false, policy(false, true))
             .expect("install keeping external ICM");
         assert_eq!(
             status(&path).expect("hook status").external_icm_entries,
@@ -699,13 +853,13 @@ mod tests {
         let path = directory.path().join("settings.json");
         fs::write(&path, b"{}\n").expect("settings write");
 
-        install(&path, binary(), true, false, false, false, true)
+        install(&path, binary(), true, false, false, policy(false, true))
             .expect("install with service opt-out");
         let opted_out = fs::read_to_string(&path).expect("opted-out settings");
         assert!(opted_out.contains("init --if-needed --quiet --session-start-hook --skip-service"));
         assert!(status(&path).expect("opted-out hook status").installed);
 
-        install(&path, binary(), true, true, false, false, true)
+        install(&path, binary(), true, true, false, policy(false, true))
             .expect("restore automatic service startup");
         let automatic = fs::read_to_string(&path).expect("automatic settings");
         assert!(automatic.contains("init --if-needed --quiet"));
@@ -721,7 +875,7 @@ mod tests {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("settings.json");
 
-        let report = install(&path, binary(), true, true, true, false, true)
+        let report = install(&path, binary(), true, true, true, policy(false, true))
             .expect("project-only hook install");
 
         assert!(
@@ -769,7 +923,7 @@ mod tests {
     #[test]
     fn hook_binary_validates_but_preserves_a_durable_symlink() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.3/bin");
+        let release = directory.path().join("versions/v0.4.4/bin");
         let prefix = directory.path().join("bin");
         fs::create_dir_all(&release).expect("release directory");
         fs::create_dir_all(&prefix).expect("prefix directory");

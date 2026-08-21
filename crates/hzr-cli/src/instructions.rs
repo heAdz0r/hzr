@@ -110,14 +110,17 @@ fn managed_block(_surface: Surface, contract_path: &Path) -> String {
          | memory | `hzr memory recall\\|store` |\n\
          | context | `hzr context plan \"<intent>\"` |\n\
          | shell command | `hzr exec run '<shell command>'`; canonical policy selects the filtered route and preserves shell grammar |\n\
-         | explicit unfiltered recovery | `HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>` only when exact byte-for-byte output is required and no safe first-class route can satisfy it |\n\
+         | explicit unfiltered recovery | `HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr rtk -- raw <command...>`; reason must be `binary`, `checksum`, `machine_protocol`, `complete_log`, `full_patch`, or `verbatim_source` |\n\
          | optional TDD | `hzr tdd` only when user/repository policy or regression risk justifies test-first overhead |\n\
          | build this project | `hzr build <args>` (not `hzr release`, which rebuilds HZR) |\n\n\
          For agent-originated shell work, `hzr exec run` is the default. If\n\
          `hzr exec rewrite '<shell command>'` returns `allow_rewrite`, `raw` is forbidden.\n\
          Do not choose `raw` merely because a command uses SSH, JSON, pipes, redirects or\n\
          unfamiliar arguments. When no filter exists, `hzr exec run` performs the tracked\n\
-        fallback without requiring the agent to select `raw`.\n\n\
+         fallback without requiring the agent to select `raw`. POSIX shell launchers, env prefixes,\n\
+         and simple Python file/JSON/subprocess wrappers do not bypass policy: HZR rewrites the\n\
+         proven leaf or returns `Ask`. Opaque computation/migration remains tracked with zero\n\
+         savings credit.\n\n\
          For a plain argv command whose output intent is known, the existing\n\
          `hzr rtk -- test`, `err`, `summary` and `log` routes provide bounded\n\
          generic filtering. Do not use them to reconstruct pipes, redirects or\n\
@@ -133,7 +136,9 @@ fn managed_block(_surface: Surface, contract_path: &Path) -> String {
          `read -n` defaults to exact content and preserves source coordinates, including\n\
          ranged and tail reads. `--max-lines N` is the exact head equivalent. `--outline`\n\
          returns Markdown headings or heuristic symbols for Rust, Python, TypeScript,\n\
-         JavaScript, Go and Java.\n\n\
+         JavaScript, Go and Java. For several files, use\n\
+         `hzr read --batch --max-tokens N <files...>`; it preserves order and coordinates and\n\
+         emits exact recovery ranges for omitted content.\n\n\
          Batch writes are atomic and idempotent per file; independent file groups can fail separately,\n\
          so inspect every operation result. Batch is not an all-files transaction.\n\n\
          ## Memory scopes\n\n\
@@ -166,17 +171,22 @@ fn managed_block(_surface: Surface, contract_path: &Path) -> String {
          another writer to the store HZR supervises and leaks orphans when the session dies.\n\n\
          `hzr rtk -- raw <command> <args...>` directly spawns the first argument and receives\n\
          zero savings credit. It is an explicit fidelity escape hatch, not the default shell\n\
-         wrapper; normal agent shell work goes through `hzr exec run '<shell command>'`.\n\n\
+         wrapper; normal agent shell work goes through `hzr exec run '<shell command>'`. The\n\
+         fidelity marker without one of the closed reasons above returns `Ask`; even a valid\n\
+         reason cannot override a managed equivalent, deny, or ambiguous-policy decision. The\n\
+         per-session allowance is five operations or 100,000 estimated delivered tokens; an\n\
+         oversized local read or unmeasurable remote exact stream asks before execution.\n\n\
          The installed `PreToolUse` hook routes Bash through the managed daemon and\n\
          falls back to the same pinned fork-core when the daemon is down. A degraded\n\
          rewrite keeps command policy but is absent from the usage ledger; `hzr doctor`\n\
          and `hzr stats` report that incomplete accounting rather than hiding it.\n\n\
-        The hook matches `Bash`, `Agent` and `Task` only. It does **not** see your host's\n\
-         own `Read`, `Grep`, `Edit`, `Write` or `Glob`, so it cannot redirect or compress\n\
-         those calls. A failure-silent `PostToolUse` observer records only their route and\n\
-         response-size estimate: it stores no tool content, changes no result and grants no\n\
-         savings credit. The table above is therefore yours to follow, not something the hook\n\
-         enforces; prefer the `hzr` command whenever one exists.\n\n\
+        The failure-open `PreToolUse` hook sees native `Read`, `Grep`, `Glob`, `Edit` and\n\
+         `Write`. In `steer` mode it prescribes `hzr read`/`hzr search`; `Glob` and native\n\
+         edits remain allowed. `strict` additionally prescribes `hzr write`, while `observe`\n\
+         retains measurement-only compatibility for existing installations. The `PostToolUse`\n\
+         observer stores no tool content and grants no savings credit. In `steer`/`strict`,\n\
+         policy-allowed native calls are accounted as typed E10 bypasses, not hidden as\n\
+         `native_unaccounted`.\n\n\
          {END}"
     )
 }
@@ -720,7 +730,9 @@ mod tests {
         assert!(out.contains("returns `allow_rewrite`, `raw` is forbidden"));
         assert!(out.contains("When no filter exists, `hzr exec run` performs the tracked"));
         assert!(out.contains("`hzr rtk -- test`, `err`, `summary` and `log`"));
-        assert!(out.contains("`HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>`"));
+        assert!(out.contains("`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason>"));
+        assert!(out.contains("simple Python file/JSON/subprocess wrappers do not bypass policy"));
+        assert!(out.contains("fidelity marker without one of the closed reasons"));
         assert!(!out.contains("| exact/raw output |"));
     }
 
@@ -744,10 +756,14 @@ mod tests {
                     "missing MCP tool {tool}"
                 );
             }
-            assert!(out.contains("`PostToolUse` observer records only their route"));
+            assert!(out.contains("failure-open `PreToolUse` hook sees native"));
+            assert!(out.contains("`Glob` and native"));
+            assert!(out.contains("`strict` additionally prescribes `hzr write`"));
+            assert!(out.contains("`PostToolUse`"));
             assert!(out.contains("stores no tool content"));
             assert!(out.contains("grants no"));
             assert!(out.contains("savings credit"));
+            assert!(out.contains("typed E10 bypasses"));
             assert!(!out.contains("nothing records them"));
             assert!(!out.contains("absent from `hzr stats` entirely"));
         }
@@ -763,6 +779,7 @@ mod tests {
             assert!(out.contains("Prefer `--outline` for structure"));
             assert!(out.contains("`--from`/`--to` for exact evidence"));
             assert!(out.contains("`HZR_EXACT_FIDELITY=1 hzr read"));
+            assert!(out.contains("`hzr read --batch --max-tokens N <files...>`"));
             assert!(!out.contains("Markdown defaults to a digest, `--level none` is exact"));
             assert!(!out.contains("\n@/opt/hzr"));
             assert!(!out.contains("Bootstrap by reading"));

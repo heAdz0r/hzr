@@ -48,6 +48,7 @@ Search & Memory:
   memory     Recall, store, or inspect ICM memory
 
 Agent tools:
+  test       Run tests through the inherited failure-first filter
   read       Read files through bounded HZR filtering
   write      Write files atomically through HZR
   exec       Rewrite or run a command through policy

@@ -1,5 +1,8 @@
 use std::ffi::OsString;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -13,6 +16,7 @@ use crate::workspace::{IndexPlacement, Workspace};
 
 pub const SUPPORTED_GREPAI_VERSION: &str = "0.35.0";
 pub const SINGLE_WORKTREE_WATCH_FLAG: &str = "--no-worktree-discovery";
+static CONFIG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
 pub struct Deadlines {
@@ -77,11 +81,23 @@ impl StoreBackend {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InitOptions {
     pub provider: EmbeddingProvider,
     pub model: Option<String>,
     pub backend: StoreBackend,
+    pub repository_graph: bool,
+}
+
+impl Default for InitOptions {
+    fn default() -> Self {
+        Self {
+            provider: EmbeddingProvider::default(),
+            model: None,
+            backend: StoreBackend::default(),
+            repository_graph: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -89,6 +105,7 @@ pub struct InitOptions {
 pub enum InitOutcome {
     Initialized,
     AlreadyInitialized,
+    RepositoryGraphEnabled,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -152,6 +169,9 @@ impl GrepAi {
         self.workspace.require_single_index()?;
         self.workspace.prepare_index_location()?;
         if self.workspace.index.config.is_file() {
+            if options.repository_graph && self.enable_repository_graph()? {
+                return Ok(InitOutcome::RepositoryGraphEnabled);
+            }
             return Ok(InitOutcome::AlreadyInitialized);
         }
         let _owner = IndexOwner::acquire(&self.workspace)?;
@@ -184,7 +204,20 @@ impl GrepAi {
         .await?;
         process::require_success(output, "initialize grepai")?;
         self.workspace.require_initialized()?;
+        if options.repository_graph {
+            enable_repository_graph_in_config(&self.workspace.index.config)?;
+        }
         Ok(InitOutcome::Initialized)
+    }
+
+    fn enable_repository_graph(&self) -> Result<bool> {
+        let config = read_managed_config(&self.workspace.index.config)?;
+        if repository_graph_enabled(&config)? {
+            return Ok(false);
+        }
+        let _owner = IndexOwner::acquire(&self.workspace)?;
+        enable_repository_graph_in_config(&self.workspace.index.config)?;
+        Ok(true)
     }
 
     pub async fn start_watch(&self) -> Result<WatchHandle> {
@@ -224,6 +257,131 @@ impl GrepAi {
             .windows(SINGLE_WORKTREE_WATCH_FLAG.len())
             .any(|window| window == SINGLE_WORKTREE_WATCH_FLAG.as_bytes()))
     }
+}
+
+fn enable_repository_graph_in_config(path: &Path) -> Result<()> {
+    let config = read_managed_config(path)?;
+    if repository_graph_enabled(&config)? {
+        return Ok(());
+    }
+
+    let mut lines = config
+        .split_inclusive('\n')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if !config.ends_with('\n') && config.rsplit_once('\n').is_none() {
+        lines = vec![config.clone()];
+    }
+    let rpg = lines.iter().position(|line| line.trim_end() == "rpg:");
+    match rpg {
+        Some(section) => {
+            let end = lines
+                .iter()
+                .enumerate()
+                .skip(section + 1)
+                .find_map(|(index, line)| {
+                    (!line.starts_with(' ') && !line.starts_with('\t') && !line.trim().is_empty())
+                        .then_some(index)
+                })
+                .unwrap_or(lines.len());
+            if let Some(enabled) = lines[section + 1..end]
+                .iter()
+                .position(|line| line.trim_start().starts_with("enabled:"))
+                .map(|offset| section + 1 + offset)
+            {
+                let newline = if lines[enabled].ends_with('\n') {
+                    "\n"
+                } else {
+                    ""
+                };
+                lines[enabled] = format!("    enabled: true{newline}");
+            } else {
+                lines.insert(section + 1, "    enabled: true\n".to_owned());
+            }
+        }
+        None => {
+            if !config.is_empty() && !config.ends_with('\n') {
+                lines.push("\n".to_owned());
+            }
+            lines.push("rpg:\n".to_owned());
+            lines.push("    enabled: true\n".to_owned());
+        }
+    }
+
+    let updated = lines.concat();
+    let sequence = CONFIG_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let temporary = path.with_extension(format!("yaml.hzr-{}-{sequence}.tmp", std::process::id()));
+    let write_result = (|| -> Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary).map_err(|source| IndexError::Io {
+            operation: "create grepai config temporary",
+            path: temporary.clone(),
+            source,
+        })?;
+        file.write_all(updated.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|source| IndexError::Io {
+                operation: "write grepai config temporary",
+                path: temporary.clone(),
+                source,
+            })?;
+        fs::rename(&temporary, path).map_err(|source| IndexError::Io {
+            operation: "replace grepai config",
+            path: path.to_path_buf(),
+            source,
+        })
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
+}
+
+fn read_managed_config(path: &Path) -> Result<String> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| IndexError::Io {
+        operation: "inspect grepai config",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(IndexError::InvalidInput {
+            field: "grepai config",
+            reason: format!("{} is not a regular file", path.display()),
+        });
+    }
+    fs::read_to_string(path).map_err(|source| IndexError::Io {
+        operation: "read grepai config",
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+fn repository_graph_enabled(config: &str) -> Result<bool> {
+    let mut in_rpg = false;
+    for line in config.lines() {
+        let trimmed = line.trim();
+        if !(line.starts_with(' ') || line.starts_with('\t')) {
+            in_rpg = trimmed == "rpg:";
+            continue;
+        }
+        if in_rpg && trimmed.starts_with("enabled:") {
+            return match trimmed.trim_start_matches("enabled:").trim() {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                value => Err(IndexError::InvalidInput {
+                    field: "rpg.enabled",
+                    reason: format!("expected true or false, got {value:?}"),
+                }),
+            };
+        }
+    }
+    Ok(false)
 }
 
 async fn verify_version(binary: &Path, root: &Path, deadline: Duration) -> Result<String> {

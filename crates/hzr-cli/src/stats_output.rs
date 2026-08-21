@@ -39,12 +39,61 @@ fn write_stats(output: &mut impl Write, report: &StatsReport, color: bool) -> io
 
     write_local_reduction(output, report, color)?;
     write_optimizer_bypass(output, report, color)?;
+    write_evasion(output, report, color)?;
     write_operation_families(output, report, color)?;
     write_operation_modes(output, report, color)?;
     write_subsystems(output, report, color)?;
     write_hot_paths(output, report, color)?;
     write_provider_usage(output, report, color)?;
     write_integrity(output, report, color)
+}
+
+fn write_evasion(output: &mut impl Write, report: &StatsReport, color: bool) -> io::Result<()> {
+    let Some(evasion) = report.evasion.as_ref() else {
+        return Ok(());
+    };
+    writeln!(output)?;
+    writeln!(
+        output,
+        "{}  {}",
+        style("EVASION", "1;38;5;208", color),
+        style("aggregate-only · payloads omitted", "2;37", color)
+    )?;
+    for class in evasion.by_class.iter().take(10) {
+        writeln!(
+            output,
+            "   {:<4} calls {:>8} · delivered {:>10} · avoidable {:>10}",
+            class.class.as_str(),
+            format_count(class.operations),
+            format_count(class.delivered_tokens),
+            format_count(class.avoidable_tokens)
+        )?;
+    }
+    writeln!(
+        output,
+        "   fidelity {} ops / {} tokens · invalid {} · allowance {}/{}",
+        format_count(evasion.fidelity_operations),
+        format_count(evasion.fidelity_delivered_tokens),
+        format_count(evasion.fidelity_invalid_operations),
+        format_count(evasion.default_allowance.max_operations),
+        format_count(evasion.default_allowance.max_delivered_tokens)
+    )?;
+    writeln!(
+        output,
+        "   policy attempts {} (separate from executed operations)",
+        format_count(evasion.policy_attempts)
+    )?;
+    for event in evasion.policy_by_class.iter().take(10) {
+        writeln!(
+            output,
+            "   {:<4} {:<10} attempts {:>8} · avoidable {:>8}",
+            event.class.as_str(),
+            event.decision.as_str(),
+            format_count(event.attempts),
+            format_count(event.avoidable_attempts)
+        )?;
+    }
+    Ok(())
 }
 
 fn write_operation_modes(
@@ -623,8 +672,15 @@ fn truncate(value: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use hzr_core::{LedgerSummary, OperationFamilySummary, OperationModeSummary, OperationRoute};
-    use hzr_protocol::{AccountingOperationKind, AccountingOperationMode, AccountingStage};
+    use hzr_core::{
+        EvasionClassSummary, EvasionSummary, FidelityAllowance, LedgerSummary,
+        OperationFamilySummary, OperationModeSummary, OperationRoute, PolicyEventSummary,
+        ReadPipelineSummary,
+    };
+    use hzr_protocol::{
+        AccountingOperationKind, AccountingOperationMode, AccountingStage, EvasionClass,
+        PolicyDecision,
+    };
 
     use crate::hook_runner::AccountingCoverage;
     use crate::stats::{
@@ -652,7 +708,7 @@ mod tests {
     fn report(usage: LedgerSummary, commands: Vec<CommandSavings>) -> StatsReport {
         let by_command_total = commands.len();
         StatsReport {
-            hzr_version: "0.4.3",
+            hzr_version: "0.4.4",
             scope: "global lifetime".into(),
             direct_savings: DirectSavings {
                 operations: 42,
@@ -674,11 +730,16 @@ mod tests {
                 share_pct: 80.0,
             }],
             by_mode: Vec::new(),
+            read_pipeline: ReadPipelineSummary::default(),
+            accounting_version_scope: "current_privacy_typed_policy",
+            accounting_policy_version: "privacy_typed_v1",
+            excluded_legacy_operations: 0,
             by_family: Vec::new(),
+            evasion: None,
             by_command: commands,
             by_command_total,
             by_command_omitted: 0,
-            by_command_recovery: "hzr stats --json --all".into(),
+            by_command_recovery: "hzr stats --json --all --since 7d".into(),
             observed_model_usage: usage,
             observed_model_usage_scope: "global_lifetime",
             bypass: BypassReport::default(),
@@ -745,7 +806,7 @@ mod tests {
             }],
             by_tool_total: 1,
             by_tool_omitted: 0,
-            by_tool_recovery: "hzr stats --json --all".into(),
+            by_tool_recovery: "hzr stats --json --all --since 7d".into(),
         }));
 
         assert!(rendered.contains("OPTIMIZER BYPASS"));
@@ -914,6 +975,40 @@ mod tests {
             rendered.contains("channels ") && rendered.contains("mcp=0"),
             "empty traffic must still render an explicit mcp=0 channel"
         );
+    }
+
+    #[test]
+    fn acceptance_gate_evasion_panel_is_bounded_and_aggregate_only() {
+        let rendered = render(&StatsReport {
+            evasion: Some(EvasionSummary {
+                by_class: vec![EvasionClassSummary {
+                    class: EvasionClass::E2ShellWrapper,
+                    operations: 7,
+                    delivered_tokens: 80_000,
+                    avoidable_operations: 7,
+                    avoidable_tokens: 70_000,
+                }],
+                fidelity_operations: 2,
+                fidelity_delivered_tokens: 30_000,
+                fidelity_invalid_operations: 1,
+                default_allowance: FidelityAllowance::default(),
+                policy_attempts: 3,
+                policy_by_class: vec![PolicyEventSummary {
+                    class: EvasionClass::E7FidelityHatch,
+                    decision: PolicyDecision::Ask,
+                    attempts: 3,
+                    avoidable_attempts: 2,
+                }],
+            }),
+            ..report(LedgerSummary::default(), Vec::new())
+        });
+        assert!(rendered.contains("EVASION"));
+        assert!(rendered.contains("e2"));
+        assert!(rendered.contains("policy attempts 3"));
+        assert!(rendered.contains("e7") && rendered.contains("ask"));
+        for sentinel in ["/private/path", "SELECT *", "secret=value", "HEREDOC"] {
+            assert!(!rendered.contains(sentinel));
+        }
     }
 
     #[test]

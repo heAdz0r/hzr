@@ -378,6 +378,7 @@ src/filters/yadm.toml
 src/filters/yamllint.toml
 src/find_cmd.rs
 src/find_cmd.rs.rtk-lock
+src/fidelity.rs
 src/format_cmd.rs
 src/format_cmd.rs.rtk-lock
 src/gain.rs
@@ -470,6 +471,7 @@ src/read_source.rs
 src/read_symbols.rs
 src/read_types.rs
 src/read_types.rs.rtk-lock
+src/remote_logs_cmd.rs
 src/rewrite_cmd.rs
 src/rgai_cmd.rs
 src/rgai_cmd.rs.rtk-lock
@@ -478,10 +480,12 @@ src/ruff_cmd.rs.rtk-lock
 src/runner.rs
 src/session_stats.rs
 src/ssh_cmd.rs
+src/sqlite_cmd.rs
 src/summary.rs
 src/symbols_regex.rs
 src/tee.rs
 src/tee.rs.rtk-lock
+src/tar_cmd.rs
 src/toml_filter.rs
 src/tracking.rs
 src/tree.rs
@@ -511,7 +515,12 @@ tasks/prd-rtk-memory-layer.md.rtk-lock
 tasks/prd-rtk-read-write-quality.md
 tasks/prd-upstream-pr-backports.md
 tasks/requirements-memory-llm-optimization.md
+tests/fixtures/anti_evasion_policy.json
+tests/fixtures/anti_evasion_fixture.rs
 tests/git_cli_parity.rs
+tests/internal_env.rs
 tests/read_cli.rs
 tests/rgai_project_root.rs
+tests/runner_exit.rs
+tests/w7_routes.rs
 tests/write_cli.rs

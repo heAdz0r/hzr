@@ -7,31 +7,31 @@
 //! optimizer entirely.
 
 use hzr_core::{
-    OperationRoute, OperationSubsystem, RawReplacement, classify_operation,
+    OperationRoute, OperationSubsystem, RawFidelityReason, RawFidelityRequest, classify_operation,
     efficient_route_replacement, explicit_raw_fidelity, first_class_replacement,
-    managed_raw_payload, raw_route_sql_predicate,
+    managed_raw_payload, raw_fidelity_request, raw_route_sql_predicate,
 };
 
 /// The hook needs the same answer for a command the agent typed directly, before any
 /// bypass prefix exists. Deriving it from a second rule is how the two drifted apart the
 /// first time, so both callers ask this one function.
 #[test]
-fn test_a_plain_shell_command_resolves_to_the_same_replacement() {
-    assert_eq!(
-        first_class_replacement("sed -n 1030,1105p crates/hzr-core/src/ledger.rs")
-            .map(|replacement| replacement.suggestion),
-        Some("hzr rtk -- read crates/hzr-core/src/ledger.rs --from 1030 --to 1105".to_owned())
-    );
-    assert_eq!(
-        first_class_replacement("hzr rtk -- raw sed -n 1030,1105p crates/hzr-core/src/ledger.rs")
-            .map(|replacement| replacement.suggestion),
-        Some("hzr rtk -- read crates/hzr-core/src/ledger.rs --from 1030 --to 1105".to_owned()),
-        "an explicit escape hatch resolves to the same suggestion as the bare command"
-    );
-    assert_eq!(
-        first_class_replacement("nl -ba src/main.rs").map(|replacement| replacement.suggestion),
-        Some("hzr rtk -- read src/main.rs -n".to_owned())
-    );
+fn test_plain_shell_commands_have_no_second_rewrite_authority() {
+    for command in [
+        "sed -n 1030,1105p crates/hzr-core/src/ledger.rs",
+        "hzr rtk -- raw sed -n 1030,1105p crates/hzr-core/src/ledger.rs",
+        "nl -ba src/main.rs",
+        "rg -n needle src",
+        "cat README.md",
+        "head README.md",
+        "tail README.md",
+    ] {
+        assert_eq!(
+            first_class_replacement(command),
+            None,
+            "shell policy must come only from the typed fork plan: {command}"
+        );
+    }
 }
 
 /// Steering must stay silent where raw is the correct tool, otherwise every build turns
@@ -46,6 +46,26 @@ fn test_commands_without_an_equivalent_are_left_alone() {
         "an in-place edit is not a read and hzr read cannot replace it"
     );
     assert_eq!(first_class_replacement(""), None);
+}
+
+#[test]
+fn acceptance_gate_private_ledger_sqlite_is_left_to_the_typed_fork_plan() {
+    for command in [
+        "sqlite3 ledger/hzr.sqlite 'select * from operations'",
+        "hzr rtk -- raw /usr/bin/sqlite3 /tmp/ledger/hzr.sqlite 'select command from operations'",
+    ] {
+        assert_eq!(
+            first_class_replacement(command),
+            None,
+            "core must not override the canonical E9 decision"
+        );
+    }
+
+    assert_eq!(
+        first_class_replacement("sqlite3 /tmp/application.db 'select 1'"),
+        None,
+        "generic SQLite remains a genuine no-equivalent fallback"
+    );
 }
 
 #[test]
@@ -105,23 +125,16 @@ fn test_ambiguous_shell_syntax_is_never_reconstructed_for_automatic_execution() 
 
 #[test]
 fn acceptance_gate_no_raw_commands_have_a_first_class_route() {
-    for (command, expected) in [
-        (
-            "hzr rtk -- raw nl -ba src/main.rs",
-            "hzr rtk -- read src/main.rs -n",
-        ),
-        (
-            "hzr rtk -- raw sed -n 40,80p src/main.rs",
-            "hzr rtk -- read src/main.rs --from 40 --to 80",
-        ),
-        (
-            "hzr rtk -- raw rg -n needle src",
-            "hzr search 'needle' --mode exact --path src",
-        ),
+    for command in [
+        "hzr rtk -- raw nl -ba src/main.rs",
+        "hzr rtk -- raw sed -n 40,80p src/main.rs",
+        "hzr rtk -- raw rg -n needle src",
     ] {
-        let replacement = first_class_replacement(command)
-            .expect("optimizable command must have a first-class route");
-        assert_eq!(replacement.suggestion, expected);
+        assert_eq!(
+            first_class_replacement(command),
+            None,
+            "fork-core must select the managed shell route: {command}"
+        );
     }
 
     for (command, expected_payload) in [
@@ -146,9 +159,45 @@ fn acceptance_gate_no_raw_commands_have_a_first_class_route() {
     }
 
     assert!(explicit_raw_fidelity(
+        "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=binary hzr rtk -- raw cat artifact.json"
+    ));
+    assert!(!explicit_raw_fidelity(
         "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.json"
     ));
     assert!(!explicit_raw_fidelity("hzr rtk -- raw cat artifact.json"));
+}
+
+#[test]
+fn acceptance_gate_raw_fidelity_uses_a_closed_reason_set_without_echoing_values() {
+    for (value, expected) in [
+        ("binary", RawFidelityReason::Binary),
+        ("checksum", RawFidelityReason::Checksum),
+        ("machine_protocol", RawFidelityReason::MachineProtocol),
+        ("complete_log", RawFidelityReason::CompleteLog),
+        ("full_patch", RawFidelityReason::FullPatch),
+        ("verbatim_source", RawFidelityReason::VerbatimSource),
+    ] {
+        let command = format!(
+            "HZR_RAW_FIDELITY_REASON={value} HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.bin"
+        );
+        assert!(matches!(
+            raw_fidelity_request(&command),
+            RawFidelityRequest::Authorized { reason, payload: "cat artifact.bin" }
+                if reason == expected
+        ));
+    }
+
+    assert_eq!(
+        raw_fidelity_request("HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.bin"),
+        RawFidelityRequest::MissingReason
+    );
+    let secret = "do-not-echo-private-value";
+    let invalid_command = format!(
+        "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON={secret} hzr rtk -- raw cat artifact.bin"
+    );
+    let invalid = raw_fidelity_request(&invalid_command);
+    assert_eq!(invalid, RawFidelityRequest::InvalidReason);
+    assert!(!format!("{invalid:?}").contains(secret));
 }
 
 #[test]
@@ -184,8 +233,11 @@ fn acceptance_gate_no_raw_wrapper_around_first_class_hzr_commands() {
     );
 
     assert_eq!(
-        first_class_replacement("HZR_RAW_FIDELITY=1 hzr rtk -- raw hzr stats"),
-        None
+        first_class_replacement(
+            "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=machine_protocol hzr rtk -- raw hzr stats"
+        )
+        .map(|replacement| replacement.suggestion),
+        Some("hzr stats".into())
     );
 }
 
@@ -220,9 +272,9 @@ fn acceptance_gate_no_raw_for_top_level_hzr_file_aliases() {
 #[test]
 fn acceptance_gate_raw_fidelity_rejects_unproven_equivalents() {
     for command in [
-        "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.json",
-        "HZR_RAW_FIDELITY=1 hzr rtk -- raw rg -n needle src",
-        "HZR_RAW_FIDELITY=1 hzr rtk -- raw sh -c 'printf complete-output'",
+        "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=binary hzr rtk -- raw cat artifact.json",
+        "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=verbatim_source hzr rtk -- raw rg -n needle src",
+        "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=complete_log hzr rtk -- raw sh -c 'printf complete-output'",
     ] {
         assert!(explicit_raw_fidelity(command));
         assert_eq!(
@@ -282,39 +334,19 @@ fn test_optimized_commands_keep_their_own_subsystem() {
 }
 
 #[test]
-fn test_bypassed_reads_and_searches_carry_their_first_class_replacement() {
-    let sed = classify_operation("rtk proxy sed -n 1030,1105p crates/hzr-core/src/ledger.rs");
-    assert_eq!(
-        sed.replacement,
-        Some(RawReplacement {
-            tool: "sed",
-            suggestion: "hzr rtk -- read crates/hzr-core/src/ledger.rs --from 1030 --to 1105"
-                .into(),
-            rationale: "hzr read streams the requested span with filtering instead of the whole slice",
-        })
-    );
-
-    let ripgrep = classify_operation("rtk proxy rg -n RewriteDecision crates/hzr-exec");
-    let ripgrep = ripgrep
-        .replacement
-        .expect("rg has a first-class replacement");
-    assert_eq!(ripgrep.tool, "rg");
-    assert_eq!(
-        ripgrep.suggestion,
-        "hzr search 'RewriteDecision' --mode exact --path crates/hzr-exec"
-    );
-
-    let cat = classify_operation("rtk proxy cat README.md");
-    assert_eq!(
-        cat.replacement.map(|replacement| replacement.suggestion),
-        Some("hzr rtk -- read README.md --level none".to_owned())
-    );
-
-    let nl = classify_operation("rtk proxy nl -ba crates/hzr-cli/src/main.rs");
-    assert_eq!(
-        nl.replacement.map(|replacement| replacement.suggestion),
-        Some("hzr rtk -- read crates/hzr-cli/src/main.rs -n".to_owned())
-    );
+fn test_bypassed_shell_tools_do_not_carry_a_second_rewrite_plan() {
+    for command in [
+        "rtk proxy sed -n 1030,1105p crates/hzr-core/src/ledger.rs",
+        "rtk proxy rg -n RewriteDecision crates/hzr-exec",
+        "rtk proxy cat README.md",
+        "rtk proxy nl -ba crates/hzr-cli/src/main.rs",
+    ] {
+        assert_eq!(
+            classify_operation(command).replacement,
+            None,
+            "ledger classification must not reconstruct shell policy: {command}"
+        );
+    }
 }
 
 #[test]

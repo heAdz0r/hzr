@@ -1,7 +1,12 @@
+use crate::fidelity::{self, FidelityReason};
 use crate::tracking;
 use anyhow::{Context, Result};
+use chrono::{FixedOffset, Utc};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::process::Command;
+
+const BLAME_EXACT_REASONS: &[FidelityReason] = &[FidelityReason::VerbatimSource];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitCommandClass {
@@ -24,6 +29,7 @@ pub enum GitCommand {
     Fetch,
     Stash { subcommand: Option<String> },
     Worktree,
+    Blame,
 }
 
 /// Create a git Command with global options prepended before subcommand args.
@@ -64,6 +70,7 @@ pub fn run(
             run_stash(subcommand.as_deref(), args, verbose, global_args)
         }
         GitCommand::Worktree => run_worktree(args, verbose, global_args),
+        GitCommand::Blame => run_blame(args, verbose, global_args),
     }
 }
 
@@ -88,9 +95,11 @@ fn is_worktree_action(args: &[String]) -> bool {
 
 pub(crate) fn classify_git_command(cmd: &GitCommand, args: &[String]) -> GitCommandClass {
     match cmd {
-        GitCommand::Diff | GitCommand::Log | GitCommand::Status | GitCommand::Show => {
-            GitCommandClass::ReadOnly
-        }
+        GitCommand::Diff
+        | GitCommand::Log
+        | GitCommand::Status
+        | GitCommand::Show
+        | GitCommand::Blame => GitCommandClass::ReadOnly,
         GitCommand::Add
         | GitCommand::Commit { .. }
         | GitCommand::Checkout
@@ -1784,6 +1793,192 @@ fn filter_worktree_list(output: &str) -> String {
     result.join("\n")
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BlameMetadata {
+    author: String,
+    date: String,
+    summary: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BlameRange {
+    start: usize,
+    end: usize,
+    commit: String,
+    metadata: BlameMetadata,
+}
+
+fn run_blame(args: &[String], verbose: u8, global_args: &[String]) -> Result<()> {
+    let timer = tracking::TimedExecution::start();
+    let porcelain_requested = args
+        .iter()
+        .any(|arg| arg == "--line-porcelain" || arg == "--porcelain" || arg == "-p");
+    let incremental_requested = args.iter().any(|arg| arg == "--incremental");
+    let exact_output = fidelity::exact_requested(BLAME_EXACT_REASONS)?;
+    if incremental_requested && !exact_output {
+        anyhow::bail!(
+            "git blame --incremental requires exact fidelity with the verbatim_source reason"
+        );
+    }
+    if exact_output && !(porcelain_requested || incremental_requested) {
+        anyhow::bail!(
+            "exact git blame fidelity requires an explicit porcelain or incremental mode"
+        );
+    }
+
+    if verbose > 0 {
+        eprintln!("git blame");
+    }
+
+    let mut cmd = git_cmd(global_args);
+    cmd.arg("blame");
+    if !exact_output {
+        cmd.arg("--line-porcelain");
+    }
+    cmd.args(args);
+    let output = cmd.output().context("Failed to run git blame")?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let raw = stdout.to_string();
+
+    if !output.status.success() {
+        timer.track("git blame", "rtk git blame", &raw, "FAILED");
+        exit_with_git_failure("git blame", &stdout, &stderr, output.status);
+    }
+
+    let shown = if exact_output {
+        raw.clone()
+    } else {
+        let compact = compact_blame(&raw);
+        if compact.is_empty() && !raw.trim().is_empty() {
+            raw.clone()
+        } else {
+            crate::guard::never_worse(&raw, &compact).to_string()
+        }
+    };
+    print!("{shown}");
+    if !shown.ends_with('\n') {
+        println!();
+    }
+    timer.track("git blame", "rtk git blame", &raw, &shown);
+    Ok(())
+}
+
+fn compact_blame(porcelain: &str) -> String {
+    let mut metadata_by_commit = HashMap::<String, BlameMetadata>::new();
+    let mut ranges = Vec::<BlameRange>::new();
+    let mut current: Option<(String, usize)> = None;
+    let mut author = None;
+    let mut author_time = None;
+    let mut author_tz = None;
+    let mut summary = None;
+
+    for line in porcelain.lines() {
+        if let Some((commit, final_line)) = parse_blame_header(line) {
+            current = Some((commit, final_line));
+            author = None;
+            author_time = None;
+            author_tz = None;
+            summary = None;
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("author ") {
+            author = Some(value.to_owned());
+        } else if let Some(value) = line.strip_prefix("author-time ") {
+            author_time = Some(value.to_owned());
+        } else if let Some(value) = line.strip_prefix("author-tz ") {
+            author_tz = Some(value.to_owned());
+        } else if let Some(value) = line.strip_prefix("summary ") {
+            summary = Some(value.to_owned());
+        } else if line.starts_with('\t') {
+            let Some((commit, final_line)) = current.take() else {
+                continue;
+            };
+            let cached = metadata_by_commit.get(&commit);
+            let metadata = BlameMetadata {
+                author: author
+                    .take()
+                    .or_else(|| cached.map(|value| value.author.clone()))
+                    .unwrap_or_else(|| "unknown".to_owned()),
+                date: blame_date(author_time.take().as_deref(), author_tz.take().as_deref())
+                    .or_else(|| cached.map(|value| value.date.clone()))
+                    .unwrap_or_else(|| "unknown-date".to_owned()),
+                summary: summary
+                    .take()
+                    .or_else(|| cached.map(|value| value.summary.clone()))
+                    .unwrap_or_else(|| "(no summary)".to_owned()),
+            };
+            metadata_by_commit.insert(commit.clone(), metadata.clone());
+
+            if let Some(previous) = ranges.last_mut() {
+                if previous.commit == commit
+                    && previous.metadata == metadata
+                    && previous.end.saturating_add(1) == final_line
+                {
+                    previous.end = final_line;
+                    continue;
+                }
+            }
+            ranges.push(BlameRange {
+                start: final_line,
+                end: final_line,
+                commit,
+                metadata,
+            });
+        }
+    }
+
+    ranges
+        .into_iter()
+        .map(|range| {
+            let lines = if range.start == range.end {
+                range.start.to_string()
+            } else {
+                format!("{}-{}", range.start, range.end)
+            };
+            format!(
+                "{lines} | {} | {} | {} | {}",
+                range.commit, range.metadata.author, range.metadata.date, range.metadata.summary
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_blame_header(line: &str) -> Option<(String, usize)> {
+    let mut parts = line.split_whitespace();
+    let commit = parts.next()?;
+    if commit.len() < 7 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    parts.next()?.parse::<usize>().ok()?;
+    let final_line = parts.next()?.parse::<usize>().ok()?;
+    Some((commit.to_owned(), final_line))
+}
+
+fn blame_date(timestamp: Option<&str>, timezone: Option<&str>) -> Option<String> {
+    let seconds = timestamp?.parse::<i64>().ok()?;
+    let timezone = timezone?;
+    let timezone_bytes = timezone.as_bytes();
+    if timezone_bytes.len() != 5 || !timezone_bytes[1..].iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let sign = match timezone_bytes.first()? {
+        b'+' => 1,
+        b'-' => -1,
+        _ => return None,
+    };
+    let hours = timezone[1..3].parse::<i32>().ok()?;
+    let minutes = timezone[3..5].parse::<i32>().ok()?;
+    let offset = FixedOffset::east_opt(sign * (hours * 3600 + minutes * 60))?;
+    Some(
+        chrono::DateTime::<Utc>::from_timestamp(seconds, 0)?
+            .with_timezone(&offset)
+            .format("%Y-%m-%d")
+            .to_string(),
+    )
+}
+
 /// Runs an unsupported git subcommand by passing it through directly
 pub fn run_passthrough(args: &[OsString], verbose: u8, global_args: &[String]) -> Result<()> {
     let timer = tracking::TimedExecution::start();
@@ -1868,6 +2063,45 @@ mod tests {
         assert_eq!(
             classify_git_command(&GitCommand::Worktree, &[]),
             GitCommandClass::ReadOnly
+        );
+        assert_eq!(
+            classify_git_command(&GitCommand::Blame, &[]),
+            GitCommandClass::ReadOnly
+        );
+    }
+
+    #[test]
+    fn blame_porcelain_groups_contiguous_lines_below_ten_percent() {
+        let commit = "0123456789abcdef0123456789abcdef01234567";
+        let porcelain = (1..=100)
+            .map(|line| {
+                format!(
+                    "{commit} {line} {line}\nauthor Ada Lovelace\nauthor-mail <ada@example.test>\nauthor-time 1704067200\nauthor-tz +0000\ncommitter Ada Lovelace\ncommitter-mail <ada@example.test>\ncommitter-time 1704067200\ncommitter-tz +0000\nsummary Establish analytical engine\nfilename src/engine.rs\n\tlet line_{line} = {line};\n"
+                )
+            })
+            .collect::<String>();
+
+        let compact = compact_blame(&porcelain);
+        assert_eq!(
+            compact,
+            "1-100 | 0123456789abcdef0123456789abcdef01234567 | Ada Lovelace | 2024-01-01 | Establish analytical engine"
+        );
+        assert!(compact.len() * 10 <= porcelain.len());
+    }
+
+    #[test]
+    fn blame_porcelain_preserves_ranges_commits_authors_dates_and_summaries() {
+        let first = "0123456789abcdef0123456789abcdef01234567";
+        let second = "fedcba9876543210fedcba9876543210fedcba98";
+        let porcelain = format!(
+            "{first} 8 20\nauthor Ada\nauthor-time 1704067200\nauthor-tz +0000\nsummary First change\nfilename src/lib.rs\n\tfirst\n{first} 9 21\nauthor Ada\nauthor-time 1704067200\nauthor-tz +0000\nsummary First change\nfilename src/lib.rs\n\tsecond\n{second} 3 22\nauthor Grace\nauthor-time 1704153600\nauthor-tz +0000\nsummary Follow-up\nfilename src/lib.rs\n\tthird\n"
+        );
+
+        assert_eq!(
+            compact_blame(&porcelain),
+            format!(
+                "20-21 | {first} | Ada | 2024-01-01 | First change\n22 | {second} | Grace | 2024-01-02 | Follow-up"
+            )
         );
     }
 

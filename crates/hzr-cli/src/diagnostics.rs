@@ -4,7 +4,9 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use hzr_agent::{IntegrationLayout, preflight};
-use hzr_core::{Config, locked_engines};
+use hzr_core::{
+    Config, DEFAULT_FIDELITY_OPERATION_ALLOWANCE, DEFAULT_FIDELITY_TOKEN_ALLOWANCE, locked_engines,
+};
 use hzr_index::{
     Deadlines, IndexGeneration, IndexMigrationOutcome, IndexPlacement, IndexStatus, Workspace,
     migrate_legacy_index,
@@ -77,12 +79,12 @@ pub async fn repair_legacy_index(
 }
 
 fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
-    if status.conflict || status.hzr_entries > 3 {
+    if status.conflict || status.hzr_entries > 6 {
         check(
             "hook_ownership",
             CheckStatus::Error,
             format!(
-                "HZR={} RTK={}; exactly three HZR handlers and zero RTK handlers are allowed",
+                "HZR={} RTK={}; exactly six HZR handlers and zero RTK handlers are allowed",
                 status.hzr_entries, status.rtk_entries
             ),
         )
@@ -90,7 +92,7 @@ fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
         check(
             "hook_ownership",
             CheckStatus::Pass,
-            "one HZR dispatcher, one SessionStart initializer, and one PostToolUse observer",
+            "native-aware dispatcher, SessionStart, observer, prompt nudge, and bounded stop scorecards",
         )
     } else {
         check(
@@ -102,6 +104,17 @@ fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
             ),
         )
     }
+}
+
+fn fidelity_allowance_check() -> DoctorCheck {
+    check(
+        "fidelity_allowance",
+        CheckStatus::Pass,
+        format!(
+            "per-session hatch allowance active: {} operations or {} delivered tokens; current-session usage appears in the Stop scorecard",
+            DEFAULT_FIDELITY_OPERATION_ALLOWANCE, DEFAULT_FIDELITY_TOKEN_ALLOWANCE
+        ),
+    )
 }
 
 fn instruction_health_check(
@@ -147,12 +160,51 @@ fn instruction_health_check(
     }
 }
 
+fn workspace_instruction_health_check(
+    name: &str,
+    surface: instructions::Surface,
+    path: &Path,
+) -> DoctorCheck {
+    match instructions::audit(surface, path) {
+        Ok(report) if !report.installed => check(
+            name,
+            CheckStatus::Warning,
+            format!(
+                "{}: managed project contract is absent; run `hzr init --if-needed`",
+                path.display()
+            ),
+        ),
+        _ => instruction_health_check(name, surface, path),
+    }
+}
+
 pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> DoctorReport {
     let mut checks = Vec::new();
     match adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
         Ok(status) => checks.push(hook_ownership_check(status)),
         Err(error) => checks.push(check("hook_ownership", CheckStatus::Warning, error)),
     }
+    match adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
+        Ok(status) => checks.push(match status.native_tool_mode {
+            Some(adoption::NativeToolMode::Observe) => check(
+                "native_tool_mode",
+                CheckStatus::Warning,
+                "observe mode leaves native Read/Grep unsteered; run `hzr install --force --native-tool-mode steer`",
+            ),
+            Some(mode) => check(
+                "native_tool_mode",
+                CheckStatus::Pass,
+                mode.as_str().to_owned(),
+            ),
+            None => check(
+                "native_tool_mode",
+                CheckStatus::Warning,
+                "native tool policy is not installed; run `hzr install --force`",
+            ),
+        }),
+        Err(error) => checks.push(check("native_tool_mode", CheckStatus::Warning, error)),
+    }
+    checks.push(fidelity_allowance_check());
     if let Ok(status) = adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
         if status.external_icm_entries > 0 {
             // A direct `icm hook` writes to a store HZR does not supervise: that is a
@@ -218,40 +270,20 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                     Err(error) => checks.push(check(name, CheckStatus::Warning, error)),
                 }
             }
-            // A leftover local block or legacy RTK/ICM mandate overrides the global contract.
-            // Absence is the normal all-project state and does not need another check.
             for (surface, path) in activation::local_instruction_paths(workspace) {
-                match instructions::audit(surface, &path) {
-                    Ok(report) if report.installed => checks.push(instruction_health_check(
-                        match surface {
-                            instructions::Surface::Claude => "workspace_claude_instructions",
-                            instructions::Surface::Codex => "workspace_codex_instructions",
-                        },
-                        surface,
-                        &path,
-                    )),
-                    Ok(report) if !report.conflicting_mandates.is_empty() => checks.push(check(
-                        match surface {
-                            instructions::Surface::Claude => "workspace_claude_instructions",
-                            instructions::Surface::Codex => "workspace_codex_instructions",
-                        },
-                        CheckStatus::Error,
-                        format!(
-                            "{}: legacy directives override the global HZR contract: {}; run `hzr init --if-needed`",
-                            path.display(),
-                            report.conflicting_mandates.join(", ")
-                        ),
-                    )),
-                    Ok(_) => {}
-                    Err(error) => {
-                        checks.push(check("workspace_instructions", CheckStatus::Warning, error))
-                    }
-                }
+                checks.push(workspace_instruction_health_check(
+                    match surface {
+                        instructions::Surface::Claude => "workspace_claude_instructions",
+                        instructions::Surface::Codex => "workspace_codex_instructions",
+                    },
+                    surface,
+                    &path,
+                ));
             }
         }
         hzr_core::ActivationMode::Selected if workspace_enabled => {
             for (surface, path) in activation::local_instruction_paths(workspace) {
-                checks.push(instruction_health_check(
+                checks.push(workspace_instruction_health_check(
                     match surface {
                         instructions::Surface::Claude => "workspace_claude_instructions",
                         instructions::Surface::Codex => "workspace_codex_instructions",
@@ -1056,9 +1088,19 @@ mod tests {
 
     use super::{
         CheckStatus, attest_active_bundle, bounded, claude_code_mcp_check,
-        direct_icm_registration_detail, hook_ownership_check, index_readiness_check,
-        instruction_health_check, integration_layout, repair_legacy_index, workspace_binding_check,
+        direct_icm_registration_detail, fidelity_allowance_check, hook_ownership_check,
+        index_readiness_check, instruction_health_check, integration_layout, repair_legacy_index,
+        workspace_binding_check, workspace_instruction_health_check,
     };
+
+    #[test]
+    fn acceptance_gate_doctor_renders_fidelity_allowance() {
+        let result = fidelity_allowance_check();
+        assert_eq!(result.status, CheckStatus::Pass);
+        assert!(result.detail.contains("5 operations"));
+        assert!(result.detail.contains("100000 delivered tokens"));
+        assert!(result.detail.contains("Stop scorecard"));
+    }
 
     #[test]
     fn acceptance_gate_doctor_rejects_stale_managed_instructions() {
@@ -1076,6 +1118,20 @@ mod tests {
         let result = instruction_health_check("codex_instructions", Surface::Codex, &target);
         assert_eq!(result.status, CheckStatus::Error);
         assert!(result.detail.contains("managed routing policy is stale"));
+        assert!(result.detail.contains("hzr init --if-needed"));
+    }
+
+    #[test]
+    fn acceptance_gate_doctor_warns_for_missing_project_contract() {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let target = fixture.path().join("AGENTS.md");
+        let result = workspace_instruction_health_check(
+            "workspace_codex_instructions",
+            Surface::Codex,
+            &target,
+        );
+        assert_eq!(result.status, CheckStatus::Warning);
+        assert!(result.detail.contains("managed project contract is absent"));
         assert!(result.detail.contains("hzr init --if-needed"));
     }
 
@@ -1182,16 +1238,17 @@ mod tests {
     fn test_doctor_accepts_the_dispatch_init_and_observer_hooks() {
         let status = crate::adoption::HookStatus {
             settings_path: "/tmp/settings.json".into(),
-            hzr_entries: 3,
+            hzr_entries: 6,
             rtk_entries: 0,
             external_icm_entries: 0,
             installed: true,
             conflict: false,
+            native_tool_mode: Some(crate::adoption::NativeToolMode::Steer),
         };
 
         let check = hook_ownership_check(status);
         assert_eq!(check.status, CheckStatus::Pass);
-        assert!(check.detail.contains("PostToolUse observer"));
+        assert!(check.detail.contains("observer"));
     }
 
     fn registration(client: Client, pinned: Option<&str>) -> ClientMcpStatus {

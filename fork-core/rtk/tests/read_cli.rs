@@ -729,3 +729,64 @@ fn read_cache_key_isolated_by_dedup_flag() {
         "non-dedup read must not reuse dedup cache output"
     );
 }
+
+#[test]
+fn read_batch_honors_total_and_per_file_budgets_with_recovery() {
+    let content = (1..=100)
+        .map(|line| format!("let value_{line} = {line};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let first = write_temp(".rs", content.as_bytes());
+    let second = write_temp(".rs", content.as_bytes());
+    let first_path = first.path().to_str().unwrap();
+    let second_path = second.path().to_str().unwrap();
+    let output = rtk_bin()
+        .args([
+            "read",
+            first_path,
+            second_path,
+            "--batch",
+            "--max-tokens",
+            "256",
+            "--per-file-tokens",
+            "128",
+        ])
+        .output()
+        .expect("run batch read");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first_header = format!("== {first_path} ==");
+    let second_header = format!("== {second_path} ==");
+    let split = stdout.find(&second_header).expect("second file header");
+    assert!(stdout.find(&first_header).unwrap() < split);
+    assert!(stdout.contains("1 │ let value_1 = 1;"));
+    assert_eq!(stdout.matches("recovery: `hzr read").count(), 2);
+    assert!(stdout.len().div_ceil(4) <= 256);
+    assert!(stdout[..split].len().div_ceil(4) <= 128);
+    assert!(stdout[split..].len().div_ceil(4) <= 128);
+}
+
+#[test]
+fn read_batch_rejects_a_budget_that_cannot_cover_every_file() {
+    let first = write_temp(".txt", b"first\n");
+    let second = write_temp(".txt", b"second\n");
+    let output = rtk_bin()
+        .args([
+            "read",
+            first.path().to_str().unwrap(),
+            second.path().to_str().unwrap(),
+            "--batch",
+            "--max-tokens",
+            "64",
+        ])
+        .output()
+        .expect("run under-budget batch read");
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("at least 128"));
+}

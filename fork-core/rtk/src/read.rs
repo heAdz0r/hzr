@@ -10,7 +10,9 @@ use crate::read_source;
 use crate::tracking;
 use anyhow::{Context, Result};
 use std::io::Write as IoWrite;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+const MIN_BATCH_FILE_TOKENS: usize = 64;
 
 fn tracked_filter_level(level: FilterLevel) -> tracking::ReadFilterLevel {
     match level {
@@ -370,6 +372,136 @@ pub fn run(
         attribution,
     );
     Ok(())
+}
+
+pub fn run_batch(
+    files: &[PathBuf],
+    max_tokens: usize,
+    per_file_tokens: Option<usize>,
+    verbose: u8,
+) -> Result<()> {
+    if files.is_empty() {
+        anyhow::bail!("batch read requires at least one file");
+    }
+    let minimum_total = MIN_BATCH_FILE_TOKENS.saturating_mul(files.len());
+    if max_tokens < minimum_total {
+        anyhow::bail!(
+            "--max-tokens must be at least {minimum_total} for {} files ({MIN_BATCH_FILE_TOKENS} per file)",
+            files.len()
+        );
+    }
+    if per_file_tokens.is_some_and(|budget| budget < MIN_BATCH_FILE_TOKENS) {
+        anyhow::bail!("--per-file-tokens must be at least {MIN_BATCH_FILE_TOKENS}");
+    }
+
+    let run_start = std::time::Instant::now();
+    let mut output = String::new();
+    let mut source_bytes = 0u64;
+    let default_per_file = max_tokens.div_ceil(files.len());
+    let requested_per_file = per_file_tokens.unwrap_or(default_per_file);
+
+    for (index, file) in files.iter().enumerate() {
+        let bytes = read_source::read_file_bytes(file, None, None)?;
+        source_bytes = source_bytes.saturating_add(bytes.len() as u64);
+        let used = tracking::estimate_tokens(&output);
+        let remaining_total = max_tokens.saturating_sub(used);
+        let remaining_files = files.len().saturating_sub(index + 1);
+        let reserved = MIN_BATCH_FILE_TOKENS.saturating_mul(remaining_files);
+        let file_budget = requested_per_file.min(remaining_total.saturating_sub(reserved));
+        let rendered = render_batch_file(file, &bytes, file_budget);
+        output.push_str(&rendered);
+    }
+
+    if verbose > 0 {
+        eprintln!(
+            "Batch read: {} files, {} estimated tokens",
+            files.len(),
+            tracking::estimate_tokens(&output)
+        );
+    }
+    print!("{output}");
+    if let Ok(tracker) = tracking::Tracker::new() {
+        let attribution = read_attribution(
+            FilterLevel::None,
+            None,
+            None,
+            Some(max_tokens),
+            None,
+            Some(source_bytes),
+        );
+        let _ = tracker.record_attributed(
+            "read batch <paths omitted>",
+            "rtk read --batch",
+            source_bytes.saturating_add(3).saturating_div(4) as usize,
+            tracking::estimate_tokens(&output),
+            run_start.elapsed().as_millis() as u64,
+            attribution,
+        );
+    }
+    Ok(())
+}
+
+fn render_batch_file(file: &Path, bytes: &[u8], budget: usize) -> String {
+    let header = format!("== {} ==\n", file.display());
+    if read_source::looks_binary(bytes) {
+        let preview = read_source::format_binary_preview(bytes);
+        let candidate = format!("{header}{preview}\n");
+        return if tracking::estimate_tokens(&candidate) <= budget {
+            candidate
+        } else {
+            format!(
+                "{header}[binary: {} bytes; recovery: use an exact binary reader]\n",
+                bytes.len()
+            )
+        };
+    }
+
+    let content = String::from_utf8_lossy(bytes);
+    let lines = content.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        return format!("{header}[empty]\n");
+    }
+
+    let mut rendered_lines = Vec::<String>::new();
+    let mut next_line = 1usize;
+    while next_line <= lines.len() {
+        let rendered = format!("{} │ {}\n", next_line, lines[next_line - 1]);
+        let following = next_line + 1;
+        let recovery =
+            (following <= lines.len()).then(|| batch_recovery(file, following, lines.len()));
+        let candidate = format!("{header}{}{}", rendered_lines.join(""), rendered);
+        let candidate = match recovery {
+            Some(ref recovery) => format!("{candidate}{recovery}"),
+            None => candidate,
+        };
+        if tracking::estimate_tokens(&candidate) > budget {
+            break;
+        }
+        rendered_lines.push(rendered);
+        next_line = following;
+    }
+
+    if next_line > lines.len() {
+        return format!("{header}{}", rendered_lines.join(""));
+    }
+
+    let recovery = batch_recovery(file, next_line, lines.len());
+    while !rendered_lines.is_empty()
+        && tracking::estimate_tokens(&format!("{header}{}{recovery}", rendered_lines.join("")))
+            > budget
+    {
+        rendered_lines.pop();
+        next_line = next_line.saturating_sub(1);
+    }
+    let recovery = batch_recovery(file, next_line, lines.len());
+    format!("{header}{}{recovery}", rendered_lines.join(""))
+}
+
+fn batch_recovery(file: &Path, from: usize, to: usize) -> String {
+    format!(
+        "... lines {from}-{to} omitted; recovery: `hzr read {} --from {from} --to {to}`\n",
+        shell_quote_path(file)
+    )
 }
 
 /// Run changed/since mode for a file (git diff-aware reading).
@@ -740,5 +872,40 @@ fn main() {{
     #[test]
     fn test_stdin_support_signature() {
         // Compile-time verification that run_stdin exists with correct signature
+    }
+
+    #[test]
+    fn batch_read_preserves_coordinates_order_and_recovery_within_budget() {
+        let first = Path::new("src/first.rs");
+        let second = Path::new("src/second.rs");
+        let first_content = (1..=100)
+            .map(|line| format!("let value_{line} = {line};"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let first_output = render_batch_file(first, first_content.as_bytes(), 120);
+        let second_output = render_batch_file(second, b"alpha\nbeta\n", 120);
+        let output = format!("{first_output}{second_output}");
+
+        assert!(
+            output.find("== src/first.rs ==").unwrap()
+                < output.find("== src/second.rs ==").unwrap()
+        );
+        assert!(first_output.contains("1 │ let value_1 = 1;"));
+        assert!(first_output.contains("recovery: `hzr read src/first.rs --from"));
+        assert!(second_output.contains("1 │ alpha\n2 │ beta"));
+        assert!(tracking::estimate_tokens(&first_output) <= 120);
+        assert!(tracking::estimate_tokens(&second_output) <= 120);
+    }
+
+    #[test]
+    fn batch_read_recovery_shell_quotes_paths() {
+        let output = render_batch_file(
+            Path::new("docs/agent's notes.md"),
+            &vec![b'x'; 2_000],
+            MIN_BATCH_FILE_TOKENS,
+        );
+
+        assert!(output.contains("docs/agent'\"'\"'s notes.md"));
+        assert!(tracking::estimate_tokens(&output) <= MIN_BATCH_FILE_TOKENS);
     }
 }

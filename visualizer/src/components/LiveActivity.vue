@@ -13,7 +13,6 @@ const props = defineProps<{
   measurement: string;
 }>();
 const selectedKey = ref<string | null>(null);
-const copiedKey = ref<string | null>(null);
 const maxTokens = computed(() =>
   Math.max(1, ...props.operations.map((operation) => operation.baseline_tokens_estimated)),
 );
@@ -32,27 +31,16 @@ const gapShare = computed(() =>
     : ((props.nativeCount + props.unmeasuredCount) * 100) / totalCount.value,
 );
 const recentAgents = computed(() => {
-  const groups = new Map<string, { count: number; directories: Set<string>; last: string }>();
+  const groups = new Map<string, { count: number; last: string }>();
   for (const operation of props.operations) {
     const agent = operation.agent ?? "Unattributed";
-    const current = groups.get(agent) ?? { count: 0, directories: new Set<string>(), last: operation.timestamp };
+    const current = groups.get(agent) ?? { count: 0, last: operation.timestamp };
     current.count += 1;
-    if (operation.working_directory) current.directories.add(operation.working_directory);
     if (Date.parse(operation.timestamp) > Date.parse(current.last)) current.last = operation.timestamp;
     groups.set(agent, current);
   }
   return [...groups.entries()]
     .map(([agent, value]) => ({ agent, ...value }))
-    .sort((left, right) => right.count - left.count);
-});
-const recentDirectories = computed(() => {
-  const counts = new Map<string, number>();
-  for (const operation of props.operations) {
-    if (!operation.working_directory) continue;
-    counts.set(operation.working_directory, (counts.get(operation.working_directory) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([directory, count]) => ({ directory, count }))
     .sort((left, right) => right.count - left.count);
 });
 
@@ -76,15 +64,9 @@ function operationKey(operation: DashboardLocalOperation): string {
   return String(operation.ledger_id);
 }
 
-function directoryName(path: string): string {
-  if (!path) return "Not recorded";
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  return parts.at(-1) ?? path;
-}
-
-function shortSession(session: string | null): string {
-  if (!session) return "Not recorded";
-  return session.length > 18 ? `${session.slice(0, 8)}…${session.slice(-6)}` : session;
+function shortHash(hash: string | null): string {
+  if (!hash) return "Not recorded";
+  return hash.length > 24 ? `${hash.slice(0, 15)}…${hash.slice(-6)}` : hash;
 }
 
 function creditedSaving(operation: DashboardLocalOperation): number {
@@ -97,13 +79,6 @@ function routeDetail(operation: DashboardLocalOperation): string {
   return "Optimized";
 }
 
-async function copyCommand(key: string, command: string): Promise<void> {
-  await navigator.clipboard.writeText(command);
-  copiedKey.value = key;
-  window.setTimeout(() => {
-    if (copiedKey.value === key) copiedKey.value = null;
-  }, 1_600);
-}
 </script>
 
 <template>
@@ -120,19 +95,14 @@ async function copyCommand(key: string, command: string): Promise<void> {
           <span v-for="agent in recentAgents" :key="agent.agent">
             <i :class="{ unattributed: agent.agent === 'Unattributed' }"></i>
             <strong>{{ agent.agent }}</strong>
-            <small>{{ agent.count }} ops · {{ agent.directories.size }} dirs</small>
+            <small>{{ agent.count }} ops</small>
           </span>
         </div>
         <p v-else>No agent-attributed operations in this project snapshot.</p>
       </section>
       <section>
-        <header><span>Working directories</span><b>{{ recentDirectories.length }}</b></header>
-        <div v-if="recentDirectories.length" class="directory-list">
-          <span v-for="item in recentDirectories.slice(0, 4)" :key="item.directory" :title="item.directory">
-            <AppIcon name="folder" :size="14" /><code>{{ item.directory }}</code><b>{{ item.count }}</b>
-          </span>
-        </div>
-        <p v-else>No working directory was recorded.</p>
+        <header><span>Privacy boundary</span><b>ON</b></header>
+        <p>Commands, arguments, queries, paths, environment values, SQL, and heredocs are never returned by this endpoint.</p>
       </section>
     </div>
 
@@ -159,10 +129,10 @@ async function copyCommand(key: string, command: string): Promise<void> {
           <time :datetime="operation.timestamp">{{ operationTime(operation.timestamp) }}</time>
           <span class="route-badge" :class="`route-${operation.route}`">{{ operation.route }}</span>
           <span class="activity-agent"><i></i>{{ operation.agent ?? "Unattributed" }}</span>
-          <span class="activity-directory" :title="operation.working_directory">
-            <AppIcon name="folder" :size="13" />{{ directoryName(operation.working_directory) }}
+          <span class="activity-directory" title="Project identity is hashed">
+            <AppIcon name="folder" :size="13" />private scope
           </span>
-          <strong :title="operation.recorded_command">{{ operation.operation }}</strong>
+          <strong>{{ operation.operation }}</strong>
           <div class="output-bars" :aria-label="`${operation.baseline_tokens_estimated} raw baseline tokens and ${operation.delivered_tokens_estimated} delivered tokens`">
             <span class="baseline-bar" :style="{ width: width(operation.baseline_tokens_estimated) }"></span>
             <span class="delivered-bar" :style="{ width: width(operation.delivered_tokens_estimated) }"></span>
@@ -181,11 +151,12 @@ async function copyCommand(key: string, command: string): Promise<void> {
             <span class="evidence-state"><AppIcon name="check" :size="14" /> Recorded by HZR</span>
           </div>
           <dl>
-            <div class="wide"><dt>Requested command</dt><dd><code>{{ operation.original_command }}</code></dd></div>
-            <div class="wide"><dt>Routed command</dt><dd><code>{{ operation.recorded_command }}</code><button type="button" @click.stop="copyCommand(operationKey(operation), operation.recorded_command)">{{ copiedKey === operationKey(operation) ? "Copied" : "Copy" }}</button></dd></div>
-            <div class="wide"><dt>Working directory</dt><dd><code>{{ operation.working_directory || "Not recorded" }}</code></dd></div>
+            <div class="wide"><dt>Command digest</dt><dd><code>{{ shortHash(operation.command_hash) }}</code></dd></div>
+            <div class="wide"><dt>Project digest</dt><dd><code>{{ shortHash(operation.project_hash) }}</code></dd></div>
             <div><dt>Agent</dt><dd>{{ operation.agent ?? "Unattributed" }}</dd></div>
-            <div><dt>Session</dt><dd><code :title="operation.session_id ?? undefined">{{ shortSession(operation.session_id) }}</code></dd></div>
+            <div><dt>Session digest</dt><dd><code>{{ shortHash(operation.session_hash) }}</code></dd></div>
+            <div><dt>Producer</dt><dd><code>{{ operation.producer_version ?? "legacy" }}</code></dd></div>
+            <div><dt>Policy</dt><dd><code>{{ operation.policy_version ?? "legacy" }}</code></dd></div>
             <div><dt>Route</dt><dd>{{ routeDetail(operation) }}</dd></div>
             <div><dt>Latency</dt><dd>{{ operation.execution_ms }}ms</dd></div>
             <div><dt>Baseline estimate</dt><dd>{{ formatCount(operation.baseline_tokens_estimated) }} tokens</dd></div>
@@ -203,7 +174,7 @@ async function copyCommand(key: string, command: string): Promise<void> {
     </div>
     <div v-else class="activity-empty">No routed operations have been recorded for this project yet.</div>
     <p class="activity-footnote">
-      Coverage: output-bearing fork-core rows for this project and its subdirectories. Agent labels are recorded at invocation time; missing historical attribution stays explicit. Provider prompts, responses, stdin, and captured output bodies are not exposed here.
+      Coverage: current privacy-typed rows for this project and its subdirectories. Commands, arguments, queries, paths, environment values, SQL, heredocs, prompts, responses, stdin, and output bodies are not exposed here.
     </p>
   </div>
 </template>

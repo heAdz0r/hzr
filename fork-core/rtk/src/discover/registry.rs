@@ -2,12 +2,18 @@
 
 use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
+use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 use super::lexer::{
-    has_stdout_file_redirect, shell_split, split_on_operators, tokenize, tokenize_with_newlines,
-    ParsedToken, PipeKind, TokenKind,
+    has_stdout_file_redirect, parse_shell_command_wrapper, shell_split, split_on_operators,
+    tokenize, tokenize_with_newlines, ParsedToken, PipeKind, ShellWrapperParse, TokenKind,
 };
 use super::rules::{IGNORED_EXACT, IGNORED_PREFIXES, RULES};
+
+#[cfg(test)]
+#[path = "../../tests/fixtures/anti_evasion_fixture.rs"]
+mod anti_evasion_fixture;
 
 /// Result of classifying a command.
 #[derive(Debug, PartialEq)]
@@ -28,7 +34,7 @@ pub enum Classification {
 pub fn category_avg_tokens(category: &str, subcmd: &str) -> usize {
     match category {
         "Git" => match subcmd {
-            "log" | "diff" | "show" => 200,
+            "log" | "diff" | "show" | "blame" => 200,
             _ => 40,
         },
         "Cargo" => match subcmd {
@@ -60,7 +66,11 @@ lazy_static! {
         let unquoted = r#"[^\s]*"#;
         let env_value = format!("(?:{}|{}|{})", double_quoted, single_quoted, unquoted);
         let env_assign = format!(r#"[A-Z_][A-Z0-9_]*={}"#, env_value);
-        Regex::new(&format!(r#"^(?:sudo\s+|env\s+|{}\s+)+"#, env_assign)).unwrap()
+        Regex::new(&format!(
+            r#"^(?:sudo\s+|(?:(?:/usr)?/bin/)?env\s+|{}\s+)+"#,
+            env_assign
+        ))
+        .unwrap()
     };
     // Git global options that appear before the subcommand: -C <path>, -c <key=val>,
     // --git-dir <dir>, --work-tree <dir>, and flag-only options (#163)
@@ -384,10 +394,10 @@ fn strip_absolute_path(cmd: &str) -> String {
         Some(pos) => &cmd[..pos],
         None => cmd,
     };
-    if first_word.contains('/') {
+    if Path::new(first_word).is_absolute() {
         // Extract basename
         let basename = first_word.rsplit('/').next().unwrap_or(first_word);
-        if basename.is_empty() {
+        if basename.is_empty() || !absolute_matches_path_executable(first_word, basename) {
             return cmd.to_string();
         }
         match first_space {
@@ -397,6 +407,35 @@ fn strip_absolute_path(cmd: &str) -> String {
     } else {
         cmd.to_string()
     }
+}
+
+fn absolute_matches_path_executable(absolute: &str, basename: &str) -> bool {
+    let Ok(absolute) = std::fs::canonicalize(absolute) else {
+        return false;
+    };
+    path_executable(basename)
+        .and_then(|path| std::fs::canonicalize(path).ok())
+        .is_some_and(|path| path == absolute)
+}
+
+fn path_executable(name: &str) -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?).find_map(|directory| {
+        let candidate = directory.join(name);
+        executable_candidate(&candidate).then_some(candidate)
+    })
+}
+
+#[cfg(unix)]
+fn executable_candidate(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn executable_candidate(path: &Path) -> bool {
+    path.is_file()
 }
 
 pub fn prefix_contains_rtk_disabled(prefix_part: &str) -> bool {
@@ -496,7 +535,318 @@ fn collapse_line_continuations(s: &str) -> std::borrow::Cow<'_, str> {
 /// starts with `"foo bar "` (or strictly equals `"foo bar"`), not anything
 /// else. Matching is literal, not pattern-based: configure the exact concrete
 /// prefix you use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RewriteOutcome {
+    Rewritten(String),
+    ByteFidelityProxy,
+    NoEquivalent,
+    AmbiguousShell,
+    PolicyAsk,
+}
+
+/// Payload-free normalization evidence emitted by the typed rewrite-plan interface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CanonicalAttribution {
+    pub class: &'static str,
+    pub wrapper_depth: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interpreter: Option<&'static str>,
+    pub path_form: &'static str,
+    pub stage_count: u16,
+    pub hatch_marker: bool,
+    pub avoidable: bool,
+    pub tier: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fidelity_reason: Option<&'static str>,
+    pub fidelity_validation: &'static str,
+}
+
+pub fn canonical_attribution(
+    command: &str,
+    outcome: &RewriteOutcome,
+) -> Option<CanonicalAttribution> {
+    let wrapper_depth = wrapper_depth(command, 0);
+    let tokens = tokenize(command);
+    let stage_count = tokens
+        .iter()
+        .filter(|token| {
+            matches!(token.kind, TokenKind::Operator | TokenKind::Pipe(_))
+                || (token.kind == TokenKind::Shellism && token.value == "&")
+        })
+        .count()
+        .saturating_add(1)
+        .min(u16::MAX as usize) as u16;
+    let hatch = fidelity_signal(command);
+    let interpreter = interpreter_signal(command);
+    let path_form = path_form(command);
+    let pipeline = tokens.iter().any(|token| {
+        matches!(
+            token.kind,
+            TokenKind::Operator | TokenKind::Pipe(_) | TokenKind::Redirect
+        )
+    });
+    let quoted = command.contains(['\'', '"']);
+    let nested_dump = aggregate_dump_requires_ask(command);
+    let diagnostic = ledger_sqlite_requires_ask(command);
+
+    let class = if hatch.requested {
+        "e7_fidelity_hatch"
+    } else if diagnostic {
+        "e9_diagnostic_bypass"
+    } else if nested_dump {
+        "e6_nested_unbounded_reader"
+    } else if interpreter.is_some() && interpreter_read_requires_ask(command) {
+        "e3_interpreter_read"
+    } else if wrapper_depth > 0 {
+        "e2_shell_wrapper"
+    } else if pipeline {
+        "e5_pipeline_or_redirect"
+    } else if matches!(path_form, "absolute_system" | "resolved_alias") {
+        "e4_executable_path"
+    } else if quoted && matches!(outcome, RewriteOutcome::Rewritten(_)) {
+        "e1_quoted_covered_command"
+    } else if matches!(
+        outcome,
+        RewriteOutcome::NoEquivalent | RewriteOutcome::PolicyAsk | RewriteOutcome::AmbiguousShell
+    ) {
+        "e10_capability_gap"
+    } else {
+        return None;
+    };
+
+    let avoidable = !matches!(class, "e7_fidelity_hatch" | "e10_capability_gap");
+    let tier = if class == "e7_fidelity_hatch" {
+        "t4_hatch_quarantine"
+    } else if matches!(
+        outcome,
+        RewriteOutcome::PolicyAsk | RewriteOutcome::AmbiguousShell
+    ) {
+        "t2_deny_with_prescription"
+    } else if avoidable && matches!(outcome, RewriteOutcome::Rewritten(_)) {
+        "t1_named_correction"
+    } else {
+        "t0_transparent_rewrite"
+    };
+    Some(CanonicalAttribution {
+        class,
+        wrapper_depth,
+        interpreter,
+        path_form,
+        stage_count,
+        hatch_marker: hatch.requested,
+        avoidable,
+        tier,
+        fidelity_reason: hatch.reason,
+        fidelity_validation: hatch.validation,
+    })
+}
+
+#[derive(Clone, Copy)]
+struct FidelitySignal {
+    requested: bool,
+    reason: Option<&'static str>,
+    validation: &'static str,
+}
+
+fn fidelity_signal(command: &str) -> FidelitySignal {
+    let mut requested = false;
+    let mut reason = None;
+    let mut invalid = false;
+    for word in shell_split(command) {
+        if word == "HZR_RAW_FIDELITY=1" {
+            requested = true;
+        } else if let Some(value) = word.strip_prefix("HZR_RAW_FIDELITY_REASON=") {
+            let parsed = match value {
+                "binary" => Some("binary"),
+                "checksum" => Some("checksum"),
+                "machine_protocol" => Some("machine_protocol"),
+                "complete_log" => Some("complete_log"),
+                "full_patch" => Some("full_patch"),
+                "verbatim_source" => Some("verbatim_source"),
+                _ => None,
+            };
+            if parsed.is_none() || reason.replace(parsed.unwrap_or_default()).is_some() {
+                invalid = true;
+            }
+        } else if !word.contains('=') {
+            break;
+        }
+    }
+    let validation = if !requested {
+        "not_requested"
+    } else if invalid {
+        "invalid_reason"
+    } else if reason.is_none() {
+        "missing_reason"
+    } else {
+        "valid"
+    };
+    FidelitySignal {
+        requested,
+        reason,
+        validation,
+    }
+}
+
+fn wrapper_depth(command: &str, depth: u8) -> u8 {
+    if depth >= MAX_SHELL_WRAPPER_DEPTH as u8 {
+        return depth;
+    }
+    let (_, command) = strip_disabled_prefix(command.trim());
+    match parse_shell_command_wrapper(command) {
+        ShellWrapperParse::Parsed(payload) => wrapper_depth(&payload.command, depth + 1),
+        ShellWrapperParse::Ambiguous => depth.saturating_add(1),
+        ShellWrapperParse::NotWrapper => depth,
+    }
+}
+
+fn interpreter_signal(command: &str) -> Option<&'static str> {
+    shell_split(command)
+        .iter()
+        .find_map(|word| match executable_name(word) {
+            "sh" | "bash" | "dash" | "ksh" | "zsh" => Some("shell"),
+            "python" => Some("python"),
+            name if name.starts_with("python3") => Some("python"),
+            "node" => Some("javascript"),
+            "ruby" => Some("ruby"),
+            "perl" => Some("perl"),
+            "awk" => Some("awk"),
+            "sed" => Some("sed"),
+            _ => None,
+        })
+}
+
+fn path_form(command: &str) -> &'static str {
+    let (environment, _) = strip_disabled_prefix(command.trim());
+    if path_override_resolves_rtk(environment).is_some() {
+        return "resolved_alias";
+    }
+    let words = shell_split(command);
+    let Some(program) = words.first() else {
+        return "bare";
+    };
+    let path = Path::new(program);
+    if path.is_absolute() && executable_name(program) != program {
+        "absolute_system"
+    } else if path.components().count() > 1 {
+        "relative"
+    } else {
+        "bare"
+    }
+}
+
+#[cfg(test)]
+pub fn rewrite_command_outcome(
+    cmd: &str,
+    excluded: &[String],
+    transparent_prefixes: &[String],
+) -> RewriteOutcome {
+    rewrite_command_outcome_with_fidelity(cmd, excluded, transparent_prefixes, false)
+}
+
+pub fn rewrite_command_outcome_with_fidelity(
+    cmd: &str,
+    excluded: &[String],
+    transparent_prefixes: &[String],
+    byte_fidelity: bool,
+) -> RewriteOutcome {
+    if shell_wrapper_is_ambiguous(cmd, transparent_prefixes, 0) {
+        return RewriteOutcome::AmbiguousShell;
+    }
+    if opaque_wrapper_requires_ask(cmd, transparent_prefixes, 0) {
+        return RewriteOutcome::PolicyAsk;
+    }
+    match rewrite_command_impl(cmd, excluded, transparent_prefixes) {
+        Some(command) if !rewritten_path_resolves_rtk(&command, transparent_prefixes, 0) => {
+            RewriteOutcome::PolicyAsk
+        }
+        Some(_) if byte_fidelity => RewriteOutcome::ByteFidelityProxy,
+        Some(command) => RewriteOutcome::Rewritten(command),
+        None => RewriteOutcome::NoEquivalent,
+    }
+}
+
+fn rewritten_path_resolves_rtk(
+    command: &str,
+    transparent_prefixes: &[String],
+    depth: usize,
+) -> bool {
+    if depth >= MAX_PREFIX_DEPTH {
+        return false;
+    }
+    split_on_operators(command, false)
+        .into_iter()
+        .all(|segment| rewritten_segment_path_resolves_rtk(segment, transparent_prefixes, depth))
+}
+
+fn rewritten_segment_path_resolves_rtk(
+    segment: &str,
+    transparent_prefixes: &[String],
+    depth: usize,
+) -> bool {
+    let trimmed = segment.trim();
+    let (environment, command) = strip_disabled_prefix(trimmed);
+    if path_override_resolves_rtk(environment) == Some(false) {
+        return false;
+    }
+    if command != trimmed {
+        return rewritten_segment_path_resolves_rtk(command, transparent_prefixes, depth + 1);
+    }
+    if let Some((_, child)) = execution_prefix(command) {
+        return rewritten_segment_path_resolves_rtk(child, transparent_prefixes, depth + 1);
+    }
+    for prefix in BUILTIN_TRANSPARENT_PREFIXES {
+        if let Some(child) = strip_word_prefix(command, prefix) {
+            return rewritten_segment_path_resolves_rtk(child, transparent_prefixes, depth + 1);
+        }
+    }
+    for prefix in transparent_prefixes {
+        if let Some(child) = strip_word_prefix(command, prefix) {
+            return rewritten_segment_path_resolves_rtk(child, transparent_prefixes, depth + 1);
+        }
+    }
+    match parse_shell_command_wrapper(command) {
+        ShellWrapperParse::Parsed(payload) => {
+            rewritten_path_resolves_rtk(&payload.command, transparent_prefixes, depth + 1)
+        }
+        ShellWrapperParse::Ambiguous => false,
+        ShellWrapperParse::NotWrapper => true,
+    }
+}
+
+fn path_override_resolves_rtk(environment: &str) -> Option<bool> {
+    let path = shell_split(environment)
+        .into_iter()
+        .rev()
+        .find_map(|word| word.strip_prefix("PATH=").map(str::to_owned))?;
+    let managed = std::env::current_exe()
+        .ok()
+        .and_then(|executable| std::fs::canonicalize(executable).ok());
+    Some(managed.is_some_and(|managed| {
+        std::env::split_paths(&path).any(|directory| {
+            let candidate = directory.join(format!("rtk{}", std::env::consts::EXE_SUFFIX));
+            executable_candidate(&candidate)
+                && std::fs::canonicalize(candidate).is_ok_and(|candidate| candidate == managed)
+        })
+    }))
+}
+
+#[cfg(test)]
 pub fn rewrite_command(
+    cmd: &str,
+    excluded: &[String],
+    transparent_prefixes: &[String],
+) -> Option<String> {
+    match rewrite_command_outcome(cmd, excluded, transparent_prefixes) {
+        RewriteOutcome::Rewritten(command) => Some(command),
+        RewriteOutcome::ByteFidelityProxy
+        | RewriteOutcome::NoEquivalent
+        | RewriteOutcome::AmbiguousShell
+        | RewriteOutcome::PolicyAsk => None,
+    }
+}
+
+fn rewrite_command_impl(
     cmd: &str,
     excluded: &[String],
     transparent_prefixes: &[String],
@@ -555,7 +905,8 @@ fn rewrite_single(
         return Some(trimmed.to_string());
     }
 
-    rewrite_compound(trimmed, excluded, transparent_prefixes)
+    rewrite_bounded_read_pipeline(trimmed)
+        .or_else(|| rewrite_compound(trimmed, excluded, transparent_prefixes))
 }
 
 const BLOCK_KEYWORDS: &[&str] = &[
@@ -813,6 +1164,68 @@ struct PipelineAnalysis {
 
 const SAFE_PIPE_CONSUMERS: &[&str] = &["head", "tail", "cat"];
 
+fn rewrite_bounded_read_pipeline(command: &str) -> Option<String> {
+    let tokens = tokenize(command);
+    let pipes: Vec<_> = tokens
+        .iter()
+        .filter(|token| matches!(token.kind, TokenKind::Pipe(PipeKind::Stdout)))
+        .collect();
+    if pipes.len() != 1
+        || tokens.iter().any(|token| {
+            matches!(token.kind, TokenKind::Operator | TokenKind::Redirect)
+                || matches!(token.kind, TokenKind::Pipe(PipeKind::StdoutAndStderr))
+        })
+    {
+        return None;
+    }
+
+    let pipe = pipes[0];
+    let producer = command[..pipe.offset].trim();
+    let consumer = command[pipe.offset + pipe.value.len()..].trim();
+    let producer_normalized = strip_absolute_path(producer);
+    let producer_words = shell_split(&producer_normalized);
+    if producer_words.len() != 2 || producer_words[0] != "cat" || producer_words[1] == "-" {
+        return None;
+    }
+    let producer_tokens = tokenize(producer);
+    let file = producer_tokens
+        .iter()
+        .filter(|token| token.kind == TokenKind::Arg)
+        .nth(1)
+        .map(|token| &producer[token.offset..token.offset + token.value.len()])?;
+
+    let consumer_normalized = strip_absolute_path(consumer);
+    let words = shell_split(&consumer_normalized);
+    match words.as_slice() {
+        [tool] if tool == "cat" => Some(format!("rtk read {file}")),
+        [tool, flag] if tool == "head" => {
+            parse_line_count(flag).map(|lines| format!("rtk read {file} --max-lines {lines}"))
+        }
+        [tool, flag, lines] if tool == "head" && (flag == "-n" || flag == "--lines") => {
+            decimal_line_count(lines).map(|lines| format!("rtk read {file} --max-lines {lines}"))
+        }
+        [tool, flag] if tool == "tail" => {
+            parse_line_count(flag).map(|lines| format!("rtk read {file} --tail-lines {lines}"))
+        }
+        [tool, flag, lines] if tool == "tail" && (flag == "-n" || flag == "--lines") => {
+            decimal_line_count(lines).map(|lines| format!("rtk read {file} --tail-lines {lines}"))
+        }
+        _ => None,
+    }
+}
+
+fn parse_line_count(flag: &str) -> Option<&str> {
+    decimal_line_count(
+        flag.strip_prefix("--lines=")
+            .or_else(|| flag.strip_prefix('-'))?,
+    )
+}
+
+fn decimal_line_count(value: &str) -> Option<&str> {
+    (!value.is_empty() && value.chars().all(|character| character.is_ascii_digit()))
+        .then_some(value)
+}
+
 fn is_safe_pipe_consumer(stage: &str) -> bool {
     stage
         .split_whitespace()
@@ -1042,6 +1455,62 @@ fn rewrite_compound(
 }
 
 fn rewrite_line_range(cmd: &str) -> Option<String> {
+    let tokens = tokenize(cmd);
+    if tokens.iter().all(|token| token.kind == TokenKind::Arg) {
+        let words = shell_split(cmd);
+        let path = tokens
+            .last()
+            .map(|token| &cmd[token.offset..token.offset + token.value.len()]);
+        match words.as_slice() {
+            [tool, flag, file] if tool == "head" => {
+                let lines = flag
+                    .strip_prefix("--lines=")
+                    .or_else(|| flag.strip_prefix('-'))?;
+                if lines.chars().all(|character| character.is_ascii_digit()) {
+                    return Some(format!(
+                        "rtk read {} --max-lines {}",
+                        path.unwrap_or(file),
+                        lines
+                    ));
+                }
+            }
+            [tool, flag, file] if tool == "tail" => {
+                let lines = flag
+                    .strip_prefix("--lines=")
+                    .or_else(|| flag.strip_prefix('-'))?;
+                if lines.chars().all(|character| character.is_ascii_digit()) {
+                    return Some(format!(
+                        "rtk read {} --tail-lines {}",
+                        path.unwrap_or(file),
+                        lines
+                    ));
+                }
+            }
+            [tool, flag, lines, file] if tool == "tail" && (flag == "-n" || flag == "--lines") => {
+                if lines.chars().all(|character| character.is_ascii_digit()) {
+                    return Some(format!(
+                        "rtk read {} --tail-lines {}",
+                        path.unwrap_or(file),
+                        lines
+                    ));
+                }
+            }
+            [tool, flag, span, file] if tool == "sed" && flag == "-n" => {
+                if let Some((from, to)) = parse_sed_read_span(span) {
+                    return Some(format!(
+                        "rtk read {} --from {} --to {}",
+                        path.unwrap_or(file),
+                        from,
+                        to
+                    ));
+                }
+            }
+            [tool, flag, file] if tool == "nl" && flag == "-ba" => {
+                return Some(format!("rtk read {} -n", path.unwrap_or(file)));
+            }
+            _ => {}
+        }
+    }
     for re in [&*HEAD_N, &*HEAD_LINES] {
         if let Some(caps) = re.captures(cmd) {
             let n = caps.get(1)?.as_str();
@@ -1067,6 +1536,14 @@ fn rewrite_line_range(cmd: &str) -> Option<String> {
     None
 }
 
+fn parse_sed_read_span(value: &str) -> Option<(&str, &str)> {
+    let value = value.strip_suffix('p')?;
+    let (from, to) = value.split_once(',')?;
+    let from_line = from.parse::<u64>().ok()?;
+    let to_line = to.parse::<u64>().ok()?;
+    (from_line > 0 && from_line <= to_line).then_some((from, to))
+}
+
 /// Built-in wrappers stripped before routing and restored after rewriting.
 const BUILTIN_TRANSPARENT_PREFIXES: &[&str] = &[
     "uv run",
@@ -1078,6 +1555,90 @@ const BUILTIN_TRANSPARENT_PREFIXES: &[&str] = &[
 ];
 
 const MAX_PREFIX_DEPTH: usize = 10;
+const MAX_SHELL_WRAPPER_DEPTH: usize = 3;
+
+fn executable_name(program: &str) -> &str {
+    let path = Path::new(program);
+    if path.is_absolute() {
+        let basename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(program);
+        if absolute_matches_path_executable(program, basename) {
+            return basename;
+        }
+    }
+    program
+}
+
+fn execution_prefix(command: &str) -> Option<(&str, &str)> {
+    let args: Vec<_> = tokenize(command)
+        .into_iter()
+        .filter(|token| token.kind == TokenKind::Arg)
+        .collect();
+    let program = executable_name(&args.first()?.value);
+    let mut index = 1;
+    match program {
+        "nice" => {
+            while index < args.len() {
+                match args[index].value.as_str() {
+                    "--" => {
+                        index += 1;
+                        break;
+                    }
+                    "-n" | "--adjustment" => index += 2,
+                    value if value.starts_with("--adjustment=") => index += 1,
+                    value if value.starts_with('-') && value[1..].parse::<i32>().is_ok() => {
+                        index += 1
+                    }
+                    _ => break,
+                }
+            }
+        }
+        "stdbuf" => {
+            let mut saw_mode = false;
+            while index < args.len() {
+                let value = args[index].value.as_str();
+                if value == "--" {
+                    index += 1;
+                    break;
+                }
+                if matches!(
+                    value,
+                    "-i" | "-o" | "-e" | "--input" | "--output" | "--error"
+                ) {
+                    saw_mode = true;
+                    index += 2;
+                } else if value.starts_with("--input=")
+                    || value.starts_with("--output=")
+                    || value.starts_with("--error=")
+                    || (value.len() > 2
+                        && matches!(value.as_bytes().get(1), Some(b'i' | b'o' | b'e')))
+                {
+                    saw_mode = true;
+                    index += 1;
+                } else {
+                    break;
+                }
+            }
+            if !saw_mode {
+                return None;
+            }
+        }
+        "time" => {
+            while index < args.len() && matches!(args[index].value.as_str(), "-p" | "--") {
+                index += 1;
+            }
+        }
+        _ => return None,
+    }
+    let child = args.get(index)?;
+    let boundary = child.offset;
+    Some((
+        command[..boundary].trim_end(),
+        command[boundary..].trim_start(),
+    ))
+}
 
 enum ExcludePattern {
     Regex(Regex),
@@ -1217,6 +1778,12 @@ fn rewrite_segment_inner(
         return Some(format!("{}{}", env_prefix, rewritten));
     }
 
+    if let Some((prefix, rest)) = execution_prefix(trimmed) {
+        let rewritten =
+            rewrite_segment_inner(rest, excluded, transparent_prefixes, context, depth + 1)?;
+        return Some(format!("{prefix} {rewritten}"));
+    }
+
     for &prefix in BUILTIN_TRANSPARENT_PREFIXES {
         if let Some(rest) = strip_word_prefix(trimmed, prefix) {
             if rest.is_empty() {
@@ -1243,13 +1810,36 @@ fn rewrite_segment_inner(
     // e.g. "git status 2>&1" → match "git status", re-append " 2>&1"
     let (cmd_part, redirect_suffix) = strip_trailing_redirects(trimmed);
 
+    match parse_shell_command_wrapper(cmd_part) {
+        ShellWrapperParse::Parsed(payload) => {
+            let rewritten = rewrite_single(&payload.command, excluded, transparent_prefixes)?;
+            return Some(format!(
+                "{}{}",
+                payload.replace_in(cmd_part, &rewritten),
+                redirect_suffix
+            ));
+        }
+        ShellWrapperParse::Ambiguous => return None,
+        ShellWrapperParse::NotWrapper => {}
+    }
+
     // Already RTK — pass through unchanged
     if cmd_part.starts_with("rtk ") || cmd_part == "rtk" {
         return Some(trimmed.to_string());
     }
 
+    let normalized_command = strip_absolute_path(cmd_part);
+    let cmd_part = normalized_command.as_str();
+
+    if let Some(rewritten) = rewrite_typed_gap(cmd_part) {
+        return Some(format!("{rewritten}{redirect_suffix}"));
+    }
+
     if context == RewriteContext::Normal
-        && (cmd_part.starts_with("head -") || cmd_part.starts_with("tail "))
+        && (cmd_part.starts_with("head -")
+            || cmd_part.starts_with("tail ")
+            || cmd_part.starts_with("sed -n ")
+            || cmd_part.starts_with("nl -ba "))
     {
         return rewrite_line_range(cmd_part).map(|r| format!("{}{}", r, redirect_suffix));
     }
@@ -1346,6 +1936,370 @@ fn rewrite_segment_inner(
     None
 }
 
+fn shell_wrapper_is_ambiguous(
+    command: &str,
+    transparent_prefixes: &[String],
+    depth: usize,
+) -> bool {
+    split_on_operators(command, false)
+        .into_iter()
+        .any(|segment| shell_segment_is_ambiguous(segment, transparent_prefixes, depth))
+}
+
+fn opaque_wrapper_requires_ask(
+    command: &str,
+    transparent_prefixes: &[String],
+    depth: usize,
+) -> bool {
+    if temp_log_requires_ask(command) {
+        return true;
+    }
+    split_on_operators(command, false)
+        .into_iter()
+        .any(|segment| segment_requires_ask(segment, transparent_prefixes, depth))
+}
+
+fn segment_requires_ask(segment: &str, transparent_prefixes: &[String], depth: usize) -> bool {
+    if depth >= MAX_PREFIX_DEPTH {
+        return true;
+    }
+    let trimmed = segment.trim();
+    let (_, command) = strip_disabled_prefix(trimmed);
+    if command != trimmed {
+        return segment_requires_ask(command, transparent_prefixes, depth + 1);
+    }
+    if let Some((_, child)) = execution_prefix(command) {
+        return segment_requires_ask(child, transparent_prefixes, depth + 1);
+    }
+    for prefix in BUILTIN_TRANSPARENT_PREFIXES {
+        if let Some(child) = strip_word_prefix(command, prefix) {
+            return segment_requires_ask(child, transparent_prefixes, depth + 1);
+        }
+    }
+    for prefix in transparent_prefixes {
+        if let Some(child) = strip_word_prefix(command, prefix) {
+            return segment_requires_ask(child, transparent_prefixes, depth + 1);
+        }
+    }
+    if let ShellWrapperParse::Parsed(payload) = parse_shell_command_wrapper(command) {
+        return opaque_wrapper_requires_ask(&payload.command, transparent_prefixes, depth + 1);
+    }
+
+    typed_gap_requires_ask(command)
+        || interpreter_read_requires_ask(command)
+        || aggregate_dump_requires_ask(command)
+        || ledger_sqlite_requires_ask(command)
+}
+
+fn rewrite_typed_gap(command: &str) -> Option<String> {
+    rewrite_sqlite_select(command)
+        .or_else(|| rewrite_tar_listing(command))
+        .or_else(|| rewrite_remote_docker_logs(command))
+}
+
+fn typed_gap_requires_ask(command: &str) -> bool {
+    let words = shell_split(command);
+    let Some(program) = words.first().map(|word| executable_name(word)) else {
+        return false;
+    };
+    match program {
+        "sqlite3" => rewrite_sqlite_select(command).is_none(),
+        "tar" => rewrite_tar_listing(command).is_none(),
+        "ssh" if looks_like_remote_logs(&words) => rewrite_remote_docker_logs(command).is_none(),
+        _ => false,
+    }
+}
+
+fn looks_like_remote_logs(words: &[String]) -> bool {
+    words.windows(2).any(|pair| pair == ["docker", "logs"])
+        || words.iter().skip(1).any(|word| {
+            let mut remote = word.split_ascii_whitespace();
+            remote.next() == Some("docker") && remote.next() == Some("logs")
+        })
+}
+
+fn rewrite_sqlite_select(command: &str) -> Option<String> {
+    let words = shell_split(command);
+    if words.len() != 3 || executable_name(&words[0]) != "sqlite3" {
+        return None;
+    }
+    if words[1].is_empty()
+        || words[1].starts_with('-')
+        || crate::sqlite_cmd::validate_single_select(&words[2]).is_err()
+    {
+        return None;
+    }
+    let tokens = tokenize(command);
+    let args: Vec<_> = tokens
+        .iter()
+        .filter(|token| token.kind == TokenKind::Arg)
+        .collect();
+    let database = raw_token(command, args.get(1)?)?;
+    let query = raw_token(command, args.get(2)?)?;
+    Some(format!(
+        "rtk sqlite3 {database} {query} --max-rows 50 --max-tokens 2048"
+    ))
+}
+
+fn rewrite_tar_listing(command: &str) -> Option<String> {
+    let words = shell_split(command);
+    if words.len() < 3
+        || executable_name(&words[0]) != "tar"
+        || crate::tar_cmd::validate_listing(&words[1..]).is_err()
+    {
+        return None;
+    }
+    let tokens = tokenize(command);
+    let args: Vec<_> = tokens
+        .iter()
+        .filter(|token| token.kind == TokenKind::Arg)
+        .collect();
+    let suffix = command.get(args.get(1)?.offset..)?.trim();
+    Some(format!("rtk tar --max-entries 100 {suffix}"))
+}
+
+fn rewrite_remote_docker_logs(command: &str) -> Option<String> {
+    let words = shell_split(command);
+    if words.len() < 5
+        || executable_name(&words[0]) != "ssh"
+        || words.get(2).map(String::as_str) != Some("docker")
+        || words.get(3).map(String::as_str) != Some("logs")
+        || crate::remote_logs_cmd::validate_safe_value("host", &words[1], "._@:-").is_err()
+    {
+        return None;
+    }
+
+    let mut tail = "100";
+    let mut tail_seen = false;
+    let mut since = None;
+    let mut timestamps = false;
+    let mut index = 4;
+    while index + 1 < words.len() {
+        match words[index].as_str() {
+            "--tail" | "-n" if !tail_seen => {
+                tail = words.get(index + 1)?.as_str();
+                tail_seen = true;
+                index += 2;
+            }
+            value if value.starts_with("--tail=") && !tail_seen => {
+                tail = value.strip_prefix("--tail=")?;
+                tail_seen = true;
+                index += 1;
+            }
+            "--since" if since.is_none() => {
+                since = Some(words.get(index + 1)?.as_str());
+                index += 2;
+            }
+            value if value.starts_with("--since=") && since.is_none() => {
+                since = Some(value.strip_prefix("--since=")?);
+                index += 1;
+            }
+            "--timestamps" | "-t" if !timestamps => {
+                timestamps = true;
+                index += 1;
+            }
+            _ => return None,
+        }
+    }
+    if index + 1 != words.len()
+        || tail
+            .parse::<usize>()
+            .ok()
+            .filter(|value| (1..=1_000).contains(value))
+            .is_none()
+    {
+        return None;
+    }
+    let container = &words[index];
+    if crate::remote_logs_cmd::validate_safe_value("container", container, "_.-").is_err()
+        || since.is_some_and(|value| {
+            crate::remote_logs_cmd::validate_safe_value("since", value, "_.:+-TZ").is_err()
+        })
+    {
+        return None;
+    }
+    let mut rewritten = format!("rtk logs {} {} --tail {tail}", words[1], container);
+    if let Some(since) = since {
+        rewritten.push_str(&format!(" --since {since}"));
+    }
+    if timestamps {
+        rewritten.push_str(" --timestamps");
+    }
+    Some(rewritten)
+}
+
+fn raw_token<'a>(command: &'a str, token: &ParsedToken) -> Option<&'a str> {
+    command.get(token.offset..token.offset + token.value.len())
+}
+
+fn interpreter_read_requires_ask(command: &str) -> bool {
+    let words = shell_split(command);
+    let Some(program) = words.first() else {
+        return false;
+    };
+    let program = executable_name(program);
+    match program {
+        name if name == "python" || name.starts_with("python3") => {
+            if has_heredoc(command) {
+                return python_code_requires_ask(command);
+            }
+            words.iter().any(|word| word == "-c")
+                && inline_code(&words, "-c").is_none_or(python_code_requires_ask)
+        }
+        "node" => {
+            words.iter().any(|word| word == "-e")
+                && inline_code(&words, "-e").is_none_or(|code| {
+                    code.contains("readFileSync")
+                        && (code.contains("console.log") || code.contains("stdout.write"))
+                })
+        }
+        "ruby" => {
+            words.iter().any(|word| word == "-e")
+                && inline_code(&words, "-e").is_none_or(|code| {
+                    code.contains("File.read") && (code.contains("puts") || code.contains("print"))
+                })
+        }
+        "perl" => {
+            words
+                .iter()
+                .any(|word| word.starts_with("-n") || word.starts_with("-p"))
+                && words.iter().any(|word| word.contains("print"))
+        }
+        "awk" => {
+            words
+                .get(1)
+                .is_some_and(|program| program.contains("print"))
+                && words.get(2).is_some_and(|file| file != "-")
+        }
+        _ => false,
+    }
+}
+
+fn inline_code<'a>(words: &'a [String], flag: &str) -> Option<&'a str> {
+    let index = words.iter().position(|word| word == flag)?;
+    words.get(index + 1).map(String::as_str)
+}
+
+fn python_code_requires_ask(code: &str) -> bool {
+    let emits_file =
+        (code.contains("open(") || code.contains("read_text(") || code.contains("json.load("))
+            && (code.contains("print(") || code.contains("stdout"));
+    let launches_child = (code.contains("subprocess") || code.contains("os.system("))
+        && [
+            "git ", "rg ", "grep ", "cat ", "sed ", "head ", "tail ", "bun ", "cargo ", "npm ",
+            "pnpm ",
+        ]
+        .iter()
+        .any(|managed| code.contains(managed));
+    emits_file || launches_child
+}
+
+fn aggregate_dump_requires_ask(command: &str) -> bool {
+    let words = shell_split(command);
+    let Some(program) = words.first().map(|word| executable_name(word)) else {
+        return false;
+    };
+    match program {
+        "find" => words.iter().enumerate().any(|(index, word)| {
+            matches!(word.as_str(), "-exec" | "-execdir")
+                && words.get(index + 1).is_some_and(|child| {
+                    matches!(
+                        executable_name(child),
+                        "cat" | "nl" | "head" | "tail" | "tar"
+                    )
+                })
+        }),
+        "xargs" => words.iter().skip(1).any(|word| {
+            matches!(
+                executable_name(word),
+                "cat" | "nl" | "head" | "tail" | "tar"
+            )
+        }),
+        "tar" => {
+            let creates_stdout = words.iter().skip(1).any(|word| {
+                let flags = word.trim_start_matches('-');
+                flags.contains('c') && flags.contains('f')
+            });
+            creates_stdout && words.iter().skip(1).any(|word| word == "-")
+        }
+        _ => false,
+    }
+}
+
+fn ledger_sqlite_requires_ask(command: &str) -> bool {
+    let words = shell_split(command);
+    words
+        .first()
+        .is_some_and(|program| executable_name(program) == "sqlite3")
+        && words.iter().skip(1).any(|argument| {
+            argument.ends_with("/ledger/hzr.sqlite") || argument == "ledger/hzr.sqlite"
+        })
+}
+
+fn temp_log_requires_ask(command: &str) -> bool {
+    let tokens = tokenize(command);
+    let mut redirected_files = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        if token.kind == TokenKind::Redirect
+            && (token.value == ">" || token.value == "1>" || token.value == ">>")
+        {
+            if let Some(target) = tokens
+                .get(index + 1)
+                .filter(|next| next.kind == TokenKind::Arg)
+            {
+                redirected_files.push(target.value.as_str());
+            }
+        }
+    }
+    if redirected_files.is_empty() {
+        return false;
+    }
+    split_on_operators(command, false)
+        .into_iter()
+        .any(|segment| {
+            let words = shell_split(segment);
+            words
+                .first()
+                .is_some_and(|program| executable_name(program) == "tail")
+                && words
+                    .last()
+                    .is_some_and(|path| redirected_files.contains(&path.as_str()))
+        })
+}
+
+fn shell_segment_is_ambiguous(
+    segment: &str,
+    transparent_prefixes: &[String],
+    depth: usize,
+) -> bool {
+    let trimmed = segment.trim();
+    let (_, after_env) = strip_disabled_prefix(trimmed);
+    if after_env != trimmed {
+        return shell_segment_is_ambiguous(after_env, transparent_prefixes, depth);
+    }
+    if let Some((_, child)) = execution_prefix(trimmed) {
+        return shell_segment_is_ambiguous(child, transparent_prefixes, depth + 1);
+    }
+    for prefix in BUILTIN_TRANSPARENT_PREFIXES {
+        if let Some(rest) = strip_word_prefix(trimmed, prefix) {
+            return shell_segment_is_ambiguous(rest, transparent_prefixes, depth);
+        }
+    }
+    for prefix in transparent_prefixes {
+        if let Some(rest) = strip_word_prefix(trimmed, prefix) {
+            return shell_segment_is_ambiguous(rest, transparent_prefixes, depth);
+        }
+    }
+    match parse_shell_command_wrapper(trimmed) {
+        ShellWrapperParse::Ambiguous => true,
+        ShellWrapperParse::Parsed(payload) if depth >= MAX_SHELL_WRAPPER_DEPTH => true,
+        ShellWrapperParse::Parsed(payload) => {
+            shell_wrapper_is_ambiguous(&payload.command, transparent_prefixes, depth + 1)
+        }
+        ShellWrapperParse::NotWrapper => false,
+    }
+}
+
 /// Strip a command prefix with word-boundary check.
 /// Returns the remainder of the command after the prefix, or `None` if no match.
 fn strip_word_prefix<'a>(cmd: &'a str, prefix: &str) -> Option<&'a str> {
@@ -1364,10 +2318,228 @@ fn strip_word_prefix<'a>(cmd: &'a str, prefix: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::super::report::RtkStatus;
+    use super::anti_evasion_fixture::{ProbeDecision, ProbeLayer, ProbeSurface};
     use super::*;
 
     fn rewrite_command_no_prefixes(cmd: &str, excluded: &[String]) -> Option<String> {
         super::rewrite_command(cmd, excluded, &[])
+    }
+
+    #[test]
+    fn anti_evasion_policy_matrix_covers_prd_and_regressions() {
+        let probes = super::anti_evasion_fixture::load_anti_evasion_probes();
+        assert!(probes.len() >= 56, "acceptance matrix must only grow");
+
+        for probe in probes {
+            if probe.surface == ProbeSurface::Native {
+                assert_eq!(
+                    probe.layer,
+                    ProbeLayer::Root,
+                    "native probe {} is not root",
+                    probe.id
+                );
+                assert!(
+                    probe.command.is_none(),
+                    "native probe {} has shell input",
+                    probe.id
+                );
+                assert!(
+                    probe.tool.is_some(),
+                    "native probe {} has no tool",
+                    probe.id
+                );
+                assert!(
+                    probe.tool_input.is_some(),
+                    "native probe {} has no tool input",
+                    probe.id
+                );
+                assert!(
+                    probe.mode.is_some(),
+                    "native probe {} has no mode",
+                    probe.id
+                );
+                assert!(
+                    probe.class.is_some(),
+                    "native probe {} has no class",
+                    probe.id
+                );
+                assert!(
+                    probe.avoidable.is_some(),
+                    "native probe {} has no policy",
+                    probe.id
+                );
+                continue;
+            }
+            assert_eq!(
+                probe.surface,
+                ProbeSurface::Shell,
+                "unknown surface for probe {}",
+                probe.id
+            );
+            let command = probe.command.as_deref().expect("validated shell command");
+            if probe.layer == ProbeLayer::Root {
+                assert!(
+                    matches!(
+                        probe.decision,
+                        ProbeDecision::Rewrite | ProbeDecision::Ask | ProbeDecision::Raw
+                    ),
+                    "unknown root decision for probe {}",
+                    probe.id
+                );
+                continue;
+            }
+            assert_eq!(
+                probe.layer,
+                ProbeLayer::Fork,
+                "unknown layer for probe {}",
+                probe.id
+            );
+            let outcome = rewrite_command_outcome(command, &[], &[]);
+            match probe.decision {
+                ProbeDecision::Rewrite => assert_eq!(
+                    outcome,
+                    RewriteOutcome::Rewritten(probe.route.expect("rewrite route")),
+                    "probe {}",
+                    probe.id
+                ),
+                ProbeDecision::Ask => assert!(
+                    matches!(
+                        outcome,
+                        RewriteOutcome::PolicyAsk | RewriteOutcome::AmbiguousShell
+                    ),
+                    "probe {} unexpectedly resolved as {outcome:?}",
+                    probe.id
+                ),
+                ProbeDecision::Proxy => {
+                    assert_eq!(outcome, RewriteOutcome::NoEquivalent, "probe {}", probe.id)
+                }
+                ProbeDecision::Raw | ProbeDecision::Allow | ProbeDecision::Deny => {
+                    assert!(
+                        matches!(
+                            probe.decision,
+                            ProbeDecision::Rewrite | ProbeDecision::Ask | ProbeDecision::Proxy
+                        ),
+                        "invalid fork decision for probe {}",
+                        probe.id
+                    )
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn command_local_path_must_resolve_the_managed_engine() {
+        let shadow_directory = tempfile::tempdir().expect("shadow PATH directory");
+        let engine_name = format!("rtk{}", std::env::consts::EXE_SUFFIX);
+        let shadow = shadow_directory.path().join(&engine_name);
+        std::fs::write(&shadow, "").expect("shadow engine fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            std::fs::set_permissions(&shadow, std::fs::Permissions::from_mode(0o700))
+                .expect("shadow engine permissions");
+        }
+        let shadowed = format!(
+            "PATH={} git status --short",
+            shadow_directory.path().display()
+        );
+        let shadowed_outcome = rewrite_command_outcome(&shadowed, &[], &[]);
+        assert_eq!(
+            shadowed_outcome,
+            RewriteOutcome::PolicyAsk,
+            "an unrelated executable named rtk must not satisfy identity"
+        );
+        let attribution =
+            canonical_attribution(&shadowed, &shadowed_outcome).expect("PATH attribution");
+        assert_eq!(attribution.class, "e4_executable_path");
+        assert_eq!(attribution.path_form, "resolved_alias");
+
+        for command in [
+            "PATH=/definitely/not/a/managed/path git status --short",
+            "sh -c 'PATH=/definitely/not/a/managed/path git status --short'",
+        ] {
+            assert_eq!(
+                rewrite_command_outcome(command, &[], &[]),
+                RewriteOutcome::PolicyAsk,
+                "unresolvable command-local PATH was rewritten: {command}"
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            let managed_directory = tempfile::tempdir().expect("managed PATH directory");
+            std::os::unix::fs::symlink(
+                std::env::current_exe().expect("current test executable"),
+                managed_directory.path().join(&engine_name),
+            )
+            .expect("managed engine symlink");
+            let resolvable = format!(
+                "PATH={} git status --short",
+                managed_directory.path().display()
+            );
+            assert_eq!(
+                rewrite_command_outcome(&resolvable, &[], &[]),
+                RewriteOutcome::Rewritten(format!(
+                    "PATH={} rtk git status --short",
+                    managed_directory.path().display()
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_plan_attribution_is_closed_and_payload_free() {
+        for (command, class) in [
+            ("sed -n '1,3p' README.md", "e1_quoted_covered_command"),
+            ("sh -c 'cat README.md'", "e2_shell_wrapper"),
+            (
+                "python3 -c 'print(open(\"README.md\").read())'",
+                "e3_interpreter_read",
+            ),
+            ("/bin/cat README.md", "e4_executable_path"),
+            (
+                "PATH=/definitely/not/a/managed/path git status --short",
+                "e4_executable_path",
+            ),
+            ("cat README.md | head -5", "e5_pipeline_or_redirect"),
+            (
+                "find . -name '*.rs' -exec cat {} +",
+                "e6_nested_unbounded_reader",
+            ),
+            (
+                "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=verbatim_source cat README.md",
+                "e7_fidelity_hatch",
+            ),
+            (
+                "sqlite3 /tmp/ledger/hzr.sqlite 'SELECT 1'",
+                "e9_diagnostic_bypass",
+            ),
+            (
+                "sqlite3 /tmp/x.db 'UPDATE users SET active=1'",
+                "e10_capability_gap",
+            ),
+        ] {
+            let outcome = rewrite_command_outcome(command, &[], &[]);
+            let attribution = canonical_attribution(command, &outcome)
+                .unwrap_or_else(|| panic!("missing attribution for {command}"));
+            assert_eq!(attribution.class, class, "{command}");
+            let serialized = serde_json::to_string(&attribution).expect("serialize attribution");
+            assert!(!serialized.contains("README.md"));
+            assert!(!serialized.contains("/tmp/"));
+            assert!(!serialized.contains("SELECT"));
+        }
+
+        let secret = "do-not-persist-private-reason";
+        let command = format!("HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON={secret} cat README.md");
+        let outcome = rewrite_command_outcome(&command, &[], &[]);
+        let attribution = canonical_attribution(&command, &outcome).expect("fidelity attribution");
+        let serialized = serde_json::to_string(&attribution).expect("serialize attribution");
+        assert_eq!(attribution.fidelity_validation, "invalid_reason");
+        assert!(!serialized.contains(secret));
+
+        let bare = rewrite_command_outcome("cat README.md", &[], &[]);
+        assert_eq!(canonical_attribution("cat README.md", &bare), None);
     }
 
     mod multiline_rewrite {
@@ -1762,13 +2934,34 @@ mod tests {
     fn test_registry_covers_all_git_subcommands() {
         // Verify that every GitCommand subcommand has a matching pattern
         for subcmd in [
-            "status", "log", "diff", "show", "add", "commit", "push", "pull", "branch", "fetch",
-            "stash", "worktree",
+            "status", "log", "diff", "show", "blame", "add", "commit", "push", "pull", "branch",
+            "fetch", "stash", "worktree",
         ] {
             let cmd = format!("git {subcmd}");
             match classify_command(&cmd) {
                 Classification::Supported { .. } => {}
                 other => panic!("git {subcmd} should be Supported, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn acceptance_gate_routes_git_blame_through_the_compact_handler() {
+        for command in [
+            "git blame --line-porcelain src/git.rs",
+            "git blame -L 10,40 -- src/git.rs",
+            "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=verbatim_source git blame --line-porcelain src/git.rs",
+        ] {
+            let rewritten = rewrite_command_no_prefixes(command, &[])
+                .unwrap_or_else(|| panic!("git blame remained unmanaged: {command}"));
+            assert!(
+                rewritten.contains("rtk git blame"),
+                "unexpected blame route: {rewritten}"
+            );
+            if command.starts_with("HZR_RAW_FIDELITY=1") {
+                assert!(rewritten.starts_with(
+                    "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=verbatim_source "
+                ));
             }
         }
     }
@@ -2197,13 +3390,13 @@ mod tests {
 
     #[test]
     fn test_rewrite_pipe_read_producer_stays_raw() {
-        for command in [
-            "head -20 file.txt | tail -5",
-            "cat file.txt | tail -5",
-            "tail -20 file.txt | head -5",
-        ] {
+        for command in ["head -20 file.txt | tail -5", "tail -20 file.txt | head -5"] {
             assert_eq!(rewrite_command_no_prefixes(command, &[]), None, "{command}");
         }
+        assert_eq!(
+            rewrite_command_no_prefixes("cat file.txt | tail -5", &[]),
+            Some("rtk read file.txt --tail-lines 5".into())
+        );
     }
 
     #[test]
@@ -4372,8 +5565,9 @@ mod tests {
 
     #[test]
     fn test_classify_absolute_path_git() {
+        let git = path_executable("git").expect("git must be on PATH");
         assert_eq!(
-            classify_command("/usr/local/bin/git status"),
+            classify_command(&format!("{} status", git.display())),
             Classification::Supported {
                 rtk_equivalent: "rtk git",
                 category: "Git",
@@ -4402,7 +5596,12 @@ mod tests {
         assert_eq!(strip_absolute_path("/usr/bin/grep -rn foo"), "grep -rn foo");
         assert_eq!(strip_absolute_path("/bin/ls -la"), "ls -la");
         assert_eq!(strip_absolute_path("grep -rn foo"), "grep -rn foo");
-        assert_eq!(strip_absolute_path("/usr/local/bin/git"), "git");
+        let git = path_executable("git").expect("git must be on PATH");
+        assert_eq!(strip_absolute_path(&git.display().to_string()), "git");
+        assert_eq!(
+            strip_absolute_path("./scripts/cat README.md"),
+            "./scripts/cat README.md"
+        );
     }
 
     // --- #163: git global options ---
@@ -4807,6 +6006,141 @@ mod tests {
         assert_ne!(
             classify_command("command git status"),
             Classification::Ignored
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_rewrites_managed_commands_inside_shell_wrappers() {
+        for (command, expected) in [
+            (
+                "/bin/sh -c 'git status --short'",
+                "/bin/sh -c 'rtk git status --short'",
+            ),
+            ("bash -lc 'bun run check'", "bash -lc 'rtk bun run check'"),
+            (
+                "env CI=1 sh -c 'head -20 README.md'",
+                "env CI=1 sh -c 'rtk read README.md --max-lines 20'",
+            ),
+            (
+                "/usr/bin/env CI=1 sh -c 'git status --short'",
+                "/usr/bin/env CI=1 sh -c 'rtk git status --short'",
+            ),
+            (
+                "sh -c 'tail -n 20 README.md'",
+                "sh -c 'rtk read README.md --tail-lines 20'",
+            ),
+            (
+                "sh -c 'sed -n 4,8p README.md'",
+                "sh -c 'rtk read README.md --from 4 --to 8'",
+            ),
+            ("sh -c 'nl -ba README.md'", "sh -c 'rtk read README.md -n'"),
+            (
+                "sh -c 'bash -lc \"git status --short\"'",
+                "sh -c 'bash -lc \"rtk git status --short\"'",
+            ),
+        ] {
+            assert_eq!(
+                rewrite_command_no_prefixes(command, &[]).as_deref(),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn acceptance_gate_preserves_quoted_file_arguments_inside_shell_wrappers() {
+        assert_eq!(
+            rewrite_command_no_prefixes("sh -c 'head -20 \"file with spaces.md\"'", &[]),
+            Some("sh -c 'rtk read \"file with spaces.md\" --max-lines 20'".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("sh -c 'sed -n 4,8p \"file with spaces.md\"'", &[]),
+            Some("sh -c 'rtk read \"file with spaces.md\" --from 4 --to 8'".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("sh -c 'sed -n 8,4p README.md'", &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_marks_malformed_or_too_deep_shell_wrappers_ambiguous() {
+        assert_eq!(
+            rewrite_command_outcome("sh -c 'git status", &[], &[]),
+            RewriteOutcome::AmbiguousShell
+        );
+        let mut nested = "git status".to_owned();
+        for _ in 0..=MAX_PREFIX_DEPTH {
+            nested = format!("sh -c '{nested}'");
+        }
+        assert_eq!(
+            rewrite_command_outcome(&nested, &[], &[]),
+            RewriteOutcome::AmbiguousShell
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_allows_shell_workflows_without_managed_equivalents() {
+        for command in [
+            "sh -c 'python3 scripts/migrate.py'",
+            "bash -lc 'python3 scripts/build_artifact.py --output result.bin'",
+            "sh -c 'printf exact > artifact.txt'",
+        ] {
+            assert_eq!(
+                rewrite_command_outcome(command, &[], &[]),
+                RewriteOutcome::NoEquivalent,
+                "workflow was blocked: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn acceptance_gate_python_file_reads_and_managed_children_require_approval() {
+        for command in [
+            "python -c 'print(open(\"README.md\").read())'",
+            "python3 -c 'import json; print(json.load(open(\"data.json\")))'",
+            "python -c 'import subprocess; subprocess.run(\"git status --short\", shell=True)'",
+            "python3 - <<'PY'\nprint(open('README.md').read())\nPY",
+        ] {
+            assert_eq!(
+                rewrite_command_outcome(command, &[], &[]),
+                RewriteOutcome::PolicyAsk,
+                "opaque bypass silently reached proxy: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn acceptance_gate_arbitrary_python_computation_remains_usable() {
+        for command in [
+            "python -c 'print(sum(range(100)))'",
+            "python3 scripts/migrate.py --apply",
+            "python3 scripts/build_artifact.py --output result.bin",
+        ] {
+            assert_eq!(
+                rewrite_command_outcome(command, &[], &[]),
+                RewriteOutcome::NoEquivalent,
+                "legitimate computation was blocked: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn acceptance_gate_byte_fidelity_only_proxies_after_canonical_classification() {
+        assert_eq!(
+            rewrite_command_outcome_with_fidelity("rg -n needle src", &[], &[], true),
+            RewriteOutcome::ByteFidelityProxy
+        );
+        assert_eq!(
+            rewrite_command_outcome_with_fidelity("cat artifact.bin", &[], &[], true),
+            RewriteOutcome::ByteFidelityProxy
+        );
+        assert_eq!(
+            rewrite_command_outcome_with_fidelity("python3 scripts/migrate.py", &[], &[], true),
+            RewriteOutcome::NoEquivalent
+        );
+        assert_eq!(
+            rewrite_command_outcome_with_fidelity("sh -c 'git status", &[], &[], true),
+            RewriteOutcome::AmbiguousShell
         );
     }
 

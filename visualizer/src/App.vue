@@ -313,14 +313,14 @@ onBeforeUnmount(() => {
               <div class="search-activity-orb" :class="`search-activity-${snapshot.index_observatory.search_activity.state}`">
                 <AppIcon name="search" :size="24" />
               </div>
-              <div v-if="snapshot.index_observatory.search_activity.command">
+              <div v-if="snapshot.index_observatory.search_activity.operation">
                 <span>Latest routed HZR search · ledger #{{ snapshot.index_observatory.search_activity.ledger_id }}</span>
-                <strong :title="snapshot.index_observatory.search_activity.command">
-                  {{ snapshot.index_observatory.search_activity.command }}
+                <strong>
+                  {{ snapshot.index_observatory.search_activity.operation }} · private command
                 </strong>
                 <small>
                   {{ snapshot.index_observatory.search_activity.agent ?? "Unattributed agent" }} ·
-                  {{ snapshot.index_observatory.search_activity.working_directory ?? "Unknown directory" }} ·
+                  project digest recorded ·
                   {{ snapshot.index_observatory.search_activity.execution_ms ?? 0 }}ms
                 </small>
               </div>

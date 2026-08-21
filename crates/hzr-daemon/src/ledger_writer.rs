@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use hzr_core::{
-    DetailedOperationAttribution, Ledger, LedgerError, LedgerRecord, OperationAttribution,
-    OperationChannel, OperationMeasurement, OperationRoute,
+    DetailedOperationAttribution, FidelityAllowance, FidelitySessionUsage, Ledger, LedgerError,
+    LedgerRecord, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
 };
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -26,6 +26,15 @@ enum WriteCommand {
         record: Box<OperationRecord>,
         reply: oneshot::Sender<Result<(), LedgerError>>,
     },
+    PolicyEvent {
+        record: Box<PolicyEventRecord>,
+        reply: oneshot::Sender<Result<(), LedgerError>>,
+    },
+    FidelityUsage {
+        session_id: String,
+        allowance: FidelityAllowance,
+        reply: oneshot::Sender<Result<FidelitySessionUsage, LedgerError>>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -42,6 +51,16 @@ pub struct OperationRecord {
     pub agent: Option<String>,
     pub session_id: Option<String>,
     pub attribution: Option<hzr_protocol::AccountingAttribution>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PolicyEventRecord {
+    pub project_path: String,
+    pub agent: Option<String>,
+    pub session_id: Option<String>,
+    pub evasion: hzr_protocol::EvasionAttribution,
+    pub decision: hzr_protocol::PolicyDecision,
+    pub replacement_family: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -67,24 +86,48 @@ impl LedgerWriter {
                             let _ = reply.send(ledger.record(&record));
                         }
                         WriteCommand::Operation { record, reply } => {
-                            let _ = reply.send(ledger.record_operation_attributed_with_detail(
-                                &record.original_command,
-                                &record.recorded_command,
-                                record.input_tokens,
-                                record.output_tokens,
-                                record.execution_ms,
-                                DetailedOperationAttribution {
-                                    attribution: OperationAttribution {
-                                        project_path: &record.project_path,
-                                        agent: record.agent.as_deref(),
-                                        session_id: record.session_id.as_deref(),
-                                        channel: record.channel,
-                                        measurement: record.measurement,
-                                        route: record.route,
+                            let _ = reply.send(
+                                ledger.record_operation_attributed_with_detail(
+                                    &record.original_command,
+                                    &record.recorded_command,
+                                    record.input_tokens,
+                                    record.output_tokens,
+                                    record.execution_ms,
+                                    DetailedOperationAttribution {
+                                        attribution: OperationAttribution {
+                                            project_path: &record.project_path,
+                                            agent: record.agent.as_deref(),
+                                            session_id: record.session_id.as_deref(),
+                                            channel: record.channel,
+                                            measurement: record.measurement,
+                                            route: record.route,
+                                        },
+                                        detail: record.attribution.as_ref(),
+                                        evasion: record
+                                            .attribution
+                                            .as_ref()
+                                            .and_then(|detail| detail.evasion.as_ref()),
                                     },
-                                    detail: record.attribution.as_ref(),
-                                },
-                            ));
+                                ),
+                            );
+                        }
+                        WriteCommand::PolicyEvent { record, reply } => {
+                            let _ = reply.send(ledger.record_policy_event(hzr_core::PolicyEvent {
+                                project_path: &record.project_path,
+                                agent: record.agent.as_deref(),
+                                session_id: record.session_id.as_deref(),
+                                evasion: record.evasion,
+                                decision: record.decision,
+                                replacement_family: record.replacement_family.as_deref(),
+                            }));
+                        }
+                        WriteCommand::FidelityUsage {
+                            session_id,
+                            allowance,
+                            reply,
+                        } => {
+                            let _ =
+                                reply.send(ledger.fidelity_session_usage(&session_id, allowance));
                         }
                     }
                 }
@@ -118,14 +161,50 @@ impl LedgerWriter {
         result.await.map_err(|_| LedgerWriterError::Unavailable)??;
         Ok(())
     }
+
+    pub async fn record_policy_event(
+        &self,
+        record: PolicyEventRecord,
+    ) -> Result<(), LedgerWriterError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriteCommand::PolicyEvent {
+                record: Box::new(record),
+                reply,
+            })
+            .await
+            .map_err(|_| LedgerWriterError::Unavailable)?;
+        result.await.map_err(|_| LedgerWriterError::Unavailable)??;
+        Ok(())
+    }
+
+    pub async fn fidelity_session_usage(
+        &self,
+        session_id: String,
+        allowance: FidelityAllowance,
+    ) -> Result<FidelitySessionUsage, LedgerWriterError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriteCommand::FidelityUsage {
+                session_id,
+                allowance,
+                reply,
+            })
+            .await
+            .map_err(|_| LedgerWriterError::Unavailable)?;
+        Ok(result.await.map_err(|_| LedgerWriterError::Unavailable)??)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use hzr_core::{Ledger, LedgerRecord};
-    use hzr_protocol::{TraceId, Usage};
+    use hzr_protocol::{
+        EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, FidelityValidation,
+        PolicyDecision, TraceId, Usage,
+    };
 
-    use super::LedgerWriter;
+    use super::{LedgerWriter, PolicyEventRecord};
 
     #[tokio::test]
     async fn concurrent_writes_share_one_initialized_connection() {
@@ -162,5 +241,45 @@ mod tests {
             .summary()
             .expect("summary");
         assert_eq!(summary.tasks, 100);
+    }
+
+    #[tokio::test]
+    async fn denied_policy_event_is_audited_without_an_execution_row() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("ledger.sqlite");
+        let writer = LedgerWriter::open(&path).expect("ledger writer");
+        writer
+            .record_policy_event(PolicyEventRecord {
+                project_path: "/private/work".into(),
+                agent: Some("claude-code:private-agent".into()),
+                session_id: Some("private-session".into()),
+                evasion: EvasionAttribution {
+                    class: EvasionClass::E7FidelityHatch,
+                    wrapper_depth: 1,
+                    interpreter: None,
+                    path_form: EvasionPathForm::Bare,
+                    stage_count: 1,
+                    hatch_marker: true,
+                    avoidable: true,
+                    tier: EnforcementTier::T4HatchQuarantine,
+                    fidelity_reason: None,
+                    fidelity_validation: FidelityValidation::MissingReason,
+                },
+                decision: PolicyDecision::Deny,
+                replacement_family: Some("read".into()),
+            })
+            .await
+            .expect("policy event write");
+        let ledger = Ledger::open(&path).expect("reader");
+        assert_eq!(
+            ledger.efficiency_summary().expect("efficiency").operations,
+            0
+        );
+        let summary = ledger
+            .evasion_summary(hzr_core::StatsQuery::default())
+            .expect("evasion summary");
+        assert_eq!(summary.policy_attempts, 1);
+        let encoded = serde_json::to_string(&summary).expect("JSON");
+        assert!(!encoded.contains("private"));
     }
 }

@@ -17,11 +17,11 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 141
-# Recomputed for the 0.4.3 command-utilization and typed accounting delta. The inherited
+# Recomputed for the 0.4.4 anti-evasion and compact-route delta. The inherited
 # warning set remains 141 hits with no new lint codes; only recorded line positions in
 # tracking.rs, read.rs, rgai_cmd.rs, write_cmd.rs, registry.rs, and main.rs moved. The
 # ratchet still rejects later drift.
-EXPECTED_SHA256 = "b307248248296e7c212bec04a781c24d8ec127da49ae36c156f3a786c2309e30"
+EXPECTED_SHA256 = "1dee73d88a9efa0c368a50744945205e5646ebda6b6d0e753cacee4062c791ed"
 
 
 def main() -> int:

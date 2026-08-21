@@ -20,12 +20,151 @@ pub struct ParsedToken {
     pub offset: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellCommandPayload {
+    pub command: String,
+    pub range: std::ops::Range<usize>,
+    quote: Option<char>,
+}
+
+impl ShellCommandPayload {
+    pub fn replace_in(&self, invocation: &str, rewritten: &str) -> String {
+        let replacement = match self.quote {
+            Some(quote) => format!("{quote}{rewritten}{quote}"),
+            None => format!("'{}'", rewritten.replace('\'', "'\\''")),
+        };
+        format!(
+            "{}{}{}",
+            &invocation[..self.range.start],
+            replacement,
+            &invocation[self.range.end..]
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellWrapperParse {
+    NotWrapper,
+    Parsed(ShellCommandPayload),
+    Ambiguous,
+}
+
 pub fn tokenize(input: &str) -> Vec<ParsedToken> {
     tokenize_inner(input, false)
 }
 
 pub fn tokenize_with_newlines(input: &str) -> Vec<ParsedToken> {
     tokenize_inner(input, true)
+}
+
+pub fn parse_shell_command_wrapper(input: &str) -> ShellWrapperParse {
+    let tokens = tokenize(input);
+    let Some(program) = tokens.first() else {
+        return ShellWrapperParse::NotWrapper;
+    };
+    if program.kind != TokenKind::Arg || !is_shell_program(&program.value) {
+        return ShellWrapperParse::NotWrapper;
+    }
+    if !quotes_balanced(input) || tokens.iter().any(|token| token.kind != TokenKind::Arg) {
+        return ShellWrapperParse::Ambiguous;
+    }
+
+    let mut command_flag = None;
+    let mut index = 1;
+    while let Some(token) = tokens.get(index) {
+        let Some(value) = unquote_word(&token.value) else {
+            return ShellWrapperParse::Ambiguous;
+        };
+        if value.starts_with('-')
+            && !value.starts_with("--")
+            && value[1..].chars().any(|flag| flag == 'c')
+        {
+            command_flag = Some(index);
+            break;
+        }
+        if matches!(value, "-O" | "+O" | "--rcfile" | "--init-file") {
+            if tokens.get(index + 1).is_none() {
+                return ShellWrapperParse::Ambiguous;
+            }
+            index += 2;
+            continue;
+        }
+        if !value.starts_with(['-', '+']) || value == "--" {
+            let later_command_flag = tokens.iter().skip(index + 1).any(|later| {
+                unquote_word(&later.value).is_some_and(|word| {
+                    word.starts_with('-')
+                        && !word.starts_with("--")
+                        && word[1..].chars().any(|flag| flag == 'c')
+                })
+            });
+            return if later_command_flag {
+                ShellWrapperParse::Ambiguous
+            } else {
+                ShellWrapperParse::NotWrapper
+            };
+        }
+        index += 1;
+    }
+    let Some(command_flag) = command_flag else {
+        return ShellWrapperParse::NotWrapper;
+    };
+    let Some(payload) = tokens.get(command_flag + 1) else {
+        return ShellWrapperParse::Ambiguous;
+    };
+    let raw = &input[payload.offset..payload.offset + payload.value.len()];
+    let (command, quote) = match (raw.chars().next(), raw.chars().last()) {
+        (Some(first @ ('\'' | '"')), Some(last)) if first == last => (
+            raw[first.len_utf8()..raw.len() - last.len_utf8()].to_owned(),
+            Some(first),
+        ),
+        (Some('\'' | '"'), _) | (_, Some('\'' | '"')) => return ShellWrapperParse::Ambiguous,
+        _ => (raw.to_owned(), None),
+    };
+    ShellWrapperParse::Parsed(ShellCommandPayload {
+        command,
+        range: payload.offset..payload.offset + payload.value.len(),
+        quote,
+    })
+}
+
+fn is_shell_program(value: &str) -> bool {
+    let Some(value) = unquote_word(value) else {
+        return false;
+    };
+    matches!(
+        value.rsplit('/').next(),
+        Some("sh" | "bash" | "dash" | "ksh" | "zsh")
+    )
+}
+
+fn unquote_word(value: &str) -> Option<&str> {
+    match (value.as_bytes().first(), value.as_bytes().last()) {
+        (Some(first @ (b'\'' | b'"')), Some(last)) if first == last => {
+            Some(&value[1..value.len() - 1])
+        }
+        (Some(b'\'' | b'"'), _) | (_, Some(b'\'' | b'"')) => None,
+        _ => Some(value),
+    }
+}
+
+fn quotes_balanced(input: &str) -> bool {
+    let mut single = false;
+    let mut double = false;
+    let mut escaped = false;
+    for byte in input.bytes() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if byte == b'\\' && !single {
+            escaped = true;
+        } else if byte == b'\'' && !double {
+            single = !single;
+        } else if byte == b'"' && !single {
+            double = !double;
+        }
+    }
+    !single && !double && !escaped
 }
 
 fn tokenize_inner(input: &str, emit_newline: bool) -> Vec<ParsedToken> {
@@ -1306,6 +1445,58 @@ mod tests {
         assert!(!contains_unattestable_construct("echo ${HOME}"));
         assert!(!contains_unattestable_construct("git status"));
         assert!(!contains_unattestable_construct(""));
+    }
+
+    #[test]
+    fn test_shell_wrapper_payload_preserves_outer_invocation() {
+        let invocation = "/bin/sh -c 'git status --short' positional";
+        let ShellWrapperParse::Parsed(payload) = parse_shell_command_wrapper(invocation) else {
+            panic!("expected parsed shell wrapper");
+        };
+        assert_eq!(payload.command, "git status --short");
+        assert_eq!(
+            payload.replace_in(invocation, "rtk git status --short"),
+            "/bin/sh -c 'rtk git status --short' positional"
+        );
+    }
+
+    #[test]
+    fn test_shell_wrapper_parser_supports_login_command_flags_and_nesting() {
+        let ShellWrapperParse::Parsed(payload) =
+            parse_shell_command_wrapper("bash -lc 'sh -c \"bun run check\"'")
+        else {
+            panic!("expected parsed shell wrapper");
+        };
+        assert_eq!(payload.command, "sh -c \"bun run check\"");
+        let ShellWrapperParse::Parsed(nested) = parse_shell_command_wrapper(&payload.command)
+        else {
+            panic!("expected nested shell wrapper");
+        };
+        assert_eq!(nested.command, "bun run check");
+        assert!(matches!(
+            parse_shell_command_wrapper("bash -O extglob -lc 'git status'"),
+            ShellWrapperParse::Parsed(_)
+        ));
+    }
+
+    #[test]
+    fn test_shell_wrapper_parser_rejects_malformed_or_opaque_syntax() {
+        assert_eq!(
+            parse_shell_command_wrapper("sh -c 'git status"),
+            ShellWrapperParse::Ambiguous
+        );
+        assert_eq!(
+            parse_shell_command_wrapper("sh -c 'git status' | cat"),
+            ShellWrapperParse::Ambiguous
+        );
+        assert_eq!(
+            parse_shell_command_wrapper("python -c 'print(1)'"),
+            ShellWrapperParse::NotWrapper
+        );
+        assert_eq!(
+            parse_shell_command_wrapper("sh script.sh -c 'git status'"),
+            ShellWrapperParse::Ambiguous
+        );
     }
 
     // --- split_for_permissions ---------------------------------------------

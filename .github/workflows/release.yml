@@ -28,6 +28,8 @@ jobs:
           scripts/verify-fork-core.sh
       - name: Enforce first-class and bounded routing acceptance gates
         run: |
+          cargo test --locked --manifest-path fork-core/rtk/Cargo.toml \
+            discover::registry::tests::anti_evasion_policy_matrix_covers_prd_and_regressions -- --exact
           cargo test --locked -p hzr-core acceptance_gate_
           cargo test --locked -p hzr-cli acceptance_gate_
           cargo test --locked -p hzr-daemon acceptance_gate_

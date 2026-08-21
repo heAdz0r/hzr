@@ -4,17 +4,32 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use hzr_core::{
-    BypassSummary, Config, EfficiencySummary, Ledger, LedgerSummary, OperationChannel,
-    OperationFamilySummary, OperationModeSummary, OperationRoute, StatsQuery, classify_operation,
+    BypassSummary, CURRENT_ACCOUNTING_POLICY_VERSION, Config, EfficiencySummary, EvasionSummary,
+    Ledger, LedgerSummary, OperationChannel, OperationFamilySummary, OperationModeSummary,
+    OperationRoute, ReadPipelineSummary, StatsQuery, classify_operation, privacy_identity_hash,
 };
 use hzr_exec::{ForkRuntimePaths, PinnedRtkAdapter, RtkAdapterConfig};
 use serde::Serialize;
 
-use crate::cli::StatsDuration;
+use crate::cli::{AccountingVersion, StatsDuration};
 use crate::hook_runner::{self, AccountingCoverage};
 
 const DEFAULT_COMMAND_LIMIT: usize = 12;
 const DEFAULT_BYPASS_TOOL_LIMIT: usize = 12;
+
+pub fn validate_request_bounds(
+    json: bool,
+    include_all_commands: bool,
+    has_workspace: bool,
+    has_since: bool,
+) -> Result<()> {
+    if json && include_all_commands && !has_workspace && !has_since {
+        anyhow::bail!(
+            "unbounded `hzr stats --json --all` is refused; add `--since <duration>` or `--workspace <dir>`"
+        );
+    }
+    Ok(())
+}
 
 struct ReportInputs {
     gain: EfficiencySummary,
@@ -23,7 +38,9 @@ struct ReportInputs {
     coverage: AccountingCoverage,
     bypass: BypassSummary,
     by_family: Vec<OperationFamilySummary>,
+    evasion: Option<EvasionSummary>,
     scope: String,
+    accounting_version: AccountingVersion,
 }
 
 struct ReportOptions {
@@ -38,8 +55,15 @@ pub struct StatsReport {
     pub direct_savings: DirectSavings,
     pub by_subsystem: Vec<SubsystemSavings>,
     pub by_mode: Vec<OperationModeSummary>,
+    pub read_pipeline: ReadPipelineSummary,
+    pub accounting_version_scope: &'static str,
+    pub accounting_policy_version: &'static str,
+    pub excluded_legacy_operations: u64,
     /// Argument-free aggregation safe to retain and serialize even for sensitive commands.
     pub by_family: Vec<OperationFamilySummary>,
+    /// Present only for the explicit `--evasion` view; always aggregate-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evasion: Option<EvasionSummary>,
     pub by_command: Vec<CommandSavings>,
     pub by_command_total: usize,
     pub by_command_omitted: usize,
@@ -137,7 +161,9 @@ pub async fn collect(
     config: &Config,
     workspace: Option<&Path>,
     include_all_commands: bool,
+    show_evasion: bool,
     since: Option<&StatsDuration>,
+    accounting_version: AccountingVersion,
 ) -> Result<StatsReport> {
     let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
@@ -146,9 +172,13 @@ pub async fn collect(
         .map(i64::try_from)
         .transpose()?;
     let workspace_text = workspace.map(|path| path.to_string_lossy());
+    let workspace_identity = workspace_text
+        .as_deref()
+        .map(|value| privacy_identity_hash("project", value));
     let mut collection = ledger.stats_collection(StatsQuery {
         project_path: workspace_text.as_deref(),
         since_unix_seconds: cutoff,
+        include_legacy_versions: accounting_version == AccountingVersion::All,
     })?;
     let capability_commands = collection
         .capability_commands()
@@ -168,11 +198,11 @@ pub async fn collect(
         collection.apply_capabilities(&supported);
     }
     let snapshot = collection.snapshot;
-    let scope = match (workspace_text.as_deref(), since) {
-        (Some(workspace), Some(duration)) => {
-            format!("project {workspace} since {}", duration.label())
+    let scope = match (workspace_identity.as_deref(), since) {
+        (Some(workspace_hash), Some(duration)) => {
+            format!("project {workspace_hash} since {}", duration.label())
         }
-        (Some(workspace), None) => format!("project {workspace}"),
+        (Some(workspace_hash), None) => format!("project {workspace_hash}"),
         (None, Some(duration)) => format!("global since {}", duration.label()),
         (None, None) => "global lifetime".to_owned(),
     };
@@ -183,11 +213,13 @@ pub async fn collect(
         (false, false) => "global_lifetime",
     };
     let mut recovery = "hzr stats --json --all".to_owned();
-    if let Some(workspace) = workspace_text.as_deref() {
-        recovery.push_str(&format!(" --workspace {workspace}"));
+    if workspace_text.is_some() {
+        recovery.push_str(" --workspace <workspace>");
     }
     if let Some(duration) = since {
         recovery.push_str(&format!(" --since {}", duration.label()));
+    } else if workspace_text.is_none() {
+        recovery.push_str(" --since 7d");
     }
     let coverage = hook_runner::degraded_rewrite_coverage(config)?;
     Ok(build_report_with_command_limit(
@@ -198,7 +230,9 @@ pub async fn collect(
             coverage,
             bypass: snapshot.bypass,
             by_family: snapshot.by_family,
+            evasion: show_evasion.then_some(snapshot.evasion),
             scope,
+            accounting_version,
         },
         ReportOptions {
             command_limit: (!include_all_commands).then_some(DEFAULT_COMMAND_LIMIT),
@@ -224,7 +258,9 @@ fn build_report(
             coverage,
             bypass,
             by_family: Vec::new(),
+            evasion: None,
             scope,
+            accounting_version: AccountingVersion::Current,
         },
         ReportOptions {
             command_limit: Some(DEFAULT_COMMAND_LIMIT),
@@ -241,14 +277,16 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         coverage,
         bypass,
         by_family,
+        evasion,
         scope,
+        accounting_version,
     } = inputs;
     let ReportOptions {
         command_limit,
         recovery,
     } = options;
     let by_mode = gain.by_mode.clone();
-    let reveal_command_details = command_limit.is_none();
+    let reveal_command_details = false;
     let traffic_coverage = TrafficCoverage {
         observability_scope: "observed_channels_only",
         // The reduction ratio is computed only from measured, non-native rows. An
@@ -333,7 +371,7 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
     let by_command_omitted = by_command_total.saturating_sub(commands.len());
     let by_command_recovery = recovery.unwrap_or_else(|| {
         if scope == "global lifetime" {
-            "hzr stats --json --all".to_owned()
+            "hzr stats --json --all --since 7d".to_owned()
         } else {
             format!(
                 "hzr stats --json --all --workspace {}",
@@ -361,7 +399,15 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         },
         by_subsystem,
         by_mode,
+        read_pipeline: gain.read_pipeline,
+        accounting_version_scope: match accounting_version {
+            AccountingVersion::Current => "current_privacy_typed_policy",
+            AccountingVersion::All => "all_versions_compatibility_only",
+        },
+        accounting_policy_version: CURRENT_ACCOUNTING_POLICY_VERSION,
+        excluded_legacy_operations: gain.excluded_legacy_operations,
         by_family,
+        evasion,
         by_command: commands,
         by_command_total,
         by_command_omitted,
@@ -412,21 +458,19 @@ fn bypass_report(
         .by_tool
         .into_iter()
         .map(|tool| BypassToolReport {
-            example_command: if reveal_command_details {
-                normalize_command(&tool.example_command)
-            } else {
-                format!("hzr raw {} <arguments omitted>", tool.tool)
-            },
-            replacement: if reveal_command_details {
-                tool.replacement
-            } else {
-                tool.replacement
-                    .map(|_| "available; use `hzr stats --json --all` for exact details".to_owned())
-            },
-            tool: tool.tool,
+            example_command: format!(
+                "hzr raw {} <arguments omitted>",
+                privacy_safe_tool(&tool.tool)
+            ),
+            replacement: tool.first_class_replacement_available.then(|| {
+                "available; inspect the typed family and use its first-class HZR route".to_owned()
+            }),
+            tool: privacy_safe_tool(&tool.tool).to_owned(),
             executions: tool.executions,
             delivered_tokens_estimated: tool.delivered_tokens_estimated,
-            rationale: tool.rationale,
+            rationale: tool
+                .first_class_replacement_available
+                .then(|| "first-class HZR route available".to_owned()),
         })
         .collect::<Vec<_>>();
     let by_tool_total = by_tool.len();
@@ -454,26 +498,40 @@ fn classify_command(command: &str) -> &'static str {
     classify_operation(command).subsystem.as_str()
 }
 
-fn normalize_command(command: &str) -> String {
-    command
-        .strip_prefix("rtk ")
-        .map_or_else(|| command.to_owned(), |rest| format!("hzr {rest}"))
-}
-
 fn command_label(command: &str, reveal_command_details: bool) -> String {
-    let normalized = normalize_command(command);
-    if reveal_command_details {
-        return normalized;
-    }
-
     let classification = classify_operation(command);
     if classification.route == OperationRoute::Bypassed {
-        return format!("hzr raw {} <arguments omitted>", classification.operation);
+        return format!(
+            "hzr raw {} <arguments omitted>",
+            privacy_safe_tool(&classification.operation)
+        );
     }
-    if normalized.contains(['\r', '\n']) || normalized.len() > 160 {
-        return format!("hzr {} <arguments omitted>", classification.operation);
+    let _ = reveal_command_details;
+    format!(
+        "hzr {} <arguments omitted>",
+        classification.subsystem.as_str()
+    )
+}
+
+fn privacy_safe_tool(tool: &str) -> &'static str {
+    match tool {
+        "read" => "read",
+        "search" | "rgai" | "rg" | "grep" => "search",
+        "write" => "write",
+        "memory" => "memory",
+        "codec" => "codec",
+        "git" => "git",
+        "cargo" | "rustc" | "rustup" => "rust",
+        "sed" | "cat" | "find" | "fd" | "awk" => "file",
+        "python" | "python3" => "python",
+        "sh" | "bash" | "zsh" => "shell",
+        "ssh" => "ssh",
+        "gh" => "gh",
+        "bun" | "npm" | "pnpm" | "yarn" | "node" | "deno" => "javascript",
+        "docker" | "podman" => "container",
+        "curl" | "wget" => "http",
+        _ => "other",
     }
-    normalized
 }
 
 fn signed_percentage(part: i64, total: u64) -> f64 {
@@ -501,8 +559,8 @@ mod tests {
     use hzr_core::LedgerSummary;
 
     use super::{
-        DEFAULT_BYPASS_TOOL_LIMIT, DEFAULT_COMMAND_LIMIT, build_report, classify_command,
-        normalize_command,
+        AccountingVersion, DEFAULT_BYPASS_TOOL_LIMIT, DEFAULT_COMMAND_LIMIT, ReportInputs,
+        ReportOptions, build_report, build_report_with_command_limit, classify_command,
     };
     use crate::hook_runner::AccountingCoverage;
     use hzr_core::{
@@ -631,7 +689,6 @@ mod tests {
         assert_eq!(classify_command("rtk rgai"), "search");
         assert_eq!(classify_command("rtk memory (hook)"), "memory");
         assert_eq!(classify_command("rtk cargo test"), "execution");
-        assert_eq!(normalize_command("rtk rgai"), "hzr rgai");
     }
 
     /// A bypassed command must never be counted as an optimized execution: that is exactly
@@ -673,6 +730,7 @@ mod tests {
                 delivered_tokens_estimated: 600,
                 example_command: "rtk proxy sed -n 1,80p src/lib.rs".into(),
                 replacement: Some("hzr rtk -- read src/lib.rs --from 1 --to 80".into()),
+                first_class_replacement_available: true,
                 rationale: Some("hzr read streams the requested span".into()),
             }],
         };
@@ -692,7 +750,7 @@ mod tests {
         assert_eq!(report.bypass.by_tool.len(), 1);
         assert_eq!(
             report.bypass.by_tool[0].replacement.as_deref(),
-            Some("available; use `hzr stats --json --all` for exact details")
+            Some("available; inspect the typed family and use its first-class HZR route")
         );
     }
 
@@ -725,6 +783,7 @@ mod tests {
                 delivered_tokens_estimated: 5,
                 example_command: format!("rtk proxy sed {sensitive_payload}"),
                 replacement: Some(format!("hzr rtk -- read {sensitive_payload}")),
+                first_class_replacement_available: true,
                 rationale: Some("bounded read".into()),
             }],
         };
@@ -738,13 +797,87 @@ mod tests {
             "global lifetime".into(),
         );
 
-        assert_eq!(report.by_command[0].command, "hzr rgai <arguments omitted>");
+        assert_eq!(
+            report.by_command[0].command,
+            "hzr search <arguments omitted>"
+        );
         assert_eq!(
             report.bypass.by_tool[0].example_command,
-            "hzr raw sed <arguments omitted>"
+            "hzr raw file <arguments omitted>"
         );
         let encoded = serde_json::to_string(&report).expect("report JSON");
         assert!(!encoded.contains("secret=value"));
+    }
+
+    #[test]
+    fn acceptance_gate_all_json_never_exposes_sensitive_payload_classes() {
+        for sentinel in [
+            "secret=value",
+            "/private/customer/file.rs",
+            "SELECT * FROM customer_secrets",
+            "python3 -c 'print(credential)'",
+            "<<HEREDOC private-body HEREDOC",
+        ] {
+            let report = build_report_with_command_limit(
+                ReportInputs {
+                    gain: EfficiencySummary {
+                        by_command: vec![EfficiencyCommandSummary {
+                            command: format!("rtk raw python3 {sentinel}"),
+                            executions: 1,
+                            baseline_tokens_estimated: 4,
+                            delivered_tokens_estimated: 4,
+                            gross_avoided_tokens_estimated: 0,
+                            regression_tokens_estimated: 0,
+                            net_avoided_tokens_estimated: 0,
+                            avg_time_ms: 1,
+                        }],
+                        ..EfficiencySummary::default()
+                    },
+                    observed_model_usage: LedgerSummary::default(),
+                    observed_model_usage_scope: "global_lifetime",
+                    coverage: AccountingCoverage::default_complete(),
+                    bypass: BypassSummary {
+                        lifetime: BypassWindow {
+                            operations: 1,
+                            total_operations: 1,
+                            delivered_tokens_estimated: 4,
+                            total_delivered_tokens_estimated: 4,
+                        },
+                        by_tool: vec![BypassTool {
+                            tool: sentinel.into(),
+                            executions: 1,
+                            delivered_tokens_estimated: 4,
+                            example_command: sentinel.into(),
+                            replacement: Some(sentinel.into()),
+                            first_class_replacement_available: true,
+                            rationale: Some(sentinel.into()),
+                        }],
+                    },
+                    by_family: Vec::new(),
+                    evasion: None,
+                    scope: "global lifetime".into(),
+                    accounting_version: AccountingVersion::Current,
+                },
+                ReportOptions {
+                    command_limit: None,
+                    recovery: None,
+                },
+            );
+            let encoded = serde_json::to_string(&report).expect("--all JSON");
+            assert!(!encoded.contains(sentinel), "stats leaked {sentinel}");
+        }
+    }
+
+    #[test]
+    fn acceptance_gate_unbounded_all_json_is_refused_with_bounded_alternatives() {
+        let error = super::validate_request_bounds(true, true, false, false)
+            .expect_err("unbounded all JSON must be refused");
+        let message = error.to_string();
+        assert!(message.contains("--since <duration>"));
+        assert!(message.contains("--workspace <dir>"));
+        super::validate_request_bounds(true, true, true, false).expect("workspace bound");
+        super::validate_request_bounds(true, true, false, true).expect("time bound");
+        super::validate_request_bounds(false, true, false, false).expect("human view is bounded");
     }
 
     /// The headline ratio is honest only when it is read next to the bypass share, so the
@@ -843,7 +976,10 @@ mod tests {
         assert_eq!(report.by_command.len(), DEFAULT_COMMAND_LIMIT);
         assert_eq!(report.by_command_total, 75);
         assert_eq!(report.by_command_omitted, 75 - DEFAULT_COMMAND_LIMIT);
-        assert_eq!(report.by_command_recovery, "hzr stats --json --all");
+        assert_eq!(
+            report.by_command_recovery,
+            "hzr stats --json --all --since 7d"
+        );
     }
 
     #[test]
@@ -862,6 +998,7 @@ mod tests {
                     delivered_tokens_estimated: 10,
                     example_command: format!("rtk proxy tool-{index} secret=value"),
                     replacement: None,
+                    first_class_replacement_available: false,
                     rationale: None,
                 })
                 .collect(),
@@ -881,7 +1018,10 @@ mod tests {
             report.bypass.by_tool_omitted,
             75 - DEFAULT_BYPASS_TOOL_LIMIT
         );
-        assert_eq!(report.bypass.by_tool_recovery, "hzr stats --json --all");
+        assert_eq!(
+            report.bypass.by_tool_recovery,
+            "hzr stats --json --all --since 7d"
+        );
         let encoded = serde_json::to_vec(&report).expect("report JSON");
         assert!(
             encoded.len() / 4 < 4_000,

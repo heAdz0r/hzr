@@ -11,8 +11,9 @@ mod model;
 mod shell;
 
 pub use adapter::{
-    ForkCoreConfig, ForkCoreInvocation, ForkCoreRunner, ForkRuntimePaths, PINNED_RTK_VERSION,
-    PinnedRtkAdapter, RtkAdapterConfig, RtkCapabilities, RtkRewriteInterface,
+    ForkCoreConfig, ForkCoreInvocation, ForkCoreRunner, ForkRuntimePaths, INTERNAL_EVASION_ENV,
+    PINNED_RTK_VERSION, PinnedRtkAdapter, RtkAdapterConfig, RtkCapabilities, RtkRewriteInterface,
+    RtkRewriteOutcome,
 };
 pub use error::ExecError;
 pub use executor::{ExecutionHandle, ExecutionPipeline};

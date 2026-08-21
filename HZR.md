@@ -79,7 +79,7 @@ Write    -> hzr write patch|replace|set|create|batch ...
 Shell    -> hzr exec run '<shell command>'   (default policy route; preserves shell grammar)
 Known output -> hzr rtk -- test|err|summary|log <command...>   (plain argv only)
 Density  -> hzr codec compile --profile shadow|adaptive|compact
-Exact raw -> HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>   (explicit unfiltered fidelity only)
+Exact raw -> HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr rtk -- raw <command...>
 TDD      -> hzr tdd                  (optional; strict when selected)
 MCP      -> hzr mcp serve            (launched by a client, never by hand)
 Config   -> hzr mcp config --client codex|claude-desktop  (prints a snippet)
@@ -140,6 +140,10 @@ managed blocks and HZR-owned global MCP registrations are removed transactionall
 workspace registration, memory, or ledger history. Explicit CLI commands remain available to the
 operator even when automatic activation is disabled.
 
+`hzr init` enables the repository graph in the managed grepai configuration, including existing
+HZR-owned workspaces where the upstream default left it disabled. `hzr doctor` remains read-only:
+it reports graph readiness, while init/warm performs the state change.
+
 ## Reading a file: reach for the flags, not for `sed`
 
 `hzr read` is not "cat with filtering". It takes the arguments you would
@@ -155,6 +159,7 @@ hzr read <file> --changed                    # only the working-tree hunks
 hzr read <file> --since HEAD~3               # only what changed since a revision
 hzr read <file> --max-lines N                # head(1)
 hzr read <file> --tail-lines N               # tail(1)
+hzr read --batch --max-tokens N <files...>   # several files under one shared budget
 ```
 
 Markdown defaults to a bounded digest and code defaults to its minimal view. Unbounded
@@ -163,7 +168,9 @@ structure and `--from N --to M` for exact evidence. When the complete file is it
 authoritative text input, use
 `HZR_EXACT_FIDELITY=1 hzr read <file> --level none`. The read engine intentionally previews
 binary data; when byte-for-byte binary stdout is itself required, use the explicit
-`HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>` recovery path. `-n` defaults to exact content
+`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=binary hzr rtk -- raw <command...>` recovery path.
+Batch reads keep caller order and source coordinates, reserve a bounded share for every file,
+and print exact range recovery commands when content is omitted. `-n` defaults to exact content
 and prints original
 source coordinates, including for ranges and tails. `--max-lines N` returns the first N
 lines followed by the file total, omitted count, and an exact recovery command; tails and
@@ -199,6 +206,12 @@ Do not choose `raw` merely because a command uses SSH, JSON, pipes, redirects, o
 arguments. If no filter exists, `hzr exec run` still performs the tracked fallback; agents do not
 need to select `raw` themselves.
 
+The policy recursively inspects POSIX shell launchers and environment prefixes. Wrapping a managed
+command in `/bin/sh`, `bash`, `zsh`, or a simple Python file/JSON/subprocess script does not turn it
+into an allowed proxy: HZR rewrites the proven leaf or returns an explicit policy `Ask`. Opaque
+computation, migration, code generation, redirects, and mixed pipelines remain usable only as a
+tracked no-equivalent route; they receive no savings credit.
+
 ## The cost of `raw`
 
 `hzr rtk -- raw <cmd> <args...>` directly spawns the first argument and forwards its argv
@@ -211,11 +224,18 @@ baseline and delivered estimates. Inherited stdio that cannot be captured is mar
 `hzr stats`.
 
 Exact operator/debug recovery uses
-`HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>`. The separate marker makes byte-for-byte intent
-explicit and prevents a habitual RAW wrapper from bypassing managed routing. Checksums, parsers,
-generated files, complete logs, or machine-readable data may require that fidelity, but their
-normal agent route is still `hzr exec run`. Unmarked managed RAW wrappers are removed before
-fork-core policy runs. Raw is *never* correct when policy reports a safe first-class replacement.
+`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr rtk -- raw <command...>`, where `reason`
+is one of `binary`, `checksum`, `machine_protocol`, `complete_log`, `full_patch`, or
+`verbatim_source`. A missing or unknown reason returns a policy `Ask` and is never echoed into
+telemetry. Even a valid reason cannot override a deny/ask decision or an equivalent managed HZR
+command; it enables unfiltered bytes only after fork-core proves that no byte-faithful first-class
+route exists. The default per-session allowance is five operations or 100,000 estimated delivered
+tokens, whichever is reached first. A statically identifiable local read that would exceed the
+remaining allowance, and any unmeasurable remote exact stream, requires approval before execution.
+The same preflight applies to `HZR_EXACT_FIDELITY=1` full reads. The normal agent route is still
+`hzr exec run`. Unmarked managed RAW wrappers are
+removed before fork-core policy runs. Raw is *never* correct when policy reports a safe first-class
+replacement.
 Reaching for `sed -n`, `nl`, `cat`, `head`, `tail`, `rg`, `ssh`, `curl`, `bun`, `git`, or `find`
 through `raw` when a filtered route exists is avoidable token waste.
 
@@ -261,19 +281,30 @@ hiding it.
 
 ## What the hooks cover, and what only you can
 
-The `PreToolUse` hook matches `Bash`, `Agent` and `Task`. It does **not** redirect the host's
-own `Read`, `Grep`, `Edit`, `Write` or `Glob` calls. A failure-silent `PostToolUse` observer
-records only their route and response-size estimate; it never stores tool content, mutates a
-result, blocks a call, or grants savings credit. `hzr stats` therefore reports the fraction
-of observed traffic covered by its reduction ratio instead of leaving native calls invisible.
+The failure-open `PreToolUse` hook matches `Bash`, `Agent`, `Task`, `Read`, `Grep`, `Glob`,
+`Edit` and `Write`. New installations use `steer`: native Read/Grep calls receive one concrete
+HZR prescription, while Glob and native edits remain allowed. Existing installations retain
+`observe` until explicitly changed and `hzr doctor` names that compatibility state. Opt-in
+`strict` additionally prescribes `hzr write` for native edits. Hook failure never blocks a host
+tool call.
 
-Reaching for a native file tool is not blocked and is sometimes right. Prefer the `hzr`
-command whenever one exists; the coverage share will show the cost of routing around it.
+The failure-silent `PostToolUse` observer stores no tool content and grants no savings credit.
+Policy-allowed native calls in steer/strict are typed E10 bypasses rather than being hidden as
+`native_unaccounted`; observe mode preserves the historical native-unaccounted measurement.
+Session nudges and stop scorecards are bounded, name the recovered route and never include the
+underlying command, path, query, content, or raw agent identity.
 
 Prefer the bounded HZR planner for discovery. Never create a second `.grepai` index,
 a second ICM database, or parallel RTK hooks.
 
 ## Reading `hzr stats`
+
+Stats default to the current privacy/accounting policy. Use `--accounting-version all` only for a
+legacy-compatible comparison; legacy rows are excluded from current headline claims. `--all`
+means all aggregate groups, never command payloads. Stored and serialized telemetry contains typed
+families, routes, versions and hashes rather than commands, arguments, queries, paths, sessions,
+environment values, SQL, heredocs, prompts, responses, or stdin. Read metrics separately report
+selection reduction against the full source and transform overhead against the selected slice.
 
 Four numbers, in the order they must be read:
 

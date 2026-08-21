@@ -4,49 +4,41 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
+use fs2::FileExt;
 use hzr_core::{
-    Config, Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-    efficient_route_replacement, explicit_raw_fidelity, first_class_replacement,
-    managed_raw_payload,
+    Config, DetailedOperationAttribution, FidelityAllowance, FidelityBudget, FidelityPreflight,
+    Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
+    PolicyEvent, RawFidelityRequest, efficient_route_replacement, fidelity_preflight_required,
+    first_class_replacement, raw_fidelity_request,
 };
 use hzr_exec::{
     CanonicalCommand, ForkRuntimePaths, PinnedRtkAdapter, RewriteDecision, RewriteSource,
     RtkAdapterConfig,
 };
-use hzr_protocol::{ContextPlanApiRequest, ExecApiRequest};
+use hzr_protocol::{
+    ContextPlanApiRequest, EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm,
+    ExecApiRequest, FidelityValidation, PolicyDecision,
+};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::time::timeout;
 
+use crate::adoption::NativeToolMode;
 use crate::client::DaemonClient;
+
+#[cfg(test)]
+#[path = "../../../fork-core/rtk/tests/fixtures/anti_evasion_fixture.rs"]
+mod anti_evasion_fixture;
 
 const HOOK_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_HOOK_INPUT_BYTES: u64 = 2 * 1024 * 1024;
+const SESSION_CORRECTION_NUDGE: u64 = 3;
+const SESSION_BYPASS_COUNT_BUDGET: u64 = 40;
+const SESSION_BYPASS_TOKEN_BUDGET: u64 = 250_000;
+const SESSION_AVOIDABLE_SHARE_NUDGE: f64 = 10.0;
 
-pub async fn dispatch(config: &Config) -> Result<()> {
-    let cwd = std::env::current_dir().context("failed to resolve hook working directory")?;
-    if !crate::activation::is_enabled(config, &cwd)
-        .await
-        .unwrap_or(false)
-    {
-        return Ok(());
-    }
-    let input = read_input()?;
-    let tool_name = input
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    match tool_name {
-        "Bash" => rewrite(config, &input).await,
-        "Agent" | "Task" => task(config, &input).await,
-        _ => Ok(()),
-    }
-}
-
-/// Observe host-native file tools without steering or blocking them.
-///
-/// This entry point intentionally returns no error: a measurement failure must never turn a
-/// successful host tool call into a failed one. The hook emits no stdout payload.
-pub async fn observe(config: &Config) {
+pub async fn dispatch(config: &Config, native_mode: NativeToolMode) {
     let Ok(cwd) = std::env::current_dir() else {
         return;
     };
@@ -59,10 +51,48 @@ pub async fn observe(config: &Config) {
     let Ok(input) = read_input() else {
         return;
     };
-    let _ = observe_input(config, &input);
+    let _ = update_session(config, &input, |state| {
+        state.operations = state.operations.saturating_add(1);
+    });
+    let tool_name = input
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match tool_name {
+        "Bash" => {
+            let _ = rewrite(config, &input).await;
+        }
+        "Agent" | "Task" => {
+            let _ = task(config, &input).await;
+        }
+        "Read" | "Grep" | "Glob" | "Edit" | "Write" => {
+            let _ = native_pre_tool(config, &input, native_mode);
+        }
+        _ => {}
+    }
 }
 
-fn observe_input(config: &Config, input: &Value) -> Result<()> {
+/// Observe host-native file tools without steering or blocking them.
+///
+/// This entry point intentionally returns no error: a measurement failure must never turn a
+/// successful host tool call into a failed one. The hook emits no stdout payload.
+pub async fn observe(config: &Config, native_mode: NativeToolMode) {
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    if !crate::activation::is_enabled(config, &cwd)
+        .await
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let Ok(input) = read_input() else {
+        return;
+    };
+    let _ = observe_input(config, &input, native_mode);
+}
+
+fn observe_input(config: &Config, input: &Value, native_mode: NativeToolMode) -> Result<()> {
     let tool = input
         .get("tool_name")
         .and_then(Value::as_str)
@@ -79,26 +109,33 @@ fn observe_input(config: &Config, input: &Value) -> Result<()> {
     let estimated = u64::try_from(response_bytes / 4).unwrap_or(u64::MAX);
     let cwd = input.get("cwd").and_then(Value::as_str).unwrap_or_default();
     let session_id = input.get("session_id").and_then(Value::as_str);
+    let agent = agent_attribution(input);
     let (measurement, tokens) = if response.is_some() {
         (OperationMeasurement::Estimated, estimated)
     } else {
         (OperationMeasurement::Unmeasured, 0)
     };
-    Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?.record_operation_attributed(
-        &format!("native {tool}"),
-        &format!("native {tool}"),
-        tokens,
-        tokens,
-        0,
-        OperationAttribution {
-            project_path: cwd,
-            agent: Some("claude"),
-            session_id,
-            channel: OperationChannel::NativeHost,
-            measurement,
-            route: OperationRoute::NativeUnaccounted,
-        },
-    )?;
+    let (route, evasion) = native_observation_policy(tool, native_mode);
+    Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?
+        .record_operation_attributed_with_detail(
+            &format!("native {tool}"),
+            &format!("native {tool}"),
+            tokens,
+            tokens,
+            0,
+            DetailedOperationAttribution {
+                attribution: OperationAttribution {
+                    project_path: cwd,
+                    agent: Some(&agent),
+                    session_id,
+                    channel: OperationChannel::NativeHost,
+                    measurement,
+                    route,
+                },
+                detail: None,
+                evasion: Some(&evasion),
+            },
+        )?;
     Ok(())
 }
 
@@ -122,11 +159,24 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         return Ok(());
     }
     let cwd = std::env::current_dir().context("failed to resolve hook working directory")?;
+    let fidelity_evasion = match hook_fidelity_preflight(config, input, raw, &cwd) {
+        HookFidelityPreflight::NotRequested => None,
+        HookFidelityPreflight::Allow(evasion) => Some(evasion),
+        HookFidelityPreflight::Ask { decision, evasion } => {
+            let _ = record_local_policy_decision(config, input, &decision, Some(evasion));
+            return write_decision(input, decision);
+        }
+    };
     let request = ExecApiRequest {
         cwd: cwd.to_string_lossy().into_owned(),
         command: raw.to_owned(),
         timeout_ms: Some(HOOK_TIMEOUT.as_millis() as u64),
         caller_path: std::env::var("PATH").ok(),
+        agent: Some(agent_attribution(input)),
+        session_id: input
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     };
     let managed = if let Ok(client) = DaemonClient::from_config(config) {
         timeout(HOOK_TIMEOUT, client.exec_rewrite(&request))
@@ -136,6 +186,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     } else {
         None
     };
+    let daemon_recorded_policy = managed.is_some();
     let decision = match managed {
         Some(decision) => {
             // The daemon answered, so any earlier gap is now behind us: close it instead of
@@ -148,7 +199,330 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
             fallback_decision(config, raw, &cwd).await
         }
     };
-    write_decision(input, steer_to_first_class(raw, decision))
+    let decision = steer_to_first_class(raw, decision);
+    let decision = attach_hook_evasion(raw, decision, fidelity_evasion.as_ref());
+    let decision = attach_t1_feedback(config, input, decision);
+    if !daemon_recorded_policy {
+        let _ = record_local_policy_decision(config, input, &decision, None);
+    }
+    write_decision(input, decision)
+}
+
+fn record_local_policy_decision(
+    config: &Config,
+    input: &Value,
+    decision: &RewriteDecision,
+    explicit_evasion: Option<EvasionAttribution>,
+) -> Result<()> {
+    let decision = match decision {
+        RewriteDecision::Ask { .. } => PolicyDecision::Ask,
+        RewriteDecision::Deny { .. } => PolicyDecision::Deny,
+        RewriteDecision::AllowRewrite { .. } => PolicyDecision::Correction,
+        RewriteDecision::AllowRaw { .. } => return Ok(()),
+    };
+    let evasion = explicit_evasion.unwrap_or(EvasionAttribution {
+        class: EvasionClass::E10CapabilityGap,
+        wrapper_depth: 0,
+        interpreter: None,
+        path_form: EvasionPathForm::Bare,
+        stage_count: 1,
+        hatch_marker: false,
+        avoidable: false,
+        tier: EnforcementTier::T0TransparentRewrite,
+        fidelity_reason: None,
+        fidelity_validation: FidelityValidation::NotRequested,
+    });
+    let agent = agent_attribution(input);
+    Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?.record_policy_event(PolicyEvent {
+        project_path: input.get("cwd").and_then(Value::as_str).unwrap_or_default(),
+        agent: Some(&agent),
+        session_id: input.get("session_id").and_then(Value::as_str),
+        evasion,
+        decision,
+        replacement_family: None,
+    })?;
+    Ok(())
+}
+
+enum HookFidelityPreflight {
+    NotRequested,
+    Allow(EvasionAttribution),
+    Ask {
+        decision: RewriteDecision,
+        evasion: EvasionAttribution,
+    },
+}
+
+fn hook_fidelity_preflight(
+    config: &Config,
+    input: &Value,
+    raw: &str,
+    cwd: &Path,
+) -> HookFidelityPreflight {
+    if !fidelity_preflight_required(raw) {
+        return HookFidelityPreflight::NotRequested;
+    }
+    let budget = input
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|session_id| {
+            Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))
+                .and_then(|ledger| {
+                    ledger.fidelity_session_usage(session_id, FidelityAllowance::default())
+                })
+                .ok()
+        })
+        .map(|usage| FidelityBudget {
+            remaining_operations: usage.remaining_operations,
+            remaining_tokens: usage.remaining_tokens,
+            exhausted: usage.exhausted,
+        });
+    match hzr_core::fidelity_preflight(raw, cwd, budget) {
+        FidelityPreflight::NotRequested => HookFidelityPreflight::NotRequested,
+        FidelityPreflight::Allow { evasion, .. } => HookFidelityPreflight::Allow(evasion),
+        FidelityPreflight::Ask { evasion, reason } => HookFidelityPreflight::Ask {
+            decision: RewriteDecision::Ask {
+                proposed: Some(CanonicalCommand::shell(raw)),
+                reason,
+            },
+            evasion,
+        },
+    }
+}
+
+fn attach_hook_evasion(
+    raw: &str,
+    decision: RewriteDecision,
+    evasion: Option<&EvasionAttribution>,
+) -> RewriteDecision {
+    let Some(evasion) = evasion else {
+        return decision;
+    };
+    let Ok(encoded) = serde_json::to_string(evasion) else {
+        return RewriteDecision::Ask {
+            proposed: Some(CanonicalCommand::shell(raw)),
+            reason: "T4 fidelity attribution could not be serialized".into(),
+        };
+    };
+    let command = match &decision {
+        RewriteDecision::AllowRaw { .. } => raw.to_owned(),
+        RewriteDecision::AllowRewrite { command, .. } => match render_command(command) {
+            Ok(command) => command,
+            Err(_) => {
+                return RewriteDecision::Ask {
+                    proposed: Some(CanonicalCommand::shell(raw)),
+                    reason: "T4 fidelity execution could not preserve the approved command".into(),
+                };
+            }
+        },
+        RewriteDecision::Ask { .. } | RewriteDecision::Deny { .. } => return decision,
+    };
+    let Some(command) = attributed_hook_command(&encoded, &command) else {
+        return RewriteDecision::Ask {
+            proposed: Some(CanonicalCommand::shell(raw)),
+            reason: "T4 fidelity execution needs explicit approval on this host".into(),
+        };
+    };
+    RewriteDecision::AllowRewrite {
+        command: CanonicalCommand::shell(command),
+        source: RewriteSource::HzrPolicy,
+        reason: "T4 fidelity execution carries closed typed attribution".into(),
+    }
+}
+
+#[cfg(unix)]
+fn attributed_hook_command(encoded: &str, command: &str) -> Option<String> {
+    Some(format!(
+        "HZR_INTERNAL_EVASION_JSON={} {command}",
+        shell_quote(encoded)
+    ))
+}
+
+#[cfg(windows)]
+fn attributed_hook_command(_encoded: &str, _command: &str) -> Option<String> {
+    None
+}
+
+fn native_pre_tool(config: &Config, input: &Value, mode: NativeToolMode) -> Result<()> {
+    let tool = input
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if mode == NativeToolMode::Observe || tool == "Glob" {
+        return Ok(());
+    }
+    if mode == NativeToolMode::Steer && matches!(tool, "Edit" | "Write") {
+        return Ok(());
+    }
+    let Some(replacement) = native_replacement(input, mode) else {
+        return Ok(());
+    };
+    record_native_correction(config, input, tool)?;
+    let count = update_session(config, input, |state| {
+        state.corrections = state.corrections.saturating_add(1);
+        state.native_denials = state.native_denials.saturating_add(1);
+    })
+    .map(|state| state.corrections)
+    .unwrap_or(0);
+    write_hook_json(json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": format!(
+                "T1 native-tool correction E8 ({tool}); use `{replacement}`; session avoidable-bypass count={count}"
+            ),
+        }
+    }))
+}
+
+fn native_evasion(
+    class: EvasionClass,
+    avoidable: bool,
+    tier: EnforcementTier,
+) -> EvasionAttribution {
+    EvasionAttribution {
+        class,
+        wrapper_depth: 0,
+        interpreter: None,
+        path_form: EvasionPathForm::Bare,
+        stage_count: 1,
+        hatch_marker: false,
+        avoidable,
+        tier,
+        fidelity_reason: None,
+        fidelity_validation: FidelityValidation::NotRequested,
+    }
+}
+
+fn native_observation_policy(
+    tool: &str,
+    native_mode: NativeToolMode,
+) -> (OperationRoute, EvasionAttribution) {
+    if native_mode == NativeToolMode::Observe {
+        return (
+            OperationRoute::NativeUnaccounted,
+            native_evasion(
+                EvasionClass::E8NativeTool,
+                false,
+                EnforcementTier::T0TransparentRewrite,
+            ),
+        );
+    }
+    let allowed_by_policy = tool == "Glob"
+        || (native_mode == NativeToolMode::Steer && matches!(tool, "Edit" | "Write"));
+    if allowed_by_policy {
+        (
+            OperationRoute::Bypassed,
+            native_evasion(
+                EvasionClass::E10CapabilityGap,
+                false,
+                EnforcementTier::T0TransparentRewrite,
+            ),
+        )
+    } else {
+        (
+            OperationRoute::Bypassed,
+            native_evasion(
+                EvasionClass::E8NativeTool,
+                true,
+                EnforcementTier::T2DenyWithPrescription,
+            ),
+        )
+    }
+}
+
+fn record_native_correction(config: &Config, input: &Value, tool: &str) -> Result<()> {
+    let cwd = input.get("cwd").and_then(Value::as_str).unwrap_or_default();
+    let session_id = input.get("session_id").and_then(Value::as_str);
+    let agent = agent_attribution(input);
+    let evasion = native_evasion(
+        EvasionClass::E8NativeTool,
+        true,
+        EnforcementTier::T1NamedCorrection,
+    );
+    Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?.record_policy_event(PolicyEvent {
+        project_path: cwd,
+        agent: Some(&agent),
+        session_id,
+        evasion,
+        decision: PolicyDecision::Deny,
+        replacement_family: Some(match tool {
+            "Read" => "read",
+            "Grep" => "search",
+            "Edit" | "Write" => "write",
+            _ => "other",
+        }),
+    })?;
+    Ok(())
+}
+
+fn native_replacement(input: &Value, mode: NativeToolMode) -> Option<String> {
+    let tool = input.get("tool_name")?.as_str()?;
+    let arguments = input.get("tool_input")?;
+    let path = arguments
+        .get("file_path")
+        .or_else(|| arguments.get("path"))
+        .and_then(Value::as_str);
+    match tool {
+        "Read" => Some(format!("hzr read {}", shell_quote(path?))),
+        "Grep" => {
+            let pattern = arguments.get("pattern")?.as_str()?;
+            let mut command = format!("hzr search {} --mode exact", shell_quote(pattern));
+            if let Some(path) = path {
+                command.push_str(" --path ");
+                command.push_str(&shell_quote(path));
+            }
+            Some(command)
+        }
+        "Edit" if mode == NativeToolMode::Strict => {
+            let old = bounded_hook_text(arguments.get("old_string")?.as_str()?)?;
+            let new = bounded_hook_text(arguments.get("new_string")?.as_str()?)?;
+            Some(format!(
+                "hzr write patch {} --old {} --new {} --cas",
+                shell_quote(path?),
+                shell_quote(old),
+                shell_quote(new)
+            ))
+        }
+        "Write" if mode == NativeToolMode::Strict => {
+            let content = bounded_hook_text(arguments.get("content")?.as_str()?)?;
+            Some(format!(
+                "hzr write create {} --content {} --force",
+                shell_quote(path?),
+                shell_quote(content)
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn bounded_hook_text(value: &str) -> Option<&str> {
+    (value.len() <= 2_048 && !value.contains('\0')).then_some(value)
+}
+
+fn attach_t1_feedback(
+    config: &Config,
+    input: &Value,
+    mut decision: RewriteDecision,
+) -> RewriteDecision {
+    let RewriteDecision::AllowRewrite {
+        source: RewriteSource::HzrPolicy,
+        reason,
+        ..
+    } = &mut decision
+    else {
+        return decision;
+    };
+    if let Ok(state) = update_session(config, input, |state| {
+        state.corrections = state.corrections.saturating_add(1);
+    }) {
+        reason.push_str(&format!(
+            " T1 named correction class=covered_route; session avoidable-bypass count={}.",
+            state.corrections
+        ));
+    }
+    decision
 }
 
 /// Enforce the first-class HZR command when the agent is about to reach the shell unfiltered
@@ -204,15 +578,52 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RewriteDec
         rewrite_timeout_ms: HOOK_TIMEOUT.as_millis() as u64,
     })
     .await;
-    if explicit_raw_fidelity(raw) {
+    let fidelity = raw_fidelity_request(raw);
+    let command = match fidelity {
+        RawFidelityRequest::NotRequested => hzr_core::managed_raw_payload(raw).unwrap_or(raw),
+        RawFidelityRequest::MissingReason => {
+            return RewriteDecision::Ask {
+                proposed: None,
+                reason: "HZR_RAW_FIDELITY=1 requires a closed HZR_RAW_FIDELITY_REASON".into(),
+            };
+        }
+        RawFidelityRequest::InvalidReason => {
+            return RewriteDecision::Ask {
+                proposed: None,
+                reason: "HZR_RAW_FIDELITY_REASON is not an allowed fidelity reason".into(),
+            };
+        }
+        RawFidelityRequest::Authorized { payload, .. } => {
+            if let Some(replacement) = first_class_replacement(raw) {
+                return hzr_policy_rewrite(replacement);
+            }
+            payload
+        }
+    };
+    let authorized = matches!(fidelity, RawFidelityRequest::Authorized { .. });
+    let canonical = CanonicalCommand::shell(command);
+    let decision = if authorized {
+        adapter.decide_byte_fidelity_in(&canonical, Some(cwd)).await
+    } else {
+        adapter.decide_in(&canonical, Some(cwd)).await
+    };
+    if authorized
+        && matches!(
+            &decision,
+            RewriteDecision::AllowRewrite {
+                source: RewriteSource::Rtk {
+                    route: hzr_exec::RtkRewriteRoute::Proxy,
+                    ..
+                },
+                ..
+            }
+        )
+    {
         return RewriteDecision::allow_raw(
-            "explicit HZR_RAW_FIDELITY=1 request requires unfiltered output",
+            "authorized raw fidelity request has no byte-faithful managed equivalent",
         );
     }
-    let command = managed_raw_payload(raw).unwrap_or(raw);
-    adapter
-        .decide_in(&CanonicalCommand::shell(command), Some(cwd))
-        .await
+    decision
 }
 
 fn write_decision(input: &Value, decision: RewriteDecision) -> Result<()> {
@@ -275,6 +686,183 @@ fn render_command(command: &CanonicalCommand) -> Result<String> {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct SessionFeedback {
+    operations: u64,
+    corrections: u64,
+    native_denials: u64,
+    avoidable_tokens_estimated: u64,
+    nudged: bool,
+}
+
+fn agent_identity(input: &Value) -> &'static str {
+    let supplied = ["agent_type", "agent", "host"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+        .unwrap_or("claude-code")
+        .to_ascii_lowercase();
+    if supplied.contains("codex") {
+        "codex"
+    } else if supplied.contains("cursor") {
+        "cursor"
+    } else {
+        "claude-code"
+    }
+}
+
+fn agent_attribution(input: &Value) -> String {
+    let host = agent_identity(input);
+    let identity = ["agent_id", "subagent_id"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+        .or_else(|| {
+            input
+                .pointer("/tool_input/agent_id")
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    identity.map_or_else(|| host.to_owned(), |identity| format!("{host}:{identity}"))
+}
+
+fn session_state_path(config: &Config, input: &Value) -> Option<std::path::PathBuf> {
+    let session = input.get("session_id")?.as_str()?.trim();
+    if session.is_empty() {
+        return None;
+    }
+    let subagent = ["agent_id", "subagent_id"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+        .or_else(|| {
+            input
+                .pointer("/tool_input/agent_id")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("root");
+    let digest = hex::encode(Sha256::digest(format!(
+        "hook-session\0{session}\0{}\0{subagent}",
+        agent_identity(input)
+    )));
+    Some(
+        config
+            .data_dir
+            .join("hook-sessions")
+            .join(format!("{digest}.json")),
+    )
+}
+
+fn update_session(
+    config: &Config,
+    input: &Value,
+    update: impl FnOnce(&mut SessionFeedback),
+) -> Result<SessionFeedback> {
+    let path = session_state_path(config, input).context("hook input has no session identity")?;
+    let parent = path.parent().context("session state has no parent")?;
+    fs::create_dir_all(parent)?;
+    let lock_path = path.with_extension("lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)?;
+    lock.lock_exclusive()?;
+    let mut state = match fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => SessionFeedback::default(),
+        Err(error) => return Err(error.into()),
+    };
+    update(&mut state);
+    let mut bytes = serde_json::to_vec(&state)?;
+    bytes.push(b'\n');
+    crate::adoption::atomic_write(&path, &bytes)?;
+    FileExt::unlock(&lock)?;
+    Ok(state)
+}
+
+fn read_session(config: &Config, input: &Value) -> Option<SessionFeedback> {
+    let path = session_state_path(config, input)?;
+    serde_json::from_slice(&fs::read(path).ok()?).ok()
+}
+
+/// Emit bounded feedback for prompt and completion hooks. This hook is deliberately
+/// failure-silent: state is advisory and must never block a user prompt or session stop.
+pub async fn feedback(config: &Config) {
+    let Ok(input) = read_input() else {
+        return;
+    };
+    let event = input
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let state = read_session(config, &input).unwrap_or_default();
+    let session_summary = input
+        .get("session_id")
+        .and_then(Value::as_str)
+        .and_then(|session_id| {
+            Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))
+                .ok()?
+                .session_evasion_summary(session_id, FidelityAllowance::default())
+                .ok()
+        });
+    let crosses_threshold = state.corrections >= SESSION_CORRECTION_NUDGE
+        || session_summary.as_ref().is_some_and(|summary| {
+            summary.avoidable_operations > 0
+                && summary.avoidable_share_pct >= SESSION_AVOIDABLE_SHARE_NUDGE
+        });
+    if state.operations == 0 && session_summary.is_none() {
+        return;
+    }
+    match event {
+        "UserPromptSubmit" if crosses_threshold && !state.nudged => {
+            let updated = update_session(config, &input, |state| state.nudged = true);
+            if updated.is_err() {
+                return;
+            }
+            let _ = write_hook_json(json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": format!(
+                        "HZR: avoidable route share crossed the session threshold ({} corrections); use the prescribed first-class route.",
+                        state.corrections,
+                    )
+                }
+            }));
+        }
+        "Stop" | "SubagentStop" => {
+            let operations = session_summary
+                .as_ref()
+                .map_or(state.operations, |summary| {
+                    summary.operations.max(state.operations)
+                });
+            let recoverable = session_summary
+                .as_ref()
+                .map_or(state.avoidable_tokens_estimated, |summary| {
+                    summary.recoverable_tokens
+                });
+            let top_class = session_summary
+                .as_ref()
+                .and_then(|summary| summary.top_class)
+                .map_or("none", EvasionClass::as_str);
+            let _ = write_hook_json(json!({
+                "systemMessage": format!(
+                    "HZR scorecard: ops={} corrections={} native-denials={} top={} recoverable-tokens={}; shadow-budget count={}/{} tokens={}/{} (no punishment).",
+                    operations,
+                    state.corrections,
+                    state.native_denials,
+                    top_class,
+                    recoverable,
+                    state.corrections,
+                    SESSION_BYPASS_COUNT_BUDGET,
+                    state.avoidable_tokens_estimated,
+                    SESSION_BYPASS_TOKEN_BUDGET,
+                )
+            }));
+        }
+        _ => {}
+    }
 }
 
 async fn task(config: &Config, input: &Value) -> Result<()> {
@@ -557,14 +1145,24 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
-    use hzr_core::{Config, Ledger};
+    use hzr_core::{Config, FidelityAllowance, Ledger};
+    use hzr_protocol::{
+        EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, FidelityValidation,
+    };
     use tempfile::tempdir;
 
+    use crate::adoption::NativeToolMode;
     use hzr_exec::{CanonicalCommand, PINNED_RTK_VERSION, RewriteDecision, RewriteSource};
 
+    use super::anti_evasion_fixture::{
+        ProbeClass, ProbeDecision, ProbeLayer, ProbeNativeMode, ProbeSurface,
+    };
     use super::{
+        HookFidelityPreflight, agent_attribution, agent_identity, attach_t1_feedback,
         clear_reconciled_rewrites, context_brief, degraded_rewrite_coverage, fallback_decision,
-        observe_input, record_degraded_rewrite_at, steer_to_first_class,
+        hook_fidelity_preflight, native_observation_policy, native_replacement, observe_input,
+        read_session, record_degraded_rewrite_at, record_local_policy_decision,
+        record_native_correction, steer_to_first_class,
     };
 
     #[test]
@@ -578,8 +1176,11 @@ mod tests {
                 "tool_input": {"file_path": "/work/src/lib.rs"},
                 "tool_response": {"content": "four words of output"},
                 "cwd": "/work",
-                "session_id": "session-1"
+                "session_id": "session-1",
+                "agent_type": "claude-code",
+                "agent_id": "agent-private-123"
             }),
+            NativeToolMode::Observe,
         )
         .expect("native observation");
 
@@ -591,6 +1192,442 @@ mod tests {
         assert_eq!(summary.native_unaccounted_operations, 1);
         assert_eq!(summary.total_observed_operations, 1);
         assert_eq!(summary.by_channel.get("native_host"), Some(&1));
+        let correction = serde_json::json!({
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/work/src/lib.rs"},
+            "cwd": "/work",
+            "session_id": "session-1",
+            "agent_type": "claude-code",
+            "agent_id": "agent-private-123"
+        });
+        record_native_correction(&config, &correction, "Read").expect("typed native correction");
+        let agent = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))
+            .expect("ledger")
+            .session_evasion_summary("session-1", FidelityAllowance::default())
+            .expect("session summary");
+        assert_eq!(agent.agent.as_deref(), Some("claude-code"));
+        assert!(agent.agent_hash.is_some());
+        assert_eq!(agent.avoidable_operations, 0);
+        assert_eq!(agent.policy_attempts, 1);
+        assert_eq!(agent.policy_denials, 1);
+        assert!(
+            !serde_json::to_string(&agent)
+                .expect("summary JSON")
+                .contains("agent-private-123")
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_local_fidelity_ask_is_a_policy_event_not_an_operation() {
+        let directory = tempdir().expect("temporary directory");
+        let config = config(directory.path());
+        let input = serde_json::json!({
+            "cwd": "/private/work",
+            "session_id": "private-session",
+            "agent_type": "claude-code",
+            "agent_id": "private-agent"
+        });
+        let decision = RewriteDecision::Ask {
+            proposed: None,
+            reason: "bounded audit reason".into(),
+        };
+        record_local_policy_decision(
+            &config,
+            &input,
+            &decision,
+            Some(EvasionAttribution {
+                class: EvasionClass::E7FidelityHatch,
+                wrapper_depth: 1,
+                interpreter: None,
+                path_form: EvasionPathForm::Bare,
+                stage_count: 1,
+                hatch_marker: true,
+                avoidable: true,
+                tier: EnforcementTier::T4HatchQuarantine,
+                fidelity_reason: None,
+                fidelity_validation: FidelityValidation::MissingReason,
+            }),
+        )
+        .expect("policy event");
+        let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite")).expect("ledger");
+        assert_eq!(
+            ledger.efficiency_summary().expect("efficiency").operations,
+            0
+        );
+        let score = ledger
+            .session_evasion_summary("private-session", FidelityAllowance::default())
+            .expect("score");
+        assert_eq!(score.policy_attempts, 1);
+        assert_eq!(score.policy_asks, 1);
+        assert_eq!(score.top_class, Some(EvasionClass::E7FidelityHatch));
+        assert!(
+            !serde_json::to_string(&score)
+                .expect("JSON")
+                .contains("private")
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_steer_allowed_native_tools_are_typed_e10_bypasses() {
+        let directory = tempdir().expect("temporary directory");
+        let config = config(directory.path());
+        for tool in ["Glob", "Edit", "Write"] {
+            observe_input(
+                &config,
+                &serde_json::json!({
+                    "tool_name": tool,
+                    "tool_response": {"content": "measured native result"},
+                    "cwd": "/work",
+                    "session_id": "session-native-allowed",
+                    "agent_type": "claude-code"
+                }),
+                NativeToolMode::Steer,
+            )
+            .expect("policy-allowed native observation");
+        }
+
+        let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite")).expect("ledger");
+        let efficiency = ledger.efficiency_summary().expect("efficiency summary");
+        assert_eq!(efficiency.native_unaccounted_operations, 0);
+        assert_eq!(efficiency.operations, 3);
+        assert_eq!(
+            efficiency.baseline_tokens_estimated,
+            efficiency.delivered_tokens_estimated
+        );
+        assert_eq!(efficiency.net_avoided_tokens_estimated, 0);
+        assert_eq!(efficiency.by_channel.get("native_host"), Some(&3));
+
+        let evasion = ledger
+            .session_evasion_summary("session-native-allowed", FidelityAllowance::default())
+            .expect("session evasion summary");
+        assert_eq!(evasion.top_class, Some(EvasionClass::E10CapabilityGap));
+        assert_eq!(evasion.avoidable_operations, 0);
+    }
+
+    #[test]
+    fn acceptance_gate_native_modes_prescribe_only_proven_surfaces() {
+        let read = serde_json::json!({
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/work/file with spaces.md"}
+        });
+        assert_eq!(
+            native_replacement(&read, NativeToolMode::Steer).as_deref(),
+            Some("hzr read '/work/file with spaces.md'")
+        );
+        let grep = serde_json::json!({
+            "tool_name": "Grep",
+            "tool_input": {"pattern": "two words", "path": "/work/src"}
+        });
+        assert_eq!(
+            native_replacement(&grep, NativeToolMode::Steer).as_deref(),
+            Some("hzr search 'two words' --mode exact --path '/work/src'")
+        );
+        for mode in [
+            NativeToolMode::Observe,
+            NativeToolMode::Steer,
+            NativeToolMode::Strict,
+        ] {
+            assert_eq!(
+                native_replacement(
+                    &serde_json::json!({"tool_name": "Glob", "tool_input": {"pattern": "**/*"}}),
+                    mode,
+                ),
+                None,
+                "Glob must always remain allowed"
+            );
+        }
+        assert_eq!(
+            native_replacement(
+                &serde_json::json!({"tool_name": "Edit", "tool_input": {
+                    "file_path": "x.rs", "old_string": "old", "new_string": "new"
+                }}),
+                NativeToolMode::Steer,
+            ),
+            None,
+            "steer must not deny native edits"
+        );
+        assert!(
+            native_replacement(
+                &serde_json::json!({"tool_name": "Edit", "tool_input": {
+                    "file_path": "x.rs", "old_string": "old", "new_string": "new"
+                }}),
+                NativeToolMode::Strict,
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_shared_fixture_covers_every_native_mode() {
+        let probes = super::anti_evasion_fixture::load_anti_evasion_probes();
+        let native = probes
+            .iter()
+            .filter(|probe| {
+                probe.layer == ProbeLayer::Root && probe.surface == ProbeSurface::Native
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(native.len(), 15, "five tools across three modes");
+
+        for probe in native {
+            let mode = match probe.mode.expect("validated native mode") {
+                ProbeNativeMode::Observe => NativeToolMode::Observe,
+                ProbeNativeMode::Steer => NativeToolMode::Steer,
+                ProbeNativeMode::Strict => NativeToolMode::Strict,
+            };
+            let input = serde_json::json!({
+                "tool_name": probe.tool.as_deref().expect("native tool"),
+                "tool_input": probe.tool_input.as_ref().expect("native tool input"),
+            });
+            let replacement = native_replacement(&input, mode);
+            let tool = probe.tool.as_deref().expect("native tool");
+            let would_deny = mode != NativeToolMode::Observe
+                && tool != "Glob"
+                && !(mode == NativeToolMode::Steer && matches!(tool, "Edit" | "Write"))
+                && replacement.is_some();
+            match probe.decision {
+                ProbeDecision::Deny => {
+                    assert!(would_deny, "native probe {} was not denied", probe.id);
+                    assert_eq!(
+                        replacement.as_deref(),
+                        probe.route.as_deref(),
+                        "native probe {} did not prescribe its managed route",
+                        probe.id
+                    );
+                }
+                ProbeDecision::Allow => {
+                    assert!(!would_deny, "native probe {} was denied", probe.id)
+                }
+                ProbeDecision::Rewrite
+                | ProbeDecision::Ask
+                | ProbeDecision::Proxy
+                | ProbeDecision::Raw => {
+                    assert!(
+                        matches!(probe.decision, ProbeDecision::Allow | ProbeDecision::Deny),
+                        "invalid native decision for {}",
+                        probe.id
+                    )
+                }
+            }
+            let (_, attribution) = native_observation_policy(tool, mode);
+            let class = match probe.class.expect("validated native class") {
+                ProbeClass::E8NativeTool => EvasionClass::E8NativeTool,
+                ProbeClass::E10CapabilityGap => EvasionClass::E10CapabilityGap,
+            };
+            assert_eq!(attribution.class, class, "native probe {}", probe.id);
+            assert_eq!(
+                attribution.avoidable,
+                probe.avoidable.expect("native avoidable flag"),
+                "native probe {}",
+                probe.id
+            );
+        }
+    }
+
+    #[test]
+    fn acceptance_gate_shared_fixture_reaches_hook_postprocessing() {
+        let probes = super::anti_evasion_fixture::load_anti_evasion_probes();
+        let root_shell = probes
+            .iter()
+            .filter(|probe| probe.layer == ProbeLayer::Root && probe.surface == ProbeSurface::Shell)
+            .collect::<Vec<_>>();
+        assert_eq!(root_shell.len(), 5, "all root shell probes must execute");
+
+        for probe in root_shell {
+            let command = probe.command.as_deref().expect("root shell command");
+            let daemon_decision = match probe.decision {
+                ProbeDecision::Rewrite
+                    if probe
+                        .route
+                        .as_deref()
+                        .is_some_and(|route| route.starts_with("rtk ")) =>
+                {
+                    RewriteDecision::AllowRewrite {
+                        command: CanonicalCommand::shell(
+                            probe.route.as_deref().expect("managed rewrite route"),
+                        ),
+                        source: RewriteSource::Rtk {
+                            version: PINNED_RTK_VERSION.into(),
+                            route: hzr_exec::RtkRewriteRoute::Optimized,
+                        },
+                        reason: "typed daemon plan".into(),
+                    }
+                }
+                ProbeDecision::Rewrite | ProbeDecision::Raw => allow_raw(),
+                ProbeDecision::Ask => RewriteDecision::Ask {
+                    proposed: None,
+                    reason: "typed daemon policy".into(),
+                },
+                ProbeDecision::Proxy | ProbeDecision::Allow | ProbeDecision::Deny => {
+                    assert!(
+                        matches!(
+                            probe.decision,
+                            ProbeDecision::Rewrite | ProbeDecision::Ask | ProbeDecision::Raw
+                        ),
+                        "invalid root decision for {}",
+                        probe.id
+                    );
+                    continue;
+                }
+            };
+            let decision = steer_to_first_class(command, daemon_decision);
+            match probe.decision {
+                ProbeDecision::Rewrite => assert!(
+                    proposed(&decision).is_some_and(
+                        |route| route.ends_with(probe.route.as_deref().expect("route"))
+                    ),
+                    "root probe {} did not reach its hook route: {decision:?}",
+                    probe.id
+                ),
+                ProbeDecision::Ask => assert!(
+                    matches!(decision, RewriteDecision::Ask { .. }),
+                    "root probe {} was not Ask: {decision:?}",
+                    probe.id
+                ),
+                ProbeDecision::Raw => assert!(
+                    matches!(decision, RewriteDecision::AllowRaw { .. }),
+                    "root probe {} did not preserve fidelity: {decision:?}",
+                    probe.id
+                ),
+                ProbeDecision::Proxy | ProbeDecision::Allow | ProbeDecision::Deny => {
+                    assert!(
+                        matches!(
+                            probe.decision,
+                            ProbeDecision::Rewrite | ProbeDecision::Ask | ProbeDecision::Raw
+                        ),
+                        "invalid root decision for {}",
+                        probe.id
+                    )
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn acceptance_gate_t1_feedback_is_counted_without_raw_identity() {
+        let directory = tempdir().expect("temporary directory");
+        let config = config(directory.path());
+        let input = serde_json::json!({
+            "session_id": "private-session",
+            "agent_type": "claude-code",
+            "agent_id": "private-subagent"
+        });
+        let decision = RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("hzr read README.md"),
+            source: RewriteSource::HzrPolicy,
+            reason: "replacement".into(),
+        };
+        let decision = attach_t1_feedback(&config, &input, decision);
+        assert!(matches!(
+            decision,
+            RewriteDecision::AllowRewrite { ref reason, .. }
+                if reason.contains("session avoidable-bypass count=1")
+        ));
+        let state = read_session(&config, &input).expect("session state");
+        assert_eq!(state.corrections, 1);
+        let names = fs::read_dir(config.data_dir.join("hook-sessions"))
+            .expect("session directory")
+            .map(|entry| {
+                entry
+                    .expect("session entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(!names.contains("private-session"));
+        assert!(!names.contains("private-subagent"));
+        assert_eq!(agent_identity(&input), "claude-code");
+        assert_eq!(
+            agent_attribution(&input),
+            "claude-code:private-subagent",
+            "raw identity is supplied transiently for hashing; ledger persists only host + digest"
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_t4_preflights_first_use_fidelity_output() {
+        let directory = tempdir().expect("temporary directory");
+        let config = config(directory.path());
+        let oversized = directory.path().join("oversized.txt");
+        fs::write(&oversized, vec![b'x'; 400_001]).expect("oversized fixture");
+        let input = serde_json::json!({"session_id": "session-t4"});
+
+        for command in [
+            "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=verbatim_source hzr rtk -- raw cat oversized.txt",
+            "HZR_EXACT_FIDELITY=1 hzr read oversized.txt --level none",
+        ] {
+            let preflight = hook_fidelity_preflight(&config, &input, command, directory.path());
+            assert!(matches!(preflight, HookFidelityPreflight::Ask { .. }));
+            let HookFidelityPreflight::Ask { decision, evasion } = preflight else {
+                return;
+            };
+            assert!(matches!(
+                decision,
+                RewriteDecision::Ask { ref reason, proposed: Some(_) }
+                    if reason.contains("remaining allowance")
+            ));
+            assert_eq!(
+                evasion.fidelity_validation,
+                FidelityValidation::BudgetExhausted
+            );
+        }
+
+        fs::write(directory.path().join("small.txt"), b"bounded").expect("small fixture");
+        assert!(matches!(
+            hook_fidelity_preflight(
+                &config,
+                &input,
+                "HZR_EXACT_FIDELITY=1 hzr read small.txt --level none",
+                directory.path(),
+            ),
+            HookFidelityPreflight::Allow(_)
+        ));
+        assert!(matches!(
+            hook_fidelity_preflight(
+                &config,
+                &input,
+                "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=complete_log hzr rtk -- raw ssh host docker logs app",
+                directory.path(),
+            ),
+            HookFidelityPreflight::Ask {
+                decision: RewriteDecision::Ask { ref reason, .. },
+                ..
+            } if reason.contains("not statically bounded")
+        ));
+        assert!(matches!(
+            hook_fidelity_preflight(
+                &config,
+                &input,
+                "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw sha256sum oversized.txt",
+                directory.path(),
+            ),
+            HookFidelityPreflight::Allow(_)
+        ));
+        assert!(matches!(
+            hook_fidelity_preflight(
+                &config,
+                &serde_json::json!({}),
+                "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw sha256sum oversized.txt",
+                directory.path(),
+            ),
+            HookFidelityPreflight::Ask { .. }
+        ));
+        assert!(matches!(
+            hook_fidelity_preflight(
+                &config,
+                &input,
+                "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw cat small.txt",
+                directory.path(),
+            ),
+            HookFidelityPreflight::Ask {
+                evasion: EvasionAttribution {
+                    fidelity_validation: FidelityValidation::Contradicted,
+                    ..
+                },
+                ..
+            }
+        ));
     }
 
     fn allow_raw() -> RewriteDecision {
@@ -655,43 +1692,18 @@ mod tests {
         }
     }
 
-    /// The behaviour that stops the leak: an agent reaching for `sed -n A,Bp` is shown the
-    /// `hzr read` that does the same job for a fraction of the tokens, with the span
-    /// already filled in.
     #[test]
-    fn test_a_bypassed_read_is_answered_with_the_equivalent_hzr_command() {
-        let decision = steer_to_first_class(
+    fn test_shell_policy_is_not_reconstructed_after_the_fork_decision() {
+        for command in [
             "hzr rtk -- raw sed -n 1030,1105p crates/hzr-core/src/ledger.rs",
-            allow_raw(),
-        );
-
-        assert_eq!(
-            proposed(&decision).as_deref(),
-            Some("hzr rtk -- read crates/hzr-core/src/ledger.rs --from 1030 --to 1105")
-        );
-    }
-
-    #[test]
-    fn test_a_bypassed_search_is_answered_with_hzr_search() {
-        let decision = steer_to_first_class("rg -n RewriteDecision crates/hzr-exec", allow_raw());
-
-        assert_eq!(
-            proposed(&decision).as_deref(),
-            Some("hzr search 'RewriteDecision' --mode exact --path crates/hzr-exec")
-        );
-    }
-
-    #[test]
-    fn test_safe_replacement_is_automatic() {
-        let decision = steer_to_first_class("cat README.md", allow_raw());
-
-        assert!(matches!(
-            decision,
-            RewriteDecision::AllowRewrite {
-                source: RewriteSource::HzrPolicy,
-                ..
-            }
-        ));
+            "rg -n RewriteDecision crates/hzr-exec",
+            "cat README.md",
+        ] {
+            assert!(matches!(
+                steer_to_first_class(command, allow_raw()),
+                RewriteDecision::AllowRaw { .. }
+            ));
+        }
 
         let specialized = RewriteDecision::AllowRewrite {
             command: CanonicalCommand::shell("rtk rg -n RewriteDecision crates/hzr-exec"),
@@ -714,9 +1726,6 @@ mod tests {
     #[test]
     fn acceptance_gate_no_raw_for_optimizable_hook_commands() {
         for command in [
-            "hzr rtk -- raw nl -ba src/main.rs",
-            "hzr rtk -- raw sed -n 40,80p src/main.rs",
-            "hzr rtk -- raw rg -n needle src",
             "hzr rtk -- raw hzr stats",
             "hzr rtk -- raw hzr search \"two words\" --mode exact",
         ] {
@@ -727,28 +1736,19 @@ mod tests {
             );
         }
 
-        let decision = steer_to_first_class(
-            "hzr rtk -- raw nl -ba src/main.rs",
-            RewriteDecision::AllowRewrite {
-                command: CanonicalCommand::shell("rtk proxy nl -ba src/main.rs"),
-                source: RewriteSource::Rtk {
-                    version: PINNED_RTK_VERSION.into(),
-                    route: hzr_exec::RtkRewriteRoute::Proxy,
-                },
-                reason: "fork selected tracked raw proxy".into(),
+        let proxy = RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("rtk proxy nl -ba src/main.rs"),
+            source: RewriteSource::Rtk {
+                version: PINNED_RTK_VERSION.into(),
+                route: hzr_exec::RtkRewriteRoute::Proxy,
             },
-        );
+            reason: "fork selected tracked raw proxy".into(),
+        };
+        let decision = steer_to_first_class("hzr rtk -- raw nl -ba src/main.rs", proxy.clone());
         assert_eq!(
-            proposed(&decision).as_deref(),
-            Some("hzr rtk -- read src/main.rs -n")
+            decision, proxy,
+            "hook overrode the canonical Proxy decision"
         );
-        assert!(matches!(
-            decision,
-            RewriteDecision::AllowRewrite {
-                source: RewriteSource::HzrPolicy,
-                ..
-            }
-        ));
     }
 
     #[test]
@@ -814,11 +1814,22 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn acceptance_gate_no_raw_for_fork_families_in_degraded_hook() {
+    async fn acceptance_gate_shared_fixture_reaches_degraded_hook() {
+        let probes = super::anti_evasion_fixture::load_anti_evasion_probes();
+        let shell_probes = probes
+            .iter()
+            .filter(|probe| probe.surface == ProbeSurface::Shell)
+            .collect::<Vec<_>>();
+        assert!(
+            shell_probes.len() > 5,
+            "both fork and root shell probes must execute"
+        );
+
         let directory = tempdir().expect("temporary directory");
         let engines = directory.path().join("engines");
         fs::create_dir(&engines).expect("engine directory");
         let binary = engines.join("rtk");
+        let plan_path = directory.path().join("rewrite-plan.json");
         let script = format!(
             r#"#!/bin/sh
 if test "${{1:-}}" = --version; then
@@ -833,20 +1844,13 @@ if test "${{1:-}}" = proxy && test "${{2:-}}" = --help; then
   printf 'Usage: rtk proxy [ARGS]... Execute command without filtering\n'
   exit 0
 fi
-if test "${{1:-}}" = rewrite; then
-  case "${{2:-}}" in
-    bun\ *|cargo\ *|npm\ *|pnpm\ *|ssh\ *|git\ *|gh\ *|find\ *|wget\ *|ps\ *)
-      printf 'rtk filtered'
-      exit 0
-      ;;
-    hzr\ rtk\ --\ raw\ *)
-      exit 2
-      ;;
-  esac
-  exit 1
+if test "${{1:-}}" = rewrite-plan; then
+  /bin/cat '{}'
+  exit 0
 fi
 exit 64
-"#
+"#,
+            plan_path.display()
         );
         fs::write(&binary, script).expect("fake fork-core");
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
@@ -854,32 +1858,99 @@ exit 64
         let mut config = config(directory.path());
         config.engines.directory = Some(engines);
 
-        for command in [
-            "hzr rtk -- raw bun test",
-            "hzr rtk -- raw cargo test --workspace",
-            "hzr rtk -- raw npm test",
-            "hzr rtk -- raw pnpm test",
-            "hzr rtk -- raw ssh host docker-ps",
-            "hzr rtk -- raw git status --short",
-            "hzr rtk -- raw gh run list",
-            "hzr rtk -- raw find src -type f",
-            "hzr rtk -- raw wget https://example.test",
-            "hzr rtk -- raw ps aux",
-        ] {
-            let decision = fallback_decision(&config, command, directory.path()).await;
-            assert!(
-                matches!(decision, RewriteDecision::AllowRewrite { .. }),
-                "{command} remained raw: {decision:?}"
-            );
-        }
-
-        for command in [
-            "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.json",
-            "HZR_RAW_FIDELITY=1 hzr rtk -- raw rg -n needle src",
-            "HZR_RAW_FIDELITY=1 hzr rtk -- raw sh -c 'printf complete-output'",
-        ] {
-            let unsupported = fallback_decision(&config, command, directory.path()).await;
-            assert!(matches!(unsupported, RewriteDecision::AllowRaw { .. }));
+        for probe in shell_probes {
+            let plan = match probe.decision {
+                ProbeDecision::Rewrite => serde_json::json!({
+                    "decision": "rewrite",
+                    "proposed": probe.route.as_deref().expect("rewrite route")
+                }),
+                ProbeDecision::Ask => {
+                    serde_json::json!({"decision": "ask", "reason": "canonical_policy"})
+                }
+                ProbeDecision::Proxy | ProbeDecision::Raw => {
+                    serde_json::json!({"decision": "proxy"})
+                }
+                ProbeDecision::Allow | ProbeDecision::Deny => {
+                    assert!(
+                        matches!(probe.decision, ProbeDecision::Rewrite),
+                        "invalid shell decision for {}",
+                        probe.id
+                    );
+                    continue;
+                }
+            };
+            fs::write(
+                &plan_path,
+                serde_json::to_vec(&plan).expect("rewrite plan JSON"),
+            )
+            .expect("rewrite plan fixture");
+            let command = probe.command.as_deref().expect("shell command");
+            let fallback = fallback_decision(&config, command, directory.path()).await;
+            let decision = steer_to_first_class(command, fallback);
+            match probe.decision {
+                ProbeDecision::Rewrite => {
+                    let RewriteDecision::AllowRewrite {
+                        command: CanonicalCommand::Shell { command, .. },
+                        ..
+                    } = decision
+                    else {
+                        assert!(
+                            matches!(
+                                &decision,
+                                RewriteDecision::AllowRewrite {
+                                    command: CanonicalCommand::Shell { .. },
+                                    ..
+                                }
+                            ),
+                            "shell probe {} was not rewritten: {decision:?}",
+                            probe.id
+                        );
+                        continue;
+                    };
+                    assert!(
+                        command.ends_with(probe.route.as_deref().expect("rewrite route")),
+                        "shell probe {} selected {command}",
+                        probe.id
+                    );
+                }
+                ProbeDecision::Ask => assert!(
+                    matches!(decision, RewriteDecision::Ask { .. }),
+                    "shell probe {} was not Ask: {decision:?}",
+                    probe.id
+                ),
+                ProbeDecision::Proxy => assert!(
+                    matches!(
+                        decision,
+                        RewriteDecision::AllowRewrite {
+                            source: RewriteSource::Rtk {
+                                route: hzr_exec::RtkRewriteRoute::Proxy,
+                                ..
+                            },
+                            ..
+                        }
+                    ),
+                    "shell probe {} was not a tracked Proxy: {decision:?}",
+                    probe.id
+                ),
+                ProbeDecision::Raw => assert!(
+                    matches!(decision, RewriteDecision::AllowRaw { .. }),
+                    "shell probe {} did not preserve fidelity: {decision:?}",
+                    probe.id
+                ),
+                ProbeDecision::Allow | ProbeDecision::Deny => {
+                    assert!(
+                        matches!(
+                            probe.decision,
+                            ProbeDecision::Rewrite
+                                | ProbeDecision::Ask
+                                | ProbeDecision::Proxy
+                                | ProbeDecision::Raw
+                        ),
+                        "invalid shell decision for {}",
+                        probe.id
+                    )
+                }
+            }
         }
     }
 
@@ -918,6 +1989,16 @@ exit 64
         let decision = steer_to_first_class("cat README.md", rewritten);
 
         assert!(matches!(decision, RewriteDecision::AllowRewrite { .. }));
+    }
+
+    #[test]
+    fn test_an_ambiguous_shell_wrapper_remains_an_explicit_ask() {
+        let ask = RewriteDecision::Ask {
+            proposed: None,
+            reason: "fork-core could not safely decompose an opaque shell wrapper".into(),
+        };
+
+        assert_eq!(steer_to_first_class("sh -c 'git status", ask.clone()), ask);
     }
 
     fn config(root: &std::path::Path) -> Config {

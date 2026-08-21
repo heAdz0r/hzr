@@ -4,14 +4,14 @@
 
 ![HZR control-plane banner](docs/assets/hzr-hero.png)
 
-[![Version](https://img.shields.io/badge/version-0.4.3-e64a19)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.4.4-e64a19)](Cargo.toml)
 [![CI](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg)](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00)](https://github.com/heAdz0r/hzr/releases)
 [![License](https://img.shields.io/badge/control_plane-Apache--2.0-37474f)](LICENSE)
 
 HZR is an independent product from heAdz0r that turns disparate layers of agent optimization into one controlled execution path. A single control plane handles search, memory, context budget, execution, response density, and usage accounting—without rework or competing loops.
 
-**The core invariant of the 0.4.3 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
+**The core invariant of the 0.4.4 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
 
 > HZR does not claim unverified percentage savings. Functional and supply-chain gates are defined and repeatedly tested before release; the end-to-end economic effect must still be measured through paired, provider-billed benchmarks on identical tasks.
 
@@ -19,7 +19,7 @@ HZR is an independent product from heAdz0r that turns disparate layers of agent 
 
 HZR optimizes for an agent reaching the correct next action, not for the smallest output in isolation. A bounded response must say what it represents, what was omitted, how much source it covers, and how to recover exact evidence. Mutations need the same discipline: exact preconditions, atomic replacement, idempotent retries, dry-run, and structured outcomes.
 
-| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.4.3` |
+| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.4.4` |
 |---|---|---|---|
 | Understand a large Markdown file quickly | no common bounded contract | full file in the recorded case | self-described digest: bounded lead prose, omitted-content marker, source lines/bytes, section coverage, exact recovery hint |
 | Recover authoritative content | command-specific full output | full output | `--level none` preserves complete text; `--from`/`--to` gives an exact focused range; arbitrary binary fidelity remains explicit RAW |
@@ -85,13 +85,13 @@ Published artifacts:
 | macOS | Apple Silicon | Available | native release workflow + clean-install smoke |
 | macOS | Intel | Available | native release workflow + clean-install smoke |
 
-No Windows artifact is provided in 0.4.3. Release scripts build native artifacts rather than cross-compiling them.
+No Windows artifact is provided in 0.4.4. Release scripts build native artifacts rather than cross-compiling them.
 
 Download the installer, review it, then run it:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.4.3/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.4.4/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -104,7 +104,7 @@ The installer downloads the platform artifact and `SHA256SUMS` from GitHub Relea
 
 ```text
 ~/.local/share/hzr/
-  versions/v0.4.3-<platform>/   # version-scoped self-contained bundle
+  versions/v0.4.4-<platform>/   # version-scoped self-contained bundle
   current -> versions/...
 
 ~/.local/bin/
@@ -139,7 +139,7 @@ binaries are not required.
 
 | Component | Pin | Distribution role |
 |---|---:|---|
-| HZR | 0.4.3 | public CLI + daemon |
+| HZR | 0.4.4 | public CLI + daemon |
 | HZR fork-core RTK | 0.44.1-fork.1 | private native engine; complete inherited surface |
 | grepai | 0.35.0 + ownership patch | private native engine |
 | ICM | 0.10.61 + lockfile patch | private native engine |
@@ -185,8 +185,10 @@ separately labeled estimates, and copyable diagnostic commands. Background synch
 quiet: it preserves scroll, graph camera, topic selection, and expanded activity while the manual
 Refresh control stays under operator control. The public loopback dashboard exposes bounded,
 redacted project-scoped memory topology; full record content is available only from the
-bearer-authenticated memory-detail API. An operation expands into the exact ledger command, route, working directory, latency,
-and observed agent/session attribution. Historical attribution remains explicitly `Unattributed`.
+bearer-authenticated memory-detail API. Operation activity exposes typed family, route, latency,
+closed host identity and keyed agent/session pseudonyms; commands, arguments, queries, paths,
+environment values, SQL and heredocs are scrubbed before persistence. Historical attribution
+remains explicitly `Unattributed`.
 RAW operations are visible, receive zero savings credit, and show a first-class HZR replacement
 when one exists. `hzr init` refreshes the active managed instruction scope, migrates a detected
 legacy local RTK block, updates the current project's private `workspace.json` registration, and ensures the production
@@ -216,6 +218,7 @@ hzr agent run "Implement the requested change" --workspace .
 hzr stats
 hzr stats --workspace .
 hzr stats --since 7d
+hzr stats --evasion --since 7d
 ```
 
 The complete fork CLI remains available:
@@ -349,6 +352,7 @@ hzr exec rewrite|run|approve|deny
 hzr codec compile
 hzr agent run
 hzr tdd                                optional; strict RED → GREEN → REFACTOR when selected
+hzr test <command...>                  run tests through failure-first output
 hzr stats                              global cumulative efficiency ledger
 hzr build <args>                       build YOUR project (token-optimized output)
 hzr release --force                    rebuild and reinstall HZR itself
@@ -359,11 +363,13 @@ hzr rtk -- <fork arguments>
 
 `hzr exec run '<shell command>'` is the default route for agent-originated shell work. It sends
 the complete command through canonical policy so existing filters for `ssh`, `curl`, `bun`,
-`git`, `find`, `rg`, and other supported tools are selected automatically, including when the
-command contains pipes or redirects. `hzr exec rewrite '<shell command>'` previews that decision
-without executing it. `HZR_RAW_FIDELITY=1 hzr rtk -- raw ...` is the explicit byte-for-byte
-recovery path when no safe filtered route can satisfy the task; unmarked managed RAW wrappers are
-routed again and are never the normal wrapper for a shell command.
+`git`, `find`, `rg`, and other supported tools are selected automatically. Quotes, verified
+system paths, environment prefixes and nested POSIX shell launchers are normalized before routing;
+ambiguous interpreters, redirects or mixed pipelines return `Ask` instead of silently becoming a
+raw proxy. `hzr exec rewrite '<shell command>'` previews that decision without executing it.
+Byte-for-byte recovery requires both `HZR_RAW_FIDELITY=1` and a compatible closed
+`HZR_RAW_FIDELITY_REASON`; missing, contradictory or over-budget requests require approval.
+Unmarked managed RAW wrappers are routed again and are never the normal wrapper for a shell command.
 
 `hzr tdd` is HZR's optional, executable form of the upstream RTK project skill.
 Use it when explicitly requested, required by repository-local policy, or worth
@@ -405,13 +411,15 @@ hzr read README.md --from 120 --to 180            # exact focused range
 hzr read README.md --outline                       # Markdown heading tree + source spans
 hzr read src/main.rs -n                            # exact content + source coordinates
 hzr read README.md --max-lines 40                  # exact first 40 lines
+hzr read --batch --max-tokens 1200 README.md src/main.rs
 ```
 
 `--outline` is format-aware: Markdown uses ATX headings (`#` through `######`), while
 supported source files use their symbol extractor. Default `-n` reads exact content, and
 ranges or tails preserve the original source coordinates instead of restarting at line 1.
 `--max-lines N` is an exact head operation; it does not replace omitted lines with a smart
-truncation marker.
+truncation marker. Batch reads preserve caller order and source coordinates, enforce one shared
+budget plus an optional per-file budget, and emit exact range recovery commands.
 
 File mutations use one predictable contract with concise, quiet, or JSON v1 output:
 
@@ -509,7 +517,7 @@ contract is in [HZR.md](HZR.md).
 Standards baseline: [MCP 2025-11-25 lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
 and [tool contracts](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
 
-The MCP layer in 0.4.3 is a stateless stdio gateway: it stores no data of its own
+The MCP layer in 0.4.4 is a stateless stdio gateway: it stores no data of its own
 and does not spawn internal engines. Each client process terminates at EOF,
 while durable ownership remains with production `hzrd`; the installer migrates direct ICM
 registrations, and `hzr doctor` verifies the service lifecycle.
@@ -547,7 +555,7 @@ Contributors need Rust 1.85+, Go (CI pin 1.24.2), Git, Bash, curl and standard U
 scripts/build-bundle.sh "$PWD/dist"
 scripts/package-release.sh "$PWD/dist" "$PWD/dist-release"
 HZR_RELEASE_ARCHIVE="$(find "$PWD/dist-release" -maxdepth 1 \
-  -name 'hzr-v0.4.3-*.tar.gz' -print -quit)"
+  -name 'hzr-v0.4.4-*.tar.gz' -print -quit)"
 scripts/smoke-install.sh "$HZR_RELEASE_ARCHIVE" "$PWD/dist-release/SHA256SUMS"
 ```
 
@@ -573,12 +581,14 @@ Do not run `cargo test` directly inside `fork-core/rtk`: the official gate creat
 
 ## Verifiable guarantees and fair boundaries
 
-|Guarantee|Status 0.4.3|
+|Guarantee|Status 0.4.4|
 |---|---|
 |Full fork baseline and current engine have verifiable identity|implemented|
 |Stock RTK is missing from the production path|implemented|
 |Release bundle works without external Node/RTK/grepai/ICM|native clean-install smoke passes and enters the release gate|
 |Actual usage does not mix with estimates|implemented|
+|Anti-evasion probe matrix covers shell, quote, path, interpreter, nested-reader and fidelity routes|release-gated|
+|Current telemetry persists no command, path, query, session ID or agent ID payload|implemented|
 | Paired provider-billed savings benchmark |not yet completed; 0/9 product metrics|
 | Windows release artifact |absent|
 

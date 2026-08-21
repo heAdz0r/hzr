@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
 
+use hzr_protocol::EvasionAttribution;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -11,6 +12,7 @@ use tokio::process::Command;
 use crate::{CanonicalCommand, ExecError, RewriteDecision, RewriteSource};
 
 pub const PINNED_RTK_VERSION: &str = "0.44.1-fork.1";
+pub const INTERNAL_EVASION_ENV: &str = "HZR_INTERNAL_EVASION_JSON";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ForkRuntimePaths {
@@ -202,6 +204,66 @@ struct CapabilityBatchRequest<'a> {
 #[serde(deny_unknown_fields)]
 struct CapabilityBatchResponse {
     supported: Vec<bool>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RtkRewriteOutcome {
+    pub decision: RewriteDecision,
+    pub evasion: Option<EvasionAttribution>,
+}
+
+impl RtkRewriteOutcome {
+    pub fn apply_evasion_environment(
+        &self,
+        environment: &mut crate::Environment,
+    ) -> Result<(), ExecError> {
+        environment.set.remove(INTERNAL_EVASION_ENV);
+        environment
+            .remove
+            .retain(|variable| variable != INTERNAL_EVASION_ENV);
+        match self.evasion {
+            Some(evasion) => {
+                environment.set.insert(
+                    INTERNAL_EVASION_ENV.to_owned(),
+                    serde_json::to_string(&evasion)?,
+                );
+            }
+            None => environment.remove.push(INTERNAL_EVASION_ENV.to_owned()),
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RewritePlanDecision {
+    Rewrite,
+    Proxy,
+    Ask,
+    Deny,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RewritePlanReason {
+    PermissionPolicy,
+    CanonicalPolicy,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RewritePlanResponse {
+    decision: RewritePlanDecision,
+    proposed: Option<String>,
+    attribution: Option<EvasionAttribution>,
+    reason: Option<RewritePlanReason>,
+}
+
+fn outcome_without_evasion(decision: RewriteDecision) -> RtkRewriteOutcome {
+    RtkRewriteOutcome {
+        decision,
+        evasion: None,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -432,34 +494,74 @@ impl PinnedRtkAdapter {
         command: &CanonicalCommand,
         cwd: Option<&Path>,
     ) -> RewriteDecision {
+        self.decide_with_plan_in(command, cwd).await.decision
+    }
+
+    pub async fn decide_with_plan_in(
+        &self,
+        command: &CanonicalCommand,
+        cwd: Option<&Path>,
+    ) -> RtkRewriteOutcome {
+        self.decide_in_mode(command, cwd, false).await
+    }
+
+    pub async fn decide_byte_fidelity_in(
+        &self,
+        command: &CanonicalCommand,
+        cwd: Option<&Path>,
+    ) -> RewriteDecision {
+        self.decide_byte_fidelity_with_plan_in(command, cwd)
+            .await
+            .decision
+    }
+
+    pub async fn decide_byte_fidelity_with_plan_in(
+        &self,
+        command: &CanonicalCommand,
+        cwd: Option<&Path>,
+    ) -> RtkRewriteOutcome {
+        self.decide_in_mode(command, cwd, true).await
+    }
+
+    async fn decide_in_mode(
+        &self,
+        command: &CanonicalCommand,
+        cwd: Option<&Path>,
+        byte_fidelity: bool,
+    ) -> RtkRewriteOutcome {
         if let RtkRewriteInterface::Unavailable { reason } = &self.capabilities.rewrite {
-            return RewriteDecision::Deny {
+            return outcome_without_evasion(RewriteDecision::Deny {
                 reason: format!("managed fork-core unavailable: {reason}"),
-            };
+            });
         }
         if !self.capabilities.proxy {
-            return RewriteDecision::Deny {
+            return outcome_without_evasion(RewriteDecision::Deny {
                 reason: "managed fork-core proxy capability is unavailable".to_owned(),
-            };
+            });
         }
         let Some(runtime_paths) = self.config.runtime_paths.as_ref() else {
-            return RewriteDecision::Deny {
+            return outcome_without_evasion(RewriteDecision::Deny {
                 reason: "managed fork-core runtime paths are unavailable".to_owned(),
-            };
+            });
         };
         if let Err(error) = runtime_paths.ensure_layout() {
-            return RewriteDecision::Deny {
+            return outcome_without_evasion(RewriteDecision::Deny {
                 reason: format!("managed fork-core runtime is unavailable: {error}"),
-            };
+            });
         }
 
         let raw = render_command(command);
         let mut rewrite = Command::new(&self.config.binary);
-        rewrite.arg("rewrite").arg(&raw);
+        rewrite.arg("rewrite-plan").arg(&raw);
+        if byte_fidelity {
+            rewrite.env("HZR_INTERNAL_BYTE_FIDELITY", "1");
+        } else {
+            rewrite.env_remove("HZR_INTERNAL_BYTE_FIDELITY");
+        }
         if let Err(error) = runtime_paths.apply_to_command(&mut rewrite, &self.config.binary) {
-            return RewriteDecision::Deny {
+            return outcome_without_evasion(RewriteDecision::Deny {
                 reason: format!("managed fork-core environment is unavailable: {error}"),
-            };
+            });
         }
         if let Some(cwd) = cwd {
             rewrite.current_dir(cwd);
@@ -472,25 +574,70 @@ impl PinnedRtkAdapter {
         let output = match output {
             Ok(output) => output,
             Err(reason) => {
-                return RewriteDecision::Deny {
+                return outcome_without_evasion(RewriteDecision::Deny {
                     reason: format!("managed fork-core rewrite failed: {reason}"),
-                };
+                });
             }
         };
-
-        match output.status.code() {
-            Some(0) => self.rewritten_decision(command, &output.stdout, false),
-            Some(1) => self.proxy_decision(command),
-            Some(2) => RewriteDecision::Deny {
+        if !output.status.success() {
+            return outcome_without_evasion(RewriteDecision::Deny {
+                reason: format!(
+                    "managed fork-core rewrite plan exited with {}",
+                    output.status
+                ),
+            });
+        }
+        let plan: RewritePlanResponse = match serde_json::from_slice(&output.stdout) {
+            Ok(plan) => plan,
+            Err(error) => {
+                return outcome_without_evasion(RewriteDecision::Deny {
+                    reason: format!("managed fork-core rewrite plan was invalid JSON: {error}"),
+                });
+            }
+        };
+        let reason_is_consistent = match plan.decision {
+            RewritePlanDecision::Rewrite | RewritePlanDecision::Proxy => plan.reason.is_none(),
+            RewritePlanDecision::Ask => matches!(
+                plan.reason,
+                Some(RewritePlanReason::PermissionPolicy | RewritePlanReason::CanonicalPolicy)
+            ),
+            RewritePlanDecision::Deny => {
+                matches!(plan.reason, Some(RewritePlanReason::PermissionPolicy))
+            }
+        };
+        if !reason_is_consistent {
+            return outcome_without_evasion(RewriteDecision::Deny {
+                reason: "managed fork-core rewrite plan had inconsistent policy metadata"
+                    .to_owned(),
+            });
+        }
+        let decision = match plan.decision {
+            RewritePlanDecision::Rewrite => match plan.proposed {
+                Some(proposed) => self.rewritten_decision(command, proposed.as_bytes(), false),
+                None => RewriteDecision::Deny {
+                    reason: "fork-core rewrite plan omitted its proposed command".to_owned(),
+                },
+            },
+            RewritePlanDecision::Proxy if plan.proposed.is_none() => self.proxy_decision(command),
+            RewritePlanDecision::Proxy => RewriteDecision::Deny {
+                reason: "fork-core proxy plan unexpectedly included a command".to_owned(),
+            },
+            RewritePlanDecision::Ask => {
+                let proposed = plan
+                    .proposed
+                    .and_then(|proposed| self.managed_shell_command(command, &proposed).ok());
+                RewriteDecision::Ask {
+                    proposed,
+                    reason: "fork-core canonical policy requires approval".to_owned(),
+                }
+            }
+            RewritePlanDecision::Deny => RewriteDecision::Deny {
                 reason: "fork-core permission policy denied the command".to_owned(),
             },
-            Some(3) => self.rewritten_decision(command, &output.stdout, true),
-            status => RewriteDecision::Deny {
-                reason: format!(
-                    "managed fork-core rewrite returned unsupported status {}",
-                    status.map_or_else(|| "signal".to_owned(), |code| code.to_string())
-                ),
-            },
+        };
+        RtkRewriteOutcome {
+            decision,
+            evasion: plan.attribution,
         }
     }
 

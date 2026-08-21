@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hzr_exec::CanonicalCommand;
+use hzr_exec::{CanonicalCommand, RewriteDecision};
+use hzr_protocol::EvasionAttribution;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
@@ -13,7 +14,8 @@ const MAX_PENDING_APPROVALS: usize = 128;
 #[derive(Clone, Debug)]
 pub struct PendingApproval {
     pub requested: CanonicalCommand,
-    pub proposed: CanonicalCommand,
+    pub approved_decision: RewriteDecision,
+    pub evasion: Option<EvasionAttribution>,
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
     pub caller_path: Option<String>,
@@ -68,7 +70,7 @@ fn prune_expired(approvals: &mut HashMap<String, StoredApproval>) {
 
 #[cfg(test)]
 mod tests {
-    use hzr_exec::CanonicalCommand;
+    use hzr_exec::{CanonicalCommand, RewriteDecision};
 
     use super::{ApprovalStore, PendingApproval};
 
@@ -77,7 +79,8 @@ mod tests {
         let store = ApprovalStore::default();
         let pending = PendingApproval {
             requested: CanonicalCommand::shell("cargo test"),
-            proposed: CanonicalCommand::shell("rtk cargo test"),
+            approved_decision: RewriteDecision::allow_raw("approved fixture"),
+            evasion: None,
             cwd: std::env::current_dir().expect("current directory"),
             timeout_ms: Some(1_000),
             caller_path: Some("/toolchain/bin:/usr/bin".into()),

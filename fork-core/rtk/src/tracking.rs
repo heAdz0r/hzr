@@ -32,12 +32,115 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock; // H4: project_path cache
 use std::time::Instant;
+
+const INTERNAL_EVASION_ENV: &str = "HZR_INTERNAL_EVASION_JSON";
+const MAX_INTERNAL_EVASION_BYTES: usize = 1_024;
+static INTERNAL_EVASION: OnceLock<Option<InternalEvasionAttribution>> = OnceLock::new();
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InternalEvasionAttribution {
+    class: String,
+    wrapper_depth: u8,
+    interpreter: Option<String>,
+    path_form: String,
+    stage_count: u16,
+    hatch_marker: bool,
+    avoidable: bool,
+    tier: String,
+    fidelity_reason: Option<String>,
+    fidelity_validation: String,
+}
+
+impl InternalEvasionAttribution {
+    fn valid(&self) -> bool {
+        matches!(
+            self.class.as_str(),
+            "e1_quoted_covered_command"
+                | "e2_shell_wrapper"
+                | "e3_interpreter_read"
+                | "e4_executable_path"
+                | "e5_pipeline_or_redirect"
+                | "e6_nested_unbounded_reader"
+                | "e7_fidelity_hatch"
+                | "e8_native_tool"
+                | "e9_diagnostic_bypass"
+                | "e10_capability_gap"
+        ) && self.wrapper_depth <= 3
+            && self.stage_count > 0
+            && self.interpreter.as_deref().is_none_or(|value| {
+                matches!(
+                    value,
+                    "shell" | "python" | "javascript" | "ruby" | "perl" | "awk" | "sed"
+                )
+            })
+            && matches!(
+                self.path_form.as_str(),
+                "bare" | "absolute_system" | "relative" | "resolved_alias"
+            )
+            && matches!(
+                self.tier.as_str(),
+                "t0_transparent_rewrite"
+                    | "t1_named_correction"
+                    | "t2_deny_with_prescription"
+                    | "t3_budget_exhaustion"
+                    | "t4_hatch_quarantine"
+            )
+            && self.fidelity_reason.as_deref().is_none_or(|value| {
+                matches!(
+                    value,
+                    "binary"
+                        | "checksum"
+                        | "machine_protocol"
+                        | "complete_log"
+                        | "full_patch"
+                        | "verbatim_source"
+                )
+            })
+            && matches!(
+                self.fidelity_validation.as_str(),
+                "not_requested"
+                    | "valid"
+                    | "missing_reason"
+                    | "invalid_reason"
+                    | "contradicted"
+                    | "proven_equivalent"
+                    | "budget_exhausted"
+            )
+            && (self.hatch_marker || self.fidelity_reason.is_none())
+            && (self.hatch_marker || self.fidelity_validation == "not_requested")
+    }
+}
+
+/// Consume internal policy metadata before any thread or child process can inherit it.
+pub fn initialize_internal_evasion() {
+    let _ = INTERNAL_EVASION.get_or_init(|| {
+        let value = std::env::var(INTERNAL_EVASION_ENV).ok();
+        // SAFETY: main calls this before RTK creates threads or child processes.
+        unsafe { std::env::remove_var(INTERNAL_EVASION_ENV) };
+        value.as_deref().and_then(parse_internal_evasion)
+    });
+}
+
+fn current_evasion_attribution() -> Option<&'static InternalEvasionAttribution> {
+    initialize_internal_evasion();
+    INTERNAL_EVASION.get().and_then(Option::as_ref)
+}
+
+fn parse_internal_evasion(value: &str) -> Option<InternalEvasionAttribution> {
+    if value.len() > MAX_INTERNAL_EVASION_BYTES || value.contains('\0') {
+        return None;
+    }
+    serde_json::from_str::<InternalEvasionAttribution>(value)
+        .ok()
+        .filter(InternalEvasionAttribution::valid)
+}
 
 // ── Project path helpers ── // added: project-scoped tracking support
 
@@ -544,6 +647,23 @@ impl Tracker {
             "range_from INTEGER",
             "range_to INTEGER",
             "source_bytes INTEGER",
+            "producer_version TEXT",
+            "accounting_policy_version TEXT",
+            "operation_family TEXT",
+            "command_hash TEXT",
+            "project_hash TEXT",
+            "project_scope_hashes TEXT",
+            "session_hash TEXT",
+            "evasion_class TEXT",
+            "wrapper_depth INTEGER",
+            "interpreter_kind TEXT",
+            "path_form TEXT",
+            "stage_count INTEGER",
+            "hatch_marker INTEGER",
+            "avoidable INTEGER",
+            "enforcement_tier TEXT",
+            "fidelity_reason TEXT",
+            "fidelity_validation TEXT",
         ] {
             let _ = conn.execute(&format!("ALTER TABLE commands ADD COLUMN {column}"), []);
         }
@@ -671,6 +791,7 @@ impl Tracker {
 
         let project_path = current_project_path_string(); // added: record cwd
         let (agent, session_id) = current_agent_context();
+        let evasion = current_evasion_attribution();
 
         self.conn.execute(
             "INSERT INTO commands (
@@ -679,11 +800,15 @@ impl Tracker {
                 channel, measurement, route, operation_kind, operation_mode, accounting_stage,
                 requested_mode, effective_mode, search_strategy, search_fallback_code,
                 search_include_content, result_limit, path_scope_count, filter_level, range_from,
-                range_to, source_bytes
+                range_to, source_bytes, producer_version, accounting_policy_version,
+                operation_family, evasion_class, wrapper_depth, interpreter_kind, path_form,
+                stage_count, hatch_marker, avoidable, enforcement_tier, fidelity_reason,
+                fidelity_validation
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
                 'hook_cli', ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
-                ?24, ?25, ?26, ?27
+                ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37,
+                ?38, ?39, ?40
              )",
             params![
                 Utc::now().to_rfc3339(),
@@ -727,6 +852,19 @@ impl Tracker {
                 accounting.attribution.and_then(|value| value.from_line),
                 accounting.attribution.and_then(|value| value.to_line),
                 accounting.attribution.and_then(|value| value.source_bytes),
+                concat!("rtk/", env!("CARGO_PKG_VERSION")),
+                "privacy_typed_v1",
+                accounting.attribution.map(|value| value.operation.as_str()),
+                evasion.map(|value| value.class.as_str()),
+                evasion.map(|value| value.wrapper_depth),
+                evasion.and_then(|value| value.interpreter.as_deref()),
+                evasion.map(|value| value.path_form.as_str()),
+                evasion.map(|value| value.stage_count),
+                evasion.map(|value| value.hatch_marker),
+                evasion.map(|value| value.avoidable),
+                evasion.map(|value| value.tier.as_str()),
+                evasion.and_then(|value| value.fidelity_reason.as_deref()),
+                evasion.map(|value| value.fidelity_validation.as_str()),
             ],
         )?;
 
@@ -1665,6 +1803,21 @@ mod tests {
         assert_eq!(estimate_tokens("abcde"), 2); // 5 chars = ceil(1.25) = 2
         assert_eq!(estimate_tokens("a"), 1); // 1 char = ceil(0.25) = 1
         assert_eq!(estimate_tokens("12345678"), 2); // 8 chars = 2 tokens
+    }
+
+    #[test]
+    fn internal_evasion_metadata_accepts_only_closed_payload_free_json() {
+        let valid = r#"{"class":"e2_shell_wrapper","wrapper_depth":1,"interpreter":"shell","path_form":"bare","stage_count":1,"hatch_marker":false,"avoidable":true,"tier":"t1_named_correction","fidelity_validation":"not_requested"}"#;
+        let parsed = parse_internal_evasion(valid).expect("closed attribution");
+        assert_eq!(parsed.class, "e2_shell_wrapper");
+
+        for invalid in [
+            r#"{"class":"e2_shell_wrapper","wrapper_depth":1,"interpreter":"shell","path_form":"bare","stage_count":1,"hatch_marker":false,"avoidable":true,"tier":"t1_named_correction","fidelity_validation":"not_requested","command":"cat private.txt"}"#,
+            r#"{"class":"custom","wrapper_depth":1,"path_form":"bare","stage_count":1,"hatch_marker":false,"avoidable":true,"tier":"t1_named_correction","fidelity_validation":"not_requested"}"#,
+            r#"{"class":"e2_shell_wrapper","wrapper_depth":99,"path_form":"bare","stage_count":1,"hatch_marker":false,"avoidable":true,"tier":"t1_named_correction","fidelity_validation":"not_requested"}"#,
+        ] {
+            assert!(parse_internal_evasion(invalid).is_none());
+        }
     }
 
     // 2. args_display — format OsString vec

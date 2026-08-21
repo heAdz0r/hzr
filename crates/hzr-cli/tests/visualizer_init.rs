@@ -44,7 +44,7 @@ fn init_is_idempotent_and_registers_the_visualizer_workspace() {
     );
     let second = run_init(&workspace, &config, &["--if-needed"]);
 
-    assert_eq!(first["outcome"], "initialized_without_git");
+    assert_eq!(first["outcome"], "index_initialized");
     assert_eq!(second["outcome"], "already_initialized");
     assert_eq!(first["repository_id"], second["repository_id"]);
     assert_eq!(first["worktree_id"], second["worktree_id"]);
@@ -71,6 +71,8 @@ fn init_is_idempotent_and_registers_the_visualizer_workspace() {
     assert!(registration.is_file(), "registration is missing");
     assert!(directory.path().join("claude/CLAUDE.md").is_file());
     assert!(directory.path().join("codex/AGENTS.md").is_file());
+    assert!(workspace.join("CLAUDE.md").is_file());
+    assert!(workspace.join("AGENTS.md").is_file());
     assert_eq!(
         second["instructions"]
             .as_array()
@@ -104,6 +106,9 @@ fn acceptance_gate_init_repairs_stale_managed_instructions() {
     assert!(migrated_local.contains("# Project rules"));
     assert!(migrated_local.contains("`hzr read <file>`"));
     assert!(migrated_local.contains("<!-- hzr:begin managed agent contract"));
+    let local_codex =
+        std::fs::read_to_string(workspace.join("AGENTS.md")).expect("local Codex instructions");
+    assert!(local_codex.contains("<!-- hzr:begin managed agent contract"));
     let codex = directory.path().join("codex/AGENTS.md");
     let stale = std::fs::read_to_string(&codex)
         .expect("managed Codex instructions")
@@ -127,7 +132,80 @@ fn acceptance_gate_init_repairs_stale_managed_instructions() {
 }
 
 #[test]
-fn acceptance_gate_init_repairs_instructions_before_an_index_blocker() {
+fn acceptance_gate_legacy_init_requires_explicit_migration_without_registration() {
+    let directory = tempdir().expect("temporary init root");
+    let workspace = directory.path().join("workspace");
+    let config = directory.path().join("config.toml");
+    let data = directory.path().join("data");
+    let legacy_index = workspace.join(".grepai");
+    std::fs::create_dir_all(&legacy_index).expect("legacy index");
+    let legacy_index = legacy_index.canonicalize().expect("canonical legacy index");
+    std::fs::write(legacy_index.join("config.yaml"), "version: 1\n").expect("legacy index config");
+    std::fs::write(workspace.join("CLAUDE.md"), "# Claude project rules\n")
+        .expect("Claude project rules");
+    std::fs::write(workspace.join("AGENTS.md"), "# Codex project rules\n")
+        .expect("Codex project rules");
+
+    let initialized = run_init(
+        &workspace,
+        &config,
+        &["--data-dir", data.to_str().expect("UTF-8 data path")],
+    );
+    let forced = run_init(
+        &workspace,
+        &config,
+        &[
+            "--force",
+            "--data-dir",
+            data.to_str().expect("UTF-8 data path"),
+        ],
+    );
+    let if_needed = run_init(&workspace, &config, &["--if-needed"]);
+
+    for outcome in [&initialized, &forced, &if_needed] {
+        assert_eq!(outcome["outcome"], "migration_required");
+        assert_eq!(outcome["changed"], false);
+        assert!(outcome["registration"].is_null());
+        assert_eq!(
+            outcome["index"].as_str().expect("legacy index path"),
+            legacy_index.to_str().expect("UTF-8 legacy index path")
+        );
+    }
+    assert!(legacy_index.is_dir());
+    assert!(
+        !std::fs::symlink_metadata(&legacy_index)
+            .expect("legacy index metadata")
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        std::fs::read_to_string(workspace.join("CLAUDE.md"))
+            .expect("managed Claude instructions")
+            .contains("# Claude project rules")
+    );
+    assert!(
+        std::fs::read_to_string(workspace.join("AGENTS.md"))
+            .expect("managed Codex instructions")
+            .contains("# Codex project rules")
+    );
+
+    let registration = data
+        .join("workspaces")
+        .join(
+            initialized["repository_id"]
+                .as_str()
+                .expect("repository id"),
+        )
+        .join(initialized["worktree_id"].as_str().expect("worktree id"))
+        .join("workspace.json");
+    assert!(
+        !registration.exists(),
+        "legacy workspace must not be registered"
+    );
+}
+
+#[test]
+fn acceptance_gate_init_repairs_instructions_before_legacy_migration() {
     let directory = tempdir().expect("temporary init root");
     let workspace = directory.path().join("workspace");
     let config = directory.path().join("config.toml");
@@ -156,12 +234,16 @@ fn acceptance_gate_init_repairs_instructions_before_an_index_blocker() {
         .env("CODEX_HOME", directory.path().join("codex"))
         .current_dir(&workspace)
         .output()
-        .expect("run blocked hzr init");
+        .expect("run legacy hzr init");
 
     assert!(
-        !output.status.success(),
-        "duplicate indexes must still block init"
+        output.status.success(),
+        "legacy init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    let result: Value = serde_json::from_slice(&output.stdout).expect("init JSON");
+    assert_eq!(result["outcome"], "migration_required");
+    assert!(result["registration"].is_null());
     let migrated = std::fs::read_to_string(local_claude).expect("migrated instructions");
     assert!(migrated.contains("# Project rules"));
     assert!(!migrated.contains("rtk-instructions"));

@@ -12,7 +12,7 @@ pub struct RtkRule {
 
 pub const RULES: &[RtkRule] = &[
     RtkRule {
-        pattern: r"^(?:git|yadm)\s+(?:(?:-[Cc])\s+[^[:space:]]+\s+|--[a-z-]+(?:=[^[:space:]]+)?\s+)*(status|log|diff|show|add|commit|push|pull|branch|fetch|stash|worktree|checkout|cherry-pick|remote|merge-base|rev-parse|ls-files|merge|rebase|rm)(\s|$)", // fork: extended git subcommands
+        pattern: r"^(?:git|yadm)\s+(?:(?:-[Cc])\s+[^[:space:]]+\s+|--[a-z-]+(?:=[^[:space:]]+)?\s+)*(status|log|diff|show|blame|add|commit|push|pull|branch|fetch|stash|worktree|checkout|cherry-pick|remote|merge-base|rev-parse|ls-files|merge|rebase|rm)(\s|$)", // fork: extended git subcommands
         rtk_cmd: "rtk git",
         rewrite_prefixes: &["git", "yadm"],
         category: "Git",
@@ -20,6 +20,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_savings: &[
             ("diff", 80.0),
             ("show", 80.0),
+            ("blame", 80.0),
             ("add", 59.0),
             ("commit", 59.0),
             ("checkout", 0.0),

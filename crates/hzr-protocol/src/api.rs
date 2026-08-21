@@ -271,6 +271,10 @@ pub struct ExecApiRequest {
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -537,6 +541,204 @@ pub struct AccountingAttribution {
     pub to_line: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evasion: Option<EvasionAttribution>,
+}
+
+/// Closed, privacy-safe taxonomy for command-routing evasion. These values are suitable for
+/// persistence and IPC because they describe only the construct, never its payload.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvasionClass {
+    E1QuotedCoveredCommand,
+    E2ShellWrapper,
+    E3InterpreterRead,
+    E4ExecutablePath,
+    E5PipelineOrRedirect,
+    E6NestedUnboundedReader,
+    E7FidelityHatch,
+    E8NativeTool,
+    E9DiagnosticBypass,
+    E10CapabilityGap,
+}
+
+impl EvasionClass {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::E1QuotedCoveredCommand => "e1",
+            Self::E2ShellWrapper => "e2",
+            Self::E3InterpreterRead => "e3",
+            Self::E4ExecutablePath => "e4",
+            Self::E5PipelineOrRedirect => "e5",
+            Self::E6NestedUnboundedReader => "e6",
+            Self::E7FidelityHatch => "e7",
+            Self::E8NativeTool => "e8",
+            Self::E9DiagnosticBypass => "e9",
+            Self::E10CapabilityGap => "e10",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvasionInterpreter {
+    Shell,
+    Python,
+    Javascript,
+    Ruby,
+    Perl,
+    Awk,
+    Sed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvasionPathForm {
+    Bare,
+    AbsoluteSystem,
+    Relative,
+    ResolvedAlias,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnforcementTier {
+    T0TransparentRewrite,
+    T1NamedCorrection,
+    T2DenyWithPrescription,
+    T3BudgetExhaustion,
+    T4HatchQuarantine,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FidelityReason {
+    Binary,
+    Checksum,
+    MachineProtocol,
+    CompleteLog,
+    FullPatch,
+    VerbatimSource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FidelityValidation {
+    NotRequested,
+    Valid,
+    MissingReason,
+    InvalidReason,
+    Contradicted,
+    ProvenEquivalent,
+    BudgetExhausted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyDecision {
+    Ask,
+    Deny,
+    Correction,
+}
+
+impl PolicyDecision {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+            Self::Correction => "correction",
+        }
+    }
+}
+
+impl EnforcementTier {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::T0TransparentRewrite => "t0",
+            Self::T1NamedCorrection => "t1",
+            Self::T2DenyWithPrescription => "t2",
+            Self::T3BudgetExhaustion => "t3",
+            Self::T4HatchQuarantine => "t4",
+        }
+    }
+}
+
+impl FidelityReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Binary => "binary",
+            Self::Checksum => "checksum",
+            Self::MachineProtocol => "machine_protocol",
+            Self::CompleteLog => "complete_log",
+            Self::FullPatch => "full_patch",
+            Self::VerbatimSource => "verbatim_source",
+        }
+    }
+}
+
+impl FidelityValidation {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotRequested => "not_requested",
+            Self::Valid => "valid",
+            Self::MissingReason => "missing_reason",
+            Self::InvalidReason => "invalid_reason",
+            Self::Contradicted => "contradicted",
+            Self::ProvenEquivalent => "proven_equivalent",
+            Self::BudgetExhausted => "budget_exhausted",
+        }
+    }
+}
+
+impl EvasionInterpreter {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::Python => "python",
+            Self::Javascript => "javascript",
+            Self::Ruby => "ruby",
+            Self::Perl => "perl",
+            Self::Awk => "awk",
+            Self::Sed => "sed",
+        }
+    }
+}
+
+impl EvasionPathForm {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bare => "bare",
+            Self::AbsoluteSystem => "absolute_system",
+            Self::Relative => "relative",
+            Self::ResolvedAlias => "resolved_alias",
+        }
+    }
+}
+
+/// Payload-free accounting evidence. Producers may populate this after the shared normalizer;
+/// consumers can aggregate it without learning the original command, path, query, or content.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EvasionAttribution {
+    pub class: EvasionClass,
+    pub wrapper_depth: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interpreter: Option<EvasionInterpreter>,
+    pub path_form: EvasionPathForm,
+    pub stage_count: u16,
+    pub hatch_marker: bool,
+    pub avoidable: bool,
+    pub tier: EnforcementTier,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fidelity_reason: Option<FidelityReason>,
+    pub fidelity_validation: FidelityValidation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -738,10 +940,11 @@ pub struct DashboardSearchActivity {
     pub state: DashboardState,
     pub ledger_id: Option<u64>,
     pub observed_at: Option<String>,
-    pub command: Option<String>,
-    pub working_directory: Option<String>,
+    pub operation: Option<String>,
+    pub command_hash: Option<String>,
+    pub project_hash: Option<String>,
     pub agent: Option<String>,
-    pub session_id: Option<String>,
+    pub session_hash: Option<String>,
     pub route: Option<DashboardOperationRoute>,
     pub execution_ms: Option<u64>,
     pub detail: String,
@@ -795,11 +998,12 @@ pub struct DashboardLocalOperation {
     pub timestamp: String,
     pub operation: String,
     pub route: DashboardOperationRoute,
-    pub original_command: String,
-    pub recorded_command: String,
-    pub working_directory: String,
+    pub command_hash: String,
+    pub project_hash: String,
     pub agent: Option<String>,
-    pub session_id: Option<String>,
+    pub session_hash: Option<String>,
+    pub producer_version: Option<String>,
+    pub policy_version: Option<String>,
     pub baseline_tokens_estimated: u64,
     pub delivered_tokens_estimated: u64,
     pub net_avoided_tokens_estimated: i64,
@@ -938,6 +1142,8 @@ mod tests {
             command: "cargo test".into(),
             timeout_ms: Some(1_000),
             caller_path: Some("/toolchain/bin:/usr/bin".into()),
+            agent: Some("cli".into()),
+            session_id: None,
         };
         let value = serde_json::to_value(request).expect("exec request serializes");
         assert_eq!(value["caller_path"], "/toolchain/bin:/usr/bin");

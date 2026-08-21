@@ -37,7 +37,7 @@ use hzr_core::{
     Config, ConfigPaths, Ledger, discover_legacy_rtk_history, inspect_legacy_efficiency,
 };
 use hzr_index::{
-    Deadlines, GrepAi, IndexPlacement, InitOptions, Workspace, WorkspaceRegistration,
+    Deadlines, GrepAi, IndexPlacement, InitOptions, InitOutcome, Workspace, WorkspaceRegistration,
     migrate_legacy_index,
 };
 use hzr_protocol::{
@@ -105,6 +105,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             skip_instructions,
             skip_service,
             project_only,
+            native_tool_mode,
             workspace,
         } => {
             return run_install(
@@ -118,6 +119,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     wire_instructions: !*skip_instructions,
                     start_service: !*skip_service,
                     project_only: *project_only,
+                    native_tool_mode: *native_tool_mode,
                     workspace: workspace.clone(),
                 },
                 &config_path,
@@ -314,15 +316,21 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         } => bail!("hook status entered configured execution path"),
         Command::Update { .. } => bail!("update command entered configured execution path"),
         Command::Hooks {
-            command: HooksCommand::Dispatch,
+            command: HooksCommand::Dispatch { native_mode },
         } => {
-            hook_runner::dispatch(&config).await?;
+            hook_runner::dispatch(&config, native_mode).await;
             Ok(ExitCode::SUCCESS)
         }
         Command::Hooks {
-            command: HooksCommand::Observe,
+            command: HooksCommand::Observe { native_mode },
         } => {
-            hook_runner::observe(&config).await;
+            hook_runner::observe(&config, native_mode).await;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Hooks {
+            command: HooksCommand::Feedback,
+        } => {
+            hook_runner::feedback(&config).await;
             Ok(ExitCode::SUCCESS)
         }
         Command::Doctor { workspace, fix } => {
@@ -475,19 +483,20 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Build(arguments) => {
             // One inherited subcommand, forwarded verbatim: `hzr build --release` must
             // reach the fork exactly as `rtk build --release` did.
-            let mut args = vec![std::ffi::OsString::from("build")];
-            args.extend(arguments.args.iter().cloned());
+            let args = forwarded_fork_args("build", &arguments.args);
+            fork::passthrough(&config, &args).await
+        }
+        Command::Test(arguments) => {
+            let args = forwarded_fork_args("test", &arguments.args);
             fork::passthrough(&config, &args).await
         }
         Command::Read(arguments) => {
-            let mut args = vec![std::ffi::OsString::from("read")];
-            args.extend(arguments.args.iter().cloned());
+            let args = forwarded_fork_args("read", &arguments.args);
             let args = bounded_read_arguments(&args, exact_read_fidelity_requested());
             fork::passthrough(&config, &args).await
         }
         Command::Write(arguments) => {
-            let mut args = vec![std::ffi::OsString::from("write")];
-            args.extend(arguments.args.iter().cloned());
+            let args = forwarded_fork_args("write", &arguments.args);
             fork::passthrough(&config, &args).await
         }
         Command::Release {
@@ -547,9 +556,33 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Stats {
             workspace,
             all,
+            evasion,
             since,
-        } => show_stats(&config, workspace.as_deref(), cli.json, all, since.as_ref()).await,
-        Command::Savings => show_stats(&config, None, cli.json, false, None).await,
+            accounting_version,
+        } => {
+            show_stats(
+                &config,
+                workspace.as_deref(),
+                cli.json,
+                all,
+                evasion,
+                since.as_ref(),
+                accounting_version,
+            )
+            .await
+        }
+        Command::Savings => {
+            show_stats(
+                &config,
+                None,
+                cli.json,
+                false,
+                false,
+                None,
+                crate::cli::AccountingVersion::Current,
+            )
+            .await
+        }
         Command::Migrate { command } => match command {
             MigrateCommand::Scan { workspace } => {
                 let workspace = canonical_directory(workspace.as_deref())?;
@@ -793,6 +826,7 @@ struct InstallOptions {
     wire_instructions: bool,
     start_service: bool,
     project_only: bool,
+    native_tool_mode: Option<adoption::NativeToolMode>,
     workspace: Option<PathBuf>,
 }
 
@@ -867,8 +901,11 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
         options.adopt_icm,
         options.start_service,
         options.project_only,
-        options.dry_run,
-        options.force,
+        adoption::HookInstallPolicy {
+            native_tool_mode: options.native_tool_mode,
+            dry_run: options.dry_run,
+            confirmed: options.force,
+        },
     )?;
 
     let mut instruction_reports = Vec::new();
@@ -902,9 +939,10 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             roots.dedup();
             for root in roots {
                 for (surface, target) in activation::local_instruction_paths(&root) {
-                    instruction_reports.push(instructions::uninstall(
+                    instruction_reports.push(instructions::install(
                         surface,
                         &target,
+                        &contract,
                         options.dry_run,
                         options.force,
                     )?);
@@ -967,15 +1005,9 @@ fn reconcile_agent_instructions(
                 .into_iter()
                 .map(|surface| surface.default_path().map(|path| (surface, path)))
                 .collect::<Result<Vec<_>>>()?;
-            // Global instructions cover ordinary repositories. A pre-HZR local contract can
-            // override them, so migrate only local files that already contain an HZR block or
-            // a known conflicting RTK/ICM mandate. Clean projects remain byte-for-byte intact.
-            for (surface, path) in activation::local_instruction_paths(workspace_root) {
-                let audit = instructions::audit(surface, &path)?;
-                if audit.installed || !audit.conflicting_mandates.is_empty() {
-                    targets.push((surface, path));
-                }
-            }
+            // The local routing pointer keeps policy visible at the point where an agent
+            // discovers repository instructions. The managed region preserves all user text.
+            targets.extend(activation::local_instruction_paths(workspace_root));
             targets
         }
         hzr_core::ActivationMode::Selected => {
@@ -1524,8 +1556,11 @@ async fn set_workspace_activation(
             true,
             true,
             true,
-            false,
-            true,
+            adoption::HookInstallPolicy {
+                native_tool_mode: hook_status.native_tool_mode,
+                dry_run: false,
+                confirmed: true,
+            },
         )?;
     }
     for (surface, target) in activation::local_instruction_paths(&workspace.identity.root) {
@@ -1558,7 +1593,13 @@ async fn set_workspace_activation(
 async fn initialize_workspace_at(
     config: &Config,
     workspace_path: &Path,
-) -> Result<(Workspace, &'static str, bool, bool, WorkspaceRegistration)> {
+) -> Result<(
+    Workspace,
+    &'static str,
+    bool,
+    bool,
+    Option<WorkspaceRegistration>,
+)> {
     let workspace = Workspace::discover_managed(
         workspace_path,
         Path::new("git"),
@@ -1572,7 +1613,9 @@ async fn initialize_workspace_at(
     let git_backed = workspace.identity.git_common_dir.is_some();
     let relocated = workspace.adopt_relocated_index()?;
     workspace.require_single_index()?;
-    let (outcome, changed) = match workspace.placement()? {
+    let placement = workspace.placement()?;
+    let legacy = matches!(&placement, IndexPlacement::LegacyProject { .. });
+    let (mut outcome, mut changed) = match placement {
         IndexPlacement::ManagedSymlink { .. } if relocated => ("relocated_to_git_identity", true),
         IndexPlacement::ManagedSymlink { .. } => ("already_initialized", false),
         IndexPlacement::Missing { .. } => {
@@ -1586,7 +1629,30 @@ async fn initialize_workspace_at(
         IndexPlacement::LegacyProject { .. } => ("migration_required", false),
         placement => bail!("unsupported grepai placement: {placement:?}"),
     };
-    let registration = workspace.register()?;
+    if !legacy {
+        let grepai = GrepAi::connect(
+            config.engines.binary("grepai"),
+            workspace.clone(),
+            Deadlines::default(),
+        )
+        .await?;
+        match grepai.initialize(&InitOptions::default()).await? {
+            InitOutcome::Initialized => {
+                outcome = "index_initialized";
+                changed = true;
+            }
+            InitOutcome::RepositoryGraphEnabled => {
+                outcome = "repository_graph_enabled";
+                changed = true;
+            }
+            InitOutcome::AlreadyInitialized => {}
+        }
+    }
+    let registration = if legacy {
+        None
+    } else {
+        Some(workspace.register()?)
+    };
     Ok((workspace, outcome, changed, git_backed, registration))
 }
 
@@ -1718,6 +1784,7 @@ async fn record_search_delivery(
             from_line: None,
             to_line: None,
             source_bytes: None,
+            evasion: None,
         }),
     };
     if client.record_operation(&request).await.is_err() {
@@ -1988,6 +2055,14 @@ fn exec_request(arguments: ExecArgs) -> Result<ExecApiRequest> {
         command: arguments.command,
         timeout_ms: arguments.timeout_ms,
         caller_path: std::env::var("PATH").ok(),
+        agent: Some("cli".into()),
+        session_id: ["CODEX_THREAD_ID", "CLAUDE_SESSION_ID"]
+            .into_iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            }),
     })
 }
 
@@ -2078,12 +2153,28 @@ async fn show_stats(
     workspace: Option<&Path>,
     json: bool,
     include_all_commands: bool,
+    show_evasion: bool,
     since: Option<&crate::cli::StatsDuration>,
+    accounting_version: crate::cli::AccountingVersion,
 ) -> Result<ExitCode> {
+    stats::validate_request_bounds(
+        json,
+        include_all_commands,
+        workspace.is_some(),
+        since.is_some(),
+    )?;
     let workspace = workspace
         .map(|path| canonical_directory(Some(path)))
         .transpose()?;
-    let report = stats::collect(config, workspace.as_deref(), include_all_commands, since).await?;
+    let report = stats::collect(
+        config,
+        workspace.as_deref(),
+        include_all_commands,
+        show_evasion,
+        since,
+        accounting_version,
+    )
+    .await?;
     if json {
         print_json(&report)?;
     } else {
@@ -2115,6 +2206,15 @@ fn payload_limit(request_limit: usize) -> usize {
     request_limit.saturating_sub(4_096)
 }
 
+fn forwarded_fork_args(
+    subcommand: &str,
+    arguments: &[std::ffi::OsString],
+) -> Vec<std::ffi::OsString> {
+    std::iter::once(std::ffi::OsString::from(subcommand))
+        .chain(arguments.iter().cloned())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -2123,8 +2223,24 @@ mod tests {
 
     use super::{
         bounded_read_arguments, canonical_directory, contract_asset_path,
-        executable_source_directory, payload_limit,
+        executable_source_directory, forwarded_fork_args, payload_limit,
     };
+
+    #[test]
+    fn acceptance_gate_test_alias_forwards_argv_without_reconstruction() {
+        let arguments = [
+            std::ffi::OsString::from("npm"),
+            std::ffi::OsString::from("quoted argument stays one argv"),
+            std::ffi::OsString::from("--watch"),
+        ];
+        assert_eq!(
+            forwarded_fork_args("test", &arguments),
+            [std::ffi::OsString::from("test")]
+                .into_iter()
+                .chain(arguments)
+                .collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn acceptance_gate_direct_cli_reduces_only_unbounded_exact_reads() {
@@ -2184,7 +2300,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.3-test");
+        let release = directory.path().join("versions/v0.4.4-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -2204,7 +2320,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.3-test");
+        let release = directory.path().join("versions/v0.4.4-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))
@@ -2222,7 +2338,7 @@ mod tests {
     #[test]
     fn public_binary_symlink_resolves_to_the_versioned_source_directory() {
         let directory = tempdir().expect("temporary directory");
-        let release_bin = directory.path().join("versions/v0.4.3-test/bin");
+        let release_bin = directory.path().join("versions/v0.4.4-test/bin");
         let release_binary = release_bin.join("hzr");
         let public_bin = directory.path().join("bin");
         std::fs::create_dir_all(&release_bin).expect("release bin");

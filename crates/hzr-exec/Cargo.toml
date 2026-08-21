@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Typed, conservative command execution pipeline for HZR"
 
 [dependencies]
+hzr-protocol = { path = "../hzr-protocol" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -26,7 +26,7 @@ fn test_a_recorded_operation_reaches_the_efficiency_summary() {
         .by_command
         .first()
         .expect("the operation is grouped by command");
-    assert_eq!(command.command, "hzr codec adaptive");
+    assert_eq!(command.command, "rtk codec");
     assert_eq!(
         classify_operation(&command.command).subsystem,
         OperationSubsystem::Codec,
@@ -77,7 +77,7 @@ fn test_a_recorded_operation_is_scoped_to_its_project() {
 }
 
 #[test]
-fn test_recent_activity_preserves_inspectable_request_context() {
+fn test_recent_activity_exposes_only_hashed_request_context() {
     let directory = tempdir().expect("temp directory");
     let path = directory.path().join("hzr.sqlite");
     let ledger = Ledger::open(&path).expect("ledger open");
@@ -106,14 +106,19 @@ fn test_recent_activity_preserves_inspectable_request_context() {
         .expect("recent operation");
 
     assert!(operation.ledger_id > 0);
-    assert_eq!(operation.original_command, "rg --files visualizer/src");
-    assert_eq!(
-        operation.recorded_command,
-        "hzr rtk -- raw rg --files visualizer/src"
-    );
-    assert_eq!(operation.working_directory, "/work/project/visualizer");
+    assert!(operation.command_hash.starts_with("sha256:"));
+    assert!(operation.project_hash.starts_with("sha256:"));
     assert_eq!(operation.agent.as_deref(), Some("codex"));
-    assert_eq!(operation.session_id.as_deref(), Some("thread-123"));
+    assert!(
+        operation
+            .session_hash
+            .as_deref()
+            .is_some_and(|value| value.starts_with("sha256:"))
+    );
+    let encoded = serde_json::to_string(operation).expect("operation JSON");
+    for sensitive in ["visualizer/src", "/work/project", "thread-123", "--files"] {
+        assert!(!encoded.contains(sensitive), "leaked {sensitive}");
+    }
 }
 
 #[test]
@@ -145,7 +150,7 @@ fn test_raw_routes_receive_zero_credit_even_when_recorded_counts_differ() {
     let raw = summary
         .by_command
         .iter()
-        .find(|command| command.command.contains("-- raw"))
+        .find(|command| command.command == "rtk raw rg")
         .expect("raw command summary");
     assert_eq!(raw.baseline_tokens_estimated, 1);
     assert_eq!(raw.delivered_tokens_estimated, 1);
