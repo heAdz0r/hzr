@@ -1654,9 +1654,11 @@ async fn initialize_workspace_at(
                 }
                 InitOutcome::AlreadyInitialized => {}
             },
-            Err(error) if index_engine_is_absent(&error) => {
-                outcome = "index_engine_unavailable";
-            }
+            // Leave the placement outcome alone. It describes what `init` did own — registering
+            // the workspace — and overwriting it would make "already initialized" indistinguish-
+            // able from a first run purely because the engine is missing. A missing engine is a
+            // host condition, and `hzr doctor` is the single place that reports it.
+            Err(error) if index_engine_is_absent(&error) => {}
             Err(error) => return Err(error.into()),
         }
     }

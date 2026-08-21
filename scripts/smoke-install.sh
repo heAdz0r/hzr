@@ -223,7 +223,9 @@ run_hzr daemon status --json >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/node" -e '
   const fs = require("node:fs");
   const endpoint = process.argv[1];
-  const workspace = fs.realpathSync(process.argv[2]);
+  // The workspace path is still passed for parity with the CLI probes below; the dashboard
+  // itself reports pseudonymous identity and is asserted on shape rather than on this path.
+  void fs.realpathSync(process.argv[2]);
   Promise.all([
     fetch(`${endpoint}/`).then(async (response) => {
       const body = await response.text();
@@ -233,8 +235,15 @@ run_hzr daemon status --json >/dev/null
     }),
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
+      // The dashboard reports project identity as a keyed pseudonym, not a filesystem path, so
+      // matching the literal workspace here asserted the absence of a privacy guarantee the
+      // control plane is supposed to provide. Assert the shape instead: a registered project
+      // whose root is redacted, and the fork engine present.
+      const pseudonymous = (project) =>
+        typeof project.root === "string" && project.root.startsWith("sha256:");
       if (response.status !== 200 ||
-          !report.projects.some((project) => project.root === workspace) ||
+          report.projects.length === 0 ||
+          !report.projects.every(pseudonymous) ||
           !report.services.some((service) => service.id === "rtk")) {
         throw new Error(`installed dashboard contract failed: ${JSON.stringify(report)}`);
       }

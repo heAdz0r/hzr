@@ -1,31 +1,54 @@
 use std::process::Command;
 
+use tempfile::TempDir;
+
 fn rtk_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_rtk"))
 }
 
+/// Run `rtk` against a home directory that carries no permission configuration.
+///
+/// Rewrite decisions read the caller's permission policy, so a developer whose config allows
+/// `ps` saw `rewrite`/exit 0 while a clean CI runner saw the default verdict and its `ask`/exit
+/// 3. Pinning the home directory makes these tests assert behavior instead of host state.
+fn rtk_with_default_permissions(home: &TempDir) -> Command {
+    let mut command = rtk_bin();
+    command
+        .env("HOME", home.path())
+        .env("XDG_CONFIG_HOME", home.path().join("xdg"));
+    command
+}
+
 #[test]
-fn ps_has_a_first_class_rewrite_and_bounded_command() {
-    let rewrite = rtk_bin()
+fn ps_has_a_first_class_rewrite_under_the_default_permission_verdict() {
+    let home = TempDir::new().expect("clean home");
+    let rewrite = rtk_with_default_permissions(&home)
         .args(["rewrite", "ps aux"])
         .output()
         .expect("rewrite ps");
-    assert!(rewrite.status.success());
+    // Exit 3 is the documented "rewrite produced, approval required" code. The route is what is
+    // under test, and it is proven by the proposed command either way.
+    assert_eq!(rewrite.status.code(), Some(3));
     assert_eq!(String::from_utf8_lossy(&rewrite.stdout), "rtk ps aux");
 
-    let help = rtk_bin().args(["ps", "--help"]).output().expect("ps help");
+    let help = rtk_with_default_permissions(&home)
+        .args(["ps", "--help"])
+        .output()
+        .expect("ps help");
     assert!(help.status.success());
 }
 
 #[test]
 fn hidden_rewrite_plan_dispatches_one_typed_json_object() {
-    let output = rtk_bin()
+    let home = TempDir::new().expect("clean home");
+    let output = rtk_with_default_permissions(&home)
         .args(["rewrite-plan", "ps aux"])
         .output()
         .expect("typed rewrite plan");
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
-    assert_eq!(value["decision"], "rewrite");
+    assert_eq!(value["decision"], "ask");
+    assert_eq!(value["reason"], "permission_policy");
     assert_eq!(value["proposed"], "rtk ps aux");
     assert_eq!(
         output.stdout.iter().filter(|byte| **byte == b'\n').count(),

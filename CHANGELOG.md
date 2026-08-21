@@ -26,7 +26,15 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   `SessionFeedback` field that no code path ever wrote. Both halves now come from the ledger's
   per-session avoidable operations and tokens, so the shadow window can calibrate the threshold
   it exists to calibrate, and the label states that T3 is measured rather than enforced.
-- `hzr init` no longer fails when the pinned index engine is not installed. Warming the index is
+- The installed-bundle smoke check asserted that the dashboard reports a literal workspace path.
+  Project identity became a keyed pseudonym in 0.4.4, so the check asserted the absence of the
+  privacy guarantee it should have been proving; it now requires a registered project whose root
+  is redacted. This failed both the `assembled-bundle` CI job and every release bundle job.
+- The `ps` route tests pinned a permission verdict that depends on the caller's home directory,
+  so they passed on a developer host that allows `ps` and failed on a clean runner. They now run
+  against a temporary home and assert the default verdict's documented rewrite and exit code.
+- `hzr init` no longer fails when the pinned index engine is not installed.
+ Warming the index is
   optional; the workspace registration is not. A source checkout, a partially installed host and
   the `rust` CI job all lack the engine, and the hard failure took the whole command — and the
   SessionStart hook — down with it. A genuinely broken engine still surfaces.
