@@ -12,3 +12,6 @@
 .grepai
 .grepai/
 .grepai.hzr-backup-*/
+
+# HZR write lock artifacts
+*.rtk-lock

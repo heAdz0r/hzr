@@ -1630,22 +1630,34 @@ async fn initialize_workspace_at(
         placement => bail!("unsupported grepai placement: {placement:?}"),
     };
     if !legacy {
-        let grepai = GrepAi::connect(
+        // The workspace registration above is the part `init` owns; warming the index needs the
+        // pinned engine. A bundle always ships one, but a source checkout or a partially
+        // installed host may not have it yet, and `init --if-needed` also runs from the
+        // SessionStart hook — failing the whole command there would break the session over a
+        // missing optional warm-up. A genuinely broken engine still propagates; only an absent
+        // binary degrades, and `hzr doctor` is what reports it.
+        match GrepAi::connect(
             config.engines.binary("grepai"),
             workspace.clone(),
             Deadlines::default(),
         )
-        .await?;
-        match grepai.initialize(&InitOptions::default()).await? {
-            InitOutcome::Initialized => {
-                outcome = "index_initialized";
-                changed = true;
+        .await
+        {
+            Ok(grepai) => match grepai.initialize(&InitOptions::default()).await? {
+                InitOutcome::Initialized => {
+                    outcome = "index_initialized";
+                    changed = true;
+                }
+                InitOutcome::RepositoryGraphEnabled => {
+                    outcome = "repository_graph_enabled";
+                    changed = true;
+                }
+                InitOutcome::AlreadyInitialized => {}
+            },
+            Err(error) if index_engine_is_absent(&error) => {
+                outcome = "index_engine_unavailable";
             }
-            InitOutcome::RepositoryGraphEnabled => {
-                outcome = "repository_graph_enabled";
-                changed = true;
-            }
-            InitOutcome::AlreadyInitialized => {}
+            Err(error) => return Err(error.into()),
         }
     }
     let registration = if legacy {
@@ -1654,6 +1666,18 @@ async fn initialize_workspace_at(
         Some(workspace.register()?)
     };
     Ok((workspace, outcome, changed, git_backed, registration))
+}
+
+/// Whether an index error means the pinned engine binary is simply not installed.
+///
+/// Distinguishing absence from failure matters: a missing binary is a host state `hzr doctor`
+/// already reports, while a spawn error of any other kind is a real fault that must surface.
+fn index_engine_is_absent(error: &hzr_index::IndexError) -> bool {
+    matches!(
+        error,
+        hzr_index::IndexError::CommandUnavailable { source, .. }
+            if source.kind() == std::io::ErrorKind::NotFound
+    )
 }
 
 async fn show_engines(config: &Config, json: bool) -> Result<ExitCode> {
@@ -2300,7 +2324,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.4-test");
+        let release = directory.path().join("versions/v0.4.5-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -2320,7 +2344,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.4-test");
+        let release = directory.path().join("versions/v0.4.5-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))
@@ -2338,7 +2362,7 @@ mod tests {
     #[test]
     fn public_binary_symlink_resolves_to_the_versioned_source_directory() {
         let directory = tempdir().expect("temporary directory");
-        let release_bin = directory.path().join("versions/v0.4.4-test/bin");
+        let release_bin = directory.path().join("versions/v0.4.5-test/bin");
         let release_binary = release_bin.join("hzr");
         let public_bin = directory.path().join("bin");
         std::fs::create_dir_all(&release_bin).expect("release bin");

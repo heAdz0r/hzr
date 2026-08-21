@@ -578,6 +578,61 @@ impl EvasionClass {
             Self::E10CapabilityGap => "e10",
         }
     }
+
+    /// Short human-readable name of the construct, for agent-facing policy messages.
+    #[must_use]
+    pub const fn construct(self) -> &'static str {
+        match self {
+            Self::E1QuotedCoveredCommand => "quoted covered command",
+            Self::E2ShellWrapper => "shell wrapper",
+            Self::E3InterpreterRead => "interpreter file read",
+            Self::E4ExecutablePath => "executable path form",
+            Self::E5PipelineOrRedirect => "pipeline or redirect",
+            Self::E6NestedUnboundedReader => "nested unbounded reader",
+            Self::E7FidelityHatch => "raw fidelity request",
+            Self::E8NativeTool => "host-native file tool",
+            Self::E9DiagnosticBypass => "direct HZR diagnostic access",
+            Self::E10CapabilityGap => "no first-class route",
+        }
+    }
+
+    /// The route an agent should reach for instead.
+    ///
+    /// An Ask that does not say what to run instead costs a turn and teaches nothing, so every
+    /// class carries its prescription here rather than leaving the caller to invent one. E10 is
+    /// deliberately not a correction: no route exists, so approval is the honest outcome.
+    #[must_use]
+    pub const fn prescription(self) -> &'static str {
+        match self {
+            Self::E1QuotedCoveredCommand | Self::E2ShellWrapper | Self::E4ExecutablePath => {
+                "re-issue the inner command directly so HZR can route it"
+            }
+            Self::E3InterpreterRead => {
+                "read files with `hzr read <file>` and scan them with `hzr search '<pattern>'`; \
+                 keep the interpreter for computation that has no managed route"
+            }
+            Self::E5PipelineOrRedirect => {
+                "run each stage through its own managed route, for example \
+                 `hzr read <file> --max-lines N` instead of piping a full read into a limiter"
+            }
+            Self::E6NestedUnboundedReader => {
+                "read the matched files with `hzr read <file>` instead of embedding an unbounded \
+                 reader in the command"
+            }
+            Self::E7FidelityHatch => {
+                "supply a fidelity reason that matches the command, or use the bounded managed \
+                 route when exact bytes are not required"
+            }
+            Self::E8NativeTool => "use the equivalent `hzr` file operation",
+            Self::E9DiagnosticBypass => {
+                "use `hzr stats` (add `--since` or `--workspace`) instead of reading HZR state \
+                 directly"
+            }
+            Self::E10CapabilityGap => {
+                "no managed route covers this command; approving runs it as tracked raw"
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

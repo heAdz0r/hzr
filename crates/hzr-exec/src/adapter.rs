@@ -259,6 +259,48 @@ struct RewritePlanResponse {
     reason: Option<RewritePlanReason>,
 }
 
+/// Render an agent-facing reason for an Ask or Deny decision.
+///
+/// A bare "policy requires approval" costs the agent a turn and teaches it nothing: it names
+/// neither the construct that was refused nor the route to reach for instead. Both are already
+/// carried by the closed evasion taxonomy, so the message is assembled from that single
+/// authority rather than restated at each call site. Commands without attribution keep the
+/// original wording, because inventing a prescription for an unclassified construct would be a
+/// guess presented as guidance.
+fn policy_reason(
+    decision: &str,
+    plan_reason: Option<RewritePlanReason>,
+    attribution: Option<&EvasionAttribution>,
+    proposed: Option<&str>,
+) -> String {
+    let policy = match plan_reason {
+        Some(RewritePlanReason::PermissionPolicy) => "fork-core permission policy",
+        Some(RewritePlanReason::CanonicalPolicy) | None => "fork-core canonical policy",
+    };
+    let verb = if decision == "deny" {
+        "denied the command"
+    } else {
+        "requires approval"
+    };
+    let Some(attribution) = attribution else {
+        return format!("{policy} {verb}");
+    };
+    let mut reason = format!(
+        "{tier} {decision} {class} ({construct}): {policy} {verb}; {prescription}",
+        tier = attribution.tier.as_str(),
+        class = attribution.class.as_str(),
+        construct = attribution.class.construct(),
+        prescription = attribution.class.prescription(),
+    );
+    if let Some(proposed) = proposed
+        .map(str::trim)
+        .filter(|proposed| !proposed.is_empty())
+    {
+        reason.push_str(&format!("; approving runs the managed form: {proposed}"));
+    }
+    reason
+}
+
 fn outcome_without_evasion(decision: RewriteDecision) -> RtkRewriteOutcome {
     RtkRewriteOutcome {
         decision,
@@ -623,16 +665,22 @@ impl PinnedRtkAdapter {
                 reason: "fork-core proxy plan unexpectedly included a command".to_owned(),
             },
             RewritePlanDecision::Ask => {
+                let prescribed = plan.proposed.clone();
                 let proposed = plan
                     .proposed
                     .and_then(|proposed| self.managed_shell_command(command, &proposed).ok());
                 RewriteDecision::Ask {
                     proposed,
-                    reason: "fork-core canonical policy requires approval".to_owned(),
+                    reason: policy_reason(
+                        "ask",
+                        plan.reason,
+                        plan.attribution.as_ref(),
+                        prescribed.as_deref(),
+                    ),
                 }
             }
             RewritePlanDecision::Deny => RewriteDecision::Deny {
-                reason: "fork-core permission policy denied the command".to_owned(),
+                reason: policy_reason("deny", plan.reason, plan.attribution.as_ref(), None),
             },
         };
         RtkRewriteOutcome {
@@ -1046,9 +1094,119 @@ async fn run_with_timeout(command: &mut Command, timeout: Duration) -> Result<Ou
 #[cfg(test)]
 mod tests {
     use super::{
-        PINNED_RTK_VERSION, PinnedRtkAdapter, RtkAdapterConfig, parse_version, render_command,
+        EvasionAttribution, PINNED_RTK_VERSION, PinnedRtkAdapter, RewritePlanReason,
+        RtkAdapterConfig, parse_version, policy_reason, render_command,
     };
     use crate::{CanonicalCommand, parse_simple_shell};
+    use hzr_protocol::{EnforcementTier, EvasionClass, EvasionPathForm, FidelityValidation};
+
+    /// Every closed evasion class must produce a message an agent can act on.
+    ///
+    /// The 0.4.4 shipping behavior was a single generic string for all 25 Ask cases in the
+    /// acceptance matrix: no class, no construct, no route. This gate fails if any class
+    /// regresses to a reason the agent cannot act on.
+    #[test]
+    fn acceptance_gate_every_ask_names_its_class_and_prescribes_a_route() {
+        const CLASSES: [EvasionClass; 10] = [
+            EvasionClass::E1QuotedCoveredCommand,
+            EvasionClass::E2ShellWrapper,
+            EvasionClass::E3InterpreterRead,
+            EvasionClass::E4ExecutablePath,
+            EvasionClass::E5PipelineOrRedirect,
+            EvasionClass::E6NestedUnboundedReader,
+            EvasionClass::E7FidelityHatch,
+            EvasionClass::E8NativeTool,
+            EvasionClass::E9DiagnosticBypass,
+            EvasionClass::E10CapabilityGap,
+        ];
+        for class in CLASSES {
+            let attribution = EvasionAttribution {
+                class,
+                wrapper_depth: 0,
+                interpreter: None,
+                path_form: EvasionPathForm::Bare,
+                stage_count: 1,
+                hatch_marker: false,
+                avoidable: true,
+                tier: EnforcementTier::T2DenyWithPrescription,
+                fidelity_reason: None,
+                fidelity_validation: FidelityValidation::NotRequested,
+            };
+            let ask = policy_reason(
+                "ask",
+                Some(RewritePlanReason::CanonicalPolicy),
+                Some(&attribution),
+                None,
+            );
+            assert!(
+                ask.contains(class.as_str()),
+                "{ask} omits the class token for {class:?}"
+            );
+            assert!(
+                ask.contains(class.construct()),
+                "{ask} omits the construct for {class:?}"
+            );
+            assert!(
+                ask.contains(class.prescription()),
+                "{ask} omits the prescribed route for {class:?}"
+            );
+            assert!(ask.contains("requires approval"), "{ask} omits the verdict");
+
+            let deny = policy_reason(
+                "deny",
+                Some(RewritePlanReason::PermissionPolicy),
+                Some(&attribution),
+                None,
+            );
+            assert!(
+                deny.contains("denied the command") && deny.contains(class.prescription()),
+                "{deny} is not actionable for {class:?}"
+            );
+        }
+    }
+
+    /// An approved Ask must show the exact command approval will run.
+    #[test]
+    fn acceptance_gate_a_proposed_ask_shows_the_managed_form() {
+        let attribution = EvasionAttribution {
+            class: EvasionClass::E2ShellWrapper,
+            wrapper_depth: 1,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 1,
+            hatch_marker: false,
+            avoidable: true,
+            tier: EnforcementTier::T2DenyWithPrescription,
+            fidelity_reason: None,
+            fidelity_validation: FidelityValidation::NotRequested,
+        };
+        let reason = policy_reason(
+            "ask",
+            Some(RewritePlanReason::CanonicalPolicy),
+            Some(&attribution),
+            Some("rtk read README.md"),
+        );
+        assert!(reason.contains("approving runs the managed form: rtk read README.md"));
+    }
+
+    /// Without attribution the message stays exactly as it was: a prescription invented for an
+    /// unclassified construct would be a guess presented to the agent as guidance.
+    #[test]
+    fn an_unclassified_command_keeps_the_original_wording() {
+        assert_eq!(
+            policy_reason("ask", None, None, None),
+            "fork-core canonical policy requires approval"
+        );
+        assert_eq!(
+            policy_reason(
+                "deny",
+                Some(RewritePlanReason::PermissionPolicy),
+                None,
+                None
+            ),
+            "fork-core permission policy denied the command"
+        );
+    }
 
     #[test]
     fn test_parse_version_finds_fork_semver_token() {

@@ -64,6 +64,13 @@ pub struct AntiEvasionProbe {
     pub class: Option<ProbeClass>,
     #[serde(default)]
     pub avoidable: Option<bool>,
+    /// Substrings the agent-facing reason must contain.
+    ///
+    /// A decision the agent cannot act on is not enforcement, so every Ask and Deny asserts that
+    /// its reason names the evasion class and prescribes a route. Without this the matrix could
+    /// only prove that a construct was refused, never that the refusal was useful.
+    #[serde(default)]
+    pub expect_reason_contains: Vec<String>,
 }
 
 pub fn load_anti_evasion_probes() -> Vec<AntiEvasionProbe> {
@@ -117,6 +124,14 @@ pub fn load_anti_evasion_probes() -> Vec<AntiEvasionProbe> {
                     probe.id
                 );
             }
+        }
+        if matches!(probe.decision, ProbeDecision::Ask | ProbeDecision::Deny) {
+            assert!(
+                !probe.expect_reason_contains.is_empty(),
+                "{} decision {:?} must assert what its reason tells the agent",
+                probe.id,
+                probe.decision
+            );
         }
     }
     probes

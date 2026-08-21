@@ -201,7 +201,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     };
     let decision = steer_to_first_class(raw, decision);
     let decision = attach_hook_evasion(raw, decision, fidelity_evasion.as_ref());
-    let decision = attach_t1_feedback(config, input, decision);
+    let decision = attach_policy_feedback(config, input, decision);
     if !daemon_recorded_policy {
         let _ = record_local_policy_decision(config, input, &decision, None);
     }
@@ -501,26 +501,40 @@ fn bounded_hook_text(value: &str) -> Option<&str> {
     (value.len() <= 2_048 && !value.contains('\0')).then_some(value)
 }
 
-fn attach_t1_feedback(
+/// Give every agent-visible policy decision the running session cost.
+///
+/// A correction increments the counter because it is the event being counted. An Ask or a Deny
+/// only reports it: those decisions already cost the agent a turn, and an E10 Ask is a genuine
+/// capability gap that must never consume the avoidable-bypass budget.
+fn attach_policy_feedback(
     config: &Config,
     input: &Value,
     mut decision: RewriteDecision,
 ) -> RewriteDecision {
-    let RewriteDecision::AllowRewrite {
-        source: RewriteSource::HzrPolicy,
-        reason,
-        ..
-    } = &mut decision
-    else {
-        return decision;
-    };
-    if let Ok(state) = update_session(config, input, |state| {
-        state.corrections = state.corrections.saturating_add(1);
-    }) {
-        reason.push_str(&format!(
-            " T1 named correction class=covered_route; session avoidable-bypass count={}.",
-            state.corrections
-        ));
+    match &mut decision {
+        RewriteDecision::AllowRewrite {
+            source: RewriteSource::HzrPolicy,
+            reason,
+            ..
+        } => {
+            if let Ok(state) = update_session(config, input, |state| {
+                state.corrections = state.corrections.saturating_add(1);
+            }) {
+                reason.push_str(&format!(
+                    " T1 named correction class=covered_route; session avoidable-bypass count={}.",
+                    state.corrections
+                ));
+            }
+        }
+        RewriteDecision::Ask { reason, .. } | RewriteDecision::Deny { reason } => {
+            if let Some(state) = read_session(config, input) {
+                reason.push_str(&format!(
+                    "; session avoidable-bypass count={}",
+                    state.corrections
+                ));
+            }
+        }
+        RewriteDecision::AllowRaw { .. } | RewriteDecision::AllowRewrite { .. } => {}
     }
     decision
 }
@@ -688,12 +702,18 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// Hook-local session counters.
+///
+/// These count what the hook itself saw and prevented. Anything measured in tokens comes from
+/// the ledger instead: this file cannot observe how much output a command would have delivered,
+/// and a second accounting path that guesses is worse than one that abstains. An earlier
+/// `avoidable_tokens_estimated` field here had no writer at all, so the shadow budget's token
+/// half reported a constant zero and could never calibrate its own threshold.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct SessionFeedback {
     operations: u64,
     corrections: u64,
     native_denials: u64,
-    avoidable_tokens_estimated: u64,
     nudged: bool,
 }
 
@@ -837,26 +857,35 @@ pub async fn feedback(config: &Config) {
                 .map_or(state.operations, |summary| {
                     summary.operations.max(state.operations)
                 });
+            // Both halves of the shadow budget come from the ledger, which is the only place
+            // that knows what an operation actually delivered. Corrections are reported
+            // separately: a corrected command never ran in its bypassed form, so counting it
+            // against a budget meant to measure leakage would inflate the very number the
+            // shadow window exists to calibrate.
             let recoverable = session_summary
                 .as_ref()
-                .map_or(state.avoidable_tokens_estimated, |summary| {
-                    summary.recoverable_tokens
-                });
+                .map_or(0, |summary| summary.recoverable_tokens);
+            let avoidable_operations = session_summary
+                .as_ref()
+                .map_or(0, |summary| summary.avoidable_operations);
+            let avoidable_tokens = session_summary
+                .as_ref()
+                .map_or(0, |summary| summary.avoidable_tokens);
             let top_class = session_summary
                 .as_ref()
                 .and_then(|summary| summary.top_class)
                 .map_or("none", EvasionClass::as_str);
             let _ = write_hook_json(json!({
                 "systemMessage": format!(
-                    "HZR scorecard: ops={} corrections={} native-denials={} top={} recoverable-tokens={}; shadow-budget count={}/{} tokens={}/{} (no punishment).",
+                    "HZR scorecard: ops={} corrections={} native-denials={} top={} recoverable-tokens={}; shadow-budget avoidable={}/{} ops, {}/{} tokens (T3 measured, not enforced).",
                     operations,
                     state.corrections,
                     state.native_denials,
                     top_class,
                     recoverable,
-                    state.corrections,
+                    avoidable_operations,
                     SESSION_BYPASS_COUNT_BUDGET,
-                    state.avoidable_tokens_estimated,
+                    avoidable_tokens,
                     SESSION_BYPASS_TOKEN_BUDGET,
                 )
             }));
@@ -1145,7 +1174,10 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
-    use hzr_core::{Config, FidelityAllowance, Ledger};
+    use hzr_core::{
+        Config, FidelityAllowance, Ledger, OperationAttribution, OperationChannel,
+        OperationMeasurement, OperationRoute,
+    };
     use hzr_protocol::{
         EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, FidelityValidation,
     };
@@ -1158,7 +1190,7 @@ mod tests {
         ProbeClass, ProbeDecision, ProbeLayer, ProbeNativeMode, ProbeSurface,
     };
     use super::{
-        HookFidelityPreflight, agent_attribution, agent_identity, attach_t1_feedback,
+        HookFidelityPreflight, agent_attribution, agent_identity, attach_policy_feedback,
         clear_reconciled_rewrites, context_brief, degraded_rewrite_coverage, fallback_decision,
         hook_fidelity_preflight, native_observation_policy, native_replacement, observe_input,
         read_session, record_degraded_rewrite_at, record_local_policy_decision,
@@ -1357,6 +1389,63 @@ mod tests {
         );
     }
 
+    /// Tie the matrix's expected wording to the implementation that produces it.
+    ///
+    /// The matrix used to assert only the verdict, so all 25 Ask cases passed while telling the
+    /// agent nothing. Asserting the text alone would drift the moment the wording changed, so
+    /// each shell expectation must match a prescription the closed taxonomy actually emits.
+    #[test]
+    fn acceptance_gate_every_ask_and_deny_asserts_an_implemented_prescription() {
+        const CLASSES: [EvasionClass; 10] = [
+            EvasionClass::E1QuotedCoveredCommand,
+            EvasionClass::E2ShellWrapper,
+            EvasionClass::E3InterpreterRead,
+            EvasionClass::E4ExecutablePath,
+            EvasionClass::E5PipelineOrRedirect,
+            EvasionClass::E6NestedUnboundedReader,
+            EvasionClass::E7FidelityHatch,
+            EvasionClass::E8NativeTool,
+            EvasionClass::E9DiagnosticBypass,
+            EvasionClass::E10CapabilityGap,
+        ];
+        let probes = super::anti_evasion_fixture::load_anti_evasion_probes();
+        let mut asserted = 0;
+        for probe in &probes {
+            if !matches!(probe.decision, ProbeDecision::Ask | ProbeDecision::Deny) {
+                continue;
+            }
+            asserted += 1;
+            assert!(
+                !probe.expect_reason_contains.is_empty(),
+                "{} must assert what its reason tells the agent",
+                probe.id
+            );
+            if probe.surface == ProbeSurface::Native || probe.id == "fidelity-missing-reason" {
+                // Produced by the native correction and fidelity preflight paths, which already
+                // name the fault and the replacement.
+                continue;
+            }
+            let prescribed = probe.expect_reason_contains.iter().any(|expected| {
+                CLASSES
+                    .iter()
+                    .any(|class| class.prescription().contains(expected.as_str()))
+            });
+            assert!(
+                prescribed,
+                "{} expects wording no evasion class prescribes: {:?}",
+                probe.id, probe.expect_reason_contains
+            );
+            assert!(
+                probe.expect_reason_contains.iter().any(|expected| CLASSES
+                    .iter()
+                    .any(|class| class.as_str() == expected.as_str())),
+                "{} does not assert its evasion class",
+                probe.id
+            );
+        }
+        assert_eq!(asserted, 31, "every Ask and Deny case carries an assertion");
+    }
+
     #[test]
     fn acceptance_gate_shared_fixture_covers_every_native_mode() {
         let probes = super::anti_evasion_fixture::load_anti_evasion_probes();
@@ -1502,6 +1591,65 @@ mod tests {
         }
     }
 
+    /// The shadow budget must measure something.
+    ///
+    /// Its token half used to read a `SessionFeedback` field that no code path ever wrote, so
+    /// every scorecard reported `tokens=0/250000` regardless of what the session did — a shadow
+    /// window that can never calibrate the threshold it exists to calibrate. Both halves now
+    /// come from the ledger, so an executed avoidable bypass has to move them.
+    #[test]
+    fn acceptance_gate_the_shadow_budget_reflects_recorded_avoidable_bypass() {
+        let directory = tempdir().expect("temporary directory");
+        let config = config(directory.path());
+        let ledger =
+            Ledger::open(&config.data_dir.join("ledger/hzr.sqlite")).expect("ledger opens");
+        let evasion = EvasionAttribution {
+            class: EvasionClass::E5PipelineOrRedirect,
+            wrapper_depth: 0,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 2,
+            hatch_marker: false,
+            avoidable: true,
+            tier: EnforcementTier::T1NamedCorrection,
+            fidelity_reason: None,
+            fidelity_validation: FidelityValidation::NotRequested,
+        };
+        ledger
+            .record_operation_attributed_with_detail(
+                "rtk proxy sh -c 'cat a | tail -5'",
+                "rtk proxy sh -c 'cat a | tail -5'",
+                4_096,
+                4_096,
+                1,
+                hzr_core::DetailedOperationAttribution {
+                    attribution: OperationAttribution {
+                        project_path: "/tmp/project",
+                        agent: Some("claude-code"),
+                        session_id: Some("shadow-session"),
+                        channel: OperationChannel::HookCli,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Bypassed,
+                    },
+                    detail: None,
+                    evasion: Some(&evasion),
+                },
+            )
+            .expect("recorded avoidable bypass");
+
+        let summary = ledger
+            .session_evasion_summary("shadow-session", FidelityAllowance::default())
+            .expect("session summary");
+
+        assert_eq!(summary.avoidable_operations, 1);
+        assert_eq!(summary.avoidable_tokens, 4_096);
+        assert_eq!(
+            summary.recoverable_tokens, 4_096,
+            "the scorecard's token figures must move with recorded avoidable bypass"
+        );
+        assert!(summary.avoidable_tokens <= super::SESSION_BYPASS_TOKEN_BUDGET);
+    }
+
     #[test]
     fn acceptance_gate_t1_feedback_is_counted_without_raw_identity() {
         let directory = tempdir().expect("temporary directory");
@@ -1516,7 +1664,7 @@ mod tests {
             source: RewriteSource::HzrPolicy,
             reason: "replacement".into(),
         };
-        let decision = attach_t1_feedback(&config, &input, decision);
+        let decision = attach_policy_feedback(&config, &input, decision);
         assert!(matches!(
             decision,
             RewriteDecision::AllowRewrite { ref reason, .. }

@@ -454,25 +454,48 @@ fn bypass_report(
     reveal_command_details: bool,
     recovery: String,
 ) -> BypassReport {
-    let mut by_tool = bypass
-        .by_tool
+    // The ledger groups by its own tool identity, but the report publishes the privacy-safe
+    // label, and that label is deliberately coarser: `rg`, `grep`, `rgai` and `search` all
+    // become "search". Mapping after grouping therefore emitted one row per pre-map identity,
+    // so a reader saw the same tool twice with its traffic split across the rows. Merge on the
+    // key that is actually displayed, and treat a family as replaceable when any of its merged
+    // identities has a first-class route.
+    let mut merged: BTreeMap<&'static str, (u64, u64, bool)> = BTreeMap::new();
+    for tool in bypass.by_tool {
+        let label = privacy_safe_tool(&tool.tool);
+        let entry = merged.entry(label).or_default();
+        entry.0 = entry.0.saturating_add(tool.executions);
+        entry.1 = entry.1.saturating_add(tool.delivered_tokens_estimated);
+        // The per-row flag records whether a concrete replacement could be reconstructed from
+        // the recorded invocation, which is not the same question as whether the family has a
+        // route. HZR's own subsystems have one by construction, so a bypassed `search` must not
+        // be reported as having no first-class equivalent just because one example could not be
+        // rebuilt from a redacted command.
+        entry.2 |= tool.first_class_replacement_available || hzr_subsystem_label(label);
+    }
+    let mut by_tool = merged
         .into_iter()
-        .map(|tool| BypassToolReport {
-            example_command: format!(
-                "hzr raw {} <arguments omitted>",
-                privacy_safe_tool(&tool.tool)
-            ),
-            replacement: tool.first_class_replacement_available.then(|| {
-                "available; inspect the typed family and use its first-class HZR route".to_owned()
-            }),
-            tool: privacy_safe_tool(&tool.tool).to_owned(),
-            executions: tool.executions,
-            delivered_tokens_estimated: tool.delivered_tokens_estimated,
-            rationale: tool
-                .first_class_replacement_available
-                .then(|| "first-class HZR route available".to_owned()),
-        })
+        .map(
+            |(tool, (executions, delivered_tokens_estimated, replaceable))| BypassToolReport {
+                example_command: format!("hzr raw {tool} <arguments omitted>"),
+                replacement: replaceable.then(|| {
+                    "available; inspect the typed family and use its first-class HZR route"
+                        .to_owned()
+                }),
+                tool: tool.to_owned(),
+                executions,
+                delivered_tokens_estimated,
+                rationale: replaceable.then(|| "first-class HZR route available".to_owned()),
+            },
+        )
         .collect::<Vec<_>>();
+    // Merging reorders, and the report's contract is costliest leak first.
+    by_tool.sort_by(|left, right| {
+        right
+            .delivered_tokens_estimated
+            .cmp(&left.delivered_tokens_estimated)
+            .then_with(|| left.tool.cmp(&right.tool))
+    });
     let by_tool_total = by_tool.len();
     if !reveal_command_details {
         by_tool.truncate(DEFAULT_BYPASS_TOOL_LIMIT);
@@ -511,6 +534,14 @@ fn command_label(command: &str, reveal_command_details: bool) -> String {
         "hzr {} <arguments omitted>",
         classification.subsystem.as_str()
     )
+}
+
+/// Labels that name an HZR subsystem rather than an external tool.
+///
+/// Reaching the shell as one of these is by definition avoidable: the managed route is the
+/// subsystem itself.
+fn hzr_subsystem_label(label: &str) -> bool {
+    matches!(label, "read" | "search" | "write" | "memory" | "codec")
 }
 
 fn privacy_safe_tool(tool: &str) -> &'static str {
@@ -754,6 +785,99 @@ mod tests {
         );
     }
 
+    /// A per-tool table must not list the same tool twice.
+    ///
+    /// `rg`, `grep`, `rgai` and `search` share one privacy-safe label, and mapping after
+    /// grouping split one family's traffic across several identically named rows. The advice
+    /// column has to survive the merge too: one replaceable identity makes the family
+    /// replaceable, otherwise the row tells the reader that search has no managed route.
+    #[test]
+    fn acceptance_gate_bypass_rows_merge_on_the_label_they_display() {
+        let bypass = BypassSummary {
+            lifetime: BypassWindow {
+                operations: 78,
+                total_operations: 100,
+                delivered_tokens_estimated: 900,
+                total_delivered_tokens_estimated: 1_000,
+            },
+            by_tool: vec![
+                BypassTool {
+                    tool: "rg".into(),
+                    executions: 23,
+                    delivered_tokens_estimated: 300,
+                    example_command: "rtk proxy rg -n TODO".into(),
+                    replacement: None,
+                    first_class_replacement_available: false,
+                    rationale: None,
+                },
+                BypassTool {
+                    tool: "grep".into(),
+                    executions: 55,
+                    delivered_tokens_estimated: 600,
+                    example_command: "rtk proxy grep -rn TODO".into(),
+                    replacement: Some("hzr search 'TODO' --mode exact".into()),
+                    first_class_replacement_available: true,
+                    rationale: Some("hzr search returns ranked matches".into()),
+                },
+            ],
+        };
+
+        let report = build_report(
+            EfficiencySummary::default(),
+            LedgerSummary::default(),
+            "global_lifetime",
+            AccountingCoverage::default_complete(),
+            bypass,
+            "global lifetime".into(),
+        );
+
+        assert_eq!(report.bypass.by_tool.len(), 1, "one family, one row");
+        let search = &report.bypass.by_tool[0];
+        assert_eq!(search.tool, "search");
+        assert_eq!(search.executions, 78);
+        assert_eq!(search.delivered_tokens_estimated, 900);
+        assert!(
+            search.replacement.is_some(),
+            "search has a first-class route; the merged row must not deny it"
+        );
+    }
+
+    /// An HZR subsystem that reached the shell is avoidable by construction.
+    ///
+    /// The per-row flag only records whether a replacement could be rebuilt from the recorded
+    /// invocation, so a redacted example used to make `hzr stats` tell the reader that search
+    /// has no managed route.
+    #[test]
+    fn acceptance_gate_a_bypassed_subsystem_is_never_reported_as_unreplaceable() {
+        let bypass = BypassSummary {
+            lifetime: BypassWindow::default(),
+            by_tool: vec![BypassTool {
+                tool: "search".into(),
+                executions: 91,
+                delivered_tokens_estimated: 0,
+                example_command: "rtk proxy search <redacted>".into(),
+                replacement: None,
+                first_class_replacement_available: false,
+                rationale: None,
+            }],
+        };
+
+        let report = build_report(
+            EfficiencySummary::default(),
+            LedgerSummary::default(),
+            "global_lifetime",
+            AccountingCoverage::default_complete(),
+            bypass,
+            "global lifetime".into(),
+        );
+
+        assert_eq!(report.bypass.by_tool.len(), 1);
+        assert!(
+            report.bypass.by_tool[0].replacement.is_some(),
+            "a bypassed HZR subsystem always has a first-class route"
+        );
+    }
+
     #[test]
     fn test_default_report_redacts_unbounded_command_details() {
         let sensitive_payload = "secret=value\n".repeat(40);
@@ -982,6 +1106,12 @@ mod tests {
         );
     }
 
+    /// Identities whose privacy-safe labels are all distinct, so truncation is still exercised.
+    const NAMED_TOOLS: [&str; 15] = [
+        "read", "search", "write", "memory", "codec", "git", "cargo", "sed", "python3", "bash",
+        "ssh", "gh", "bun", "docker", "curl",
+    ];
+
     #[test]
     fn test_default_report_bounds_bypass_tools_and_total_json_cost() {
         let bypass = BypassSummary {
@@ -991,12 +1121,17 @@ mod tests {
                 delivered_tokens_estimated: 750,
                 total_delivered_tokens_estimated: 750,
             },
-            by_tool: (0..75)
-                .map(|index| BypassTool {
-                    tool: format!("tool-{index}"),
+            // Sixteen identities that carry distinct privacy-safe labels, plus a long tail of
+            // unrecognized ones that all share the "other" label.
+            by_tool: NAMED_TOOLS
+                .iter()
+                .map(|tool| (*tool).to_owned())
+                .chain((0..59).map(|index| format!("tool-{index}")))
+                .map(|tool| BypassTool {
                     executions: 1,
                     delivered_tokens_estimated: 10,
-                    example_command: format!("rtk proxy tool-{index} secret=value"),
+                    example_command: format!("rtk proxy {tool} secret=value"),
+                    tool,
                     replacement: None,
                     first_class_replacement_available: false,
                     rationale: None,
@@ -1012,12 +1147,24 @@ mod tests {
             "global lifetime".into(),
         );
 
+        // The table is keyed by the label it prints, so the 59 unrecognized identities become a
+        // single "other" row and the total counts distinct labels rather than raw identities.
+        assert_eq!(report.bypass.by_tool_total, NAMED_TOOLS.len() + 1);
         assert_eq!(report.bypass.by_tool.len(), DEFAULT_BYPASS_TOOL_LIMIT);
-        assert_eq!(report.bypass.by_tool_total, 75);
         assert_eq!(
             report.bypass.by_tool_omitted,
-            75 - DEFAULT_BYPASS_TOOL_LIMIT
+            NAMED_TOOLS.len() + 1 - DEFAULT_BYPASS_TOOL_LIMIT
         );
+        let mut labels = report
+            .bypass
+            .by_tool
+            .iter()
+            .map(|tool| tool.tool.as_str())
+            .collect::<Vec<_>>();
+        labels.sort_unstable();
+        let unique = labels.len();
+        labels.dedup();
+        assert_eq!(labels.len(), unique, "a label may appear at most once");
         assert_eq!(
             report.bypass.by_tool_recovery,
             "hzr stats --json --all --since 7d"

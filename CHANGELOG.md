@@ -4,6 +4,40 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-08-21
+
+### Added
+
+- Every Ask and Deny names its evasion class, the construct that triggered it, and the route to
+  use instead. `EvasionClass` carries `construct()` and `prescription()` as the single authority
+  for that wording, and an approved Ask states the managed form approval will run.
+- The acceptance matrix asserts what a decision tells the agent, not only its verdict. Ask and
+  Deny cases require `expect_reason_contains`, the loader rejects an empty expectation, and a
+  gate ties every expectation to a prescription the taxonomy actually emits.
+
+### Changed
+
+- Ask and Deny decisions report the running session avoidable-bypass count alongside corrections.
+  Only corrections increment it: an E10 Ask is a capability gap and must not consume the budget.
+
+### Fixed
+
+- The Stop scorecard's shadow budget reported a constant `tokens=0/250000`: it read a
+  `SessionFeedback` field that no code path ever wrote. Both halves now come from the ledger's
+  per-session avoidable operations and tokens, so the shadow window can calibrate the threshold
+  it exists to calibrate, and the label states that T3 is measured rather than enforced.
+- `hzr init` no longer fails when the pinned index engine is not installed. Warming the index is
+  optional; the workspace registration is not. A source checkout, a partially installed host and
+  the `rust` CI job all lack the engine, and the hard failure took the whole command — and the
+  SessionStart hook — down with it. A genuinely broken engine still surfaces.
+- `hzr stats` bypass rows merge on the privacy-safe label they display instead of the ledger tool
+  identity, so `rg`, `grep`, `rgai` and `search` no longer appear as several identically named
+  rows with their traffic split.
+- A bypassed HZR subsystem is no longer reported as having no first-class route. The per-row flag
+  records whether a replacement could be reconstructed from one recorded invocation, which is a
+  different question from whether the family has a route; `read`, `search`, `write`, `memory` and
+  `codec` have one by construction.
+
 ## [0.4.4] - 2026-08-21
 
 ### Added

@@ -10,6 +10,16 @@ Supersedes nothing; extends `docs/PRD_HZR_TOKEN_ECONOMY_UTILIZATION.md` and the
 All token figures are `estimated_utf8_bytes_div_4_v1` estimates from the HZR ledger. They are
 not provider billing and this document makes no economic savings claim.
 
+> **Baseline comparability.** Every measurement in §2 was taken against 0.4.3 and must not be
+> compared directly with current `hzr stats` output. 0.4.4 excludes unattributed legacy rows from
+> current-policy reporting, so the same nominal seven-day window now covers 1,718 operations
+> instead of 10,239 — 16.8% of the earlier population. The move from 50.3% to 6.9% bypassed
+> tokens is therefore a change of denominator, not a measured improvement, and the §9 targets
+> still require one post-release seven-day window under a single accounting model.
+>
+> Re-probed against 0.4.4 on 2026-08-21, all 41 cases in §2.4 resolve to a managed route or an
+> explicit `ask`; none reach silent raw proxy.
+
 Implementation note: sections 1–3 and the probe table preserve the measured 0.4.3 baseline.
 HZR 0.4.4 implements the technical workstreams and grows the executable matrix to 85 cases.
 The sustained seven-day targets in section 9 cannot be asserted at release time; they remain a

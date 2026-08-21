@@ -1,87 +1,759 @@
 [
-  {"id":"bare-cat","command":"cat README.md","decision":"rewrite","route":"rtk read README.md"},
-  {"id":"bare-head","command":"head -200 README.md","decision":"rewrite","route":"rtk read README.md --max-lines 200"},
-  {"id":"bare-tail","command":"tail -50 README.md","decision":"rewrite","route":"rtk read README.md --tail-lines 50"},
-  {"id":"quoted-sed","command":"sed -n '10,20p' README.md","decision":"rewrite","route":"rtk read README.md --from 10 --to 20"},
-  {"id":"quoted-nl","command":"nl -ba 'README.md'","decision":"rewrite","route":"rtk read 'README.md' -n"},
-  {"id":"env-prefix","command":"env FOO=1 cat README.md","decision":"rewrite","route":"env FOO=1 rtk read README.md"},
-  {"id":"command-prefix","command":"command cat README.md","decision":"rewrite","route":"command rtk read README.md"},
-  {"id":"exec-prefix","command":"exec git status --short","decision":"rewrite","route":"exec rtk git status --short"},
-  {"id":"nice-prefix","command":"nice -n 5 cargo test","decision":"rewrite","route":"nice -n 5 rtk cargo test"},
-  {"id":"stdbuf-prefix","command":"stdbuf -oL bun test","decision":"rewrite","route":"stdbuf -oL rtk bun test"},
-  {"id":"time-prefix","command":"time -p git status --short","decision":"rewrite","route":"time -p rtk git status --short"},
-  {"id":"rg","command":"rg -n TODO .","decision":"rewrite","route":"rtk rg -n TODO ."},
-  {"id":"grep","command":"grep -rn TODO .","decision":"rewrite","route":"rtk grep -rn TODO ."},
-  {"id":"bun","command":"bun test","decision":"rewrite","route":"rtk bun test"},
-  {"id":"bun-build","command":"bun run build","decision":"rewrite","route":"rtk bun run build"},
-  {"id":"cargo","command":"cargo test --workspace","decision":"rewrite","route":"rtk cargo test --workspace"},
-  {"id":"ssh","command":"ssh host docker logs foo","decision":"rewrite","route":"rtk logs host foo --tail 100"},
-  {"id":"gh-log-failed","command":"gh run view 123 --log-failed","decision":"rewrite","route":"rtk gh run view 123 --log-failed"},
-  {"id":"jq","command":"jq -r '.[]' /tmp/x.json","decision":"rewrite","route":"rtk jq -r '.[]' /tmp/x.json"},
-  {"id":"ps","command":"ps -axo pid,ppid,command","decision":"rewrite","route":"rtk ps -axo pid,ppid,command"},
-  {"id":"wget","command":"wget -qO- https://example.test","decision":"rewrite","route":"rtk wget -qO- https://example.test"},
-  {"id":"curl","command":"curl -fsS https://example.test","decision":"rewrite","route":"rtk curl -fsS https://example.test"},
-  {"id":"shell-blame","command":"/bin/sh -c 'git blame README.md'","decision":"rewrite","route":"/bin/sh -c 'rtk git blame README.md'"},
-  {"id":"shell-cat","command":"sh -lc 'cat README.md'","decision":"rewrite","route":"sh -lc 'rtk read README.md'"},
-  {"id":"bash-nl","command":"bash -c 'nl -ba README.md'","decision":"rewrite","route":"bash -c 'rtk read README.md -n'"},
-  {"id":"zsh-sed","command":"zsh -lc 'sed -n 1,50p README.md'","decision":"rewrite","route":"zsh -lc 'rtk read README.md --from 1 --to 50'"},
-  {"id":"absolute-cat","command":"/bin/cat README.md","decision":"rewrite","route":"rtk read README.md"},
-  {"id":"git-no-pager","command":"git --no-pager blame README.md","decision":"rewrite","route":"rtk git --no-pager blame README.md"},
-  {"id":"cat-head-pipeline","command":"cat README.md | head -50","decision":"rewrite","route":"rtk read README.md --max-lines 50"},
-  {"id":"cat-identity-pipeline","command":"cat README.md | cat","decision":"rewrite","route":"rtk read README.md"},
-  {"id":"nested-shell","command":"sh -c 'bash -lc \"git status --short\"'","decision":"rewrite","route":"sh -c 'bash -lc \"rtk git status --short\"'"},
-  {"id":"env-shell","command":"env CI=1 sh -c 'head -20 README.md'","decision":"rewrite","route":"env CI=1 sh -c 'rtk read README.md --max-lines 20'"},
-  {"id":"path-override-missing-engine","command":"PATH=/definitely/not/a/managed/path git status --short","decision":"ask"},
-  {"id":"nested-path-override-missing-engine","command":"sh -c 'PATH=/definitely/not/a/managed/path git status --short'","decision":"ask"},
-  {"id":"quoted-file-sed","command":"sed -n '4,8p' \"file with spaces.md\"","decision":"rewrite","route":"rtk read \"file with spaces.md\" --from 4 --to 8"},
-  {"id":"managed-raw-rg","layer":"root","command":"hzr rtk -- raw rg -n TODO","decision":"rewrite","route":"rtk rg -n TODO"},
-  {"id":"unbounded-managed-read","layer":"root","command":"hzr read README.md --level none","decision":"rewrite","route":"hzr rtk -- read README.md"},
-  {"id":"python-read","command":"python3 -c 'print(open(\"README.md\").read())'","decision":"ask"},
-  {"id":"node-read","command":"node -e 'console.log(readFileSync(\"README.md\",\"utf8\"))'","decision":"ask"},
-  {"id":"ruby-read","command":"ruby -e 'puts File.read(\"README.md\")'","decision":"ask"},
-  {"id":"perl-read","command":"perl -ne 'print' README.md","decision":"ask"},
-  {"id":"awk-read","command":"awk '{print}' README.md","decision":"ask"},
-  {"id":"find-exec-cat","command":"find . -name '*.rs' -exec cat {} +","decision":"ask"},
-  {"id":"xargs-cat","command":"xargs -a /dev/null cat README.md","decision":"ask"},
-  {"id":"tar-stdout","command":"tar cf - README.md","decision":"ask"},
-  {"id":"temp-log","command":"sh -lc 'bun test > /tmp/o.log 2>&1; tail -n 80 /tmp/o.log'","decision":"ask"},
-  {"id":"ledger-sqlite","command":"/usr/bin/sqlite3 /tmp/ledger/hzr.sqlite 'select * from operations'","decision":"ask"},
-  {"id":"malformed-shell","command":"sh -c 'git status","decision":"ask"},
-  {"id":"missing-inline-code","command":"python3 -c","decision":"ask"},
-  {"id":"generic-sqlite","command":"sqlite3 /tmp/x.db 'select 1'","decision":"rewrite","route":"rtk sqlite3 /tmp/x.db 'select 1' --max-rows 50 --max-tokens 2048"},
-  {"id":"absolute-generic-sqlite","command":"/usr/bin/sqlite3 -readonly -json /tmp/x.db 'select 1'","decision":"ask"},
-  {"id":"direct-git-blame","command":"git blame README.md","decision":"rewrite","route":"rtk git blame README.md"},
-  {"id":"tar-listing","command":"tar tf archive.tar","decision":"rewrite","route":"rtk tar --max-entries 100 tf archive.tar"},
-  {"id":"python-script","command":"python3 scripts/migrate.py","decision":"proxy"},
-  {"id":"node-script","command":"node scripts/build-artifact.js","decision":"proxy"},
-  {"id":"fidelity-verbatim-source","layer":"root","command":"HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=verbatim_source hzr rtk -- raw cat README.md","decision":"raw"},
-  {"id":"fidelity-missing-reason","layer":"root","command":"HZR_RAW_FIDELITY=1 hzr rtk -- raw cat README.md","decision":"ask"},
-  {"id":"fidelity-managed-command","layer":"root","command":"HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=machine_protocol hzr rtk -- raw hzr stats","decision":"rewrite","route":"hzr stats"},
-  {"id":"sqlite-write","command":"sqlite3 /tmp/x.db 'UPDATE users SET active=1'","decision":"ask"},
-  {"id":"sqlite-dot-command","command":"sqlite3 /tmp/x.db '.dump'","decision":"ask"},
-  {"id":"sqlite-multiple-statements","command":"sqlite3 /tmp/x.db 'SELECT 1; SELECT 2'","decision":"ask"},
-  {"id":"sqlite-dangerous-select","command":"sqlite3 /tmp/x.db 'SELECT writefile(\"/tmp/out\", value) FROM data'","decision":"ask"},
-  {"id":"tar-gzip-listing","command":"tar -tzf archive.tgz","decision":"rewrite","route":"rtk tar --max-entries 100 -tzf archive.tgz"},
-  {"id":"tar-extract","command":"tar -xf archive.tar","decision":"ask"},
-  {"id":"tar-long-listing","command":"tar --list --file archive.tar","decision":"rewrite","route":"rtk tar --max-entries 100 --list --file archive.tar"},
-  {"id":"tar-external-command","command":"tar -tf archive.tar --to-command=sh","decision":"ask"},
-  {"id":"remote-logs-flags","command":"ssh deploy@example.test docker logs --tail 80 --since 5m --timestamps story-1","decision":"rewrite","route":"rtk logs deploy@example.test story-1 --tail 80 --since 5m --timestamps"},
-  {"id":"remote-logs-follow","command":"ssh host docker logs --follow story-1","decision":"ask"},
-  {"id":"remote-logs-ssh-option","command":"ssh -T host docker logs story-1","decision":"ask"},
-  {"id":"remote-logs-shell-payload","command":"ssh host 'docker logs story-1 | cat'","decision":"ask"},
-  {"id":"native-read-observe","layer":"root","surface":"native","tool":"Read","tool_input":{"file_path":"/work/file.md"},"mode":"observe","decision":"allow","class":"e8_native_tool","avoidable":false},
-  {"id":"native-grep-observe","layer":"root","surface":"native","tool":"Grep","tool_input":{"pattern":"needle","path":"/work/src"},"mode":"observe","decision":"allow","class":"e8_native_tool","avoidable":false},
-  {"id":"native-glob-observe","layer":"root","surface":"native","tool":"Glob","tool_input":{"pattern":"**/*"},"mode":"observe","decision":"allow","class":"e8_native_tool","avoidable":false},
-  {"id":"native-edit-observe","layer":"root","surface":"native","tool":"Edit","tool_input":{"file_path":"/work/file.md","old_string":"old","new_string":"new"},"mode":"observe","decision":"allow","class":"e8_native_tool","avoidable":false},
-  {"id":"native-write-observe","layer":"root","surface":"native","tool":"Write","tool_input":{"file_path":"/work/file.md","content":"content"},"mode":"observe","decision":"allow","class":"e8_native_tool","avoidable":false},
-  {"id":"native-read-steer","layer":"root","surface":"native","tool":"Read","tool_input":{"file_path":"/work/file.md"},"mode":"steer","decision":"deny","route":"hzr read '/work/file.md'","class":"e8_native_tool","avoidable":true},
-  {"id":"native-grep-steer","layer":"root","surface":"native","tool":"Grep","tool_input":{"pattern":"needle","path":"/work/src"},"mode":"steer","decision":"deny","route":"hzr search 'needle' --mode exact --path '/work/src'","class":"e8_native_tool","avoidable":true},
-  {"id":"native-glob-steer","layer":"root","surface":"native","tool":"Glob","tool_input":{"pattern":"**/*"},"mode":"steer","decision":"allow","class":"e10_capability_gap","avoidable":false},
-  {"id":"native-edit-steer","layer":"root","surface":"native","tool":"Edit","tool_input":{"file_path":"/work/file.md","old_string":"old","new_string":"new"},"mode":"steer","decision":"allow","class":"e10_capability_gap","avoidable":false},
-  {"id":"native-write-steer","layer":"root","surface":"native","tool":"Write","tool_input":{"file_path":"/work/file.md","content":"content"},"mode":"steer","decision":"allow","class":"e10_capability_gap","avoidable":false},
-  {"id":"native-read-strict","layer":"root","surface":"native","tool":"Read","tool_input":{"file_path":"/work/file.md"},"mode":"strict","decision":"deny","route":"hzr read '/work/file.md'","class":"e8_native_tool","avoidable":true},
-  {"id":"native-grep-strict","layer":"root","surface":"native","tool":"Grep","tool_input":{"pattern":"needle","path":"/work/src"},"mode":"strict","decision":"deny","route":"hzr search 'needle' --mode exact --path '/work/src'","class":"e8_native_tool","avoidable":true},
-  {"id":"native-glob-strict","layer":"root","surface":"native","tool":"Glob","tool_input":{"pattern":"**/*"},"mode":"strict","decision":"allow","class":"e10_capability_gap","avoidable":false},
-  {"id":"native-edit-strict","layer":"root","surface":"native","tool":"Edit","tool_input":{"file_path":"/work/file.md","old_string":"old","new_string":"new"},"mode":"strict","decision":"deny","route":"hzr write patch '/work/file.md' --old 'old' --new 'new' --cas","class":"e8_native_tool","avoidable":true},
-  {"id":"native-write-strict","layer":"root","surface":"native","tool":"Write","tool_input":{"file_path":"/work/file.md","content":"content"},"mode":"strict","decision":"deny","route":"hzr write create '/work/file.md' --content 'content' --force","class":"e8_native_tool","avoidable":true}
+  {
+    "id": "bare-cat",
+    "command": "cat README.md",
+    "decision": "rewrite",
+    "route": "rtk read README.md"
+  },
+  {
+    "id": "bare-head",
+    "command": "head -200 README.md",
+    "decision": "rewrite",
+    "route": "rtk read README.md --max-lines 200"
+  },
+  {
+    "id": "bare-tail",
+    "command": "tail -50 README.md",
+    "decision": "rewrite",
+    "route": "rtk read README.md --tail-lines 50"
+  },
+  {
+    "id": "quoted-sed",
+    "command": "sed -n '10,20p' README.md",
+    "decision": "rewrite",
+    "route": "rtk read README.md --from 10 --to 20"
+  },
+  {
+    "id": "quoted-nl",
+    "command": "nl -ba 'README.md'",
+    "decision": "rewrite",
+    "route": "rtk read 'README.md' -n"
+  },
+  {
+    "id": "env-prefix",
+    "command": "env FOO=1 cat README.md",
+    "decision": "rewrite",
+    "route": "env FOO=1 rtk read README.md"
+  },
+  {
+    "id": "command-prefix",
+    "command": "command cat README.md",
+    "decision": "rewrite",
+    "route": "command rtk read README.md"
+  },
+  {
+    "id": "exec-prefix",
+    "command": "exec git status --short",
+    "decision": "rewrite",
+    "route": "exec rtk git status --short"
+  },
+  {
+    "id": "nice-prefix",
+    "command": "nice -n 5 cargo test",
+    "decision": "rewrite",
+    "route": "nice -n 5 rtk cargo test"
+  },
+  {
+    "id": "stdbuf-prefix",
+    "command": "stdbuf -oL bun test",
+    "decision": "rewrite",
+    "route": "stdbuf -oL rtk bun test"
+  },
+  {
+    "id": "time-prefix",
+    "command": "time -p git status --short",
+    "decision": "rewrite",
+    "route": "time -p rtk git status --short"
+  },
+  {
+    "id": "rg",
+    "command": "rg -n TODO .",
+    "decision": "rewrite",
+    "route": "rtk rg -n TODO ."
+  },
+  {
+    "id": "grep",
+    "command": "grep -rn TODO .",
+    "decision": "rewrite",
+    "route": "rtk grep -rn TODO ."
+  },
+  {
+    "id": "bun",
+    "command": "bun test",
+    "decision": "rewrite",
+    "route": "rtk bun test"
+  },
+  {
+    "id": "bun-build",
+    "command": "bun run build",
+    "decision": "rewrite",
+    "route": "rtk bun run build"
+  },
+  {
+    "id": "cargo",
+    "command": "cargo test --workspace",
+    "decision": "rewrite",
+    "route": "rtk cargo test --workspace"
+  },
+  {
+    "id": "ssh",
+    "command": "ssh host docker logs foo",
+    "decision": "rewrite",
+    "route": "rtk logs host foo --tail 100"
+  },
+  {
+    "id": "gh-log-failed",
+    "command": "gh run view 123 --log-failed",
+    "decision": "rewrite",
+    "route": "rtk gh run view 123 --log-failed"
+  },
+  {
+    "id": "jq",
+    "command": "jq -r '.[]' /tmp/x.json",
+    "decision": "rewrite",
+    "route": "rtk jq -r '.[]' /tmp/x.json"
+  },
+  {
+    "id": "ps",
+    "command": "ps -axo pid,ppid,command",
+    "decision": "rewrite",
+    "route": "rtk ps -axo pid,ppid,command"
+  },
+  {
+    "id": "wget",
+    "command": "wget -qO- https://example.test",
+    "decision": "rewrite",
+    "route": "rtk wget -qO- https://example.test"
+  },
+  {
+    "id": "curl",
+    "command": "curl -fsS https://example.test",
+    "decision": "rewrite",
+    "route": "rtk curl -fsS https://example.test"
+  },
+  {
+    "id": "shell-blame",
+    "command": "/bin/sh -c 'git blame README.md'",
+    "decision": "rewrite",
+    "route": "/bin/sh -c 'rtk git blame README.md'"
+  },
+  {
+    "id": "shell-cat",
+    "command": "sh -lc 'cat README.md'",
+    "decision": "rewrite",
+    "route": "sh -lc 'rtk read README.md'"
+  },
+  {
+    "id": "bash-nl",
+    "command": "bash -c 'nl -ba README.md'",
+    "decision": "rewrite",
+    "route": "bash -c 'rtk read README.md -n'"
+  },
+  {
+    "id": "zsh-sed",
+    "command": "zsh -lc 'sed -n 1,50p README.md'",
+    "decision": "rewrite",
+    "route": "zsh -lc 'rtk read README.md --from 1 --to 50'"
+  },
+  {
+    "id": "absolute-cat",
+    "command": "/bin/cat README.md",
+    "decision": "rewrite",
+    "route": "rtk read README.md"
+  },
+  {
+    "id": "git-no-pager",
+    "command": "git --no-pager blame README.md",
+    "decision": "rewrite",
+    "route": "rtk git --no-pager blame README.md"
+  },
+  {
+    "id": "cat-head-pipeline",
+    "command": "cat README.md | head -50",
+    "decision": "rewrite",
+    "route": "rtk read README.md --max-lines 50"
+  },
+  {
+    "id": "cat-identity-pipeline",
+    "command": "cat README.md | cat",
+    "decision": "rewrite",
+    "route": "rtk read README.md"
+  },
+  {
+    "id": "nested-shell",
+    "command": "sh -c 'bash -lc \"git status --short\"'",
+    "decision": "rewrite",
+    "route": "sh -c 'bash -lc \"rtk git status --short\"'"
+  },
+  {
+    "id": "env-shell",
+    "command": "env CI=1 sh -c 'head -20 README.md'",
+    "decision": "rewrite",
+    "route": "env CI=1 sh -c 'rtk read README.md --max-lines 20'"
+  },
+  {
+    "id": "path-override-missing-engine",
+    "command": "PATH=/definitely/not/a/managed/path git status --short",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e4",
+      "requires approval",
+      "re-issue the inner command directly"
+    ]
+  },
+  {
+    "id": "nested-path-override-missing-engine",
+    "command": "sh -c 'PATH=/definitely/not/a/managed/path git status --short'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e2",
+      "requires approval",
+      "re-issue the inner command directly"
+    ]
+  },
+  {
+    "id": "quoted-file-sed",
+    "command": "sed -n '4,8p' \"file with spaces.md\"",
+    "decision": "rewrite",
+    "route": "rtk read \"file with spaces.md\" --from 4 --to 8"
+  },
+  {
+    "id": "managed-raw-rg",
+    "layer": "root",
+    "command": "hzr rtk -- raw rg -n TODO",
+    "decision": "rewrite",
+    "route": "rtk rg -n TODO"
+  },
+  {
+    "id": "unbounded-managed-read",
+    "layer": "root",
+    "command": "hzr read README.md --level none",
+    "decision": "rewrite",
+    "route": "hzr rtk -- read README.md"
+  },
+  {
+    "id": "python-read",
+    "command": "python3 -c 'print(open(\"README.md\").read())'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e3",
+      "requires approval",
+      "read files with `hzr read <file>`"
+    ]
+  },
+  {
+    "id": "node-read",
+    "command": "node -e 'console.log(readFileSync(\"README.md\",\"utf8\"))'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e3",
+      "requires approval",
+      "read files with `hzr read <file>`"
+    ]
+  },
+  {
+    "id": "ruby-read",
+    "command": "ruby -e 'puts File.read(\"README.md\")'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e3",
+      "requires approval",
+      "read files with `hzr read <file>`"
+    ]
+  },
+  {
+    "id": "perl-read",
+    "command": "perl -ne 'print' README.md",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e3",
+      "requires approval",
+      "read files with `hzr read <file>`"
+    ]
+  },
+  {
+    "id": "awk-read",
+    "command": "awk '{print}' README.md",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e3",
+      "requires approval",
+      "read files with `hzr read <file>`"
+    ]
+  },
+  {
+    "id": "find-exec-cat",
+    "command": "find . -name '*.rs' -exec cat {} +",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e6",
+      "requires approval",
+      "read the matched files with `hzr read <file>`"
+    ]
+  },
+  {
+    "id": "xargs-cat",
+    "command": "xargs -a /dev/null cat README.md",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e6",
+      "requires approval",
+      "read the matched files with `hzr read <file>`"
+    ]
+  },
+  {
+    "id": "tar-stdout",
+    "command": "tar cf - README.md",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e6",
+      "requires approval",
+      "read the matched files with `hzr read <file>`"
+    ]
+  },
+  {
+    "id": "temp-log",
+    "command": "sh -lc 'bun test > /tmp/o.log 2>&1; tail -n 80 /tmp/o.log'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e2",
+      "requires approval",
+      "re-issue the inner command directly"
+    ]
+  },
+  {
+    "id": "ledger-sqlite",
+    "command": "/usr/bin/sqlite3 /tmp/ledger/hzr.sqlite 'select * from operations'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e9",
+      "requires approval",
+      "use `hzr stats`"
+    ]
+  },
+  {
+    "id": "malformed-shell",
+    "command": "sh -c 'git status",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e2",
+      "requires approval",
+      "re-issue the inner command directly"
+    ]
+  },
+  {
+    "id": "missing-inline-code",
+    "command": "python3 -c",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e3",
+      "requires approval",
+      "read files with `hzr read <file>`"
+    ]
+  },
+  {
+    "id": "generic-sqlite",
+    "command": "sqlite3 /tmp/x.db 'select 1'",
+    "decision": "rewrite",
+    "route": "rtk sqlite3 /tmp/x.db 'select 1' --max-rows 50 --max-tokens 2048"
+  },
+  {
+    "id": "absolute-generic-sqlite",
+    "command": "/usr/bin/sqlite3 -readonly -json /tmp/x.db 'select 1'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e4",
+      "requires approval",
+      "re-issue the inner command directly"
+    ]
+  },
+  {
+    "id": "direct-git-blame",
+    "command": "git blame README.md",
+    "decision": "rewrite",
+    "route": "rtk git blame README.md"
+  },
+  {
+    "id": "tar-listing",
+    "command": "tar tf archive.tar",
+    "decision": "rewrite",
+    "route": "rtk tar --max-entries 100 tf archive.tar"
+  },
+  {
+    "id": "python-script",
+    "command": "python3 scripts/migrate.py",
+    "decision": "proxy"
+  },
+  {
+    "id": "node-script",
+    "command": "node scripts/build-artifact.js",
+    "decision": "proxy"
+  },
+  {
+    "id": "fidelity-verbatim-source",
+    "layer": "root",
+    "command": "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=verbatim_source hzr rtk -- raw cat README.md",
+    "decision": "raw"
+  },
+  {
+    "id": "fidelity-missing-reason",
+    "layer": "root",
+    "command": "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat README.md",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "HZR_RAW_FIDELITY_REASON"
+    ]
+  },
+  {
+    "id": "fidelity-managed-command",
+    "layer": "root",
+    "command": "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=machine_protocol hzr rtk -- raw hzr stats",
+    "decision": "rewrite",
+    "route": "hzr stats"
+  },
+  {
+    "id": "sqlite-write",
+    "command": "sqlite3 /tmp/x.db 'UPDATE users SET active=1'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e10",
+      "requires approval",
+      "no managed route covers this command"
+    ]
+  },
+  {
+    "id": "sqlite-dot-command",
+    "command": "sqlite3 /tmp/x.db '.dump'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e10",
+      "requires approval",
+      "no managed route covers this command"
+    ]
+  },
+  {
+    "id": "sqlite-multiple-statements",
+    "command": "sqlite3 /tmp/x.db 'SELECT 1; SELECT 2'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e10",
+      "requires approval",
+      "no managed route covers this command"
+    ]
+  },
+  {
+    "id": "sqlite-dangerous-select",
+    "command": "sqlite3 /tmp/x.db 'SELECT writefile(\"/tmp/out\", value) FROM data'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e10",
+      "requires approval",
+      "no managed route covers this command"
+    ]
+  },
+  {
+    "id": "tar-gzip-listing",
+    "command": "tar -tzf archive.tgz",
+    "decision": "rewrite",
+    "route": "rtk tar --max-entries 100 -tzf archive.tgz"
+  },
+  {
+    "id": "tar-extract",
+    "command": "tar -xf archive.tar",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e10",
+      "requires approval",
+      "no managed route covers this command"
+    ]
+  },
+  {
+    "id": "tar-long-listing",
+    "command": "tar --list --file archive.tar",
+    "decision": "rewrite",
+    "route": "rtk tar --max-entries 100 --list --file archive.tar"
+  },
+  {
+    "id": "tar-external-command",
+    "command": "tar -tf archive.tar --to-command=sh",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e10",
+      "requires approval",
+      "no managed route covers this command"
+    ]
+  },
+  {
+    "id": "remote-logs-flags",
+    "command": "ssh deploy@example.test docker logs --tail 80 --since 5m --timestamps story-1",
+    "decision": "rewrite",
+    "route": "rtk logs deploy@example.test story-1 --tail 80 --since 5m --timestamps"
+  },
+  {
+    "id": "remote-logs-follow",
+    "command": "ssh host docker logs --follow story-1",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e10",
+      "requires approval",
+      "no managed route covers this command"
+    ]
+  },
+  {
+    "id": "remote-logs-ssh-option",
+    "command": "ssh -T host docker logs story-1",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e10",
+      "requires approval",
+      "no managed route covers this command"
+    ]
+  },
+  {
+    "id": "remote-logs-shell-payload",
+    "command": "ssh host 'docker logs story-1 | cat'",
+    "decision": "ask",
+    "expect_reason_contains": [
+      "e10",
+      "requires approval",
+      "no managed route covers this command"
+    ]
+  },
+  {
+    "id": "native-read-observe",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Read",
+    "tool_input": {
+      "file_path": "/work/file.md"
+    },
+    "mode": "observe",
+    "decision": "allow",
+    "class": "e8_native_tool",
+    "avoidable": false
+  },
+  {
+    "id": "native-grep-observe",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Grep",
+    "tool_input": {
+      "pattern": "needle",
+      "path": "/work/src"
+    },
+    "mode": "observe",
+    "decision": "allow",
+    "class": "e8_native_tool",
+    "avoidable": false
+  },
+  {
+    "id": "native-glob-observe",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Glob",
+    "tool_input": {
+      "pattern": "**/*"
+    },
+    "mode": "observe",
+    "decision": "allow",
+    "class": "e8_native_tool",
+    "avoidable": false
+  },
+  {
+    "id": "native-edit-observe",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Edit",
+    "tool_input": {
+      "file_path": "/work/file.md",
+      "old_string": "old",
+      "new_string": "new"
+    },
+    "mode": "observe",
+    "decision": "allow",
+    "class": "e8_native_tool",
+    "avoidable": false
+  },
+  {
+    "id": "native-write-observe",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Write",
+    "tool_input": {
+      "file_path": "/work/file.md",
+      "content": "content"
+    },
+    "mode": "observe",
+    "decision": "allow",
+    "class": "e8_native_tool",
+    "avoidable": false
+  },
+  {
+    "id": "native-read-steer",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Read",
+    "tool_input": {
+      "file_path": "/work/file.md"
+    },
+    "mode": "steer",
+    "decision": "deny",
+    "route": "hzr read '/work/file.md'",
+    "class": "e8_native_tool",
+    "avoidable": true,
+    "expect_reason_contains": [
+      "native-tool correction E8",
+      "use `hzr "
+    ]
+  },
+  {
+    "id": "native-grep-steer",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Grep",
+    "tool_input": {
+      "pattern": "needle",
+      "path": "/work/src"
+    },
+    "mode": "steer",
+    "decision": "deny",
+    "route": "hzr search 'needle' --mode exact --path '/work/src'",
+    "class": "e8_native_tool",
+    "avoidable": true,
+    "expect_reason_contains": [
+      "native-tool correction E8",
+      "use `hzr "
+    ]
+  },
+  {
+    "id": "native-glob-steer",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Glob",
+    "tool_input": {
+      "pattern": "**/*"
+    },
+    "mode": "steer",
+    "decision": "allow",
+    "class": "e10_capability_gap",
+    "avoidable": false
+  },
+  {
+    "id": "native-edit-steer",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Edit",
+    "tool_input": {
+      "file_path": "/work/file.md",
+      "old_string": "old",
+      "new_string": "new"
+    },
+    "mode": "steer",
+    "decision": "allow",
+    "class": "e10_capability_gap",
+    "avoidable": false
+  },
+  {
+    "id": "native-write-steer",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Write",
+    "tool_input": {
+      "file_path": "/work/file.md",
+      "content": "content"
+    },
+    "mode": "steer",
+    "decision": "allow",
+    "class": "e10_capability_gap",
+    "avoidable": false
+  },
+  {
+    "id": "native-read-strict",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Read",
+    "tool_input": {
+      "file_path": "/work/file.md"
+    },
+    "mode": "strict",
+    "decision": "deny",
+    "route": "hzr read '/work/file.md'",
+    "class": "e8_native_tool",
+    "avoidable": true,
+    "expect_reason_contains": [
+      "native-tool correction E8",
+      "use `hzr "
+    ]
+  },
+  {
+    "id": "native-grep-strict",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Grep",
+    "tool_input": {
+      "pattern": "needle",
+      "path": "/work/src"
+    },
+    "mode": "strict",
+    "decision": "deny",
+    "route": "hzr search 'needle' --mode exact --path '/work/src'",
+    "class": "e8_native_tool",
+    "avoidable": true,
+    "expect_reason_contains": [
+      "native-tool correction E8",
+      "use `hzr "
+    ]
+  },
+  {
+    "id": "native-glob-strict",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Glob",
+    "tool_input": {
+      "pattern": "**/*"
+    },
+    "mode": "strict",
+    "decision": "allow",
+    "class": "e10_capability_gap",
+    "avoidable": false
+  },
+  {
+    "id": "native-edit-strict",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Edit",
+    "tool_input": {
+      "file_path": "/work/file.md",
+      "old_string": "old",
+      "new_string": "new"
+    },
+    "mode": "strict",
+    "decision": "deny",
+    "route": "hzr write patch '/work/file.md' --old 'old' --new 'new' --cas",
+    "class": "e8_native_tool",
+    "avoidable": true,
+    "expect_reason_contains": [
+      "native-tool correction E8",
+      "use `hzr "
+    ]
+  },
+  {
+    "id": "native-write-strict",
+    "layer": "root",
+    "surface": "native",
+    "tool": "Write",
+    "tool_input": {
+      "file_path": "/work/file.md",
+      "content": "content"
+    },
+    "mode": "strict",
+    "decision": "deny",
+    "route": "hzr write create '/work/file.md' --content 'content' --force",
+    "class": "e8_native_tool",
+    "avoidable": true,
+    "expect_reason_contains": [
+      "native-tool correction E8",
+      "use `hzr "
+    ]
+  }
 ]
