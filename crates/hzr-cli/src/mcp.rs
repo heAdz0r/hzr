@@ -31,11 +31,12 @@ use directories::BaseDirs;
 use hzr_core::Config;
 use hzr_index::IndexPlacement;
 use hzr_protocol::{
-    AccountingAttribution, AccountingOperationKind, AccountingOperationMode, AccountingStage,
-    CodecApiRequest, CodecProfile, ContextPlanApiRequest, FidelityClass, MemoryForgetApiRequest,
-    MemoryImportance, MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector,
-    MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope, RiskClass, SearchApiRequest,
-    SearchMode,
+    AccountingAttribution, AccountingOperationKind, AccountingOperationMode,
+    AccountingSearchStrategy, AccountingStage, CodecApiRequest, CodecProfile,
+    ContextPlanApiRequest, FidelityClass, MemoryForgetApiRequest, MemoryImportance,
+    MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest,
+    MemoryUpdateApiRequest, MemoryWriteScope, RiskClass, SearchApiRequest, SearchApiResponse,
+    SearchMode, SearchStrategy,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -629,7 +630,7 @@ fn mcp_operation_request(
     let delivered = u64::try_from(bytes / 4).unwrap_or(u64::MAX).max(1);
     let command = tool_name.replace('_', " ");
     let attribution = (tool_name == "hzr_search")
-        .then(|| search_accounting_attribution(arguments))
+        .then(|| search_accounting_attribution(arguments, response))
         .transpose()?;
     Ok(hzr_protocol::OperationApiRequest {
         original_command: command.clone(),
@@ -653,30 +654,62 @@ fn mcp_operation_request(
     })
 }
 
-fn search_accounting_attribution(arguments: &Value) -> Result<AccountingAttribution> {
-    let mode = optional_enum(
+fn search_accounting_attribution(
+    arguments: &Value,
+    response: &Value,
+) -> Result<AccountingAttribution> {
+    let requested_mode = optional_enum(
         arguments,
         "mode",
         SearchMode::Auto,
         parse_mode,
         "auto, semantic, exact",
     )?;
+    let response: SearchApiResponse = serde_json::from_value(response.clone())?;
+    let effective_mode = accounting_effective_search_mode(&response);
     Ok(AccountingAttribution {
         operation: AccountingOperationKind::Search,
-        mode: match mode {
-            SearchMode::Auto => AccountingOperationMode::SearchAuto,
-            SearchMode::Semantic => AccountingOperationMode::SearchSemantic,
-            SearchMode::Exact => AccountingOperationMode::SearchExact,
-        },
+        mode: effective_mode,
         stage: AccountingStage::FinalDelivery,
+        requested_mode: Some(accounting_search_mode(requested_mode)),
+        effective_mode: Some(effective_mode),
+        search_strategy: Some(match response.strategy {
+            SearchStrategy::ForkRgaiAdaptive => AccountingSearchStrategy::ForkRgaiAdaptive,
+            SearchStrategy::ForkRgaiBuiltin => AccountingSearchStrategy::ForkRgaiBuiltin,
+            SearchStrategy::ForkRgaiGrepai => AccountingSearchStrategy::ForkRgaiGrepai,
+            SearchStrategy::ForkRgaiRipgrep => AccountingSearchStrategy::ForkRgaiRipgrep,
+            SearchStrategy::ForkRgaiFiles => AccountingSearchStrategy::ForkRgaiFiles,
+        }),
+        search_fallback_code: response.fallback_code,
         include_content: Some(optional_bool(arguments, "include_content", false)?),
         limit: Some(u64::try_from(bounded_usize(arguments, "limit", 10, 50)?)?),
-        path_scope_count: Some(u64::from(optional_string(arguments, "path")?.is_some())),
+        path_scope_count: Some(1),
         filter_level: None,
         from_line: None,
         to_line: None,
         source_bytes: None,
     })
+}
+
+const fn accounting_effective_search_mode(response: &SearchApiResponse) -> AccountingOperationMode {
+    match response.strategy {
+        SearchStrategy::ForkRgaiBuiltin if matches!(response.effective_mode, SearchMode::Exact) => {
+            AccountingOperationMode::SearchExact
+        }
+        SearchStrategy::ForkRgaiBuiltin => AccountingOperationMode::SearchBuiltin,
+        SearchStrategy::ForkRgaiAdaptive => accounting_search_mode(response.effective_mode),
+        SearchStrategy::ForkRgaiGrepai
+        | SearchStrategy::ForkRgaiRipgrep
+        | SearchStrategy::ForkRgaiFiles => AccountingOperationMode::SearchSemantic,
+    }
+}
+
+const fn accounting_search_mode(mode: SearchMode) -> AccountingOperationMode {
+    match mode {
+        SearchMode::Auto => AccountingOperationMode::SearchAuto,
+        SearchMode::Semantic => AccountingOperationMode::SearchSemantic,
+        SearchMode::Exact => AccountingOperationMode::SearchExact,
+    }
 }
 
 /// Compile a response-density contract through the daemon.

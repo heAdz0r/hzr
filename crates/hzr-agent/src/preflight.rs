@@ -16,7 +16,7 @@ use crate::process::{ProcessGroupGuard, configure_process_group};
 pub const CAVEMAN_CODE_NPM_VERSION: &str = "0.65.2";
 pub const CAVEMAN_CODE_NPM_INTEGRITY: &str = "sha512-rs7sOI7WCycpBq8qNQ3MQagxfiXAgymfyj2BjPnoaVNNPsgtFK08calhYGEhMkrH0N6prHt0KHJm4AOuuMNEpw==";
 pub const PACKAGE_LOCK_SHA256: &str =
-    "8b131bfe7ea7c9257558df645f50e85e40387c8d862356fdfafe3848407748af";
+    "4af6cb22fae9ebdb0e6c051b1942426e6c48e1fc6cdaed598102454f07f2cd45";
 pub const NODE_MINIMUM_VERSION: NodeVersion = NodeVersion {
     major: 20,
     minor: 18,

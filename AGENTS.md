@@ -4,7 +4,7 @@
 - `fork-core/rtk` is the HZR-owned evolvable engine. Develop inherited RTK functionality here, never in `/Users/andrew/Programming/rtk`.
 - Tag `v0.1.0` and snapshot v2 `f4296ec4...` are the immutable import baseline. Preserve their provenance while recording and testing every later engine delta.
 - Never replace inherited engine behavior with a reduced reimplementation. Engine changes require parity documentation and the complete deterministic regression gate.
-- Product version is 0.4.2; `v0.1.0` remains the immutable import baseline.
+- Product version is 0.4.3; `v0.1.0` remains the immutable import baseline.
 - Internal component communication uses typed protocol structures; never parse human CLI output when JSON is available.
 - Exactly one canonical workspace and one grepai index owner are allowed per worktree.
 - ICM is supervised centrally; adapters must not spawn independent long-lived instances.

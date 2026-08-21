@@ -1,17 +1,35 @@
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use hzr_core::{
     BypassSummary, Config, EfficiencySummary, Ledger, LedgerSummary, OperationChannel,
-    OperationModeSummary, OperationRoute, classify_operation,
+    OperationFamilySummary, OperationModeSummary, OperationRoute, StatsQuery, classify_operation,
 };
+use hzr_exec::{ForkRuntimePaths, PinnedRtkAdapter, RtkAdapterConfig};
 use serde::Serialize;
 
+use crate::cli::StatsDuration;
 use crate::hook_runner::{self, AccountingCoverage};
 
 const DEFAULT_COMMAND_LIMIT: usize = 12;
 const DEFAULT_BYPASS_TOOL_LIMIT: usize = 12;
+
+struct ReportInputs {
+    gain: EfficiencySummary,
+    observed_model_usage: LedgerSummary,
+    observed_model_usage_scope: &'static str,
+    coverage: AccountingCoverage,
+    bypass: BypassSummary,
+    by_family: Vec<OperationFamilySummary>,
+    scope: String,
+}
+
+struct ReportOptions {
+    command_limit: Option<usize>,
+    recovery: Option<String>,
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct StatsReport {
@@ -20,6 +38,8 @@ pub struct StatsReport {
     pub direct_savings: DirectSavings,
     pub by_subsystem: Vec<SubsystemSavings>,
     pub by_mode: Vec<OperationModeSummary>,
+    /// Argument-free aggregation safe to retain and serialize even for sensitive commands.
+    pub by_family: Vec<OperationFamilySummary>,
     pub by_command: Vec<CommandSavings>,
     pub by_command_total: usize,
     pub by_command_omitted: usize,
@@ -113,40 +133,77 @@ pub struct CommandSavings {
     pub avg_time_ms: u64,
 }
 
-pub fn collect(
+pub async fn collect(
     config: &Config,
     workspace: Option<&Path>,
     include_all_commands: bool,
+    since: Option<&StatsDuration>,
 ) -> Result<StatsReport> {
     let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?;
-    let (gain, bypass, scope, observed_model_usage, observed_model_usage_scope) = match workspace {
-        Some(workspace) => {
-            let workspace = workspace.to_string_lossy();
-            (
-                ledger.efficiency_summary_for_project(&workspace)?,
-                ledger.bypass_summary_for_project(&workspace)?,
-                format!("project {}", workspace),
-                ledger.summary_for_project(&workspace)?,
-                "project_matched",
-            )
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    let cutoff = since
+        .map(|duration| now.saturating_sub(duration.seconds()))
+        .map(i64::try_from)
+        .transpose()?;
+    let workspace_text = workspace.map(|path| path.to_string_lossy());
+    let mut collection = ledger.stats_collection(StatsQuery {
+        project_path: workspace_text.as_deref(),
+        since_unix_seconds: cutoff,
+    })?;
+    let capability_commands = collection
+        .capability_commands()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if !capability_commands.is_empty() {
+        let supported = PinnedRtkAdapter::classify_capabilities_once(
+            RtkAdapterConfig {
+                binary: config.engines.binary("rtk"),
+                runtime_paths: Some(ForkRuntimePaths::from_data_root(&config.data_dir)),
+                ..RtkAdapterConfig::default()
+            },
+            &capability_commands,
+        )
+        .await
+        .unwrap_or_else(|_| vec![false; capability_commands.len()]);
+        collection.apply_capabilities(&supported);
+    }
+    let snapshot = collection.snapshot;
+    let scope = match (workspace_text.as_deref(), since) {
+        (Some(workspace), Some(duration)) => {
+            format!("project {workspace} since {}", duration.label())
         }
-        None => (
-            ledger.efficiency_summary()?,
-            ledger.bypass_summary()?,
-            "global lifetime".to_owned(),
-            ledger.summary()?,
-            "global_lifetime",
-        ),
+        (Some(workspace), None) => format!("project {workspace}"),
+        (None, Some(duration)) => format!("global since {}", duration.label()),
+        (None, None) => "global lifetime".to_owned(),
     };
+    let observed_model_usage_scope = match (workspace.is_some(), since.is_some()) {
+        (true, true) => "project_matched_window",
+        (true, false) => "project_matched",
+        (false, true) => "global_window",
+        (false, false) => "global_lifetime",
+    };
+    let mut recovery = "hzr stats --json --all".to_owned();
+    if let Some(workspace) = workspace_text.as_deref() {
+        recovery.push_str(&format!(" --workspace {workspace}"));
+    }
+    if let Some(duration) = since {
+        recovery.push_str(&format!(" --since {}", duration.label()));
+    }
     let coverage = hook_runner::degraded_rewrite_coverage(config)?;
     Ok(build_report_with_command_limit(
-        gain,
-        observed_model_usage,
-        observed_model_usage_scope,
-        coverage,
-        bypass,
-        scope,
-        (!include_all_commands).then_some(DEFAULT_COMMAND_LIMIT),
+        ReportInputs {
+            gain: snapshot.efficiency,
+            observed_model_usage: snapshot.provider_usage,
+            observed_model_usage_scope,
+            coverage,
+            bypass: snapshot.bypass,
+            by_family: snapshot.by_family,
+            scope,
+        },
+        ReportOptions {
+            command_limit: (!include_all_commands).then_some(DEFAULT_COMMAND_LIMIT),
+            recovery: Some(recovery),
+        },
     ))
 }
 
@@ -160,25 +217,36 @@ fn build_report(
     scope: String,
 ) -> StatsReport {
     build_report_with_command_limit(
+        ReportInputs {
+            gain,
+            observed_model_usage,
+            observed_model_usage_scope,
+            coverage,
+            bypass,
+            by_family: Vec::new(),
+            scope,
+        },
+        ReportOptions {
+            command_limit: Some(DEFAULT_COMMAND_LIMIT),
+            recovery: None,
+        },
+    )
+}
+
+fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions) -> StatsReport {
+    let ReportInputs {
         gain,
         observed_model_usage,
         observed_model_usage_scope,
         coverage,
         bypass,
+        by_family,
         scope,
-        Some(DEFAULT_COMMAND_LIMIT),
-    )
-}
-
-fn build_report_with_command_limit(
-    gain: EfficiencySummary,
-    observed_model_usage: LedgerSummary,
-    observed_model_usage_scope: &'static str,
-    coverage: AccountingCoverage,
-    bypass: BypassSummary,
-    scope: String,
-    command_limit: Option<usize>,
-) -> StatsReport {
+    } = inputs;
+    let ReportOptions {
+        command_limit,
+        recovery,
+    } = options;
     let by_mode = gain.by_mode.clone();
     let reveal_command_details = command_limit.is_none();
     let traffic_coverage = TrafficCoverage {
@@ -263,14 +331,16 @@ fn build_report_with_command_limit(
         commands.truncate(limit);
     }
     let by_command_omitted = by_command_total.saturating_sub(commands.len());
-    let by_command_recovery = if scope == "global lifetime" {
-        "hzr stats --json --all".to_owned()
-    } else {
-        format!(
-            "hzr stats --json --all --workspace {}",
-            scope.trim_start_matches("project ")
-        )
-    };
+    let by_command_recovery = recovery.unwrap_or_else(|| {
+        if scope == "global lifetime" {
+            "hzr stats --json --all".to_owned()
+        } else {
+            format!(
+                "hzr stats --json --all --workspace {}",
+                scope.trim_start_matches("project ")
+            )
+        }
+    });
 
     StatsReport {
         hzr_version: env!("CARGO_PKG_VERSION"),
@@ -291,6 +361,7 @@ fn build_report_with_command_limit(
         },
         by_subsystem,
         by_mode,
+        by_family,
         by_command: commands,
         by_command_total,
         by_command_omitted,
@@ -310,21 +381,24 @@ fn build_report_with_command_limit(
 fn provider_usage_notes(observed_model_usage_scope: &str) -> Vec<&'static str> {
     let mut notes = vec![
         "direct savings are estimated from before/after output size and never mixed with provider usage",
-        "read, write, rgai/search, and command filters share the same cumulative HZR-owned history",
+        "read, write, rgai/search, and command filters share the same HZR-owned ledger scope",
         "a bypassed operation delivers as many tokens as it consumed, so it cancels out of the reduction ratio instead of lowering it",
         "context selection, memory recall, and response contracts receive no savings credit without a measured counterfactual",
         "accounting completeness applies only to observed channels; a host-native tool without an installed observer is outside the denominator",
     ];
     notes.push(match observed_model_usage_scope {
-        "project_matched" => {
+        "project_matched" | "project_matched_window" => {
             "provider usage is scoped to receipts that carry a matching workspace identity; older unscoped receipts stay in the global lifetime view only"
+        }
+        "global_window" => {
+            "provider usage is limited to receipts in the same requested time window"
         }
         _ => {
             "provider usage is the global lifetime total across scoped and legacy unscoped receipts"
         }
     });
     notes.push(
-        "degraded-hook accounting coverage remains process-local and is not project-filtered",
+        "degraded-hook accounting coverage remains process-local and is not project- or time-window-filtered",
     );
     notes
 }

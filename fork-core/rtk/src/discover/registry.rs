@@ -200,6 +200,20 @@ pub fn classify_command(cmd: &str) -> Classification {
     }
 }
 
+/// Return whether the canonical registry has an existing optimized route for `cmd`.
+///
+/// Keep this boolean boundary next to [`classify_command`] so control-plane callers do not need
+/// access to the registry's private report types or a second list of command families.
+pub fn has_existing_route(cmd: &str) -> bool {
+    matches!(
+        classify_command(cmd),
+        Classification::Supported {
+            status: super::report::RtkStatus::Existing,
+            ..
+        }
+    )
+}
+
 /// Extract the base command (first word, or first two if it looks like a subcommand pattern).
 fn extract_base_command(cmd: &str) -> &str {
     let parts: Vec<&str> = cmd.splitn(3, char::is_whitespace).collect();
@@ -3755,27 +3769,57 @@ mod tests {
 
     #[test]
     fn test_rewrite_npm_bare_subcommand() {
-        let commands = vec!["exec", "run", "run-script", "x"];
+        let commands = vec!["run", "run-script", "test"];
         for command in commands {
+            let expected = if command == "test" { " test" } else { "" };
             assert_eq!(
                 rewrite_command_no_prefixes(format!("npm {command}").as_str(), &[]),
-                Some(format!("rtk npm {command}")),
+                Some(format!("rtk npm{expected}")),
                 "Failed for bare command: npm {}",
                 command
             );
         }
+        assert_eq!(rewrite_command_no_prefixes("npm exec unknown", &[]), None);
+        assert_eq!(rewrite_command_no_prefixes("npm x unknown", &[]), None);
     }
 
     #[test]
     fn test_rewrite_npm_with_args() {
         assert_eq!(
+            rewrite_command_no_prefixes("npm run build -- --profile", &[]),
+            Some("rtk npm build -- --profile".to_string()),
+            "rtk npm adds `run` itself, so the discovery rewrite must not duplicate it"
+        );
+        assert_eq!(
             rewrite_command_no_prefixes("npm run test", &[]),
-            Some("rtk npm run test".to_string()),
+            Some("rtk npm test".to_string()),
         );
         assert_eq!(
             rewrite_command_no_prefixes("npm exec vitest", &[]),
             Some("rtk vitest".to_string()),
         );
+    }
+
+    #[test]
+    fn acceptance_gate_no_raw_for_package_test_aliases() {
+        for (command, expected) in [
+            ("npm test", "rtk npm test"),
+            ("npm test -- --watch", "rtk npm test -- --watch"),
+            ("npm run test -- --watch", "rtk npm test -- --watch"),
+            ("npm run-script test", "rtk npm test"),
+            ("npm test -- 'a b'", "rtk npm test -- 'a b'"),
+            ("pnpm test", "rtk pnpm test"),
+            ("pnpm test -- --watch", "rtk pnpm test -- --watch"),
+            ("pnpm run test -- --watch", "rtk pnpm run test -- --watch"),
+            ("pnpm run-script test", "rtk pnpm run-script test"),
+            ("pnpm test -- 'a b'", "rtk pnpm test -- 'a b'"),
+        ] {
+            assert_eq!(
+                rewrite_command_no_prefixes(command, &[]).as_deref(),
+                Some(expected),
+                "package test alias remained raw or changed argv: {command}"
+            );
+        }
     }
 
     #[test]

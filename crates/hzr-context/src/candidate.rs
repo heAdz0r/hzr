@@ -181,12 +181,18 @@ pub(crate) fn normalize_search(
     outlines: &std::collections::BTreeMap<String, ForkSymbolIndex>,
 ) -> NormalizedSource {
     let source = match response.strategy {
-        SearchStrategy::ForkRgaiAdaptive => CandidateSource::Index,
+        SearchStrategy::ForkRgaiAdaptive
+        | SearchStrategy::ForkRgaiGrepai
+        | SearchStrategy::ForkRgaiRipgrep
+        | SearchStrategy::ForkRgaiFiles => CandidateSource::Index,
         SearchStrategy::ForkRgaiBuiltin => CandidateSource::Exact,
     };
     let source_name = match response.strategy {
         SearchStrategy::ForkRgaiAdaptive => "fork-core/rgai-adaptive",
         SearchStrategy::ForkRgaiBuiltin => "fork-core/rgai-builtin",
+        SearchStrategy::ForkRgaiGrepai => "fork-core/rgai-grepai",
+        SearchStrategy::ForkRgaiRipgrep => "fork-core/rgai-ripgrep",
+        SearchStrategy::ForkRgaiFiles => "fork-core/rgai-files",
     };
     let mut candidates = Vec::with_capacity(response.hits.len());
     let mut warnings = Vec::new();
@@ -526,6 +532,7 @@ mod tests {
             }],
             effective_mode: SearchMode::Exact,
             strategy: SearchStrategy::ForkRgaiBuiltin,
+            fallback_code: None,
             index_generation: Some("generation-1".into()),
             fallback_reason: None,
             next_step: None,

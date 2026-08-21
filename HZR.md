@@ -74,9 +74,10 @@ Memory   -> hzr memory recall|store|update|forget|prune   (see scopes below)
 Semantic -> hzr rgai "<intent>"
 Literal  -> hzr search "<pattern>" --mode exact [--path FILE|DIR ...]
 Ranked   -> hzr search "<terms>" --mode auto
-Read     -> hzr rtk -- read <file> [--from N --to M | --outline | --symbols | --changed | -n]
-Write    -> hzr rtk -- write patch|replace|set|create|batch ...
+Read     -> hzr read <file> [--from N --to M | --outline | --symbols | --changed | -n]
+Write    -> hzr write patch|replace|set|create|batch ...
 Shell    -> hzr exec run '<shell command>'   (default policy route; preserves shell grammar)
+Known output -> hzr rtk -- test|err|summary|log <command...>   (plain argv only)
 Density  -> hzr codec compile --profile shadow|adaptive|compact
 Exact raw -> HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>   (explicit unfiltered fidelity only)
 TDD      -> hzr tdd                  (optional; strict when selected)
@@ -86,7 +87,7 @@ MCP state -> hzr mcp status
 Health   -> hzr doctor [--fix]     (--fix migrates one unambiguous legacy .grepai with backup)
 Enable   -> hzr enable [--workspace DIR]
 Disable  -> hzr disable [--workspace DIR]   (keeps index and memory)
-Gains    -> hzr stats [--workspace DIR]
+Gains    -> hzr stats [--workspace DIR] [--since 7d]
 Project build -> hzr build <args>    (your project, token-optimized output)
 HZR release   -> hzr release --force (rebuild and reinstall HZR itself)
 ```
@@ -102,9 +103,10 @@ one hour; a known newer release is cached for 24 hours. Network failure is silen
 workspace startup or a tool call.
 
 Claude's managed `SessionStart` hook returns a visible `systemMessage` and the same fact as agent
-context. Codex reaches the check through the mandatory exact read of this installed `HZR.md` file;
-the notice is written separately so canonical file output remains byte-exact. When a notice says a
-newer release exists, inform the user once and do not run `hzr update` without explicit approval.
+context. Codex receives the compact managed contract without an automatic full read of this file;
+the update notice is written separately so canonical contract output remains byte-exact. When a
+notice says a newer release exists, inform the user once and do not run `hzr update` without
+explicit approval.
 
 TDD is opt-in, not the default for every agent change. Use `hzr tdd` when the
 user or repository requires it, or when regression risk justifies test-first
@@ -140,26 +142,28 @@ operator even when automatic activation is disabled.
 
 ## Reading a file: reach for the flags, not for `sed`
 
-`hzr rtk -- read` is not "cat with filtering". It takes the arguments you would
+`hzr read` is not "cat with filtering". It takes the arguments you would
 otherwise express by piping through another tool, and it is the single most common
 source of avoidable output:
 
 ```text
-hzr rtk -- read <file> --from 120 --to 180   # a line span  (instead of `sed -n 120,180p`)
-hzr rtk -- read <file> -n                    # with line numbers (instead of `nl -ba`)
-hzr rtk -- read <file> --outline             # structure only, ~98% smaller
-hzr rtk -- read <file> --symbols             # the same structure as JSON, with line spans
-hzr rtk -- read <file> --changed             # only the working-tree hunks
-hzr rtk -- read <file> --since HEAD~3        # only what changed since a revision
-hzr rtk -- read <file> --max-lines N         # head(1)
-hzr rtk -- read <file> --tail-lines N        # tail(1)
+hzr read <file> --from 120 --to 180          # a line span  (instead of `sed -n 120,180p`)
+hzr read <file> -n                           # with line numbers (instead of `nl -ba`)
+hzr read <file> --outline                    # structure only, ~98% smaller
+hzr read <file> --symbols                    # the same structure as JSON, with line spans
+hzr read <file> --changed                    # only the working-tree hunks
+hzr read <file> --since HEAD~3               # only what changed since a revision
+hzr read <file> --max-lines N                # head(1)
+hzr read <file> --tail-lines N               # tail(1)
 ```
 
 Markdown defaults to a bounded digest and code defaults to its minimal view. Unbounded
 `--level none` is automatically reduced to that smart default; use `--outline` first for
 structure and `--from N --to M` for exact evidence. When the complete file is itself the
-authoritative input, use
-`HZR_EXACT_FIDELITY=1 hzr rtk -- read <file> --level none`. `-n` defaults to exact content
+authoritative text input, use
+`HZR_EXACT_FIDELITY=1 hzr read <file> --level none`. The read engine intentionally previews
+binary data; when byte-for-byte binary stdout is itself required, use the explicit
+`HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>` recovery path. `-n` defaults to exact content
 and prints original
 source coordinates, including for ranges and tails. `--max-lines N` returns the first N
 lines followed by the file total, omitted count, and an exact recovery command; tails and

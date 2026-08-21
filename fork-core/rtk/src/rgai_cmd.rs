@@ -100,20 +100,20 @@ pub struct RgaiOptions<'a> {
 }
 
 fn search_attribution(
-    literal: bool,
-    builtin: bool,
+    requested_mode: tracking::OperationMode,
+    effective_mode: tracking::OperationMode,
+    strategy: tracking::SearchStrategy,
+    fallback_code: Option<tracking::SearchFallbackCode>,
     max_results: usize,
 ) -> tracking::OperationAttribution {
     tracking::OperationAttribution {
         operation: tracking::OperationKind::Search,
-        mode: if literal {
-            tracking::OperationMode::SearchExact
-        } else if builtin {
-            tracking::OperationMode::SearchBuiltin
-        } else {
-            tracking::OperationMode::SearchSemantic
-        },
+        mode: effective_mode,
         stage: tracking::AccountingStage::InternalTransport,
+        requested_mode: Some(requested_mode),
+        effective_mode: Some(effective_mode),
+        search_strategy: Some(strategy),
+        search_fallback_code: fallback_code,
         include_content: None,
         limit: Some(max_results),
         path_scope_count: Some(1),
@@ -140,7 +140,13 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
         verbose,
     } = options;
     let timer = tracking::TimedExecution::start();
-    let attribution = search_attribution(literal, builtin, max_results);
+    let requested_mode = if literal {
+        tracking::OperationMode::SearchExact
+    } else if builtin {
+        tracking::OperationMode::SearchBuiltin
+    } else {
+        tracking::OperationMode::SearchSemantic
+    };
 
     let query = query.trim();
     if query.is_empty() {
@@ -178,7 +184,13 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
                 "rtk rgai (grepai)",
                 &raw,
                 &filtered,
-                attribution,
+                search_attribution(
+                    requested_mode,
+                    tracking::OperationMode::SearchSemantic,
+                    tracking::SearchStrategy::Grepai,
+                    None,
+                    max_results,
+                ),
             );
             return Ok(());
         }
@@ -262,6 +274,35 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
     } else {
         "rtk rgai"
     };
+    let (effective_mode, strategy, fallback_code) = match backend {
+        "rg" => (
+            tracking::OperationMode::SearchSemantic,
+            tracking::SearchStrategy::Ripgrep,
+            Some(tracking::SearchFallbackCode::GrepaiUnavailable),
+        ),
+        "rg-files" => (
+            tracking::OperationMode::SearchSemantic,
+            tracking::SearchStrategy::Files,
+            None,
+        ),
+        _ => (
+            if literal {
+                tracking::OperationMode::SearchExact
+            } else {
+                tracking::OperationMode::SearchBuiltin
+            },
+            tracking::SearchStrategy::Builtin,
+            (!builtin && files.is_none())
+                .then_some(tracking::SearchFallbackCode::RipgrepUnavailable),
+        ),
+    };
+    let attribution = search_attribution(
+        requested_mode,
+        effective_mode,
+        strategy,
+        fallback_code,
+        max_results,
+    );
 
     let mut rendered = String::new();
     if outcome.hits.is_empty() {
@@ -273,6 +314,7 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
                 "scanned_files": outcome.scanned_files,
                 "skipped_large": outcome.skipped_large,
                 "skipped_binary": outcome.skipped_binary,
+                "backend": backend,
                 "hits": []
             }))?;
             rendered.push('\n');
@@ -328,6 +370,7 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
             "scanned_files": outcome.scanned_files,
             "skipped_large": outcome.skipped_large,
             "skipped_binary": outcome.skipped_binary,
+            "backend": backend,
             "hits": hits_json
         }))?;
         rendered.push('\n');
@@ -621,6 +664,7 @@ fn filter_grepai_output(
                     "scanned_files": 0,
                     "skipped_large": 0,
                     "skipped_binary": 0,
+                    "backend": "grepai",
                     "hits": [],
                     "parse_error": "failed to parse grepai JSON",
                     "fallback_raw": raw,
@@ -643,6 +687,7 @@ fn filter_grepai_output(
                 "scanned_files": 0,
                 "skipped_large": 0,
                 "skipped_binary": 0,
+                "backend": "grepai",
                 "hits": []
             }))
             .unwrap_or_default()
@@ -692,6 +737,7 @@ fn filter_grepai_output(
             "scanned_files": 0,
             "skipped_large": 0,
             "skipped_binary": 0,
+            "backend": "grepai",
             "hits": hits_json
         }))
         .unwrap_or_default()
@@ -1717,19 +1763,29 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn search_attribution_distinguishes_exact_builtin_and_semantic_without_payloads() {
-        let exact = search_attribution(true, false, 7);
+    fn acceptance_gate_search_attribution_records_actual_backend_without_payloads() {
+        let exact = search_attribution(
+            tracking::OperationMode::SearchSemantic,
+            tracking::OperationMode::SearchExact,
+            tracking::SearchStrategy::Builtin,
+            Some(tracking::SearchFallbackCode::GrepaiUnavailable),
+            7,
+        );
         assert_eq!(exact.mode, tracking::OperationMode::SearchExact);
+        assert_eq!(
+            exact.requested_mode,
+            Some(tracking::OperationMode::SearchSemantic)
+        );
+        assert_eq!(
+            exact.effective_mode,
+            Some(tracking::OperationMode::SearchExact)
+        );
+        assert_eq!(
+            exact.search_strategy,
+            Some(tracking::SearchStrategy::Builtin)
+        );
         assert_eq!(exact.limit, Some(7));
         assert_eq!(exact.path_scope_count, Some(1));
-        assert_eq!(
-            search_attribution(false, true, 10).mode,
-            tracking::OperationMode::SearchBuiltin
-        );
-        assert_eq!(
-            search_attribution(false, false, 10).mode,
-            tracking::OperationMode::SearchSemantic
-        );
     }
 
     #[test]
@@ -2276,10 +2332,12 @@ pub fn log_info(msg: &str) {
             "scanned_files",
             "skipped_large",
             "skipped_binary",
+            "backend",
             "hits",
         ] {
             assert!(parsed.get(key).is_some(), "missing key: {}", key);
         }
+        assert_eq!(parsed["backend"], "grepai");
     }
 
     // --- ripgrep backend tests ---

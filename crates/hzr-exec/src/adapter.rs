@@ -5,6 +5,7 @@ use std::process::Output;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::{CanonicalCommand, ExecError, RewriteDecision, RewriteSource};
@@ -192,6 +193,17 @@ pub struct RtkCapabilities {
     pub proxy: bool,
 }
 
+#[derive(Serialize)]
+struct CapabilityBatchRequest<'a> {
+    commands: &'a [String],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapabilityBatchResponse {
+    supported: Vec<bool>,
+}
+
 #[derive(Clone, Debug)]
 pub struct PinnedRtkAdapter {
     config: RtkAdapterConfig,
@@ -344,6 +356,71 @@ impl PinnedRtkAdapter {
             binary: self.config.binary.clone(),
             runtime_paths,
         })
+    }
+
+    /// Classify distinct commands through one canonical fork-core process.
+    ///
+    /// The response contains booleans only; command payloads never return through stdout.
+    pub async fn classify_capabilities_once(
+        config: RtkAdapterConfig,
+        commands: &[String],
+    ) -> Result<Vec<bool>, ExecError> {
+        let binary = resolve_binary(&config.binary)
+            .map_err(|reason| ExecError::ForkCoreUnavailable { reason })?;
+        let runtime_paths = config
+            .runtime_paths
+            .ok_or(ExecError::MissingForkRuntimePaths)?;
+        let payload = serde_json::to_vec(&CapabilityBatchRequest { commands })?;
+        runtime_paths.ensure_layout()?;
+        let mut command = Command::new(&binary);
+        command.arg("capability-batch");
+        runtime_paths.apply_to_command(&mut command, &binary)?;
+        command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let program = binary.display().to_string();
+        let mut child = command.spawn().map_err(|source| ExecError::Spawn {
+            program: program.clone(),
+            source,
+        })?;
+        let mut stdin = child.stdin.take().ok_or_else(|| ExecError::MissingPipe {
+            program: program.clone(),
+            stream: "stdin",
+        })?;
+        stdin
+            .write_all(&payload)
+            .await
+            .map_err(|source| ExecError::WriteStdin {
+                program: program.clone(),
+                source,
+            })?;
+        drop(stdin);
+        let output = tokio::time::timeout(
+            Duration::from_millis(config.rewrite_timeout_ms),
+            child.wait_with_output(),
+        )
+        .await
+        .map_err(|_| ExecError::ForkCoreUnavailable {
+            reason: "capability batch timed out".to_owned(),
+        })?
+        .map_err(|source| ExecError::Wait {
+            program: program.clone(),
+            source,
+        })?;
+        if !output.status.success() {
+            return Err(ExecError::ForkCoreUnavailable {
+                reason: format!("capability batch exited with {}", output.status),
+            });
+        }
+        let response: CapabilityBatchResponse = serde_json::from_slice(&output.stdout)?;
+        if response.supported.len() != commands.len() {
+            return Err(ExecError::ForkCoreUnavailable {
+                reason: "capability batch cardinality mismatch".to_owned(),
+            });
+        }
+        Ok(response.supported)
     }
 
     pub async fn decide(&self, command: &CanonicalCommand) -> RewriteDecision {
@@ -821,7 +898,9 @@ async fn run_with_timeout(command: &mut Command, timeout: Duration) -> Result<Ou
 
 #[cfg(test)]
 mod tests {
-    use super::{PINNED_RTK_VERSION, parse_version, render_command};
+    use super::{
+        PINNED_RTK_VERSION, PinnedRtkAdapter, RtkAdapterConfig, parse_version, render_command,
+    };
     use crate::{CanonicalCommand, parse_simple_shell};
 
     #[test]
@@ -851,6 +930,20 @@ mod tests {
                 "--format=%h %s".to_owned(),
                 "apostrophe's".to_owned(),
             ])
+        );
+    }
+
+    #[tokio::test]
+    async fn capability_batch_fails_closed_when_the_pinned_engine_is_absent() {
+        let config = RtkAdapterConfig {
+            binary: std::path::PathBuf::from("/definitely/missing/hzr-fork-core"),
+            ..RtkAdapterConfig::default()
+        };
+
+        assert!(
+            PinnedRtkAdapter::classify_capabilities_once(config, &["cargo test".to_owned()])
+                .await
+                .is_err()
         );
     }
 }

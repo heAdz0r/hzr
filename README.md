@@ -4,14 +4,14 @@
 
 ![HZR control-plane banner](docs/assets/hzr-hero.png)
 
-[![Version](https://img.shields.io/badge/version-0.4.2-e64a19)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.4.3-e64a19)](Cargo.toml)
 [![CI](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg)](https://github.com/heAdz0r/hzr/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00)](https://github.com/heAdz0r/hzr/releases)
 [![License](https://img.shields.io/badge/control_plane-Apache--2.0-37474f)](LICENSE)
 
 HZR is an independent product from heAdz0r that turns disparate layers of agent optimization into one controlled execution path. A single control plane handles search, memory, context budget, execution, response density, and usage accounting—without rework or competing loops.
 
-**The core invariant of the 0.4.2 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
+**The core invariant of the 0.4.3 distribution:** one installer deploys the entire versioned, self-contained runtime. Internal engines and their runtime dependencies require no separate installation. The only external runtime prerequisite is system Git.
 
 > HZR does not claim unverified percentage savings. Functional and supply-chain gates are defined and repeatedly tested before release; the end-to-end economic effect must still be measured through paired, provider-billed benchmarks on identical tasks.
 
@@ -19,10 +19,10 @@ HZR is an independent product from heAdz0r that turns disparate layers of agent 
 
 HZR optimizes for an agent reaching the correct next action, not for the smallest output in isolation. A bounded response must say what it represents, what was omitted, how much source it covers, and how to recover exact evidence. Mutations need the same discipline: exact preconditions, atomic replacement, idempotent retries, dry-run, and structured outcomes.
 
-| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.4.2` |
+| Agent need | RAW tools | RTK upstream `v0.44.1` | HZR `0.4.3` |
 |---|---|---|---|
 | Understand a large Markdown file quickly | no common bounded contract | full file in the recorded case | self-described digest: bounded lead prose, omitted-content marker, source lines/bytes, section coverage, exact recovery hint |
-| Recover authoritative content | command-specific full output | full output | `--level none` is byte-exact; `--from`/`--to` gives an exact focused range |
+| Recover authoritative content | command-specific full output | full output | `--level none` preserves complete text; `--from`/`--to` gives an exact focused range; arbitrary binary fidelity remains explicit RAW |
 | Make one safe edit | tool/shell-specific behavior | no `write` command | `replace`, `patch`, JSON/TOML `set`, and idempotent `create`; lock + atomic rename, durable by default |
 | Apply an edit plan | scripts or repeated processes | no `write batch` command | ordered JSON plan, grouped per-file I/O, dry-run, CAS/retry options, JSON v1 outcome |
 | Know whether the answer is complete | varies by command | command-dependent filters | explicit mode, coverage, exit state and recovery path; exact-class invariants remain testable |
@@ -85,13 +85,13 @@ Published artifacts:
 | macOS | Apple Silicon | Available | native release workflow + clean-install smoke |
 | macOS | Intel | Available | native release workflow + clean-install smoke |
 
-No Windows artifact is provided in 0.4.2. Release scripts build native artifacts rather than cross-compiling them.
+No Windows artifact is provided in 0.4.3. Release scripts build native artifacts rather than cross-compiling them.
 
 Download the installer, review it, then run it:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.4.2/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.4.3/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -104,7 +104,7 @@ The installer downloads the platform artifact and `SHA256SUMS` from GitHub Relea
 
 ```text
 ~/.local/share/hzr/
-  versions/v0.4.2-<platform>/   # version-scoped self-contained bundle
+  versions/v0.4.3-<platform>/   # version-scoped self-contained bundle
   current -> versions/...
 
 ~/.local/bin/
@@ -139,7 +139,7 @@ binaries are not required.
 
 | Component | Pin | Distribution role |
 |---|---:|---|
-| HZR | 0.4.2 | public CLI + daemon |
+| HZR | 0.4.3 | public CLI + daemon |
 | HZR fork-core RTK | 0.44.1-fork.1 | private native engine; complete inherited surface |
 | grepai | 0.35.0 + ownership patch | private native engine |
 | ICM | 0.10.61 + lockfile patch | private native engine |
@@ -209,10 +209,13 @@ are intentionally excluded from the public assets.
 hzr index status --workspace .
 hzr search "where is command policy" --workspace .
 hzr context plan "change command policy" --workspace .
+hzr read README.md --outline
+hzr write patch README.md --old @/tmp/old.txt --new @/tmp/new.txt --dry-run
 hzr exec rewrite 'cargo test 2>&1 | tail -80'
 hzr agent run "Implement the requested change" --workspace .
 hzr stats
 hzr stats --workspace .
+hzr stats --since 7d
 ```
 
 The complete fork CLI remains available:
@@ -396,12 +399,12 @@ Default Markdown reads are bounded overviews. They explicitly identify the outpu
 report source and section coverage, and tell the agent how to recover exact evidence:
 
 ```bash
-hzr rtk -- read README.md                         # self-described bounded overview
-hzr rtk -- read README.md --level none            # byte-exact full content
-hzr rtk -- read README.md --from 120 --to 180     # exact focused range
-hzr rtk -- read README.md --outline                # Markdown heading tree + source spans
-hzr rtk -- read src/main.rs -n                     # exact content + source coordinates
-hzr rtk -- read README.md --max-lines 40           # exact first 40 lines
+hzr read README.md                                # self-described bounded overview
+HZR_EXACT_FIDELITY=1 hzr read README.md --level none  # complete text content
+hzr read README.md --from 120 --to 180            # exact focused range
+hzr read README.md --outline                       # Markdown heading tree + source spans
+hzr read src/main.rs -n                            # exact content + source coordinates
+hzr read README.md --max-lines 40                  # exact first 40 lines
 ```
 
 `--outline` is format-aware: Markdown uses ATX headings (`#` through `######`), while
@@ -413,11 +416,11 @@ truncation marker.
 File mutations use one predictable contract with concise, quiet, or JSON v1 output:
 
 ```bash
-hzr rtk -- write --output json replace app.rs --from old --to new --dry-run
-hzr rtk -- write patch app.rs --old @/tmp/old.txt --new @/tmp/new.txt --cas --retry 2
-hzr rtk -- write set config.json --key agent.enabled --value true --value-type bool
-hzr rtk -- write create notes.md --content @/tmp/notes.md
-hzr rtk -- write batch --plan '[{"op":"replace","file":"a.txt","from":"old","to":"new"}]'
+hzr write --output json replace app.rs --from old --to new --dry-run
+hzr write patch app.rs --old @/tmp/old.txt --new @/tmp/new.txt --cas --retry 2
+hzr write set config.json --key agent.enabled --value true --value-type bool
+hzr write create notes.md --content @/tmp/notes.md
+hzr write batch --plan '[{"op":"replace","file":"a.txt","from":"old","to":"new"}]'
 ```
 
 `batch` applies operations for the same file in plan order and performs one atomic file commit
@@ -506,7 +509,7 @@ contract is in [HZR.md](HZR.md).
 Standards baseline: [MCP 2025-11-25 lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)
 and [tool contracts](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
 
-The MCP layer in 0.4.2 is a stateless stdio gateway: it stores no data of its own
+The MCP layer in 0.4.3 is a stateless stdio gateway: it stores no data of its own
 and does not spawn internal engines. Each client process terminates at EOF,
 while durable ownership remains with production `hzrd`; the installer migrates direct ICM
 registrations, and `hzr doctor` verifies the service lifecycle.
@@ -544,7 +547,7 @@ Contributors need Rust 1.85+, Go (CI pin 1.24.2), Git, Bash, curl and standard U
 scripts/build-bundle.sh "$PWD/dist"
 scripts/package-release.sh "$PWD/dist" "$PWD/dist-release"
 HZR_RELEASE_ARCHIVE="$(find "$PWD/dist-release" -maxdepth 1 \
-  -name 'hzr-v0.4.2-*.tar.gz' -print -quit)"
+  -name 'hzr-v0.4.3-*.tar.gz' -print -quit)"
 scripts/smoke-install.sh "$HZR_RELEASE_ARCHIVE" "$PWD/dist-release/SHA256SUMS"
 ```
 
@@ -570,7 +573,7 @@ Do not run `cargo test` directly inside `fork-core/rtk`: the official gate creat
 
 ## Verifiable guarantees and fair boundaries
 
-|Guarantee|Status 0.4.2|
+|Guarantee|Status 0.4.3|
 |---|---|
 |Full fork baseline and current engine have verifiable identity|implemented|
 |Stock RTK is missing from the production path|implemented|

@@ -4,6 +4,41 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-08-21
+
+### Added
+
+- `hzr stats --since <N{h|d|w}>` applies one inclusive time window to provider,
+  efficiency, bypass, family, and mode summaries. Human and JSON output now include bounded,
+  privacy-safe operation-family and stage-aware mode aggregates.
+- Typed requested/effective search modes, actual backend strategy, closed fallback code, and
+  accounting stage distinguish internal transport from final delivery without storing queries,
+  paths, command arguments, file contents, or arbitrary error text.
+- Top-level `hzr read` and `hzr write` aliases expose the existing typed fork-core operations
+  without requiring agents to spell the compatibility route.
+- A final High Critical command-utilization audit and acceptance matrix cover redundant HZR
+  wrappers, typed npm/pnpm test aliases, instruction drift, accounting de-duplication, and
+  privacy-safe diagnostics.
+
+### Changed
+
+- Redundant managed RAW/proxy wrappers around an already first-class `hzr` command are removed
+  byte-for-byte. Explicit `HZR_RAW_FIDELITY=1` remains a byte-fidelity escape when no equivalent
+  bounded route can preserve the requested output.
+- `npm test`, `npm run test`, and `pnpm test` use the existing typed command families. Unknown
+  npm execution forms remain conservative proxy operations unless a specialized rule matches.
+- Managed Claude and Codex instructions prefer top-level read/write aliases, list every shipped
+  MCP tool, expose bounded generic output filters, and describe native tool observation as
+  measurement-only rather than redirection or savings.
+
+### Fixed
+
+- Direct and MCP search accounting now records the backend actually used instead of inferring it
+  from the requested mode, and final-delivery rows no longer double-count headline totals.
+- npm run aliases no longer produce a duplicated `run` argument.
+- The inherited fork-core Clippy ratchet retains the reviewed 141-warning set after the typed
+  accounting and command-routing line shifts.
+
 ## [0.4.2] - 2026-08-21
 
 ### Added
@@ -649,3 +684,4 @@ First public HZR release.
 [0.3.0]: https://github.com/heAdz0r/hzr/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/heAdz0r/hzr/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/heAdz0r/hzr/releases/tag/v0.1.0
+[0.4.3]: https://github.com/heAdz0r/hzr/compare/v0.4.2...v0.4.3

@@ -39,10 +39,103 @@ fn write_stats(output: &mut impl Write, report: &StatsReport, color: bool) -> io
 
     write_local_reduction(output, report, color)?;
     write_optimizer_bypass(output, report, color)?;
+    write_operation_families(output, report, color)?;
+    write_operation_modes(output, report, color)?;
     write_subsystems(output, report, color)?;
     write_hot_paths(output, report, color)?;
     write_provider_usage(output, report, color)?;
     write_integrity(output, report, color)
+}
+
+fn write_operation_modes(
+    output: &mut impl Write,
+    report: &StatsReport,
+    color: bool,
+) -> io::Result<()> {
+    if report.by_mode.is_empty() {
+        return Ok(());
+    }
+    writeln!(output)?;
+    writeln!(
+        output,
+        "{}  {}",
+        style("OPERATION MODES", "1;38;5;208", color),
+        style("estimated · stage-aware · top 12", "2;37", color)
+    )?;
+    let columns = [10, 19, 20, 8, 11];
+    write_rule(output, '╭', '┬', '╮', &columns)?;
+    writeln!(
+        output,
+        "│ {:<8} │ {:<17} │ {:<18} │ {:>6} │ {:>9} │",
+        "FAMILY", "MODE", "STAGE", "CALLS", "DELIVERED"
+    )?;
+    write_rule(output, '├', '┼', '┤', &columns)?;
+    for mode in report.by_mode.iter().take(12) {
+        writeln!(
+            output,
+            "│ {:<8} │ {:<17} │ {:<18} │ {:>6} │ {:>9} │",
+            mode.operation.as_str(),
+            truncate(mode.mode.as_str(), 17),
+            mode.stage.as_str(),
+            format_count(mode.operations),
+            format_count(mode.delivered_tokens_estimated)
+        )?;
+    }
+    write_rule(output, '╰', '┴', '╯', &columns)?;
+    if report.by_mode.len() > 12 {
+        writeln!(
+            output,
+            "   {} more mode/stage groups available in `hzr stats --json`",
+            report.by_mode.len() - 12
+        )?;
+    }
+    Ok(())
+}
+
+fn write_operation_families(
+    output: &mut impl Write,
+    report: &StatsReport,
+    color: bool,
+) -> io::Result<()> {
+    if report.by_family.is_empty() {
+        return Ok(());
+    }
+    writeln!(output)?;
+    writeln!(
+        output,
+        "{}  {}",
+        style("OPERATION FAMILIES", "1;38;5;208", color),
+        style("estimated · arguments and content omitted", "2;37", color)
+    )?;
+    let columns = [24, 20, 12, 13];
+    write_rule(output, '╭', '┬', '╮', &columns)?;
+    writeln!(
+        output,
+        "│ {:<22} │ {:<18} │ {:>10} │ {:>11} │",
+        "FAMILY", "ROUTE / REPLACE?", "CALLS", "DELIVERED"
+    )?;
+    write_rule(output, '├', '┼', '┤', &columns)?;
+    for family in report.by_family.iter().take(12) {
+        let route = match family.route {
+            hzr_core::OperationRoute::Optimized => "optimized",
+            hzr_core::OperationRoute::Bypassed => "raw",
+            hzr_core::OperationRoute::NativeUnaccounted => "native_unaccounted",
+        };
+        let route = if family.first_class_replacement_available {
+            format!("{route} / yes")
+        } else {
+            format!("{route} / no")
+        };
+        writeln!(
+            output,
+            "│ {:<22} │ {:<18} │ {:>10} │ {:>11} │",
+            truncate(&family.family, 22),
+            truncate(&route, 18),
+            format_count(family.operations),
+            format_count(family.delivered_tokens_estimated)
+        )?;
+    }
+    write_rule(output, '╰', '┴', '╯', &columns)
 }
 
 /// Section 1 — locally estimated output reduction. Every figure here comes from the fork
@@ -530,7 +623,8 @@ fn truncate(value: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use hzr_core::LedgerSummary;
+    use hzr_core::{LedgerSummary, OperationFamilySummary, OperationModeSummary, OperationRoute};
+    use hzr_protocol::{AccountingOperationKind, AccountingOperationMode, AccountingStage};
 
     use crate::hook_runner::AccountingCoverage;
     use crate::stats::{
@@ -558,7 +652,7 @@ mod tests {
     fn report(usage: LedgerSummary, commands: Vec<CommandSavings>) -> StatsReport {
         let by_command_total = commands.len();
         StatsReport {
-            hzr_version: "0.4.2",
+            hzr_version: "0.4.3",
             scope: "global lifetime".into(),
             direct_savings: DirectSavings {
                 operations: 42,
@@ -580,6 +674,7 @@ mod tests {
                 share_pct: 80.0,
             }],
             by_mode: Vec::new(),
+            by_family: Vec::new(),
             by_command: commands,
             by_command_total,
             by_command_omitted: 0,
@@ -837,5 +932,46 @@ mod tests {
     fn test_plain_output_contains_no_ansi_escapes() {
         let rendered = render(&report(LedgerSummary::default(), Vec::new()));
         assert!(!rendered.contains("\x1b["));
+    }
+
+    #[test]
+    fn acceptance_gate_family_panel_renders_only_safe_aggregates() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.by_family = vec![OperationFamilySummary {
+            family: "search".into(),
+            route: OperationRoute::Bypassed,
+            operations: 3,
+            delivered_tokens_estimated: 1_024,
+            first_class_replacement_available: true,
+        }];
+
+        let rendered = render(&report);
+
+        assert!(rendered.contains("OPERATION FAMILIES"));
+        assert!(rendered.contains("raw / yes"));
+        assert!(rendered.contains("arguments and content omitted"));
+        assert_aligned(&rendered);
+    }
+
+    #[test]
+    fn acceptance_gate_mode_panel_is_stage_aware_and_bounded() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.by_mode = (0..13)
+            .map(|_| OperationModeSummary {
+                operation: AccountingOperationKind::Search,
+                mode: AccountingOperationMode::SearchExact,
+                stage: AccountingStage::FinalDelivery,
+                operations: 2,
+                delivered_tokens_estimated: 8,
+            })
+            .collect();
+
+        let rendered = render(&report);
+
+        assert!(rendered.contains("OPERATION MODES"));
+        assert!(rendered.contains("search_exact"));
+        assert!(rendered.contains("final_delivery"));
+        assert!(rendered.contains("1 more mode/stage groups"));
+        assert_aligned(&rendered);
     }
 }

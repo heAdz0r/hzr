@@ -14,8 +14,9 @@ pub use ledger::{
     BypassSummary, BypassTool, BypassWindow, DetailedOperationAttribution,
     EfficiencyCommandSummary, EfficiencySummary, Ledger, LedgerError, LedgerRecord, LedgerSummary,
     LegacyEfficiencyMigration, LegacyEfficiencySource, OperationAttribution, OperationContext,
-    OperationModeSummary, PriceTable, ProjectActivitySummary, ProjectOperationRoute,
-    ProjectOperationSummary, discover_legacy_rtk_history, inspect_legacy_efficiency,
+    OperationFamilySummary, OperationModeSummary, PriceTable, ProjectActivitySummary,
+    ProjectOperationRoute, ProjectOperationSummary, StatsCollection, StatsQuery, StatsSnapshot,
+    discover_legacy_rtk_history, inspect_legacy_efficiency,
 };
 pub use operation::{
     OperationChannel, OperationClassification, OperationMeasurement, OperationRoute,

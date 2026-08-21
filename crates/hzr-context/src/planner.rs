@@ -17,7 +17,8 @@ use hzr_memory::{
 };
 use hzr_protocol::{
     ContextPlanApiResponse, ContextWarning, ContextWarningCode, ForkPlannerMetadata,
-    SearchApiResponse, SearchHit, SearchLine, SearchMode, SearchSnippet, SearchStrategy,
+    SearchApiResponse, SearchFallbackCode, SearchHit, SearchLine, SearchMode, SearchSnippet,
+    SearchStrategy,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -140,15 +141,21 @@ impl ContextPlanner {
         self.search_with_accounting(request, false).await
     }
 
-    async fn workspace_for_read(&self, start: &Path) -> Result<(Workspace, Option<String>)> {
+    async fn workspace_for_read(
+        &self,
+        start: &Path,
+    ) -> Result<(Workspace, Option<(SearchFallbackCode, String)>)> {
         match self.indexes.workspace(start).await {
             Ok(workspace) => Ok((workspace, None)),
             Err(error @ IndexError::LegacyIndexRequiresMigration { .. }) => {
                 let workspace = self.indexes.workspace_for_builtin_search(start).await?;
                 Ok((
                     workspace,
-                    Some(format!(
-                        "canonical grepai index requires explicit migration; fork rgai used its builtin fallback without activating or modifying the legacy index: {error}"
+                    Some((
+                        SearchFallbackCode::LegacyIndexRequiresMigration,
+                        format!(
+                            "canonical grepai index requires explicit migration; fork rgai used its builtin fallback without activating or modifying the legacy index: {error}"
+                        ),
                     )),
                 ))
             }
@@ -163,6 +170,7 @@ impl ContextPlanner {
     ) -> Result<SearchApiResponse> {
         request.validate()?;
         let (workspace, migration_fallback) = self.workspace_for_read(&request.workspace).await?;
+        let requested_mode = request.mode;
         if migration_fallback.is_some() {
             request.mode = SearchMode::Exact;
         }
@@ -177,17 +185,26 @@ impl ContextPlanner {
                     (
                         workspace,
                         initial_generation,
-                        Some(format!(
-                            "canonical grepai lifecycle is unavailable; fork rgai used its builtin fallback: {error}"
+                        Some((
+                            SearchFallbackCode::SemanticIndexUnavailable,
+                            format!(
+                                "canonical grepai lifecycle is unavailable; fork rgai used its builtin fallback: {error}"
+                            ),
                         )),
                     )
                 }
             }
         };
+        if requested_mode == SearchMode::Auto && request.mode == SearchMode::Auto {
+            request.mode = SearchMode::Semantic;
+        }
         let mut response = self
             .search_in(&workspace, &generation, &request, account_usage)
             .await?;
-        response.fallback_reason = fallback_reason;
+        if let Some((code, reason)) = fallback_reason {
+            response.fallback_code = Some(code);
+            response.fallback_reason = Some(reason);
+        }
         Ok(response)
     }
 
@@ -613,7 +630,7 @@ impl ContextPlanner {
                     field: "workspace",
                     reason: "workspace root must be valid UTF-8".into(),
                 })?;
-        let strategy = if request.mode == SearchMode::Exact {
+        let planned_strategy = if request.mode == SearchMode::Exact {
             SearchStrategy::ForkRgaiBuiltin
         } else {
             self.ensure_managed_fork_search_config(workspace, account_usage)
@@ -643,6 +660,11 @@ impl ContextPlanner {
                 detail: parse_error,
             });
         }
+        let strategy = raw
+            .backend
+            .map(ForkSearchBackend::strategy)
+            .unwrap_or(planned_strategy);
+        let fallback_code = fork_backend_fallback_code(request.mode, strategy);
         let hits = raw
             .hits
             .into_iter()
@@ -668,6 +690,7 @@ impl ContextPlanner {
             hits,
             effective_mode: request.mode,
             strategy,
+            fallback_code,
             index_generation: Some(generation.generation.clone()),
             fallback_reason: None,
             next_step,
@@ -789,6 +812,43 @@ struct ForkSearchOutput {
     hits: Vec<ForkSearchHit>,
     #[serde(default)]
     parse_error: Option<String>,
+    #[serde(default)]
+    backend: Option<ForkSearchBackend>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+enum ForkSearchBackend {
+    #[serde(rename = "grepai")]
+    Grepai,
+    #[serde(rename = "rg")]
+    Ripgrep,
+    #[serde(rename = "rg-files")]
+    Files,
+    #[serde(rename = "builtin")]
+    Builtin,
+}
+
+impl ForkSearchBackend {
+    const fn strategy(self) -> SearchStrategy {
+        match self {
+            Self::Grepai => SearchStrategy::ForkRgaiGrepai,
+            Self::Ripgrep => SearchStrategy::ForkRgaiRipgrep,
+            Self::Files => SearchStrategy::ForkRgaiFiles,
+            Self::Builtin => SearchStrategy::ForkRgaiBuiltin,
+        }
+    }
+}
+
+const fn fork_backend_fallback_code(
+    requested_mode: SearchMode,
+    strategy: SearchStrategy,
+) -> Option<SearchFallbackCode> {
+    match (requested_mode, strategy) {
+        (SearchMode::Exact, _) | (_, SearchStrategy::ForkRgaiGrepai) => None,
+        (_, SearchStrategy::ForkRgaiRipgrep) => Some(SearchFallbackCode::GrepaiUnavailable),
+        (_, SearchStrategy::ForkRgaiBuiltin) => Some(SearchFallbackCode::RipgrepUnavailable),
+        _ => None,
+    }
 }
 
 #[derive(Deserialize)]
@@ -1242,12 +1302,13 @@ mod tests {
 
     use hzr_protocol::{
         CandidateSource, ContextCandidate, ContextWarning, ContextWarningCode, Provenance,
-        SearchMode, TokenCount, TokenCountSource,
+        SearchFallbackCode, SearchMode, SearchStrategy, TokenCount, TokenCountSource,
     };
 
     use super::{
-        MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, exact_identifier, fork_search_args, fuse,
-        hit_relative_path, push_warning, repair_snippet_line, validate_fork_search_config,
+        ForkSearchOutput, MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, exact_identifier,
+        fork_backend_fallback_code, fork_search_args, fuse, hit_relative_path, push_warning,
+        repair_snippet_line, validate_fork_search_config,
     };
     use crate::candidate::RetrievedCandidate;
 
@@ -1260,6 +1321,34 @@ mod tests {
         assert_eq!(
             exact_identifier("explain how workspace binding works"),
             None
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_fork_backend_metadata_is_closed_and_drives_typed_fallback() {
+        let output: ForkSearchOutput = serde_json::from_value(serde_json::json!({
+            "query": "payload omitted",
+            "total_hits": 0,
+            "backend": "rg",
+            "hits": []
+        }))
+        .expect("typed fork search output");
+        let strategy = output.backend.expect("backend").strategy();
+
+        assert_eq!(strategy, SearchStrategy::ForkRgaiRipgrep);
+        assert_eq!(
+            fork_backend_fallback_code(SearchMode::Semantic, strategy),
+            Some(SearchFallbackCode::GrepaiUnavailable)
+        );
+        assert!(
+            serde_json::from_value::<ForkSearchOutput>(serde_json::json!({
+                "query": "payload omitted",
+                "total_hits": 0,
+                "backend": "arbitrary-shell-backend",
+                "hits": []
+            }))
+            .is_err(),
+            "backend attribution must reject free-form values"
         );
     }
 

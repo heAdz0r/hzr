@@ -79,9 +79,13 @@ pub fn print_index_init(outcome: InitOutcome, status: &IndexStatus) -> io::Resul
     writeln!(output, "watcher: not started; hzrd owns watcher lifecycle")
 }
 
-pub fn print_search(response: &SearchApiResponse) -> io::Result<()> {
-    let stdout = io::stdout();
-    let mut output = stdout.lock();
+pub fn render_search(response: &SearchApiResponse) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    write_search(&mut output, response)?;
+    Ok(output)
+}
+
+fn write_search(output: &mut impl Write, response: &SearchApiResponse) -> io::Result<()> {
     for hit in &response.hits {
         writeln!(
             output,

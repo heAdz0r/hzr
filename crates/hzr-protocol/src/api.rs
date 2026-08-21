@@ -26,6 +26,18 @@ pub enum SearchMode {
 pub enum SearchStrategy {
     ForkRgaiAdaptive,
     ForkRgaiBuiltin,
+    ForkRgaiGrepai,
+    ForkRgaiRipgrep,
+    ForkRgaiFiles,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchFallbackCode {
+    LegacyIndexRequiresMigration,
+    SemanticIndexUnavailable,
+    GrepaiUnavailable,
+    RipgrepUnavailable,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -61,6 +73,8 @@ pub struct SearchApiResponse {
     pub hits: Vec<SearchHit>,
     pub effective_mode: SearchMode,
     pub strategy: SearchStrategy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_code: Option<SearchFallbackCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index_generation: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -447,6 +461,41 @@ pub enum AccountingFilterLevel {
     Aggressive,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountingSearchStrategy {
+    ForkRgaiAdaptive,
+    ForkRgaiBuiltin,
+    ForkRgaiGrepai,
+    ForkRgaiRipgrep,
+    ForkRgaiFiles,
+}
+
+impl AccountingSearchStrategy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ForkRgaiAdaptive => "fork_rgai_adaptive",
+            Self::ForkRgaiBuiltin => "fork_rgai_builtin",
+            Self::ForkRgaiGrepai => "fork_rgai_grepai",
+            Self::ForkRgaiRipgrep => "fork_rgai_ripgrep",
+            Self::ForkRgaiFiles => "fork_rgai_files",
+        }
+    }
+}
+
+impl SearchFallbackCode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacyIndexRequiresMigration => "legacy_index_requires_migration",
+            Self::SemanticIndexUnavailable => "semantic_index_unavailable",
+            Self::GrepaiUnavailable => "grepai_unavailable",
+            Self::RipgrepUnavailable => "ripgrep_unavailable",
+        }
+    }
+}
+
 impl AccountingFilterLevel {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -463,8 +512,17 @@ impl AccountingFilterLevel {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AccountingAttribution {
     pub operation: AccountingOperationKind,
+    /// Backward-compatible canonical mode. New search producers set this to the effective mode.
     pub mode: AccountingOperationMode,
     pub stage: AccountingStage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_mode: Option<AccountingOperationMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_mode: Option<AccountingOperationMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_strategy: Option<AccountingSearchStrategy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_fallback_code: Option<SearchFallbackCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_content: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -895,8 +953,13 @@ mod tests {
     }
 
     #[test]
-    fn operation_attribution_rejects_arbitrary_filter_text() {
-        let request = r#"{"operation":"read","mode":"read_filtered","stage":"internal_transport","filter_level":"secret=value"}"#;
-        assert!(serde_json::from_str::<AccountingAttribution>(request).is_err());
+    fn acceptance_gate_operation_attribution_rejects_free_form_dimensions() {
+        for request in [
+            r#"{"operation":"read","mode":"read_filtered","stage":"internal_transport","filter_level":"secret=value"}"#,
+            r#"{"operation":"search","mode":"search_exact","stage":"final_delivery","search_strategy":"private/path"}"#,
+            r#"{"operation":"search","mode":"search_exact","stage":"final_delivery","search_fallback_code":"token=secret"}"#,
+        ] {
+            assert!(serde_json::from_str::<AccountingAttribution>(request).is_err());
+        }
     }
 }

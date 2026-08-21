@@ -23,6 +23,50 @@ use crate::cli_subcommand_help::{
     STATS_LONG_ABOUT, UPDATE_AFTER_HELP, UPDATE_LONG_ABOUT,
 };
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StatsDuration {
+    seconds: u64,
+    label: String,
+}
+
+impl StatsDuration {
+    pub const fn seconds(&self) -> u64 {
+        self.seconds
+    }
+
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+fn parse_stats_duration(value: &str) -> Result<StatsDuration, String> {
+    let (amount, unit) = value
+        .split_at_checked(value.len().saturating_sub(1))
+        .ok_or_else(|| "duration must be a positive integer followed by h, d, or w".to_owned())?;
+    if amount.is_empty() || !amount.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("duration must be a positive integer followed by h, d, or w".to_owned());
+    }
+    let amount = amount
+        .parse::<u64>()
+        .map_err(|_| "duration is too large".to_owned())?;
+    if amount == 0 {
+        return Err("duration must be greater than zero".to_owned());
+    }
+    let unit_seconds = match unit {
+        "h" => 60 * 60,
+        "d" => 24 * 60 * 60,
+        "w" => 7 * 24 * 60 * 60,
+        _ => return Err("duration unit must be h, d, or w".to_owned()),
+    };
+    let seconds = amount
+        .checked_mul(unit_seconds)
+        .ok_or_else(|| "duration is too large".to_owned())?;
+    Ok(StatsDuration {
+        seconds,
+        label: format!("{amount}{unit}"),
+    })
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "hzr",
@@ -266,6 +310,10 @@ pub enum Command {
         long_about = "Build your project through the inherited fork-core build wrapper with token-optimized output. Deliberately kept as `build` rather than folded into `hzr rtk -- build` so RTK muscle memory keeps working. Building the HZR distribution itself is `hzr release`."
     )]
     Build(ForkForwardArgs),
+    #[command(about = "Read files through bounded HZR filtering")]
+    Read(ForkForwardArgs),
+    #[command(about = "Write files atomically through HZR")]
+    Write(ForkForwardArgs),
     #[command(
         about = "Show cumulative efficiency gains",
         long_about = STATS_LONG_ABOUT,
@@ -278,6 +326,9 @@ pub enum Command {
         /// Emit every per-command row. Default JSON is bounded to protect agent context.
         #[arg(long)]
         all: bool,
+        /// Limit all ledger summaries to records observed within this window (for example 24h, 7d, or 4w)
+        #[arg(long, value_name = "DURATION", value_parser = parse_stats_duration)]
+        since: Option<StatsDuration>,
     },
     #[command(hide = true)]
     Savings,
@@ -1302,6 +1353,38 @@ mod tests {
     }
 
     #[test]
+    fn acceptance_gate_read_write_have_first_class_hzr_aliases() {
+        let read = Cli::try_parse_from(["hzr", "read", "README.md", "--outline"])
+            .expect("first-class read alias");
+        let write = Cli::try_parse_from([
+            "hzr",
+            "write",
+            "patch",
+            "README.md",
+            "--patch",
+            "change.diff",
+        ])
+        .expect("first-class write alias");
+
+        assert!(matches!(
+            read.command,
+            Command::Read(ref arguments)
+                if arguments.args
+                    == [
+                        std::ffi::OsString::from("README.md"),
+                        std::ffi::OsString::from("--outline"),
+                    ]
+        ));
+        assert!(matches!(
+            write.command,
+            Command::Write(ref arguments)
+                if arguments.args.first().and_then(|value| value.to_str()) == Some("patch")
+                    && arguments.args.get(1).and_then(|value| value.to_str())
+                        == Some("README.md")
+        ));
+    }
+
+    #[test]
     fn test_cli_parses_adoption_and_idempotent_init_surface() {
         let install =
             Cli::try_parse_from(["hzr", "install", "--dry-run"]).expect("valid install preview");
@@ -1367,6 +1450,39 @@ mod tests {
             Command::Stats { workspace: Some(ref path), .. }
                 if path == std::path::Path::new("/work/app")
         ));
+    }
+
+    #[test]
+    fn acceptance_gate_stats_since_accepts_h_d_w_and_rejects_ambiguous_values() {
+        for (value, expected_seconds) in [
+            ("6h", 6 * 60 * 60),
+            ("7d", 7 * 24 * 60 * 60),
+            ("4w", 4 * 7 * 24 * 60 * 60),
+        ] {
+            let cli = Cli::try_parse_from(["hzr", "stats", "--since", value])
+                .expect("valid stats duration");
+            assert!(matches!(
+                cli.command,
+                Command::Stats { since: Some(ref duration), .. }
+                    if duration.seconds() == expected_seconds && duration.label() == value
+            ));
+        }
+
+        for value in [
+            "",
+            "0h",
+            "1",
+            "1H",
+            "1.5d",
+            "-1d",
+            "1 d",
+            "999999999999999999999w",
+        ] {
+            assert!(
+                Cli::try_parse_from(["hzr", "stats", "--since", value]).is_err(),
+                "duration {value:?} must be rejected deterministically"
+            );
+        }
     }
 
     #[test]

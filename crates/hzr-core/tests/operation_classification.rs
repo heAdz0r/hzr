@@ -51,6 +51,7 @@ fn test_commands_without_an_equivalent_are_left_alone() {
 #[test]
 fn acceptance_gate_no_unbounded_exact_read_defaults() {
     for command in [
+        "hzr read src/main.rs --level none",
         "hzr rtk -- read src/main.rs --level none",
         "rtk read README.md -l none",
         "hzr rtk -- raw read src/lib.rs --level=none",
@@ -65,6 +66,7 @@ fn acceptance_gate_no_unbounded_exact_read_defaults() {
         "hzr rtk -- read src/main.rs -n --level none",
         "hzr rtk -- read src/main.rs --max-lines 80 --level none",
         "hzr rtk -- read src/main.rs --outline --level none",
+        "HZR_EXACT_FIDELITY=1 hzr read src/main.rs --level none",
         "HZR_EXACT_FIDELITY=1 hzr rtk -- read src/main.rs --level none",
         "hzr search RewriteDecision --mode exact",
     ] {
@@ -133,6 +135,8 @@ fn acceptance_gate_no_raw_commands_have_a_first_class_route() {
             "hzr rtk -- raw cargo test --workspace",
             "cargo test --workspace",
         ),
+        ("hzr rtk -- raw npm test", "npm test"),
+        ("hzr rtk -- raw pnpm test", "pnpm test"),
     ] {
         assert_eq!(
             managed_raw_payload(command),
@@ -145,6 +149,89 @@ fn acceptance_gate_no_raw_commands_have_a_first_class_route() {
         "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.json"
     ));
     assert!(!explicit_raw_fidelity("hzr rtk -- raw cat artifact.json"));
+}
+
+#[test]
+fn acceptance_gate_no_raw_wrapper_around_first_class_hzr_commands() {
+    for (command, expected) in [
+        ("hzr rtk -- raw hzr stats", "hzr stats"),
+        (
+            "hzr rtk -- raw hzr search \"two words\" --mode exact",
+            "hzr search \"two words\" --mode exact",
+        ),
+        (
+            "rtk proxy hzr rtk -- read \"docs/file with spaces.md\" --outline",
+            "hzr rtk -- read \"docs/file with spaces.md\" --outline",
+        ),
+    ] {
+        let replacement = first_class_replacement(command)
+            .expect("a redundant raw wrapper around HZR must be removed");
+        assert_eq!(replacement.suggestion, expected);
+        assert_eq!(
+            classify_operation(command)
+                .replacement
+                .expect("stats classification must expose the same recovery")
+                .suggestion,
+            expected
+        );
+    }
+
+    let nested = "hzr rtk -- raw hzr rtk -- raw cargo test";
+    assert_eq!(
+        first_class_replacement(nested),
+        None,
+        "nested raw must remain an escape hatch: {nested}"
+    );
+
+    assert_eq!(
+        first_class_replacement("HZR_RAW_FIDELITY=1 hzr rtk -- raw hzr stats"),
+        None
+    );
+}
+
+#[test]
+fn acceptance_gate_no_raw_for_top_level_hzr_file_aliases() {
+    for command in [
+        "hzr read \"docs/file with spaces.md\" --outline",
+        "hzr write patch \"docs/file with spaces.md\" --old 'a b' --new 'c d'",
+        "HZR_EXACT_FIDELITY=1 hzr read \"docs/file with spaces.md\" --level none",
+    ] {
+        let replacement = first_class_replacement(command)
+            .expect("a typed top-level HZR file operation must not remain raw");
+        assert_eq!(
+            replacement.suggestion, command,
+            "the top-level alias must preserve command bytes"
+        );
+    }
+
+    for command in [
+        "hzr reader file.md",
+        "hzr writer file.md",
+        "hzr unknown file.md",
+    ] {
+        assert_eq!(
+            first_class_replacement(command),
+            None,
+            "an unknown HZR command must not be promoted to a typed file operation"
+        );
+    }
+}
+
+#[test]
+fn acceptance_gate_raw_fidelity_rejects_unproven_equivalents() {
+    for command in [
+        "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.json",
+        "HZR_RAW_FIDELITY=1 hzr rtk -- raw rg -n needle src",
+        "HZR_RAW_FIDELITY=1 hzr rtk -- raw sh -c 'printf complete-output'",
+    ] {
+        assert!(explicit_raw_fidelity(command));
+        assert_eq!(
+            first_class_replacement(command),
+            None,
+            "a format-changing route must not override byte fidelity"
+        );
+        assert_eq!(efficient_route_replacement(command), None);
+    }
 }
 
 #[test]

@@ -89,8 +89,24 @@ mod write_semantics;
 use anyhow::{Context, Result};
 use clap::error::ErrorKind; // fix #200
 use clap::{Parser, Subcommand};
+use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+
+const CAPABILITY_BATCH_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const CAPABILITY_BATCH_MAX_COMMANDS: usize = 100_000;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CapabilityBatchRequest {
+    commands: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CapabilityBatchResponse {
+    supported: Vec<bool>,
+}
 
 #[derive(Parser)]
 #[command(
@@ -118,6 +134,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Internal typed capability probe used by the HZR stats collector.
+    #[command(name = "capability-batch", hide = true)]
+    CapabilityBatch,
+
     /// List directory contents with token-optimized output (proxy to native ls)
     Ls {
         /// Arguments passed to ls (supports all native ls flags like -l, -a, -h, -R)
@@ -1856,6 +1876,7 @@ fn main() -> Result<()> {
     };
 
     match cli.command {
+        Commands::CapabilityBatch => run_capability_batch(std::io::stdin(), std::io::stdout())?,
         Commands::Ls { args } => {
             ls::run(&args, cli.verbose)?;
         }
@@ -3190,6 +3211,34 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn run_capability_batch(mut input: impl Read, mut output: impl Write) -> Result<()> {
+    let mut bytes = Vec::new();
+    input
+        .by_ref()
+        .take(CAPABILITY_BATCH_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .context("failed to read capability batch")?;
+    if bytes.len() as u64 > CAPABILITY_BATCH_MAX_BYTES {
+        anyhow::bail!("capability batch exceeds {CAPABILITY_BATCH_MAX_BYTES} bytes");
+    }
+    let request: CapabilityBatchRequest =
+        serde_json::from_slice(&bytes).context("invalid capability batch JSON")?;
+    if request.commands.len() > CAPABILITY_BATCH_MAX_COMMANDS {
+        anyhow::bail!("capability batch exceeds {CAPABILITY_BATCH_MAX_COMMANDS} commands");
+    }
+    let supported = request
+        .commands
+        .iter()
+        .map(|command| discover::registry::has_existing_route(command))
+        .collect();
+    serde_json::to_writer(&mut output, &CapabilityBatchResponse { supported })
+        .context("failed to write capability batch JSON")?;
+    output
+        .write_all(b"\n")
+        .context("failed to finish capability batch JSON")?;
+    Ok(())
+}
+
 /// Normalize rgai positional args: detect trailing path token in query words.
 fn normalize_rgai_args(mut query_parts: Vec<String>, mut path: String) -> (String, String) {
     if path == "." && query_parts.len() > 1 {
@@ -3218,6 +3267,43 @@ fn looks_like_path_token(token: &str) -> bool {
 #[cfg(test)]
 mod rgai_arg_tests {
     use super::*;
+
+    #[test]
+    fn capability_batch_preserves_order_cardinality_and_subcommand_semantics() {
+        let request = serde_json::json!({
+            "commands": [
+                "bun test",
+                "git status --short",
+                "ssh host remote-command",
+                "gh pr list",
+                "cargo test --workspace",
+                "cargo publish",
+                "git config --list",
+                "unknown-tool secret=value"
+            ]
+        });
+        let mut output = Vec::new();
+
+        run_capability_batch(request.to_string().as_bytes(), &mut output)
+            .expect("capability batch");
+        let response: serde_json::Value =
+            serde_json::from_slice(&output).expect("capability response");
+
+        assert_eq!(
+            response["supported"],
+            serde_json::json!([true, true, true, true, true, false, false, false])
+        );
+    }
+
+    #[test]
+    fn capability_batch_rejects_malformed_or_untyped_stdin() {
+        assert!(run_capability_batch(b"{not-json".as_slice(), Vec::new()).is_err());
+        assert!(run_capability_batch(
+            br#"{"commands":[],"payload":"must-not-be-accepted"}"#.as_slice(),
+            Vec::new()
+        )
+        .is_err());
+    }
 
     #[test]
     fn normalize_rgai_keeps_multiword_query() {

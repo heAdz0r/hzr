@@ -164,9 +164,11 @@ pub fn classify_operation(command: &str) -> OperationClassification {
         OperationRoute::Bypassed => OperationClassification {
             route,
             subsystem: OperationSubsystem::Bypass,
-            replacement: unambiguous_shell_command(command)
-                .then(|| replacement_for(head, &payload[payload.len().min(1)..]))
-                .flatten(),
+            replacement: managed_hzr_replacement(command).or_else(|| {
+                unambiguous_shell_command(command)
+                    .then(|| replacement_for(head, &payload[payload.len().min(1)..]))
+                    .flatten()
+            }),
             operation,
         },
         OperationRoute::Optimized => OperationClassification {
@@ -185,6 +187,12 @@ pub fn classify_operation(command: &str) -> OperationClassification {
 /// carries a bypass prefix — the hook sees `sed -n 1,20p f` and the ledger sees
 /// `rtk proxy sed -n 1,20p f`, and both must be told the same thing.
 pub fn first_class_replacement(command: &str) -> Option<RawReplacement> {
+    if let Some(replacement) = direct_hzr_alias_replacement(command) {
+        return Some(replacement);
+    }
+    if let Some(replacement) = managed_hzr_replacement(command) {
+        return Some(replacement);
+    }
     if !unambiguous_shell_command(command) {
         return None;
     }
@@ -197,6 +205,56 @@ pub fn first_class_replacement(command: &str) -> Option<RawReplacement> {
     };
     let head = payload.first().map(String::as_str)?;
     replacement_for(head, &payload[1..])
+}
+
+/// Keep the public read/write aliases on HZR's typed path when fork-core does not know
+/// about the outer `hzr` control-plane command.
+///
+/// The command is returned unchanged instead of tokenized and reconstructed, so quoted
+/// paths, write payloads, and shell grammar retain their exact spelling. The fixed exact-read
+/// marker is peeled only for recognition and remains part of the returned command.
+fn direct_hzr_alias_replacement(command: &str) -> Option<RawReplacement> {
+    let command = command.trim_start_matches([' ', '\t']);
+    let (_, candidate) = exact_fidelity_command(command);
+    let arguments = command_suffix(candidate, "hzr")?.trim_start_matches([' ', '\t']);
+    if !["read", "write"]
+        .into_iter()
+        .any(|subcommand| command_suffix(arguments, subcommand).is_some())
+    {
+        return None;
+    }
+    Some(RawReplacement {
+        tool: "hzr",
+        suggestion: command.to_owned(),
+        rationale: "the command already uses a typed top-level HZR file operation",
+    })
+}
+
+fn command_suffix<'a>(command: &'a str, word: &str) -> Option<&'a str> {
+    let suffix = command.strip_prefix(word)?;
+    (suffix.is_empty() || suffix.starts_with([' ', '\t'])).then_some(suffix)
+}
+
+/// Remove a redundant managed raw/proxy wrapper when its payload is already an HZR
+/// command.
+///
+/// This route deliberately preserves the payload byte-for-byte. In particular, quoted
+/// search text and shell grammar are not tokenized and reconstructed. Nested raw/proxy
+/// wrappers are excluded so the replacement cannot merely hide another bypass.
+fn managed_hzr_replacement(command: &str) -> Option<RawReplacement> {
+    let payload = managed_raw_payload(command)?.trim_start_matches([' ', '\t']);
+    let suffix = payload.strip_prefix("hzr")?;
+    if !suffix.is_empty() && !suffix.starts_with([' ', '\t']) {
+        return None;
+    }
+    if managed_raw_payload(payload).is_some() {
+        return None;
+    }
+    Some(RawReplacement {
+        tool: "hzr",
+        suggestion: payload.to_owned(),
+        rationale: "the payload is already a first-class HZR command and needs no raw proxy",
+    })
 }
 
 /// Return a lower-output route for an already managed command when the requested fidelity

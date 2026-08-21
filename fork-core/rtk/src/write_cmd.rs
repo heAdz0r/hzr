@@ -2053,7 +2053,10 @@ mod tests {
         let content = "a".repeat(1000); // 1000 chars ~ 250 tokens
         let rtk_msg = "OK replace applied=1"; // ~5 tokens
         let (input, output, cmd) = write_tracking_args("replace", &content, rtk_msg);
-        assert_eq!(input, rtk_msg, "unobserved native output receives no credit");
+        assert_eq!(
+            input, rtk_msg,
+            "unobserved native output receives no credit"
+        );
         assert_eq!(output, rtk_msg, "output should be compact rtk message");
         assert_eq!(
             cmd, "rtk write",

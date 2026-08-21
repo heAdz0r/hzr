@@ -2186,6 +2186,8 @@ mod tests {
             "hzr rtk -- raw nl -ba src/main.rs",
             "hzr rtk -- raw sed -n 40,80p src/main.rs",
             "hzr rtk -- raw rg -n needle src",
+            "hzr rtk -- raw hzr stats",
+            "hzr rtk -- raw hzr search \"two words\" --mode exact",
         ] {
             let decision = enforce_first_class(command, RewriteDecision::allow_raw("fork raw"));
             assert!(
@@ -2237,6 +2239,37 @@ mod tests {
             specialized,
             "a specialized fork-core filter must not be replaced by indexed search"
         );
+    }
+
+    #[test]
+    fn acceptance_gate_no_raw_for_top_level_hzr_file_aliases_in_exec() {
+        for command in [
+            "hzr read \"docs/file with spaces.md\" --outline",
+            "hzr write patch \"docs/file with spaces.md\" --old 'a b' --new 'c d'",
+        ] {
+            let decision = enforce_first_class(
+                command,
+                RewriteDecision::AllowRewrite {
+                    command: CanonicalCommand::shell(format!("rtk proxy {command}")),
+                    source: RewriteSource::Rtk {
+                        version: PINNED_RTK_VERSION.into(),
+                        route: hzr_exec::RtkRewriteRoute::Proxy,
+                    },
+                    reason: "fork selected tracked raw proxy".into(),
+                },
+            );
+            assert!(matches!(
+                decision,
+                RewriteDecision::AllowRewrite {
+                    command: CanonicalCommand::Shell {
+                        command: ref rewritten,
+                        ..
+                    },
+                    source: RewriteSource::HzrPolicy,
+                    ..
+                } if rewritten == command
+            ));
+        }
     }
 
     #[test]
@@ -2293,7 +2326,7 @@ if test "${{1:-}}" = proxy && test "${{2:-}}" = --help; then
 fi
 if test "${{1:-}}" = rewrite; then
   case "${{2:-}}" in
-    bun\ *|cargo\ *|ssh\ *|git\ *|gh\ *|find\ *|wget\ *|ps\ *)
+    bun\ *|cargo\ *|npm\ *|pnpm\ *|ssh\ *|git\ *|gh\ *|find\ *|wget\ *|ps\ *)
       printf 'rtk filtered'
       exit 0
       ;;
@@ -2321,6 +2354,8 @@ exit 64
         for command in [
             "hzr rtk -- raw bun test",
             "hzr rtk -- raw cargo test --workspace",
+            "hzr rtk -- raw npm test",
+            "hzr rtk -- raw pnpm test",
             "hzr rtk -- raw ssh host docker-ps",
             "hzr rtk -- raw git status --short",
             "hzr rtk -- raw gh run list",
@@ -2336,13 +2371,15 @@ exit 64
             );
         }
 
-        let exact = fork_decision_with_managed_unwrap(
-            &adapter,
+        for command in [
             "HZR_RAW_FIDELITY=1 hzr rtk -- raw cat artifact.json",
-            directory.path(),
-        )
-        .await;
-        assert!(matches!(exact, RewriteDecision::AllowRaw { .. }));
+            "HZR_RAW_FIDELITY=1 hzr rtk -- raw rg -n needle src",
+            "HZR_RAW_FIDELITY=1 hzr rtk -- raw sh -c 'printf complete-output'",
+        ] {
+            let unsupported =
+                fork_decision_with_managed_unwrap(&adapter, command, directory.path()).await;
+            assert!(matches!(unsupported, RewriteDecision::AllowRaw { .. }));
+        }
     }
 
     #[test]

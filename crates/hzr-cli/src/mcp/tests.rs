@@ -1,6 +1,7 @@
 use hzr_core::Config;
 use hzr_protocol::{
-    AccountingChannel, AccountingOperationMode, AccountingRoute, AccountingStage, SearchMode,
+    AccountingChannel, AccountingOperationMode, AccountingRoute, AccountingSearchStrategy,
+    AccountingStage, SearchFallbackCode, SearchMode,
 };
 use serde_json::{Value, json};
 
@@ -14,15 +15,28 @@ use super::{
 };
 
 #[test]
-fn test_mcp_accounting_is_neutral_and_explicitly_tagged() {
+fn acceptance_gate_mcp_accounting_is_typed_private_and_stage_explicit() {
     let arguments = json!({
         "query": "secret search text",
         "path": "private/source",
-        "mode": "exact",
+        "mode": "auto",
         "limit": 7,
         "include_content": true
     });
-    let response = json!({"hits": [{"path": "src/lib.rs"}]});
+    let response = json!({
+        "query": "secret search text",
+        "path": "private/source",
+        "total_hits": 0,
+        "shown_hits": 0,
+        "scanned_files": 1,
+        "skipped_large": 0,
+        "skipped_binary": 0,
+        "hits": [],
+        "effective_mode": "exact",
+        "strategy": "fork_rgai_builtin",
+        "fallback_code": "semantic_index_unavailable",
+        "fallback_reason": "private failure detail"
+    });
     let request = mcp_operation_request("hzr_search", "/work", &arguments, &response)
         .expect("accounting request");
 
@@ -37,12 +51,59 @@ fn test_mcp_accounting_is_neutral_and_explicitly_tagged() {
     assert_eq!(encoded["agent"], "mcp");
     let attribution = request.attribution.expect("search attribution");
     assert_eq!(attribution.mode, AccountingOperationMode::SearchExact);
+    assert_eq!(
+        attribution.requested_mode,
+        Some(AccountingOperationMode::SearchAuto)
+    );
+    assert_eq!(
+        attribution.effective_mode,
+        Some(AccountingOperationMode::SearchExact)
+    );
     assert_eq!(attribution.stage, AccountingStage::FinalDelivery);
+    assert_eq!(
+        attribution.search_strategy,
+        Some(AccountingSearchStrategy::ForkRgaiBuiltin)
+    );
+    assert_eq!(
+        attribution.search_fallback_code,
+        Some(SearchFallbackCode::SemanticIndexUnavailable)
+    );
     assert_eq!(attribution.limit, Some(7));
     assert_eq!(attribution.path_scope_count, Some(1));
     let encoded = serde_json::to_string(&attribution).expect("attribution JSON");
     assert!(!encoded.contains("secret search text"));
     assert!(!encoded.contains("private/source"));
+
+    let actual_backend_response = json!({
+        "query": "secret search text",
+        "path": "private/source",
+        "total_hits": 0,
+        "shown_hits": 0,
+        "scanned_files": 1,
+        "skipped_large": 0,
+        "skipped_binary": 0,
+        "hits": [],
+        "effective_mode": "semantic",
+        "strategy": "fork_rgai_ripgrep",
+        "fallback_code": "grepai_unavailable"
+    });
+    let actual_backend =
+        mcp_operation_request("hzr_search", "/work", &arguments, &actual_backend_response)
+            .expect("actual backend accounting request")
+            .attribution
+            .expect("actual backend attribution");
+    assert_eq!(
+        actual_backend.search_strategy,
+        Some(AccountingSearchStrategy::ForkRgaiRipgrep)
+    );
+    assert_eq!(
+        actual_backend.effective_mode,
+        Some(AccountingOperationMode::SearchSemantic)
+    );
+    assert_eq!(
+        actual_backend.search_fallback_code,
+        Some(SearchFallbackCode::GrepaiUnavailable)
+    );
 }
 
 /// Mirror of the notification rule in `handle_line`, which cannot be exercised

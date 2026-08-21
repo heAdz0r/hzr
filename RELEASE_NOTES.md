@@ -1,49 +1,50 @@
-# HZR 0.4.2 — Bounded reads and current instructions
+# HZR 0.4.3 — Efficient command utilization and accountable routing
 
-HZR 0.4.2 closes a second High Critical utilization gap: agents could request exact search and
-complete file output as a habit even when semantic discovery, outlines, changed hunks, or exact
-ranges were sufficient. It also makes installed instruction freshness an executable lifecycle
-invariant instead of trusting a managed-block marker.
+HZR 0.4.3 completes the third command-utilization pass. It closes avoidable RAW and redundant
+wrapper paths, makes recent misuse visible without recording sensitive command payloads, and
+aligns the installed Claude/Codex contract with the command surface agents should actually use.
 
-The historical ledger cannot produce an exact abuse count because older rows did not preserve
-search/read modes. The frozen audit therefore reports bounds, not billed savings: 11,632 generic
-reads delivered 18,230,797 estimated tokens, including 798 reads above 4,096 tokens that produced
-38.0% of that output. By comparison, 770 outline reads reduced 3,996,067 baseline tokens to
-146,059. The HZR-owned full-contract bootstrap alone caused 114 complete reads and 384,950
-estimated delivered tokens. These are UTF-8-size estimates, not provider billing.
+The frozen audit is an output-size estimate, not provider billing. At command id 53,511, RAW
+accounted for 12,868 lifetime operations and 27,961,942 estimated delivered tokens. In the
+preceding seven days it accounted for 1,684 operations and 7,319,643 estimated tokens, or 58.80%
+of observed output. Existing dedicated HZR routes could already cover 75.3% of lifetime RAW
+output and 83.2% of recent RAW output. The release therefore emphasizes route enforcement and
+observable attribution instead of inventing a new savings claim.
 
 ## What changed
 
-- Claude and Codex managed blocks no longer import or bootstrap the complete `HZR.md` on every
-  task. They contain the ordinary routing contract, retain the canonical contract path, and
-  direct HZR-policy investigations to an outline followed by only the relevant exact ranges.
-- Unbounded managed `read --level none` is reduced to the format-aware smart default. Exact
-  ranges, numbered/bounded reads, outlines, symbols, changed hunks, and the explicit
-  `HZR_EXACT_FIDELITY=1` whole-file escape preserve their requested semantics.
-- Search guidance now uses `auto` or semantic discovery for unknown implementations and reserves
-  `--mode exact` for a known literal, symbol, error, key, or audit target. Exact literal recall is
-  not heuristically weakened.
-- New search/read ledger attribution records typed operation mode, accounting stage, bounds,
-  filter level, result limit, include-content choice, and path-scope count without storing query
-  text, paths, file contents, or secrets. `stats` exposes mode aggregates; old rows remain
-  explicitly unattributed.
-- `hzr init --if-needed` refreshes the managed instruction scope on every idempotent lifecycle
-  pass. In all-project mode it also retires a detected local legacy RTK block that would override
-  the global HZR contract, while leaving clean repository instruction files untouched.
-- `hzr doctor` remains read-only and now verifies exact managed-policy currency, contract
-  readability, activation scope, and conflicting local RTK/ICM directives. It directs stale
-  instruction repair to `hzr init --if-needed`; `doctor --fix` remains limited to safe legacy
-  index migration.
-- The release workflow publishes stable tags explicitly as GitHub Latest. Existing `v0.4.1` was
-  corrected from prerelease to stable without changing its tag or artifacts.
+- Redundant managed RAW/proxy wrappers around an existing `hzr` command are removed without
+  reconstructing its payload. The explicit `HZR_RAW_FIDELITY=1` path remains available when a
+  bounded replacement cannot preserve byte-for-byte semantics.
+- `npm test`, `npm run test`, and `pnpm test` enter existing typed families. npm run aliases no
+  longer duplicate the `run` argument; unsupported execution forms stay conservative.
+- Top-level `hzr read` and `hzr write` aliases forward arguments to the pinned fork-core command
+  implementations. Instructions retain the compatibility spelling only where lifecycle context
+  requires it.
+- `hzr stats --since <N{h|d|w}>` applies a single inclusive cutoff and reports bounded top-12
+  operation-family and operation-mode panels. JSON exposes the same typed aggregates.
+- Search accounting records requested and effective mode, actual Grepai/Ripgrep/Files/Builtin
+  backend, closed fallback codes, and internal-versus-final stage. Final-delivery rows do not
+  inflate headline totals.
+- New attribution remains privacy-safe: no query text, path, command arguments, file contents,
+  secrets, or arbitrary error strings are stored in the added fields. Historical rows migrate
+  as nullable and remain readable.
+- Managed Claude and Codex blocks list all eight MCP tools, prefer semantic/auto discovery for
+  unknown code, reserve exact mode for known literals, expose bounded generic filters, and
+  accurately describe native file-tool observation as measurement-only.
+
+## Deliberate boundaries
+
+RAW is not banned when it is the only route that preserves the requested fidelity. Native `rg`,
+shell grammar, and arbitrary binary reads can differ from bounded or filtered output, so the
+explicit fidelity marker remains conservative. `read --max-tokens` and new tar, rustup, yarn,
+dotnet, deno, podman, or fd filters remain candidates rather than being shipped without a proven
+semantic contract.
 
 ## Upgrade impact
 
-The ledger migration only adds nullable attribution columns, so historical data remains readable.
-The active bundle, hooks, daemon, MCP registrations, and instruction contract continue to resolve
-through `~/.local/share/hzr/current`.
-
-Upgrade and refresh the current workspace with:
+The active bundle, daemon, MCP registration, hooks, and managed instructions continue to resolve
+through `~/.local/share/hzr/current`. Refresh a workspace with:
 
 ```bash
 hzr update
@@ -52,7 +53,7 @@ hzr init --if-needed
 hzr doctor
 ```
 
-Restart open agent sessions after installation so they reload the bounded routing contract.
+Restart open agent sessions after installation so they reload the current routing contract.
 
 ## Verification
 
@@ -60,12 +61,11 @@ The release is checked with:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets --all-features
 scripts/verify-fork-core.sh --test
-scripts/build-bundle.sh /absolute/path/to/hzr-dist
 ```
 
-Dedicated acceptance gates cover stale instruction detection and repair, complete legacy RTK
-block retirement, removal of forced full-contract bootstrap, exact-full fidelity escape,
-automatic smart-read routing, typed search/read attribution, and stable GitHub Latest policy.
+Dedicated acceptance gates cover no-RAW routing, exact/full-read density, instruction repair,
+typed backend attribution, final-stage de-duplication, privacy, time-bounded stats, npm/pnpm
+aliases, and top-level read/write forwarding.

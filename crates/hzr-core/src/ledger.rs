@@ -10,6 +10,7 @@ use hzr_protocol::{
 
 use crate::operation::{
     OperationChannel, OperationMeasurement, OperationRoute, classify_operation,
+    efficient_route_replacement, first_class_replacement, managed_raw_payload,
     raw_route_sql_predicate,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
@@ -74,6 +75,77 @@ pub struct OperationModeSummary {
     pub stage: AccountingStage,
     pub operations: u64,
     pub delivered_tokens_estimated: u64,
+}
+
+/// Privacy-safe aggregation for auditing which operation families and routes consume output.
+/// No recorded command, argument, query, path, or content is retained in this type.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OperationFamilySummary {
+    pub family: String,
+    pub route: OperationRoute,
+    pub operations: u64,
+    pub delivered_tokens_estimated: u64,
+    pub first_class_replacement_available: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StatsQuery<'a> {
+    pub project_path: Option<&'a str>,
+    /// Inclusive Unix-second cutoff shared by every section of one stats snapshot.
+    pub since_unix_seconds: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct StatsSnapshot {
+    pub efficiency: EfficiencySummary,
+    pub bypass: BypassSummary,
+    pub provider_usage: LedgerSummary,
+    pub by_family: Vec<OperationFamilySummary>,
+}
+
+/// A stats snapshot plus transient capability probes that must never be serialized.
+#[derive(Clone, Debug)]
+pub struct StatsCollection {
+    pub snapshot: StatsSnapshot,
+    capability_inputs: Vec<OperationCapabilityInput>,
+}
+
+#[derive(Clone, Debug)]
+struct OperationCapabilityInput {
+    command: String,
+    targets: Vec<(String, OperationRoute)>,
+}
+
+impl StatsCollection {
+    pub fn capability_commands(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.capability_inputs
+            .iter()
+            .map(|input| input.command.as_str())
+    }
+
+    /// Merge a cardinality-preserving fork-core response into the privacy-safe summary.
+    /// A malformed response is ignored so capability reporting fails closed.
+    pub fn apply_capabilities(&mut self, supported: &[bool]) -> bool {
+        if supported.len() != self.capability_inputs.len() {
+            return false;
+        }
+        for (input, supported) in self.capability_inputs.iter().zip(supported) {
+            if !supported {
+                continue;
+            }
+            for (family, route) in &input.targets {
+                if let Some(summary) = self
+                    .snapshot
+                    .by_family
+                    .iter_mut()
+                    .find(|summary| summary.family == *family && summary.route == *route)
+                {
+                    summary.first_class_replacement_available = true;
+                }
+            }
+        }
+        true
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -382,6 +454,10 @@ impl Ledger {
                     operation_kind TEXT,
                     operation_mode TEXT,
                     accounting_stage TEXT,
+                    requested_mode TEXT,
+                    effective_mode TEXT,
+                    search_strategy TEXT,
+                    search_fallback_code TEXT,
                     search_include_content INTEGER,
                     result_limit INTEGER,
                     path_scope_count INTEGER,
@@ -436,6 +512,10 @@ impl Ledger {
             "operation_kind TEXT",
             "operation_mode TEXT",
             "accounting_stage TEXT",
+            "requested_mode TEXT",
+            "effective_mode TEXT",
+            "search_strategy TEXT",
+            "search_fallback_code TEXT",
             "search_include_content INTEGER",
             "result_limit INTEGER",
             "path_scope_count INTEGER",
@@ -538,15 +618,42 @@ impl Ledger {
     }
 
     pub fn summary(&self) -> Result<LedgerSummary, LedgerError> {
-        self.summary_scoped(None)
+        self.summary_scoped(None, None)
     }
 
     /// Суммирует только чеки с совпадающим project_path; пустые (legacy) строки не входят.
     pub fn summary_for_project(&self, project_path: &str) -> Result<LedgerSummary, LedgerError> {
-        self.summary_scoped(Some(project_path))
+        self.summary_scoped(Some(project_path), None)
     }
 
-    fn summary_scoped(&self, project_path: Option<&str>) -> Result<LedgerSummary, LedgerError> {
+    /// Collect every public stats section against one immutable scope and cutoff.
+    pub fn stats_snapshot(&self, query: StatsQuery<'_>) -> Result<StatsSnapshot, LedgerError> {
+        Ok(self.stats_collection(query)?.snapshot)
+    }
+
+    /// Collect one snapshot and the distinct raw commands requiring canonical fork capability
+    /// classification. The command inputs stay in this non-serializable transient type.
+    pub fn stats_collection(&self, query: StatsQuery<'_>) -> Result<StatsCollection, LedgerError> {
+        let (by_family, capability_inputs) =
+            self.operation_family_summary(query.project_path, query.since_unix_seconds)?;
+        Ok(StatsCollection {
+            snapshot: StatsSnapshot {
+                efficiency: self
+                    .efficiency_summary_scoped(query.project_path, query.since_unix_seconds)?,
+                bypass: self.bypass_summary_scoped(query.project_path, query.since_unix_seconds)?,
+                provider_usage: self
+                    .summary_scoped(query.project_path, query.since_unix_seconds)?,
+                by_family,
+            },
+            capability_inputs,
+        })
+    }
+
+    fn summary_scoped(
+        &self,
+        project_path: Option<&str>,
+        since_unix_seconds: Option<i64>,
+    ) -> Result<LedgerSummary, LedgerError> {
         self.connection
             .query_row(
                 "SELECT
@@ -565,8 +672,13 @@ impl Ledger {
                     project_path != ''
                     AND (project_path = ?1
                          OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
-                 ))",
-                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                 ))
+                   AND (?3 IS NULL OR created_at_ms >= ?3 * 1000)",
+                params![
+                    project_path,
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
                 |row| {
                     Ok(LedgerSummary {
                         tasks: row.get(0)?,
@@ -582,19 +694,20 @@ impl Ledger {
     }
 
     pub fn efficiency_summary(&self) -> Result<EfficiencySummary, LedgerError> {
-        self.efficiency_summary_scoped(None)
+        self.efficiency_summary_scoped(None, None)
     }
 
     pub fn efficiency_summary_for_project(
         &self,
         project_path: &str,
     ) -> Result<EfficiencySummary, LedgerError> {
-        self.efficiency_summary_scoped(Some(project_path))
+        self.efficiency_summary_scoped(Some(project_path), None)
     }
 
     fn efficiency_summary_scoped(
         &self,
         project_path: Option<&str>,
+        since_unix_seconds: Option<i64>,
     ) -> Result<EfficiencySummary, LedgerError> {
         let raw_predicate = raw_route_sql_predicate("rtk_cmd");
         let neutral_predicate = format!("({raw_predicate}) OR rtk_cmd = 'rtk write'");
@@ -614,14 +727,20 @@ impl Ledger {
              FROM commands
              WHERE measurement = 'estimated'
                AND COALESCE(route, '') != 'native_unaccounted'
+               AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
                AND (?1 IS NULL OR project_path = ?1
-                    OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)"
+                    OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+               AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
         );
         let mut summary = self
             .connection
             .query_row(
                 &totals_query,
-                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                params![
+                    project_path,
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
                 |row| {
                     Ok(EfficiencySummary {
                         operations: row.get(0)?,
@@ -659,8 +778,10 @@ impl Ledger {
              FROM commands
              WHERE measurement = 'estimated'
                AND COALESCE(route, '') != 'native_unaccounted'
+               AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
                AND (?1 IS NULL OR project_path = ?1
                     OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+               AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
              GROUP BY rtk_cmd
              ORDER BY SUM(CASE WHEN ({neutral_predicate})
                                THEN 0 ELSE input_tokens - output_tokens END) DESC"
@@ -671,7 +792,11 @@ impl Ledger {
             .map_err(LedgerError::Database)?;
         summary.by_command = statement
             .query_map(
-                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                params![
+                    project_path,
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
                 |row| {
                     Ok(EfficiencyCommandSummary {
                         command: row.get(0)?,
@@ -697,8 +822,10 @@ impl Ledger {
                         COALESCE(SUM(measurement = 'unmeasured' AND route = 'bypassed'), 0)
                    FROM commands
                   WHERE (?1 IS NULL OR project_path = ?1
-                         OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)",
-                params![project_path, scope_separator],
+                         OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                    AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+                    AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)",
+                params![project_path, scope_separator, since_unix_seconds],
                 |row| {
                     Ok((
                         row.get::<_, u64>(0)?,
@@ -718,24 +845,31 @@ impl Ledger {
                 "SELECT channel, COUNT(*) FROM commands
                   WHERE (?1 IS NULL OR project_path = ?1
                          OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                    AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+                    AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
                   GROUP BY channel",
             )
             .map_err(LedgerError::Database)?;
         summary.by_channel = channels
             .query_map(
-                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                params![
+                    project_path,
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
             )
             .map_err(LedgerError::Database)?
             .collect::<Result<BTreeMap<_, _>, _>>()
             .map_err(LedgerError::Database)?;
-        summary.by_mode = self.operation_modes_summary(project_path)?;
+        summary.by_mode = self.operation_modes_summary(project_path, since_unix_seconds)?;
         Ok(summary)
     }
 
     fn operation_modes_summary(
         &self,
         project_path: Option<&str>,
+        since_unix_seconds: Option<i64>,
     ) -> Result<Vec<OperationModeSummary>, LedgerError> {
         let mut statement = self
             .connection
@@ -748,13 +882,18 @@ impl Ledger {
                     AND accounting_stage IS NOT NULL
                     AND (?1 IS NULL OR project_path = ?1
                          OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                    AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
                   GROUP BY operation_kind, operation_mode, accounting_stage
                   ORDER BY operation_kind, operation_mode, accounting_stage",
             )
             .map_err(LedgerError::Database)?;
         let rows = statement
             .query_map(
-                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                params![
+                    project_path,
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -884,6 +1023,35 @@ impl Ledger {
                 "operation mode does not match its operation family".into(),
             ));
         }
+        if detail.is_some_and(|detail| {
+            detail
+                .requested_mode
+                .is_some_and(|mode| mode.operation() != detail.operation)
+                || detail
+                    .effective_mode
+                    .is_some_and(|mode| mode.operation() != detail.operation)
+        }) {
+            return Err(LedgerError::InvalidOperation(
+                "requested/effective mode does not match its operation family".into(),
+            ));
+        }
+        if detail.is_some_and(|detail| {
+            detail
+                .effective_mode
+                .is_some_and(|effective| effective != detail.mode)
+        }) {
+            return Err(LedgerError::InvalidOperation(
+                "canonical operation mode must equal effective mode".into(),
+            ));
+        }
+        if detail.is_some_and(|detail| {
+            detail.operation != AccountingOperationKind::Search
+                && (detail.search_strategy.is_some() || detail.search_fallback_code.is_some())
+        }) {
+            return Err(LedgerError::InvalidOperation(
+                "search attribution cannot be attached to another operation family".into(),
+            ));
+        }
         let saved = input_tokens.saturating_sub(output_tokens);
         let savings_pct = if input_tokens == 0 {
             0.0
@@ -896,11 +1064,12 @@ impl Ledger {
                     timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
                     saved_tokens, savings_pct, exec_time_ms, project_path, agent, session_id,
                     channel, measurement, route, operation_kind, operation_mode,
-                    accounting_stage, search_include_content, result_limit, path_scope_count,
+                    accounting_stage, requested_mode, effective_mode, search_strategy,
+                    search_fallback_code, search_include_content, result_limit, path_scope_count,
                     filter_level, range_from, range_to, source_bytes
                  ) VALUES (
                     datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                    ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+                    ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27
                  )",
                 params![
                     original_command,
@@ -919,6 +1088,14 @@ impl Ledger {
                     detail.map(|detail| detail.operation.as_str()),
                     detail.map(|detail| detail.mode.as_str()),
                     detail.map(|detail| detail.stage.as_str()),
+                    detail.and_then(|detail| detail.requested_mode.map(|mode| mode.as_str())),
+                    detail.and_then(|detail| detail.effective_mode.map(|mode| mode.as_str())),
+                    detail.and_then(|detail| {
+                        detail.search_strategy.map(|strategy| strategy.as_str())
+                    }),
+                    detail.and_then(|detail| {
+                        detail.search_fallback_code.map(|code| code.as_str())
+                    }),
                     detail.and_then(|detail| detail.include_content),
                     detail.and_then(|detail| detail.limit),
                     detail.and_then(|detail| detail.path_scope_count),
@@ -939,19 +1116,20 @@ impl Ledger {
     /// half of its tool output straight to the model while `hzr stats` still reports a
     /// healthy percentage.
     pub fn bypass_summary(&self) -> Result<BypassSummary, LedgerError> {
-        self.bypass_summary_scoped(None)
+        self.bypass_summary_scoped(None, None)
     }
 
     pub fn bypass_summary_for_project(
         &self,
         project_path: &str,
     ) -> Result<BypassSummary, LedgerError> {
-        self.bypass_summary_scoped(Some(project_path))
+        self.bypass_summary_scoped(Some(project_path), None)
     }
 
     fn bypass_summary_scoped(
         &self,
         project_path: Option<&str>,
+        since_unix_seconds: Option<i64>,
     ) -> Result<BypassSummary, LedgerError> {
         let (total_operations, total_delivered) = self
             .connection
@@ -959,8 +1137,14 @@ impl Ledger {
                 "SELECT COUNT(*), COALESCE(SUM(output_tokens), 0)
                  FROM commands
                  WHERE (?1 IS NULL OR project_path = ?1
-                        OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)",
-                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                        OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                   AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+                   AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)",
+                params![
+                    project_path,
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
                 |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
             )
             .map_err(LedgerError::Database)?;
@@ -968,8 +1152,10 @@ impl Ledger {
             "SELECT rtk_cmd, COUNT(*), COALESCE(SUM(output_tokens), 0)
              FROM commands
              WHERE ({})
+               AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
                AND (?1 IS NULL OR project_path = ?1
                     OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+               AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
              GROUP BY rtk_cmd",
             raw_route_sql_predicate("rtk_cmd")
         );
@@ -979,7 +1165,11 @@ impl Ledger {
             .map_err(LedgerError::Database)?;
         let groups = statement
             .query_map(
-                params![project_path, std::path::MAIN_SEPARATOR.to_string()],
+                params![
+                    project_path,
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -1047,6 +1237,98 @@ impl Ledger {
             },
             by_tool,
         })
+    }
+
+    fn operation_family_summary(
+        &self,
+        project_path: Option<&str>,
+        since_unix_seconds: Option<i64>,
+    ) -> Result<(Vec<OperationFamilySummary>, Vec<OperationCapabilityInput>), LedgerError> {
+        let mut statement = self
+            .connection
+            .prepare_cached(
+                "SELECT rtk_cmd, route, operation_kind, COUNT(*),
+                        COALESCE(SUM(output_tokens), 0)
+                   FROM commands
+                  WHERE (?1 IS NULL OR project_path = ?1
+                         OR substr(project_path, 1, length(?1) + 1) = ?1 || ?2)
+                    AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
+                    AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+                  GROUP BY rtk_cmd, route, operation_kind",
+            )
+            .map_err(LedgerError::Database)?;
+        let rows = statement
+            .query_map(
+                params![
+                    project_path,
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, u64>(3)?,
+                        row.get::<_, u64>(4)?,
+                    ))
+                },
+            )
+            .map_err(LedgerError::Database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LedgerError::Database)?;
+
+        let mut families = BTreeMap::<(String, String), OperationFamilySummary>::new();
+        let mut capability_targets = BTreeMap::<String, Vec<(String, OperationRoute)>>::new();
+        for (command, stored_route, stored_operation, operations, delivered) in rows {
+            let classification = classify_operation(&command);
+            let route = route_from_ledger(stored_route.as_deref(), classification.route);
+            let family = stored_operation
+                .as_deref()
+                .and_then(parse_operation_kind)
+                .map(|operation| operation.as_str().to_owned())
+                .unwrap_or(classification.operation);
+            let replacement_available = route == OperationRoute::Optimized
+                || first_class_replacement(&command).is_some()
+                || efficient_route_replacement(&command).is_some();
+            if route == OperationRoute::Bypassed && !replacement_available {
+                let candidate = managed_raw_payload(&command).unwrap_or(&command).to_owned();
+                let target = (family.clone(), route);
+                let targets = capability_targets.entry(candidate).or_default();
+                if !targets.contains(&target) {
+                    targets.push(target);
+                }
+            }
+            let key = (family.clone(), route.as_str().to_owned());
+            let summary = families
+                .entry(key)
+                .or_insert_with(|| OperationFamilySummary {
+                    family,
+                    route,
+                    operations: 0,
+                    delivered_tokens_estimated: 0,
+                    first_class_replacement_available: false,
+                });
+            summary.operations = summary.operations.saturating_add(operations);
+            summary.delivered_tokens_estimated =
+                summary.delivered_tokens_estimated.saturating_add(delivered);
+            summary.first_class_replacement_available |= replacement_available;
+        }
+
+        let mut summaries = families.into_values().collect::<Vec<_>>();
+        summaries.sort_by(|left, right| {
+            right
+                .delivered_tokens_estimated
+                .cmp(&left.delivered_tokens_estimated)
+                .then_with(|| right.operations.cmp(&left.operations))
+                .then_with(|| left.family.cmp(&right.family))
+                .then_with(|| left.route.as_str().cmp(right.route.as_str()))
+        });
+        let capability_inputs = capability_targets
+            .into_iter()
+            .map(|(command, targets)| OperationCapabilityInput { command, targets })
+            .collect();
+        Ok((summaries, capability_inputs))
     }
 
     pub fn project_activity(
@@ -1488,6 +1770,15 @@ fn operation_identity(
     (classification.operation, route, replacement, rationale)
 }
 
+fn route_from_ledger(stored: Option<&str>, legacy: OperationRoute) -> OperationRoute {
+    match stored {
+        Some("optimized") => OperationRoute::Optimized,
+        Some("bypassed" | "raw") => OperationRoute::Bypassed,
+        Some("native_unaccounted") => OperationRoute::NativeUnaccounted,
+        _ => legacy,
+    }
+}
+
 fn open_legacy_read_only(path: &Path) -> Result<Connection, LedgerError> {
     Connection::open_with_flags(
         path,
@@ -1675,19 +1966,241 @@ fn now_ms() -> u64 {
 mod tests {
     use crate::operation::{OperationChannel, OperationMeasurement, OperationRoute};
     use hzr_protocol::{
-        AccountingAttribution, AccountingOperationKind, AccountingOperationMode, AccountingStage,
-        ActualUsage, EstimatedUsage, TraceId, Usage,
+        AccountingAttribution, AccountingOperationKind, AccountingOperationMode,
+        AccountingSearchStrategy, AccountingStage, ActualUsage, EstimatedUsage, SearchFallbackCode,
+        TraceId, Usage,
     };
-    use rusqlite::Connection;
+    use rusqlite::{Connection, params};
     use tempfile::tempdir;
 
     use super::{
         DetailedOperationAttribution, Ledger, LedgerRecord, OperationAttribution, PriceTable,
-        ProjectOperationRoute, operation_identity,
+        ProjectOperationRoute, StatsQuery, operation_identity,
     };
 
+    fn insert_family_row(
+        ledger: &Ledger,
+        timestamp: i64,
+        command: &str,
+        delivered: u64,
+        route: Option<&str>,
+        operation_kind: Option<&str>,
+    ) {
+        ledger
+            .connection
+            .execute(
+                "INSERT INTO commands (
+                    timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
+                    saved_tokens, savings_pct, exec_time_ms, project_path, channel,
+                    measurement, route, operation_kind
+                 ) VALUES (datetime(?1, 'unixepoch'), '', ?2, ?3, ?3, 0, 0, 0, '',
+                           'hook_cli', 'estimated', ?4, ?5)",
+                params![timestamp, command, delivered, route, operation_kind],
+            )
+            .expect("family fixture row");
+    }
+
     #[test]
-    fn operation_attribution_migrates_and_reports_without_sensitive_payloads() {
+    fn acceptance_gate_stats_cutoff_is_inclusive_and_shared_by_snapshot_sections() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        let cutoff = 2_000_000_000;
+        insert_family_row(&ledger, cutoff - 1, "rtk raw rg old-value", 90, None, None);
+        insert_family_row(&ledger, cutoff, "rtk raw rg boundary-value", 10, None, None);
+        for (trace_id, created_at_seconds) in [("old", cutoff - 1), ("boundary", cutoff)] {
+            ledger
+                .connection
+                .execute(
+                    "INSERT INTO usage_records (
+                        trace_id, created_at_ms, turns, retries, latency_ms, outcome,
+                        policy_version, project_path
+                     ) VALUES (?1, ?2 * 1000, 1, 0, 0, 'accepted', 'test', '')",
+                    params![trace_id, created_at_seconds],
+                )
+                .expect("provider usage fixture row");
+        }
+
+        let snapshot = ledger
+            .stats_snapshot(StatsQuery {
+                project_path: None,
+                since_unix_seconds: Some(cutoff),
+            })
+            .expect("windowed snapshot");
+
+        assert_eq!(snapshot.efficiency.operations, 1);
+        assert_eq!(snapshot.bypass.lifetime.operations, 1);
+        assert_eq!(snapshot.provider_usage.tasks, 1);
+        assert_eq!(snapshot.by_family.len(), 1);
+        assert_eq!(snapshot.by_family[0].delivered_tokens_estimated, 10);
+    }
+
+    #[test]
+    fn acceptance_gate_family_summary_prefers_typed_route_and_classifies_legacy_rows() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        insert_family_row(
+            &ledger,
+            2_000_000_000,
+            "rtk raw rg legacy-pattern",
+            11,
+            None,
+            None,
+        );
+        insert_family_row(
+            &ledger,
+            2_000_000_001,
+            "rtk raw rg typed-route-must-win",
+            7,
+            Some("optimized"),
+            Some("search"),
+        );
+
+        let families = ledger
+            .stats_snapshot(StatsQuery::default())
+            .expect("snapshot")
+            .by_family;
+
+        assert!(families.iter().any(|family| {
+            family.family == "rg"
+                && family.route == OperationRoute::Bypassed
+                && family.operations == 1
+        }));
+        assert!(families.iter().any(|family| {
+            family.family == "search"
+                && family.route == OperationRoute::Optimized
+                && family.operations == 1
+        }));
+    }
+
+    #[test]
+    fn acceptance_gate_family_summary_redacts_recorded_payloads() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        let sensitive = "secret=value /private/customer/query";
+        insert_family_row(
+            &ledger,
+            2_000_000_000,
+            &format!("rtk raw rg {sensitive}"),
+            5,
+            None,
+            None,
+        );
+
+        let families = ledger
+            .stats_snapshot(StatsQuery::default())
+            .expect("snapshot")
+            .by_family;
+        let encoded = serde_json::to_string(&families).expect("family JSON");
+
+        assert!(!encoded.contains("secret=value"));
+        assert!(!encoded.contains("/private/customer/query"));
+        assert_eq!(families[0].family, "rg");
+    }
+
+    #[test]
+    fn acceptance_gate_family_summary_groups_and_orders_stably() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        insert_family_row(&ledger, 2_000_000_000, "rtk raw rg one", 10, None, None);
+        insert_family_row(&ledger, 2_000_000_001, "rtk raw rg two", 20, None, None);
+        insert_family_row(&ledger, 2_000_000_002, "rtk raw cat file", 40, None, None);
+
+        let families = ledger
+            .stats_snapshot(StatsQuery::default())
+            .expect("snapshot")
+            .by_family;
+
+        assert_eq!(families.len(), 2);
+        assert_eq!(
+            (families[0].family.as_str(), families[0].operations),
+            ("cat", 1)
+        );
+        assert_eq!(
+            (families[1].family.as_str(), families[1].operations),
+            ("rg", 2)
+        );
+        assert_eq!(families[1].delivered_tokens_estimated, 30);
+        assert!(families[1].first_class_replacement_available);
+    }
+
+    #[test]
+    fn acceptance_gate_seven_day_legacy_raw_families_report_route_capability() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        let now = 2_000_000_000;
+        let cutoff = now - 7 * 24 * 60 * 60;
+        for (offset, family) in ["bun", "git", "ssh", "gh", "cargo"].into_iter().enumerate() {
+            insert_family_row(
+                &ledger,
+                cutoff + i64::try_from(offset).expect("small fixture offset"),
+                &format!("rtk raw {family} sensitive-argument"),
+                10,
+                None,
+                None,
+            );
+        }
+        insert_family_row(
+            &ledger,
+            now,
+            "rtk raw unknown-tool sensitive-argument",
+            10,
+            None,
+            None,
+        );
+        insert_family_row(
+            &ledger,
+            cutoff - 1,
+            "rtk raw terraform plan stale",
+            10,
+            None,
+            None,
+        );
+
+        let mut collection = ledger
+            .stats_collection(StatsQuery {
+                project_path: None,
+                since_unix_seconds: Some(cutoff),
+            })
+            .expect("seven-day snapshot");
+        let commands = collection
+            .capability_commands()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            commands.len(),
+            6,
+            "only distinct in-window commands are probed"
+        );
+        assert!(!commands.iter().any(|command| command.contains("terraform")));
+        let supported = commands
+            .iter()
+            .map(|command| {
+                ["bun", "git", "ssh", "gh", "cargo"]
+                    .iter()
+                    .any(|family| command.starts_with(family))
+            })
+            .collect::<Vec<_>>();
+        assert!(collection.apply_capabilities(&supported));
+        assert!(!collection.apply_capabilities(&supported[..supported.len() - 1]));
+        let families = collection.snapshot.by_family;
+
+        for family in ["bun", "git", "ssh", "gh", "cargo"] {
+            let summary = families
+                .iter()
+                .find(|summary| summary.family == family)
+                .expect("dedicated legacy family");
+            assert!(summary.first_class_replacement_available, "{family}");
+        }
+        assert!(families.iter().any(|summary| {
+            summary.family == "unknown-tool" && !summary.first_class_replacement_available
+        }));
+        assert!(!families.iter().any(|summary| summary.family == "terraform"));
+        let encoded = serde_json::to_string(&families).expect("family JSON");
+        assert!(!encoded.contains("sensitive-argument"));
+    }
+
+    #[test]
+    fn acceptance_gate_operation_attribution_migrates_without_sensitive_payloads() {
         let directory = tempdir().expect("temporary directory");
         let path = directory.path().join("ledger.sqlite");
         let legacy = Connection::open(&path).expect("legacy database");
@@ -1711,6 +2224,10 @@ mod tests {
             operation: AccountingOperationKind::Search,
             mode: AccountingOperationMode::SearchExact,
             stage: AccountingStage::FinalDelivery,
+            requested_mode: Some(AccountingOperationMode::SearchAuto),
+            effective_mode: Some(AccountingOperationMode::SearchExact),
+            search_strategy: Some(AccountingSearchStrategy::ForkRgaiBuiltin),
+            search_fallback_code: Some(SearchFallbackCode::SemanticIndexUnavailable),
             include_content: Some(false),
             limit: Some(7),
             path_scope_count: Some(1),
@@ -1740,10 +2257,22 @@ mod tests {
             )
             .expect("attributed operation");
 
-        let persisted: (String, String, String, bool, u64, u64) = ledger
+        let persisted: (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            bool,
+            u64,
+            u64,
+        ) = ledger
             .connection
             .query_row(
-                "SELECT operation_kind, operation_mode, accounting_stage,
+                "SELECT operation_kind, operation_mode, accounting_stage, requested_mode,
+                        effective_mode, search_strategy, search_fallback_code,
                         search_include_content, result_limit, path_scope_count FROM commands",
                 [],
                 |row| {
@@ -1754,6 +2283,10 @@ mod tests {
                         row.get(3)?,
                         row.get(4)?,
                         row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
                     ))
                 },
             )
@@ -1764,6 +2297,10 @@ mod tests {
                 "search".into(),
                 "search_exact".into(),
                 "final_delivery".into(),
+                "search_auto".into(),
+                "search_exact".into(),
+                "fork_rgai_builtin".into(),
+                "semantic_index_unavailable".into(),
                 false,
                 7,
                 1,
@@ -1776,6 +2313,71 @@ mod tests {
             AccountingOperationMode::SearchExact
         );
         assert_eq!(summary.by_mode[0].delivered_tokens_estimated, 8);
+    }
+
+    #[test]
+    fn acceptance_gate_final_delivery_is_stage_visible_but_not_double_counted() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        let internal = AccountingAttribution {
+            operation: AccountingOperationKind::Search,
+            mode: AccountingOperationMode::SearchSemantic,
+            stage: AccountingStage::InternalTransport,
+            requested_mode: Some(AccountingOperationMode::SearchAuto),
+            effective_mode: Some(AccountingOperationMode::SearchSemantic),
+            search_strategy: Some(AccountingSearchStrategy::ForkRgaiAdaptive),
+            search_fallback_code: None,
+            include_content: Some(false),
+            limit: Some(10),
+            path_scope_count: Some(1),
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: None,
+        };
+        let final_delivery = AccountingAttribution {
+            stage: AccountingStage::FinalDelivery,
+            ..internal.clone()
+        };
+        for (baseline, delivered, detail) in [(100, 20, &internal), (20, 20, &final_delivery)] {
+            ledger
+                .record_operation_attributed_with_detail(
+                    "hzr search",
+                    "hzr search",
+                    baseline,
+                    delivered,
+                    1,
+                    DetailedOperationAttribution {
+                        attribution: OperationAttribution {
+                            project_path: "/work",
+                            agent: Some("cli"),
+                            session_id: Some("session"),
+                            channel: OperationChannel::HookCli,
+                            measurement: OperationMeasurement::Estimated,
+                            route: OperationRoute::Optimized,
+                        },
+                        detail: Some(detail),
+                    },
+                )
+                .expect("record stage");
+        }
+
+        let summary = ledger.efficiency_summary().expect("efficiency summary");
+        assert_eq!(summary.operations, 1);
+        assert_eq!(summary.baseline_tokens_estimated, 100);
+        assert_eq!(summary.delivered_tokens_estimated, 20);
+        assert_eq!(summary.total_observed_operations, 1);
+        assert_eq!(summary.by_mode.len(), 2);
+        assert!(
+            summary
+                .by_mode
+                .iter()
+                .any(|mode| mode.stage == AccountingStage::FinalDelivery && mode.operations == 1)
+        );
+        let bypass = ledger.bypass_summary().expect("bypass summary");
+        assert_eq!(bypass.lifetime.operations, 0);
+        assert_eq!(bypass.lifetime.total_operations, 1);
+        assert_eq!(bypass.lifetime.total_delivered_tokens_estimated, 20);
     }
 
     #[test]
@@ -2117,7 +2719,7 @@ mod tests {
             retries: 0,
             latency_ms: 10,
             outcome: "accepted".into(),
-            policy_version: "0.4.2".into(),
+            policy_version: "0.4.3".into(),
             cost_microusd: Some(50),
             project_path: String::new(),
         };
@@ -2157,7 +2759,7 @@ mod tests {
             retries: 0,
             latency_ms: 1,
             outcome: "completed".into(),
-            policy_version: "0.4.2".into(),
+            policy_version: "0.4.3".into(),
             cost_microusd: Some(10),
             project_path: path.to_owned(),
         };
@@ -2254,7 +2856,7 @@ mod tests {
                 retries: 0,
                 latency_ms: 1,
                 outcome: "completed".into(),
-                policy_version: "0.4.2".into(),
+                policy_version: "0.4.3".into(),
                 cost_microusd: Some(1),
                 project_path: "/work/a".into(),
             })

@@ -85,7 +85,7 @@ fn managed_block(_surface: Surface, contract_path: &Path) -> String {
             "Read the full contract at `{0}` only when a bounded lookup cannot resolve ",
             "HZR-policy ambiguity.\n",
             "Ordinary tasks must not import or read it in full. Start with ",
-            "`hzr rtk -- read {0} --outline`, then read only the relevant ",
+            "`hzr read {0} --outline`, then read only the relevant ",
             "`--from`/`--to` range.\n\n",
         ),
         contract_path.display(),
@@ -104,9 +104,9 @@ fn managed_block(_surface: Surface, contract_path: &Path) -> String {
          {contract_pointer}\
          | Instead of | Use |\n\
          |---|---|\n\
-         | `Read` | `hzr rtk -- read <file>` uses the smart default; use `--outline` first for structure and ranges for exact evidence |\n\
+         | `Read` | `hzr read <file>` uses the smart default; use `--outline` first for structure and ranges for exact evidence |\n\
          | `Grep` | `hzr rgai \"<intent>\"` or `hzr search \"<intent>\" --mode auto`; use `--mode exact` only for a known literal |\n\
-         | `Edit`/`Write` | `hzr rtk -- write patch\\|replace\\|set\\|create\\|batch ...` |\n\
+         | `Edit`/`Write` | `hzr write patch\\|replace\\|set\\|create\\|batch ...` |\n\
          | memory | `hzr memory recall\\|store` |\n\
          | context | `hzr context plan \"<intent>\"` |\n\
          | shell command | `hzr exec run '<shell command>'`; canonical policy selects the filtered route and preserves shell grammar |\n\
@@ -117,10 +117,14 @@ fn managed_block(_surface: Surface, contract_path: &Path) -> String {
          `hzr exec rewrite '<shell command>'` returns `allow_rewrite`, `raw` is forbidden.\n\
          Do not choose `raw` merely because a command uses SSH, JSON, pipes, redirects or\n\
          unfamiliar arguments. When no filter exists, `hzr exec run` performs the tracked\n\
-         fallback without requiring the agent to select `raw`.\n\n\
-         Unbounded `read --level none` defeats the smart default and is automatically reduced.\n\
+        fallback without requiring the agent to select `raw`.\n\n\
+         For a plain argv command whose output intent is known, the existing\n\
+         `hzr rtk -- test`, `err`, `summary` and `log` routes provide bounded\n\
+         generic filtering. Do not use them to reconstruct pipes, redirects or\n\
+         other shell grammar; keep those commands on `hzr exec run`.\n\n\
+        Unbounded `read --level none` defeats the smart default and is automatically reduced.\n\
          Prefer `--outline` for structure and `--from`/`--to` for exact evidence. Use\n\
-         `HZR_EXACT_FIDELITY=1 hzr rtk -- read <file> --level none` only when the whole file\n\
+         `HZR_EXACT_FIDELITY=1 hzr read <file> --level none` only when the whole file\n\
          is authoritative input that cannot be bounded. Search defaults to `--mode auto` for\n\
          discovery; `--mode exact` remains the escape hatch for a known symbol, error, key, or\n\
          audit literal.\n\n\
@@ -146,8 +150,11 @@ fn managed_block(_surface: Surface, contract_path: &Path) -> String {
          | `hzr_context_plan` | Build bounded graph-first evidence for unfamiliar or cross-cutting work. |\n\
          | `hzr_search` | Find code by intent (`mode: semantic`) or exactly (`mode: exact`). |\n\
          | `hzr_memory_recall` | Recall decisions, resolved errors and prior context before re-reading files. |\n\
-         | `hzr_memory_store` | Persist a decision, resolved error or finished work. Not ephemeral state. |\n\
-         | `hzr_codec` | Apply or shadow-measure protected response-density transforms. |\n\n\
+        | `hzr_memory_store` | Persist a decision, resolved error or finished work. Not ephemeral state. |\n\
+         | `hzr_memory_update` | Replace one superseded memory after namespace ownership is verified. |\n\
+         | `hzr_memory_forget` | Delete one invalid memory after namespace ownership is verified. |\n\
+         | `hzr_memory_prune` | Preview or remove low-weight memories in one namespace; preview is the default. |\n\
+        | `hzr_codec` | Apply or shadow-measure protected response-density transforms. |\n\n\
          MCP inputs are strictly validated and results include typed `structuredContent`.\n\
          `isError: true` means no success was confirmed and no fallback engine or store\n\
          was used. If a store transport fails after dispatch, recall before retrying because\n\
@@ -164,12 +171,12 @@ fn managed_block(_surface: Surface, contract_path: &Path) -> String {
          falls back to the same pinned fork-core when the daemon is down. A degraded\n\
          rewrite keeps command policy but is absent from the usage ledger; `hzr doctor`\n\
          and `hzr stats` report that incomplete accounting rather than hiding it.\n\n\
-         The hook matches `Bash`, `Agent` and `Task` only. It does **not** see your host's\n\
-         own `Read`, `Grep`, `Edit`, `Write` or `Glob`, so nothing redirects those calls and\n\
-         nothing records them — they are absent from `hzr stats` entirely. The table above is\n\
-         therefore yours to follow, not something the hook enforces: a native file tool is\n\
-         allowed and sometimes right, but it is invisible, so prefer the `hzr` command\n\
-         whenever one exists.\n\n\
+        The hook matches `Bash`, `Agent` and `Task` only. It does **not** see your host's\n\
+         own `Read`, `Grep`, `Edit`, `Write` or `Glob`, so it cannot redirect or compress\n\
+         those calls. A failure-silent `PostToolUse` observer records only their route and\n\
+         response-size estimate: it stores no tool content, changes no result and grants no\n\
+         savings credit. The table above is therefore yours to follow, not something the hook\n\
+         enforces; prefer the `hzr` command whenever one exists.\n\n\
          {END}"
     )
 }
@@ -239,7 +246,7 @@ fn strip_legacy_imports(text: &str) -> (String, usize) {
 
 const LEGACY_COMMAND_MIGRATIONS: [(&str, &str); 25] = [
     ("`which rtk`", "`command -v hzr`"),
-    ("`rtk read <file>`", "`hzr rtk -- read <file>`"),
+    ("`rtk read <file>`", "`hzr read <file>`"),
     (
         "`rtk grep <pattern>`",
         "`hzr search \"<pattern>\" --mode exact`",
@@ -247,21 +254,18 @@ const LEGACY_COMMAND_MIGRATIONS: [(&str, &str); 25] = [
     ("`rtk rgai <query>`", "`hzr rgai \"<query>\"`"),
     (
         "`rtk write file <path> --content @/tmp/f`",
-        "`hzr rtk -- write file <path> --content @/tmp/f`",
+        "`hzr write file <path> --content @/tmp/f`",
     ),
     (
         "`rtk write batch --plan '[...]'`",
-        "`hzr rtk -- write batch --plan '[...]'`",
+        "`hzr write batch --plan '[...]'`",
     ),
     (
         "`rtk write patch/replace/set`",
-        "`hzr rtk -- write patch/replace/set`",
+        "`hzr write patch/replace/set`",
     ),
-    (
-        "`rtk write patch/replace`",
-        "`hzr rtk -- write patch/replace`",
-    ),
-    ("`rtk write batch`", "`hzr rtk -- write batch`"),
+    ("`rtk write patch/replace`", "`hzr write patch/replace`"),
+    ("`rtk write batch`", "`hzr write batch`"),
     ("`rtk rgai`", "`hzr rgai`"),
     ("`rtk grep`", "`hzr search --mode exact`"),
     ("`rtk` commands", "`hzr` commands"),
@@ -638,10 +642,10 @@ mod tests {
         let (out, _, _, migrated) = compose(legacy, Surface::Claude, contract());
 
         assert_eq!(migrated, 3);
-        assert!(out.contains("`hzr rtk -- read <file>`"));
+        assert!(out.contains("`hzr read <file>`"));
         assert!(out.contains("`hzr rgai \"<query>\"`"));
         assert!(out.contains("`hzr_memory_recall`"));
-        assert_eq!(out.matches("`hzr rtk -- read <file>`").count(), 2);
+        assert_eq!(out.matches("`hzr read <file>`").count(), 2);
         assert_eq!(compose(&out, Surface::Claude, contract()).0, out);
     }
 
@@ -683,7 +687,7 @@ mod tests {
     fn test_managed_surface_uses_bounded_contract_pointer_not_an_import() {
         let out = compose("", Surface::Codex, contract()).0;
         assert!(out.contains("Read the full contract at `/opt/hzr/share/hzr/HZR.md` only when"));
-        assert!(out.contains("hzr rtk -- read /opt/hzr/share/hzr/HZR.md --outline"));
+        assert!(out.contains("hzr read /opt/hzr/share/hzr/HZR.md --outline"));
         assert!(out.contains("relevant `--from`/`--to` range"));
         assert!(!out.contains("\n@/opt/hzr"));
         assert!(!out.contains("Bootstrap by reading"));
@@ -694,6 +698,9 @@ mod tests {
     fn test_managed_block_describes_mcp_and_batch_semantics_exactly() {
         let out = compose("", Surface::Codex, contract()).0;
         assert!(out.contains("`hzr_codec`"));
+        assert!(out.contains("`hzr_memory_update`"));
+        assert!(out.contains("`hzr_memory_forget`"));
+        assert!(out.contains("`hzr_memory_prune`"));
         assert!(out.contains("| optional TDD | `hzr tdd` only when"));
         assert!(out.contains("TDD is opt-in, not the default"));
         assert!(!out.contains("`hzr tdd` before production changes"));
@@ -712,8 +719,38 @@ mod tests {
         assert!(out.contains("shell command | `hzr exec run '<shell command>'`"));
         assert!(out.contains("returns `allow_rewrite`, `raw` is forbidden"));
         assert!(out.contains("When no filter exists, `hzr exec run` performs the tracked"));
+        assert!(out.contains("`hzr rtk -- test`, `err`, `summary` and `log`"));
         assert!(out.contains("`HZR_RAW_FIDELITY=1 hzr rtk -- raw <command...>`"));
         assert!(!out.contains("| exact/raw output |"));
+    }
+
+    #[test]
+    fn acceptance_gate_managed_contract_matches_native_observer_and_mcp_surface() {
+        for surface in [Surface::Claude, Surface::Codex] {
+            let out = compose("", surface, contract()).0;
+
+            for tool in [
+                "hzr_context_plan",
+                "hzr_search",
+                "hzr_memory_recall",
+                "hzr_memory_store",
+                "hzr_memory_update",
+                "hzr_memory_forget",
+                "hzr_memory_prune",
+                "hzr_codec",
+            ] {
+                assert!(
+                    out.contains(&format!("`{tool}`")),
+                    "missing MCP tool {tool}"
+                );
+            }
+            assert!(out.contains("`PostToolUse` observer records only their route"));
+            assert!(out.contains("stores no tool content"));
+            assert!(out.contains("grants no"));
+            assert!(out.contains("savings credit"));
+            assert!(!out.contains("nothing records them"));
+            assert!(!out.contains("absent from `hzr stats` entirely"));
+        }
     }
 
     #[test]
@@ -725,7 +762,7 @@ mod tests {
             assert!(out.contains("use `--mode exact` only for a known literal"));
             assert!(out.contains("Prefer `--outline` for structure"));
             assert!(out.contains("`--from`/`--to` for exact evidence"));
-            assert!(out.contains("`HZR_EXACT_FIDELITY=1 hzr rtk -- read"));
+            assert!(out.contains("`HZR_EXACT_FIDELITY=1 hzr read"));
             assert!(!out.contains("Markdown defaults to a digest, `--level none` is exact"));
             assert!(!out.contains("\n@/opt/hzr"));
             assert!(!out.contains("Bootstrap by reading"));

@@ -482,7 +482,20 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                     "skipped_binary": {"type": "integer", "minimum": 0},
                     "hits": {"type": "array", "items": search_hit_schema()},
                     "effective_mode": {"type": "string", "enum": ["auto", "semantic", "exact"]},
-                    "strategy": {"type": "string", "enum": ["fork_rgai_adaptive", "fork_rgai_builtin"]},
+                    "strategy": {
+                        "type": "string",
+                        "enum": [
+                            "fork_rgai_adaptive",
+                            "fork_rgai_builtin",
+                            "fork_rgai_grepai",
+                            "fork_rgai_ripgrep",
+                            "fork_rgai_files"
+                        ]
+                    },
+                    "fallback_code": {
+                        "type": "string",
+                        "enum": ["legacy_index_requires_migration", "semantic_index_unavailable", "grepai_unavailable", "ripgrep_unavailable"]
+                    },
                     "fallback_reason": {"type": "string"},
                     "next_step": {"type": "string"},
                 },

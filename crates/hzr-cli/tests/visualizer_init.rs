@@ -102,7 +102,7 @@ fn acceptance_gate_init_repairs_stale_managed_instructions() {
     let migrated_local =
         std::fs::read_to_string(&local_claude).expect("migrated local instructions");
     assert!(migrated_local.contains("# Project rules"));
-    assert!(migrated_local.contains("`hzr rtk -- read <file>`"));
+    assert!(migrated_local.contains("`hzr read <file>`"));
     assert!(migrated_local.contains("<!-- hzr:begin managed agent contract"));
     let codex = directory.path().join("codex/AGENTS.md");
     let stale = std::fs::read_to_string(&codex)

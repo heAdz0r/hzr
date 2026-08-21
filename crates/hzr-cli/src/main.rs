@@ -41,10 +41,12 @@ use hzr_index::{
     migrate_legacy_index,
 };
 use hzr_protocol::{
+    AccountingAttribution, AccountingChannel, AccountingMeasurement, AccountingOperationKind,
+    AccountingOperationMode, AccountingRoute, AccountingSearchStrategy, AccountingStage,
     CodecApiRequest, ContextPlanApiRequest, ExecApiRequest, ExecApprovalApiRequest,
     MemoryForgetApiRequest, MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryStoreApiRequest,
-    MemoryUpdateApiRequest, PROTOCOL_VERSION, SearchApiRequest, SearchApiResponse, SearchMode,
-    SessionId,
+    MemoryUpdateApiRequest, OperationApiRequest, PROTOCOL_VERSION, SearchApiRequest,
+    SearchApiResponse, SearchMode, SearchStrategy, SessionId,
 };
 
 use crate::cli::{
@@ -60,8 +62,8 @@ use crate::migration::scan;
 use crate::output::{
     print_agent, print_context, print_doctor, print_engines, print_execution, print_health,
     print_index_init, print_index_status, print_json, print_memories, print_memory_health,
-    print_migration, print_migration_apply, print_rewrite, print_search, print_stats,
-    print_transform,
+    print_migration, print_migration_apply, print_rewrite, print_stats, print_transform,
+    render_search,
 };
 
 #[tokio::main]
@@ -477,6 +479,17 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             args.extend(arguments.args.iter().cloned());
             fork::passthrough(&config, &args).await
         }
+        Command::Read(arguments) => {
+            let mut args = vec![std::ffi::OsString::from("read")];
+            args.extend(arguments.args.iter().cloned());
+            let args = bounded_read_arguments(&args, exact_read_fidelity_requested());
+            fork::passthrough(&config, &args).await
+        }
+        Command::Write(arguments) => {
+            let mut args = vec![std::ffi::OsString::from("write")];
+            args.extend(arguments.args.iter().cloned());
+            fork::passthrough(&config, &args).await
+        }
         Command::Release {
             version,
             dry_run,
@@ -531,10 +544,12 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             }
             Ok(ExitCode::SUCCESS)
         }
-        Command::Stats { workspace, all } => {
-            show_stats(&config, workspace.as_deref(), cli.json, all).await
-        }
-        Command::Savings => show_stats(&config, None, cli.json, false).await,
+        Command::Stats {
+            workspace,
+            all,
+            since,
+        } => show_stats(&config, workspace.as_deref(), cli.json, all, since.as_ref()).await,
+        Command::Savings => show_stats(&config, None, cli.json, false, None).await,
         Command::Migrate { command } => match command {
             MigrateCommand::Scan { workspace } => {
                 let workspace = canonical_directory(workspace.as_deref())?;
@@ -674,8 +689,98 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             }
         },
-        Command::Rtk(arguments) => fork::passthrough(&config, &arguments.args).await,
+        Command::Rtk(arguments) => {
+            let args = bounded_read_arguments(&arguments.args, exact_read_fidelity_requested());
+            fork::passthrough(&config, &args).await
+        }
     }
+}
+
+fn exact_read_fidelity_requested() -> bool {
+    std::env::var_os("HZR_EXACT_FIDELITY").as_deref() == Some(std::ffi::OsStr::new("1"))
+}
+
+/// Remove an unbounded exact-text request before entering fork-core.
+///
+/// This is an argv transformation, not a shell reconstruction: non-UTF-8 file names and every
+/// untouched argument retain their original bytes. Bounded/structural reads and the explicit
+/// fidelity marker remain unchanged.
+fn bounded_read_arguments(
+    arguments: &[std::ffi::OsString],
+    exact_fidelity: bool,
+) -> Vec<std::ffi::OsString> {
+    if exact_fidelity || arguments.first().and_then(|value| value.to_str()) != Some("read") {
+        return arguments.to_vec();
+    }
+
+    let mut level_none = None;
+    let mut index = 1;
+    let mut bounded = false;
+    while index < arguments.len() {
+        let Some(argument) = arguments[index].to_str() else {
+            index += 1;
+            continue;
+        };
+        bounded |= matches!(
+            argument,
+            "--from"
+                | "--to"
+                | "-n"
+                | "--line-numbers"
+                | "--max-lines"
+                | "--tail-lines"
+                | "--outline"
+                | "--symbols"
+                | "--changed"
+                | "--since"
+        ) || [
+            "--from=",
+            "--to=",
+            "--max-lines=",
+            "--tail-lines=",
+            "--since=",
+        ]
+        .iter()
+        .any(|prefix| argument.starts_with(prefix));
+
+        let candidate = if matches!(argument, "--level" | "-l") {
+            let Some(value) = arguments.get(index + 1).and_then(|value| value.to_str()) else {
+                return arguments.to_vec();
+            };
+            if value != "none" || level_none.is_some() {
+                return arguments.to_vec();
+            }
+            Some((index, index + 1))
+        } else if argument == "--level=none" {
+            if level_none.is_some() {
+                return arguments.to_vec();
+            }
+            Some((index, index))
+        } else if argument.starts_with("--level=") {
+            return arguments.to_vec();
+        } else {
+            None
+        };
+        if let Some(candidate) = candidate {
+            level_none = Some(candidate);
+            index = candidate.1 + 1;
+        } else {
+            index += 1;
+        }
+    }
+
+    let Some((start, end)) = level_none else {
+        return arguments.to_vec();
+    };
+    if bounded {
+        return arguments.to_vec();
+    }
+    arguments
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index < start || *index > end)
+        .map(|(_, argument)| argument.clone())
+        .collect()
 }
 
 struct InstallOptions {
@@ -1503,6 +1608,7 @@ async fn execute_search(
 ) -> Result<ExitCode> {
     let workspace = canonical_directory(arguments.workspace.as_deref())?;
     let mode = arguments.mode.map_or(default_mode, Into::into);
+    let path_scope_count = arguments.path.len().max(1);
     // One request per subtree, merged. The daemon filter takes a single path, and running
     // the searches here keeps that contract while letting an agent write the multi-path
     // invocation it would reach for anyway.
@@ -1536,12 +1642,108 @@ async fn execute_search(
     let mut response = merged.unwrap_or_else(|| unreachable!("at least one search is issued"));
     response.hits.truncate(arguments.limit);
     response.shown_hits = response.hits.len();
-    if json {
-        print_json(&response)?;
+    let output = if json {
+        let mut output = serde_json::to_vec_pretty(&response)?;
+        output.push(b'\n');
+        output
     } else {
-        print_search(&response)?;
-    }
+        render_search(&response)?
+    };
+    io::stdout().lock().write_all(&output)?;
+    record_search_delivery(
+        config,
+        &client,
+        &workspace,
+        mode,
+        arguments.include_content,
+        arguments.limit,
+        path_scope_count,
+        &response,
+        output.len(),
+    )
+    .await;
     Ok(ExitCode::SUCCESS)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_search_delivery(
+    config: &Config,
+    client: &DaemonClient,
+    workspace: &Path,
+    requested_mode: SearchMode,
+    include_content: bool,
+    limit: usize,
+    path_scope_count: usize,
+    response: &SearchApiResponse,
+    output_bytes: usize,
+) {
+    let delivered = u64::try_from(output_bytes / 4).unwrap_or(u64::MAX).max(1);
+    let effective_mode = accounting_effective_search_mode(response);
+    let request = OperationApiRequest {
+        original_command: "hzr search".to_owned(),
+        recorded_command: "hzr search".to_owned(),
+        baseline_tokens_estimated: delivered,
+        delivered_tokens_estimated: delivered,
+        execution_ms: 0,
+        project_path: workspace.to_string_lossy().into_owned(),
+        channel: AccountingChannel::HookCli,
+        measurement: AccountingMeasurement::Estimated,
+        route: AccountingRoute::Optimized,
+        agent: Some("cli".to_owned()),
+        session_id: ["CODEX_THREAD_ID", "CLAUDE_SESSION_ID"]
+            .into_iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            }),
+        attribution: Some(AccountingAttribution {
+            operation: AccountingOperationKind::Search,
+            mode: effective_mode,
+            stage: AccountingStage::FinalDelivery,
+            requested_mode: Some(accounting_search_mode(requested_mode)),
+            effective_mode: Some(effective_mode),
+            search_strategy: Some(match response.strategy {
+                SearchStrategy::ForkRgaiAdaptive => AccountingSearchStrategy::ForkRgaiAdaptive,
+                SearchStrategy::ForkRgaiBuiltin => AccountingSearchStrategy::ForkRgaiBuiltin,
+                SearchStrategy::ForkRgaiGrepai => AccountingSearchStrategy::ForkRgaiGrepai,
+                SearchStrategy::ForkRgaiRipgrep => AccountingSearchStrategy::ForkRgaiRipgrep,
+                SearchStrategy::ForkRgaiFiles => AccountingSearchStrategy::ForkRgaiFiles,
+            }),
+            search_fallback_code: response.fallback_code,
+            include_content: Some(include_content),
+            limit: Some(u64::try_from(limit).unwrap_or(u64::MAX)),
+            path_scope_count: Some(u64::try_from(path_scope_count).unwrap_or(u64::MAX)),
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: None,
+        }),
+    };
+    if client.record_operation(&request).await.is_err() {
+        let _ = hook_runner::record_daemon_unavailable_operation(config);
+    }
+}
+
+const fn accounting_effective_search_mode(response: &SearchApiResponse) -> AccountingOperationMode {
+    match response.strategy {
+        SearchStrategy::ForkRgaiBuiltin if matches!(response.effective_mode, SearchMode::Exact) => {
+            AccountingOperationMode::SearchExact
+        }
+        SearchStrategy::ForkRgaiBuiltin => AccountingOperationMode::SearchBuiltin,
+        SearchStrategy::ForkRgaiAdaptive => accounting_search_mode(response.effective_mode),
+        SearchStrategy::ForkRgaiGrepai
+        | SearchStrategy::ForkRgaiRipgrep
+        | SearchStrategy::ForkRgaiFiles => AccountingOperationMode::SearchSemantic,
+    }
+}
+
+const fn accounting_search_mode(mode: SearchMode) -> AccountingOperationMode {
+    match mode {
+        SearchMode::Auto => AccountingOperationMode::SearchAuto,
+        SearchMode::Semantic => AccountingOperationMode::SearchSemantic,
+        SearchMode::Exact => AccountingOperationMode::SearchExact,
+    }
 }
 
 /// Combine two subtree searches into one response, keeping the strongest hit per file.
@@ -1876,11 +2078,12 @@ async fn show_stats(
     workspace: Option<&Path>,
     json: bool,
     include_all_commands: bool,
+    since: Option<&crate::cli::StatsDuration>,
 ) -> Result<ExitCode> {
     let workspace = workspace
         .map(|path| canonical_directory(Some(path)))
         .transpose()?;
-    let report = stats::collect(config, workspace.as_deref(), include_all_commands)?;
+    let report = stats::collect(config, workspace.as_deref(), include_all_commands, since).await?;
     if json {
         print_json(&report)?;
     } else {
@@ -1919,8 +2122,48 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        canonical_directory, contract_asset_path, executable_source_directory, payload_limit,
+        bounded_read_arguments, canonical_directory, contract_asset_path,
+        executable_source_directory, payload_limit,
     };
+
+    #[test]
+    fn acceptance_gate_direct_cli_reduces_only_unbounded_exact_reads() {
+        let arguments = |values: &[&str]| {
+            values
+                .iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            bounded_read_arguments(&arguments(&["read", "README.md", "--level", "none"]), false),
+            arguments(&["read", "README.md"])
+        );
+        assert_eq!(
+            bounded_read_arguments(&arguments(&["read", "README.md", "--level=none"]), false),
+            arguments(&["read", "README.md"])
+        );
+        for preserved in [
+            arguments(&[
+                "read",
+                "README.md",
+                "--from",
+                "1",
+                "--to",
+                "20",
+                "--level",
+                "none",
+            ]),
+            arguments(&["read", "README.md", "--outline", "--level", "none"]),
+            arguments(&["read", "README.md", "--level", "none"]),
+            arguments(&["write", "replace", "README.md", "old", "new"]),
+        ] {
+            let exact_fidelity = preserved == arguments(&["read", "README.md", "--level", "none"]);
+            assert_eq!(
+                bounded_read_arguments(&preserved, exact_fidelity),
+                preserved
+            );
+        }
+    }
 
     #[test]
     fn test_payload_limit_reserves_json_envelope_space() {
@@ -1941,7 +2184,7 @@ mod tests {
     #[test]
     fn contract_uses_current_pointer_for_an_installed_release() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.2-test");
+        let release = directory.path().join("versions/v0.4.3-test");
         let source = release.join("bin");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(&source).expect("release bin");
@@ -1961,7 +2204,7 @@ mod tests {
     #[test]
     fn contract_keeps_a_logical_current_source_upgradeable() {
         let directory = tempdir().expect("temporary directory");
-        let release = directory.path().join("versions/v0.4.2-test");
+        let release = directory.path().join("versions/v0.4.3-test");
         let contract = release.join("share/hzr/HZR.md");
         std::fs::create_dir_all(release.join("bin")).expect("release bin");
         std::fs::create_dir_all(contract.parent().expect("contract parent"))
@@ -1979,7 +2222,7 @@ mod tests {
     #[test]
     fn public_binary_symlink_resolves_to_the_versioned_source_directory() {
         let directory = tempdir().expect("temporary directory");
-        let release_bin = directory.path().join("versions/v0.4.2-test/bin");
+        let release_bin = directory.path().join("versions/v0.4.3-test/bin");
         let release_binary = release_bin.join("hzr");
         let public_bin = directory.path().join("bin");
         std::fs::create_dir_all(&release_bin).expect("release bin");

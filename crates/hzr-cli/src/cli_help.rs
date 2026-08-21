@@ -48,6 +48,8 @@ Search & Memory:
   memory     Recall, store, or inspect ICM memory
 
 Agent tools:
+  read       Read files through bounded HZR filtering
+  write      Write files atomically through HZR
   exec       Rewrite or run a command through policy
   codec      Compile protected response-density transforms
   agent      Run the managed caveman-code agent
@@ -72,6 +74,7 @@ Examples:
   hzr install
   hzr doctor
   hzr search \"auth flow\"
+  hzr read README.md --outline
   hzr stats
   hzr memory recall \"decisions\"
 ";

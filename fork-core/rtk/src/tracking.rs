@@ -209,6 +209,40 @@ pub enum OperationMode {
     ReadSince,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SearchStrategy {
+    Grepai,
+    Ripgrep,
+    Files,
+    Builtin,
+}
+
+impl SearchStrategy {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Grepai => "fork_rgai_grepai",
+            Self::Ripgrep => "fork_rgai_ripgrep",
+            Self::Files => "fork_rgai_files",
+            Self::Builtin => "fork_rgai_builtin",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SearchFallbackCode {
+    GrepaiUnavailable,
+    RipgrepUnavailable,
+}
+
+impl SearchFallbackCode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::GrepaiUnavailable => "grepai_unavailable",
+            Self::RipgrepUnavailable => "ripgrep_unavailable",
+        }
+    }
+}
+
 impl OperationMode {
     const fn as_str(self) -> &'static str {
         match self {
@@ -263,6 +297,10 @@ pub struct OperationAttribution {
     pub operation: OperationKind,
     pub mode: OperationMode,
     pub stage: AccountingStage,
+    pub requested_mode: Option<OperationMode>,
+    pub effective_mode: Option<OperationMode>,
+    pub search_strategy: Option<SearchStrategy>,
+    pub search_fallback_code: Option<SearchFallbackCode>,
     pub include_content: Option<bool>,
     pub limit: Option<usize>,
     pub path_scope_count: Option<usize>,
@@ -495,6 +533,10 @@ impl Tracker {
             "operation_kind TEXT",
             "operation_mode TEXT",
             "accounting_stage TEXT",
+            "requested_mode TEXT",
+            "effective_mode TEXT",
+            "search_strategy TEXT",
+            "search_fallback_code TEXT",
             "search_include_content INTEGER",
             "result_limit INTEGER",
             "path_scope_count INTEGER",
@@ -635,11 +677,13 @@ impl Tracker {
                 timestamp, original_cmd, rtk_cmd, project_path, agent, session_id,
                 input_tokens, output_tokens, saved_tokens, savings_pct, exec_time_ms,
                 channel, measurement, route, operation_kind, operation_mode, accounting_stage,
+                requested_mode, effective_mode, search_strategy, search_fallback_code,
                 search_include_content, result_limit, path_scope_count, filter_level, range_from,
                 range_to, source_bytes
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
-                'hook_cli', ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+                'hook_cli', ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
+                ?24, ?25, ?26, ?27
              )",
             params![
                 Utc::now().to_rfc3339(),
@@ -658,6 +702,18 @@ impl Tracker {
                 accounting.attribution.map(|value| value.operation.as_str()),
                 accounting.attribution.map(|value| value.mode.as_str()),
                 accounting.attribution.map(|value| value.stage.as_str()),
+                accounting
+                    .attribution
+                    .and_then(|value| value.requested_mode.map(OperationMode::as_str)),
+                accounting
+                    .attribution
+                    .and_then(|value| value.effective_mode.map(OperationMode::as_str)),
+                accounting
+                    .attribution
+                    .and_then(|value| value.search_strategy.map(SearchStrategy::as_str)),
+                accounting.attribution.and_then(|value| {
+                    value.search_fallback_code.map(SearchFallbackCode::as_str)
+                }),
                 accounting
                     .attribution
                     .and_then(|value| value.include_content),
@@ -1720,7 +1776,7 @@ mod tests {
     }
 
     #[test]
-    fn attributed_operation_migrates_and_persists_only_typed_dimensions() {
+    fn acceptance_gate_attributed_operation_migrates_and_persists_only_typed_dimensions() {
         let temp = tempfile::tempdir().expect("temporary database directory");
         let tracker = Tracker::open(&temp.path().join("history.db")).expect("isolated tracker");
         tracker
@@ -1734,6 +1790,10 @@ mod tests {
                     operation: OperationKind::Search,
                     mode: OperationMode::SearchExact,
                     stage: AccountingStage::InternalTransport,
+                    requested_mode: Some(OperationMode::SearchSemantic),
+                    effective_mode: Some(OperationMode::SearchExact),
+                    search_strategy: Some(SearchStrategy::Builtin),
+                    search_fallback_code: Some(SearchFallbackCode::GrepaiUnavailable),
                     include_content: None,
                     limit: Some(7),
                     path_scope_count: Some(1),
@@ -1745,10 +1805,22 @@ mod tests {
             )
             .expect("attributed record");
 
-        let persisted: (String, String, String, String, u64, u64) = tracker
+        let persisted: (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            u64,
+            u64,
+        ) = tracker
             .conn
             .query_row(
                 "SELECT original_cmd, operation_kind, operation_mode, accounting_stage,
+                        requested_mode, effective_mode, search_strategy, search_fallback_code,
                         result_limit, path_scope_count FROM commands",
                 [],
                 |row| {
@@ -1759,6 +1831,10 @@ mod tests {
                         row.get(3)?,
                         row.get(4)?,
                         row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                        row.get(8)?,
+                        row.get(9)?,
                     ))
                 },
             )
@@ -1770,6 +1846,10 @@ mod tests {
                 "search".into(),
                 "search_exact".into(),
                 "internal_transport".into(),
+                "search_semantic".into(),
+                "search_exact".into(),
+                "fork_rgai_builtin".into(),
+                "grepai_unavailable".into(),
                 7,
                 1,
             )
