@@ -755,5 +755,35 @@
       "native-tool correction E8",
       "use `hzr "
     ]
+  },
+  {
+    "id": "sudo-covered-command",
+    "command": "sudo docker ps",
+    "decision": "proxy"
+  },
+  {
+    "id": "sudo-env-covered-command",
+    "command": "sudo env FOO=1 docker ps",
+    "decision": "proxy"
+  },
+  {
+    "id": "doas-covered-command",
+    "command": "doas docker ps",
+    "decision": "proxy"
+  },
+  {
+    "id": "pkexec-covered-command",
+    "command": "pkexec docker ps",
+    "decision": "proxy"
+  },
+  {
+    "id": "absolute-sudo-covered-command",
+    "command": "/usr/bin/sudo docker ps",
+    "decision": "proxy"
+  },
+  {
+    "id": "sudo-builtin-prefix-covered-command",
+    "command": "sudo noglob git status",
+    "decision": "proxy"
   }
 ]

@@ -11,8 +11,12 @@ const DEFAULT_MAX_FILES: usize = 20;
 const DEFAULT_MAX_FILE_SIZE: usize = 1_048_576;
 
 /// Sanitize a command slug for use in filenames.
-/// Replaces non-alphanumeric chars (except underscore/hyphen) with underscore,
-/// truncates at 40 chars.
+/// Replaces non-alphanumeric chars (except underscore/hyphen) with underscore.
+/// A long slug — usually an embedded file path that duplicates the command the
+/// model already issued — collapses to a short readable prefix plus a short
+/// disambiguating hash. Blunt truncation made two long slugs sharing a prefix
+/// collide within the same epoch second; this keeps them distinct and costs
+/// fewer tokens per tee hint.
 fn sanitize_slug(slug: &str) -> String {
     let sanitized: String = slug
         .chars()
@@ -24,11 +28,21 @@ fn sanitize_slug(slug: &str) -> String {
             }
         })
         .collect();
-    if sanitized.len() > 40 {
-        sanitized[..40].to_string()
-    } else {
-        sanitized
+    const MAX_READABLE: usize = 24;
+    if sanitized.len() <= MAX_READABLE {
+        return sanitized;
     }
+    let prefix: String = sanitized.chars().take(8).collect();
+    format!("{}_{}", prefix, short_hash(&sanitized))
+}
+
+/// First 6 hex chars (24 bits) of the SHA-256 of `s` — a compact tag that keeps
+/// shortened slugs distinct. Not collision-resistant on its own, and it does not
+/// need to be: a clash also requires the identical readable prefix *and* the
+/// same epoch second, which together scope tee writes exactly as before.
+fn short_hash(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(s.as_bytes()))[..6].to_string()
 }
 
 /// Get the tee directory, respecting config and env overrides.
@@ -108,7 +122,10 @@ fn write_tee_file(
     max_file_size: usize,
     max_files: usize,
 ) -> Option<PathBuf> {
-    std::fs::create_dir_all(tee_dir).ok()?;
+    // Tee files hold verbatim command output — often the most sensitive bytes
+    // the engine touches. Create the directory and the file owner-only rather
+    // than at the process umask.
+    crate::utils::create_private_dir(tee_dir).ok()?;
 
     let slug = sanitize_slug(command_slug);
     let epoch = std::time::SystemTime::now()
@@ -135,7 +152,13 @@ fn write_tee_file(
         raw.to_string()
     };
 
-    std::fs::write(&filepath, content).ok()?;
+    {
+        use std::io::Write;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        let mut file = crate::utils::open_private(&mut opts, &filepath).ok()?;
+        file.write_all(content.as_bytes()).ok()?;
+    }
 
     // Rotate old files
     cleanup_old_files(tee_dir, max_files);
@@ -250,7 +273,9 @@ fn force_tee_path(content: &str, command_slug: &str) -> Option<PathBuf> {
     }
 
     let tee_dir = get_tee_dir(&config)?;
-    let tee_dir = std::fs::create_dir_all(&tee_dir).ok().and(Some(tee_dir))?;
+    let tee_dir = crate::utils::create_private_dir(&tee_dir)
+        .ok()
+        .and(Some(tee_dir))?;
 
     write_tee_file(
         content,
@@ -335,9 +360,30 @@ mod tests {
         assert_eq!(sanitize_slug("cargo test"), "cargo_test");
         assert_eq!(sanitize_slug("cargo-test"), "cargo-test");
         assert_eq!(sanitize_slug("go/test/./pkg"), "go_test___pkg");
-        // Truncate at 40
-        let long = "a".repeat(50);
-        assert_eq!(sanitize_slug(&long).len(), 40);
+    }
+
+    #[test]
+    fn test_sanitize_slug_shortens_long_slugs_without_colliding() {
+        // A long slug collapses to prefix + hash: short enough to keep tee hints
+        // cheap, distinct enough that two slugs sharing a prefix stay separate.
+        let a = format!("{}first", "a".repeat(50));
+        let b = format!("{}second", "a".repeat(50));
+        let slug_a = sanitize_slug(&a);
+        let slug_b = sanitize_slug(&b);
+
+        assert_eq!(slug_a.len(), 15, "8-char prefix + '_' + 6 hex");
+        assert!(slug_a.starts_with("aaaaaaaa_"));
+        assert_ne!(
+            slug_a, slug_b,
+            "blunt truncation used to make these identical"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_slug_keeps_short_slugs_verbatim() {
+        let boundary = "a".repeat(24);
+        assert_eq!(sanitize_slug(&boundary), boundary);
+        assert_eq!(sanitize_slug(&"a".repeat(25)).len(), 15);
     }
 
     #[test]
@@ -409,6 +455,34 @@ mod tests {
         assert!(path.exists());
         let written = fs::read_to_string(&path).unwrap();
         assert!(written.contains("error: test failed"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_tee_file_and_dir_are_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let tee_dir = tmpdir.path().join("tee");
+        let path = write_tee_file(
+            "payload\n",
+            "cargo_test",
+            &tee_dir,
+            DEFAULT_MAX_FILE_SIZE,
+            20,
+        )
+        .expect("tee file written");
+
+        let file_mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            file_mode, 0o600,
+            "tee output must not be group/world readable"
+        );
+        let dir_mode = fs::metadata(&tee_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            dir_mode, 0o700,
+            "tee directory must not be group/world readable"
+        );
     }
 
     #[test]

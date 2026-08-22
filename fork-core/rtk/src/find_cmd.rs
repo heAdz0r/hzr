@@ -177,6 +177,13 @@ pub fn run_from_args(args: &[String], verbose: u8) -> Result<()> {
     if args.is_empty() {
         return run("*", ".", 50, "f", verbose);
     }
+    // Compound predicates and actions have no filtered equivalent. Erroring here
+    // was a dead end: once the hook has rewritten `find … -exec …` into
+    // `rtk find …`, the agent cannot reach the real binary any more. Run the
+    // caller's command verbatim and keep its output and exit code untouched.
+    if has_unsupported_find_flags(args) {
+        return run_find_passthrough(args, verbose);
+    }
     let parsed = parse_find_args(args)?;
     run_with_opts(
         &parsed.pattern,
@@ -218,6 +225,12 @@ fn run_with_opts(
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true);
+    // `[filters].ignore_dirs` / `ignore_files` from config.toml were declared but
+    // never read by any command. Applied here as exclude globs on top of the
+    // gitignore rules, so a configured entry actually removes matches.
+    if let Some(overrides) = configured_overrides(path) {
+        builder.overrides(overrides);
+    }
     if let Some(depth) = max_depth {
         builder.max_depth(Some(depth));
     }
@@ -292,14 +305,66 @@ fn run_display(
     }
 
     let body = format_grouped_results(files, max_results);
-    let shown = crate::guard::never_worse(&raw_output, &body);
+    // Compare against the plain listing *at the same cap*, not against the full
+    // match list: on a small capped run the grouped header cost more tokens than
+    // the paths it replaced, and comparing against every match hid that.
+    let capped_plain = files
+        .iter()
+        .take(max_results)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let shown = if crate::guard::estimate_body_tokens(&body)
+        > crate::guard::estimate_body_tokens(&capped_plain)
+    {
+        capped_plain.clone()
+    } else {
+        body.clone()
+    };
+    let mut shown = crate::guard::never_worse(&raw_output, &shown).to_string();
+
+    // rtk imposed this cap on its own initiative, so the hidden matches must stay
+    // recoverable without re-running the search.
+    if files.len() > max_results {
+        if let Some(hint) = crate::tee::force_tee_tail_hint(&raw_output, "find", max_results + 1) {
+            shown.push('\n');
+            shown.push_str(&hint);
+        }
+    }
+
     print!("{}", shown);
     timer.track(
         &format!("find {} -name '{}'", path, pattern),
         "rtk find",
         &raw_output,
-        shown,
+        &shown,
     );
+    Ok(())
+}
+
+/// Run the caller's `find` verbatim, preserving stdout, stderr and exit code.
+fn run_find_passthrough(args: &[String], verbose: u8) -> Result<()> {
+    let timer = tracking::TimedExecution::start();
+    if verbose > 0 {
+        eprintln!("find passthrough: {}", args.join(" "));
+    }
+    let mut cmd = std::process::Command::new("find");
+    cmd.args(args);
+    let result = crate::stream::run_streaming(
+        &mut cmd,
+        crate::stream::StdinMode::Inherit,
+        crate::stream::FilterMode::Passthrough,
+    )
+    .context("Failed to run find")?;
+
+    timer.track_passthrough(
+        &format!("find {}", args.join(" ")),
+        &format!("rtk find {} (passthrough)", args.join(" ")),
+    );
+
+    if result.exit_code != 0 {
+        std::process::exit(result.exit_code);
+    }
     Ok(())
 }
 
@@ -369,6 +434,26 @@ pub fn run(
     verbose: u8,
 ) -> Result<()> {
     run_with_opts(pattern, path, max_results, file_type, false, None, verbose)
+}
+
+/// Exclude globs built from the user's configured ignore lists. Returns `None`
+/// when nothing is configured beyond the defaults, so the common path builds no
+/// override matcher at all.
+fn configured_overrides(root: &str) -> Option<ignore::overrides::Override> {
+    let dirs = crate::config::Config::merged_ignore_dirs(&[]);
+    let files = crate::config::Config::merged_ignore_files(&[]);
+    if dirs.is_empty() && files.is_empty() {
+        return None;
+    }
+    let mut builder = ignore::overrides::OverrideBuilder::new(root);
+    for dir in &dirs {
+        builder.add(&format!("!{}/**", dir)).ok()?;
+        builder.add(&format!("!{}", dir)).ok()?;
+    }
+    for file in &files {
+        builder.add(&format!("!{}", file)).ok()?;
+    }
+    builder.build().ok()
 }
 
 #[cfg(test)]

@@ -24,7 +24,11 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let raw = format!("{}\n{}", stdout, stderr);
 
-    let filtered = filter_prettier_output(&raw);
+    let exit_code = crate::stream::status_to_exit_code(output.status);
+    // A failing `--check` must never be rendered as a pass, whatever the parse
+    // recovered from the file list.
+    let filtered =
+        crate::guard::guard_exit(&raw, exit_code, "prettier", &filter_prettier_output(&raw));
 
     println!("{}", filtered);
 
@@ -56,6 +60,16 @@ pub fn filter_prettier_output(output: &str) -> String {
         if trimmed.contains("Checking formatting") {
             is_check_mode = true;
         }
+
+        // Prettier >= 1.19 reports each file needing formatting as
+        // `[warn] <path>` on stderr. Skipping every line carrying `[warn]`
+        // discarded exactly the list the caller asked for, leaving "All files
+        // formatted correctly" next to a failing exit code. Strip the marker
+        // and judge the path instead.
+        let trimmed = trimmed
+            .strip_prefix("[warn]")
+            .map(str::trim_start)
+            .unwrap_or(trimmed);
 
         // Count files that need formatting (check mode)
         if !trimmed.is_empty()
@@ -141,6 +155,21 @@ pub fn filter_prettier_output(output: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warn_prefixed_files_are_reported_not_discarded() {
+        // Prettier >= 1.19 emits the list as `[warn] <path>` on stderr.
+        let output = "Checking formatting...\n[warn] src/app.ts\n[warn] src/util.tsx\n";
+        let filtered = filter_prettier_output(output);
+        assert!(
+            filtered.contains("src/app.ts") && filtered.contains("src/util.tsx"),
+            "the file list must survive: {filtered}"
+        );
+        assert!(
+            !filtered.contains("All files formatted correctly"),
+            "a failing check must not read as a pass: {filtered}"
+        );
+    }
 
     #[test]
     fn test_filter_all_formatted() {

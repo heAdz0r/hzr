@@ -31,6 +31,7 @@ tests/guard_integration_test.rs
 tests/search_compress_test.rs
 tests/search_error_test.rs
 tests/search_faithful_test.rs
+tests/search_memory_test.rs
 .claude/rules/ci-lessons.md
 .claude/skills/rtk-tdd/SKILL.md
 .claude/skills/rtk-tdd/references/testing-patterns.md
@@ -397,6 +398,7 @@ src/init.rs
 src/init.rs.rtk-lock
 src/integrity.rs
 src/json_cmd.rs
+src/jsonpack.rs
 src/learn/detector.rs
 src/learn/mod.rs
 src/learn/report.rs

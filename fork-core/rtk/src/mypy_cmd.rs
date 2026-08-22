@@ -38,6 +38,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     if exit_code != 0 && filtered == MYPY_CLEAN {
         filtered = clean.trim().to_string();
     }
+    filtered = crate::guard::guard_exit(&clean, exit_code, "mypy", &filtered);
 
     println!("{}", filtered);
 

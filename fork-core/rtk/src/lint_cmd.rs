@@ -51,16 +51,23 @@ fn is_python_linter(linter: &str) -> bool {
     matches!(linter, "ruff" | "pylint" | "mypy" | "flake8")
 }
 
+/// Linter names this command knows how to drive and parse.
+///
+/// The first argument is only a linter name when it is one of these. Inferring
+/// it from shape instead — "not a flag, no slash, no dot" — read `rtk lint src`
+/// as "run the linter called `src`", which cannot exist: the run failed, and the
+/// generic filter then reported a lint verdict for a run that never happened.
+fn is_known_linter(name: &str) -> bool {
+    is_python_linter(name) || matches!(name, "eslint" | "biome" | "oxlint" | "standard")
+}
+
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
-    // Detect linter name (first arg if not a path/flag, else default to eslint)
-    let is_path_or_flag = args.is_empty()
-        || args[0].starts_with('-')
-        || args[0].contains('/')
-        || args[0].contains('.');
-
-    let linter = if is_path_or_flag { "eslint" } else { &args[0] };
+    // The first argument names the linter only when it is one we recognise;
+    // anything else is a path or flag for the default linter.
+    let names_linter = args.first().is_some_and(|arg| is_known_linter(arg));
+    let linter = if names_linter { &args[0] } else { "eslint" };
 
     // Python linters use Command::new() directly (they're on PATH via pip/pipx)
     // JS linters use package_manager_exec (npx/pnpm exec)
@@ -96,7 +103,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     }
 
     // Add user arguments (skip first if it was the linter name, and skip "check" for ruff if we added it)
-    let start_idx = if is_path_or_flag {
+    let start_idx = if !names_linter {
         0
     } else if linter == "ruff" && !args.is_empty() && args[0] == "ruff" {
         // Skip "ruff" and "check" if we already added "check"
@@ -177,6 +184,9 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         .status
         .code()
         .unwrap_or(if output.status.success() { 0 } else { 1 });
+    // `rtk lint src` used to report a lint verdict for a run that never
+    // happened; the exit code is what distinguishes "clean" from "never ran".
+    let filtered = crate::guard::guard_exit(&raw, exit_code, linter, &filtered);
     let hint = crate::tee::tee_and_hint(&raw, "lint", exit_code);
     let shown = crate::runner::emit_guarded(&filtered, hint.as_deref(), &raw);
 
@@ -578,6 +588,25 @@ fn compact_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bare_path_is_not_read_as_a_linter_name() {
+        // `rtk lint src` must lint `src` with the default linter, not try to run
+        // a linter called `src` and then report a verdict for a run that never
+        // happened.
+        assert!(!is_known_linter("src"));
+        assert!(!is_known_linter("app"));
+        assert!(!is_known_linter("packages"));
+    }
+
+    #[test]
+    fn known_linter_names_are_still_recognised() {
+        for name in [
+            "eslint", "biome", "oxlint", "ruff", "pylint", "mypy", "flake8",
+        ] {
+            assert!(is_known_linter(name), "{name} must be recognised");
+        }
+    }
 
     #[test]
     fn test_filter_eslint_json() {

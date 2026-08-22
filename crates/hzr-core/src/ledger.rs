@@ -421,6 +421,46 @@ fn parse_accounting_stage(value: &str) -> Option<AccountingStage> {
     }
 }
 
+/// Create `path` owner-only if it does not exist yet, so a later opener
+/// inherits the tight mode rather than the umask.
+fn create_private_file(path: &Path) {
+    if path.exists() {
+        set_owner_only(path, 0o600);
+        return;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    if options.open(path).is_ok() {
+        set_owner_only(path, 0o600);
+    }
+}
+
+/// SQLite appends `-wal`/`-shm` to the whole filename, so these are siblings
+/// rather than extension swaps — concatenating on `OsString` rather than
+/// pushing a path component keeps them from targeting `hzr.sqlite/-wal`.
+fn restrict_db_files(path: &Path) {
+    set_owner_only(path, 0o600);
+    for suffix in ["-wal", "-shm"] {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        set_owner_only(&PathBuf::from(name), 0o600);
+    }
+}
+
+#[cfg(unix)]
+fn set_owner_only(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+}
+
+#[cfg(not(unix))]
+fn set_owner_only(_path: &Path, _mode: u32) {}
+
 fn parse_evasion_class(value: &str) -> Option<EvasionClass> {
     match value {
         "e1" => Some(EvasionClass::E1QuotedCoveredCommand),
@@ -433,6 +473,7 @@ fn parse_evasion_class(value: &str) -> Option<EvasionClass> {
         "e8" => Some(EvasionClass::E8NativeTool),
         "e9" => Some(EvasionClass::E9DiagnosticBypass),
         "e10" => Some(EvasionClass::E10CapabilityGap),
+        "e11" => Some(EvasionClass::E11PrivilegedPrefix),
         _ => None,
     }
 }
@@ -611,6 +652,13 @@ fn infer_legacy_evasion(command: &str, route: OperationRoute) -> Option<EvasionA
         None
     };
     let head = lower.split_whitespace().next().unwrap_or_default();
+    // A privilege-elevation prefix is the dominant fact about a command: HZR
+    // deliberately stays out of an elevation the user granted to one binary, so
+    // the row is a refusal to rewrite rather than an avoidable agent choice.
+    let privileged_prefix = matches!(
+        head.rsplit('/').next().unwrap_or(head),
+        "sudo" | "doas" | "pkexec"
+    );
     let path_form = if head.starts_with("/bin/") || head.starts_with("/usr/bin/") {
         EvasionPathForm::AbsoluteSystem
     } else if head.starts_with("./") || head.starts_with("../") {
@@ -634,7 +682,9 @@ fn infer_legacy_evasion(command: &str, route: OperationRoute) -> Option<EvasionA
         && [" cat ", " nl ", " sed ", " rg ", " grep "]
             .iter()
             .any(|reader| format!(" {lower} ").contains(reader));
-    let class = if hatch_marker {
+    let class = if privileged_prefix {
+        EvasionClass::E11PrivilegedPrefix
+    } else if hatch_marker {
         EvasionClass::E7FidelityHatch
     } else if diagnostic {
         EvasionClass::E9DiagnosticBypass
@@ -655,7 +705,10 @@ fn infer_legacy_evasion(command: &str, route: OperationRoute) -> Option<EvasionA
     } else {
         return None;
     };
-    let avoidable = class != EvasionClass::E10CapabilityGap;
+    let avoidable = !matches!(
+        class,
+        EvasionClass::E10CapabilityGap | EvasionClass::E11PrivilegedPrefix
+    );
     let fidelity_reason = [
         ("binary", FidelityReason::Binary),
         ("checksum", FidelityReason::Checksum),
@@ -977,8 +1030,14 @@ impl Ledger {
                 path: parent.to_path_buf(),
                 source,
             })?;
+            set_owner_only(parent, 0o700);
         }
+        // Own the database file before SQLite does, so it and the -wal/-shm
+        // siblings inherit owner-only mode instead of the process umask. The
+        // ledger records every command an agent ran in this workspace.
+        create_private_file(path);
         let connection = Connection::open(path).map_err(LedgerError::Database)?;
+        restrict_db_files(path);
         connection
             .execute_batch(
                 "PRAGMA journal_mode=WAL;
@@ -3135,6 +3194,39 @@ mod tests {
     };
     use rusqlite::{Connection, params};
     use tempfile::tempdir;
+
+    #[test]
+    fn every_evasion_class_survives_the_ledger_round_trip() {
+        // A class the parser does not know is dropped from the summary by the
+        // `continue` in the aggregation loop — silently, and only for the rows
+        // that class covers. Growing the taxonomy must therefore fail here
+        // rather than in production.
+        for class in [
+            EvasionClass::E1QuotedCoveredCommand,
+            EvasionClass::E2ShellWrapper,
+            EvasionClass::E3InterpreterRead,
+            EvasionClass::E4ExecutablePath,
+            EvasionClass::E5PipelineOrRedirect,
+            EvasionClass::E6NestedUnboundedReader,
+            EvasionClass::E7FidelityHatch,
+            EvasionClass::E8NativeTool,
+            EvasionClass::E9DiagnosticBypass,
+            EvasionClass::E10CapabilityGap,
+            EvasionClass::E11PrivilegedPrefix,
+        ] {
+            assert_eq!(
+                super::parse_evasion_class(class.as_str()),
+                Some(class),
+                "{} has no parser entry",
+                class.as_str()
+            );
+            assert!(
+                !class.construct().is_empty() && !class.prescription().is_empty(),
+                "{} must carry an agent-facing construct and prescription",
+                class.as_str()
+            );
+        }
+    }
 
     use super::{
         CURRENT_ACCOUNTING_POLICY_VERSION, CURRENT_PRODUCER_VERSION, DetailedOperationAttribution,

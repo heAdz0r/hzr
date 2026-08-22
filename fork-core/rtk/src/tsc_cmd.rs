@@ -84,6 +84,9 @@ fn run_tsc_like(
     let filtered = filter_tsc_output(&raw);
 
     let exit_code = output.status.code().unwrap_or(1); // upstream sync: tee integration
+                                                       // tsc reports position-less global errors (bad tsconfig, missing lib) that
+                                                       // the per-file grouping cannot see; exit code is the only signal left.
+    let filtered = crate::guard::guard_exit(&raw, exit_code, "tsc", &filtered);
     if let Some(hint) = crate::tee::tee_and_hint(&raw, "tsc", exit_code) {
         // upstream sync: tee
         println!("{}\n{}", filtered, hint);

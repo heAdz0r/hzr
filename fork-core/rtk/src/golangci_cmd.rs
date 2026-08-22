@@ -63,7 +63,15 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let raw = format!("{}\n{}", stdout, stderr);
 
-    let filtered = filter_golangci_json(&stdout);
+    let exit_code = crate::stream::status_to_exit_code(output.status);
+    // golangci-lint exit 1 means issues were found — a real failure, so
+    // "No issues found" must never be rendered next to it.
+    let filtered = crate::guard::guard_exit(
+        &raw,
+        exit_code,
+        "golangci-lint",
+        &filter_golangci_json(&stdout),
+    );
 
     println!("{}", filtered);
 

@@ -138,6 +138,8 @@ fn human_size(bytes: u64) -> String {
 fn compact_ls(raw: &str, show_all: bool, include_summary: bool) -> String {
     use std::collections::HashMap;
 
+    let ignore_dirs = crate::config::Config::merged_ignore_dirs(NOISE_DIRS);
+    let mut hidden = 0usize;
     let mut dirs: Vec<String> = Vec::new();
     let mut files: Vec<(String, String)> = Vec::new(); // (name, size)
     let mut by_ext: HashMap<String, usize> = HashMap::new();
@@ -161,8 +163,10 @@ fn compact_ls(raw: &str, show_all: bool, include_summary: bool) -> String {
             continue;
         }
 
-        // Filter noise dirs unless -a
-        if !show_all && NOISE_DIRS.iter().any(|noise| name == *noise) {
+        // Filter noise dirs unless -a. The list is the built-in noise set merged
+        // with the user's configured `[filters].ignore_dirs`.
+        if !show_all && ignore_dirs.contains(&name) {
+            hidden += 1;
             continue;
         }
 
@@ -183,6 +187,11 @@ fn compact_ls(raw: &str, show_all: bool, include_summary: bool) -> String {
     }
 
     if dirs.is_empty() && files.is_empty() {
+        // `(empty)` must mean empty. When every entry was filtered, say so and
+        // name the lever, or the agent concludes the directory has no content.
+        if hidden > 0 {
+            return format!("({} hidden, use -a)\n", hidden);
+        }
         return "(empty)\n".to_string();
     }
 

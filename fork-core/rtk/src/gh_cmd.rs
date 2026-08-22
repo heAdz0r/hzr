@@ -12,6 +12,14 @@ use std::process::Command;
 
 /// Run a gh command with token-optimized output
 pub fn run(subcommand: &str, args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+    // `--json` selects the caller's own field set, so no per-subcommand summary
+    // applies; the only useful transform is removing the field names repeated on
+    // every row. Reachable only when the lossless repacker is switched on — the
+    // rewrite rule keeps `--json` on exact passthrough otherwise.
+    if !has_jq_or_template(args) && args.iter().any(|arg| arg.starts_with("--json")) {
+        return run_json_packed(subcommand, args);
+    }
+
     match subcommand {
         "pr" => run_pr(args, verbose, ultra_compact),
         "issue" => run_issue(args, verbose, ultra_compact),
@@ -1100,9 +1108,21 @@ fn run_api(args: &[String], _verbose: u8) -> Result<()> {
         std::process::exit(output.status.code().unwrap_or(1));
     }
 
-    // Compact preview: truncate strings >200 chars, limit arrays >5 items
-    let filtered = compact_json_preview(&raw, 200);
-    println!("{}", filtered);
+    // Lossless repacking, not a preview.
+    //
+    // The previous rendering truncated strings past 200 chars and cut arrays to
+    // five items — a body the caller could not act on, and could only recover by
+    // re-fetching. `jsonpack` removes the repeated field names instead and
+    // verifies its own output round-trips before emitting a byte; when it cannot
+    // represent the payload it declines and the raw bytes are printed verbatim.
+    let filtered = match crate::jsonpack::pack(&raw) {
+        Some(packed) => crate::guard::never_worse(&raw, &packed).to_string(),
+        None => raw.clone(),
+    };
+    print!("{}", filtered);
+    if !filtered.ends_with('\n') {
+        println!();
+    }
 
     timer.track("gh api", "rtk gh api", &raw, &filtered);
     Ok(())
@@ -1137,61 +1157,52 @@ fn run_passthrough(cmd: &str, subcommand: &str, args: &[String]) -> Result<()> {
 // --- Pure functions for gh api filtering ---
 
 /// Check if args contain --jq or --template (user-side filtering)
+/// Run `gh <sub> --json …` and repack its array losslessly.
+///
+/// Every value is preserved; only the field names repeated on each row are
+/// removed, and the packer verifies its own round-trip before emitting. When it
+/// declines, the raw bytes are printed exactly as `gh` produced them.
+fn run_json_packed(subcommand: &str, args: &[String]) -> Result<()> {
+    let timer = tracking::TimedExecution::start();
+
+    let mut cmd = Command::new("gh");
+    cmd.arg(subcommand);
+    for arg in args {
+        cmd.arg(arg);
+    }
+
+    let output = cmd
+        .output()
+        .with_context(|| format!("Failed to run gh {}", subcommand))?;
+    let raw = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        eprintln!("{}", stderr.trim());
+        std::process::exit(crate::stream::status_to_exit_code(output.status));
+    }
+
+    let filtered = match crate::jsonpack::pack(&raw) {
+        Some(packed) => crate::guard::never_worse(&raw, &packed).to_string(),
+        None => raw.clone(),
+    };
+    print!("{}", filtered);
+    if !filtered.ends_with('\n') {
+        println!();
+    }
+
+    timer.track(
+        &format!("gh {} {}", subcommand, args.join(" ")),
+        &format!("rtk gh {} {}", subcommand, args.join(" ")),
+        &raw,
+        &filtered,
+    );
+    Ok(())
+}
+
 fn has_jq_or_template(args: &[String]) -> bool {
     args.iter()
         .any(|a| a == "--jq" || a == "-q" || a == "--template" || a == "-t")
-}
-
-/// Compact JSON preview: truncate long strings, limit arrays, keep all keys.
-/// Falls back to raw text (no truncation) if input is not valid JSON.
-fn compact_json_preview(raw: &str, max_str_len: usize) -> String {
-    match serde_json::from_str::<serde_json::Value>(raw) {
-        Ok(val) => {
-            let compacted = compact_value(val, max_str_len);
-            serde_json::to_string_pretty(&compacted).unwrap_or_else(|_| raw.to_string())
-        }
-        Err(_) => raw.to_string(), // not JSON — return as-is
-    }
-}
-
-/// Recursively compact a JSON Value: truncate strings, limit arrays.
-fn compact_value(val: serde_json::Value, max_str_len: usize) -> serde_json::Value {
-    use serde_json::Value;
-    match val {
-        Value::String(s) if s.len() > max_str_len => {
-            // truncate long string values
-            let truncated = format!("{}...", &s[..max_str_len.min(s.len())]);
-            Value::String(truncated)
-        }
-        Value::Array(arr) => {
-            let total = arr.len();
-            const MAX_ITEMS: usize = 5;
-            if total > MAX_ITEMS {
-                let mut kept: Vec<Value> = arr
-                    .into_iter()
-                    .take(MAX_ITEMS)
-                    .map(|v| compact_value(v, max_str_len))
-                    .collect();
-                let remaining = total - MAX_ITEMS;
-                kept.push(Value::String(format!("...{} more", remaining)));
-                Value::Array(kept)
-            } else {
-                Value::Array(
-                    arr.into_iter()
-                        .map(|v| compact_value(v, max_str_len))
-                        .collect(),
-                )
-            }
-        }
-        Value::Object(map) => {
-            let compacted = map
-                .into_iter()
-                .map(|(k, v)| (k, compact_value(v, max_str_len)))
-                .collect();
-            Value::Object(compacted)
-        }
-        other => other, // numbers, booleans, null — pass through
-    }
 }
 
 #[cfg(test)]
@@ -1274,61 +1285,35 @@ mod tests {
     }
 
     #[test]
-    fn test_compact_json_preview_truncates_long_strings() {
+    fn gh_api_repacking_is_lossless_or_declines() {
+        // The previous rendering truncated strings past 200 chars and cut arrays
+        // to five items; the replacement must never lose a value.
         let long_body = "a".repeat(300);
-        let input = serde_json::json!({"title": "short", "body": long_body});
-        let result = compact_json_preview(&input.to_string(), 200);
-        assert!(result.contains("short"), "should keep short values");
-        assert!(
-            !result.contains(&"a".repeat(300)),
-            "should truncate long strings"
-        );
+        let payload = serde_json::json!({"title": "short", "body": long_body}).to_string();
+        // Declining to pack leaves the raw bytes, which is also lossless.
+        if let Some(packed) = crate::jsonpack::pack(&payload) {
+            assert_eq!(
+                crate::jsonpack::unpack(&packed).expect("round-trips"),
+                serde_json::from_str::<Value>(&payload).unwrap()
+            );
+        }
     }
 
     #[test]
-    fn test_compact_json_preview_limits_arrays() {
-        let items: Vec<serde_json::Value> = (0..20)
+    fn gh_api_long_arrays_keep_every_item() {
+        let items: Vec<Value> = (0..20)
             .map(|i| serde_json::json!({"id": i, "title": format!("item-{}", i)}))
             .collect();
-        let input = serde_json::Value::Array(items).to_string();
-        let result = compact_json_preview(&input, 200);
-        assert!(result.contains("item-0"), "should have first item");
-        assert!(result.contains("item-4"), "should have 5th item");
-        assert!(result.contains("...15 more"), "should show remaining count");
-        assert!(!result.contains("item-19"), "should not have last item");
-    }
-
-    #[test]
-    fn test_compact_json_preview_preserves_small_json() {
-        let input = serde_json::json!({"id": 1, "name": "test"}).to_string();
-        let result = compact_json_preview(&input, 200);
-        assert!(result.contains("1"));
-        assert!(result.contains("test"));
-    }
-
-    #[test]
-    fn test_compact_json_preview_invalid_json() {
-        let result = compact_json_preview("not json at all\nline two", 200);
-        assert!(result.contains("not json at all"));
-        assert!(result.contains("line two"));
-    }
-
-    #[test]
-    fn test_compact_json_preview_nested_truncation() {
-        let long_b = "b".repeat(500);
-        let input = serde_json::json!({
-            "comments": [
-                {"user": "alice", "body": long_b},
-                {"user": "bob", "body": "short"}
-            ]
-        });
-        let result = compact_json_preview(&input.to_string(), 200);
-        assert!(result.contains("alice"), "should keep short nested values");
-        assert!(result.contains("bob"));
-        assert!(result.contains("short"));
+        let payload = Value::Array(items).to_string();
+        let packed = crate::jsonpack::pack(&payload).expect("a 20-row table packs");
+        assert!(packed.contains("item-19"), "the last row must survive");
         assert!(
-            !result.contains(&"b".repeat(500)),
-            "should truncate nested long strings"
+            !packed.contains("more"),
+            "no row-dropping marker may appear: {packed}"
+        );
+        assert_eq!(
+            crate::jsonpack::unpack(&packed).unwrap(),
+            serde_json::from_str::<Value>(&payload).unwrap()
         );
     }
 

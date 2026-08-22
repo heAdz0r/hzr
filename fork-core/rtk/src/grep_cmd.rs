@@ -59,18 +59,32 @@ pub fn run(opts: GrepOptions<'_>) -> Result<()> {
         rg_cmd.arg(arg);
     }
 
-    let output = rg_cmd
-        .output()
-        .or_else(|_| Command::new("grep").args(["-rn", pattern, path]).output())
-        .context("grep/rg failed")?;
+    // Capture under RAW_CAP instead of `.output()`: a search over a large tree
+    // can emit gigabytes, and `.output()` held it twice (the byte buffer plus its
+    // lossy `String` copy) — enough to OOM the calling agent. Downstream
+    // `| head -N` is no escape here, because nothing is written until the child
+    // exits.
+    let captured = crate::stream::run_streaming(
+        &mut rg_cmd,
+        crate::stream::StdinMode::Inherit,
+        crate::stream::FilterMode::CaptureOnly,
+    )
+    .or_else(|_| {
+        crate::stream::run_streaming(
+            Command::new("grep").args(["-rn", pattern, path]),
+            crate::stream::StdinMode::Inherit,
+            crate::stream::FilterMode::CaptureOnly,
+        )
+    })
+    .context("grep/rg failed")?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = captured.raw_stdout.as_str();
 
     let raw_output = stdout.to_string();
 
     // Bug 1: rg exit 2 = regex parse error — stderr was silently swallowed, showed "0 results"
-    let stderr_str = String::from_utf8_lossy(&output.stderr);
-    if output.status.code() == Some(2) {
+    let stderr_str = captured.raw_stderr.as_str();
+    if captured.exit_code == 2 {
         // fix: on regex error, show hint with auto-escaped suggestion so LLM can self-correct
         let mut msg = format!(
             "❌ rg regex error for '{}': {}",

@@ -580,10 +580,19 @@ impl Tracker {
 
     fn open(db_path: &Path) -> Result<Self> {
         if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::utils::create_private_dir(parent)?;
+        }
+
+        // Create the DB file ourselves first, so SQLite derives the -wal/-shm
+        // modes from an already-private database instead of from the umask.
+        if !db_path.exists() {
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create(true);
+            let _ = crate::utils::open_private(&mut opts, db_path);
         }
 
         let conn = Connection::open(&db_path)?;
+        restrict_db_files(db_path);
         configure_connection(&conn);
         conn.execute(
             "CREATE TABLE IF NOT EXISTS commands (
@@ -1497,6 +1506,27 @@ fn history_days() -> Option<i64> {
         },
         Err(_) => Some(DEFAULT_HISTORY_DAYS),
     }
+}
+
+/// SQLite appends `-wal`/`-shm` to the whole filename, so these are siblings
+/// rather than extension swaps. Concatenate on `OsString`, not `PathBuf::push`,
+/// which would append a component and silently target `history.db/-wal`.
+fn restrict_db_files(db_path: &Path) {
+    crate::utils::restrict_file(db_path);
+    for sidecar in db_sidecars(db_path) {
+        crate::utils::restrict_file(&sidecar);
+    }
+}
+
+fn db_sidecars(db_path: &Path) -> Vec<PathBuf> {
+    ["-wal", "-shm"]
+        .iter()
+        .map(|suffix| {
+            let mut name = db_path.as_os_str().to_os_string();
+            name.push(suffix);
+            PathBuf::from(name)
+        })
+        .collect()
 }
 
 fn get_db_path() -> Result<PathBuf> {

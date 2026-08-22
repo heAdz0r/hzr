@@ -62,8 +62,15 @@ pub(super) fn mem_db_path() -> PathBuf {
 pub(super) fn open_mem_db() -> Result<Connection> {
     let path = mem_db_path();
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
+        crate::utils::create_private_dir(parent)
             .with_context(|| format!("Failed to create mem.db directory {}", parent.display()))?;
+    }
+    // Own the file before SQLite does, so the -wal/-shm siblings inherit the
+    // private mode instead of the process umask.
+    if !path.exists() {
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true);
+        let _ = crate::utils::open_private(&mut opts, &path);
     }
     let conn = Connection::open(&path)
         .with_context(|| format!("Failed to open mem.db at {}", path.display()))?;

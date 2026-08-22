@@ -1,6 +1,6 @@
 [filters.spring-boot]
 description = "Compact Spring Boot output — strip banner and verbose startup logs, keep key events"
-match_command = "^(mvn\\s+spring-boot:run|java\\s+-jar.*\\.jar|gradle\\s+.*bootRun)"
+match_command = "^(mvn\\s+spring-boot:run|java\\s+-jar\\s+(?:\\S*/)?[^/\\s]*(?i:spring)[^/\\s]*\\.jar|gradle\\s+.*bootRun)"
 strip_ansi = true
 keep_lines_matching = [
   "Started\\s.*\\sin\\s",

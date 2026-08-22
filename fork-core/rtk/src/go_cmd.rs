@@ -62,7 +62,10 @@ pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
         .status
         .code()
         .unwrap_or(if output.status.success() { 0 } else { 1 });
-    let filtered = filter_go_test_json(&stdout);
+    // A run killed mid-stream (SIGKILL/OOM) leaves only passing events in the
+    // NDJSON, so the parsed verdict is green while the process failed.
+    let filtered =
+        crate::guard::guard_exit(&raw, exit_code, "go test", &filter_go_test_json(&stdout));
 
     let hint = crate::tee::tee_and_hint(&raw, "go_test", exit_code);
     let shown = crate::runner::emit_guarded(&filtered, hint.as_deref(), &raw);
@@ -159,7 +162,7 @@ pub fn run_vet(args: &[String], verbose: u8) -> Result<()> {
         .status
         .code()
         .unwrap_or(if output.status.success() { 0 } else { 1 });
-    let filtered = filter_go_vet(&raw);
+    let filtered = crate::guard::guard_exit(&raw, exit_code, "go vet", &filter_go_vet(&raw));
 
     let hint = crate::tee::tee_and_hint(&raw, "go_vet", exit_code);
     let shown = crate::runner::emit_guarded(&filtered, hint.as_deref(), &raw);

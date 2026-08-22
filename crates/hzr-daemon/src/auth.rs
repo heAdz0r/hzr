@@ -47,6 +47,14 @@ impl std::fmt::Debug for AuthToken {
 pub fn load_or_create_token(data_root: &Path) -> Result<(AuthToken, PathBuf), std::io::Error> {
     let runtime = data_root.join("runtime");
     fs::create_dir_all(&runtime)?;
+    // The daemon token lives here; create_dir_all alone leaves the directory at
+    // the process umask even though the token file itself is 0600.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _ = fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700));
+    }
     let token_path = runtime.join("hzrd.token");
     let lock_path = runtime.join("hzrd.token.lock");
     let mut lock_options = OpenOptions::new();

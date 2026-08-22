@@ -4,6 +4,102 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-22
+
+Selective adoption of upstream `rtk-ai/rtk` work published after the `v0.44.1` import base
+(59 commits to `develop` @ `f8d636d`, plus reviewed unmerged proposals). The trees diverged
+structurally, so every item is a re-implementation against `fork-core`, not a merge. Analysis and
+the per-item decision record live in `docs/PRD_HZR_UPSTREAM_RTK_SYNC_0_4_7.md`.
+
+### Security
+
+- HZR is no longer inserted into a privilege elevation. `sudo docker ps` was rewritten to
+  `sudo rtk docker ps`, so an elevated engine wrote the history DB, its SQLite siblings, tee files
+  and the audit log as root inside a user-owned data root. `sudo`, `doas` and `pkexec` prefixes —
+  bare or via an absolute path — now stop the rewrite; the command runs verbatim and is accounted
+  under the new `e11_privileged_prefix` class, marked not avoidable so it cannot consume the
+  avoidable-bypass budget.
+- Data files are created owner-only instead of being chmod-ed after the write, which left a
+  window where content was readable under a permissive umask. Covers the engine history DB and
+  its `-wal`/`-shm` siblings, tee output, the telemetry salt and the memory cache, plus the HZR
+  ledger database and the daemon runtime directory.
+- A lone `\r` is no longer a command separator. Bash runs `git status\rrm -rf ~` as a single
+  mangled git command; treating the `\r` as a boundary over-segmented the permission split
+  relative to the command that actually executed.
+
+### Fixed
+
+- A single non-UTF-8 byte no longer truncates the rest of a command's output. The reader chained
+  `BufRead::lines()` with `.map_while(Result::ok)`, which stops the iterator at the first `Err`,
+  so one stray byte discarded every remaining line of that stream — and the loss was recorded as
+  a saving. Lines are now split on the raw byte and decoded lossily.
+- `git log` gained a real argument model. Requests for a raw diff shape (`-p`, `--patch`,
+  `--stat`, `--numstat`, `--shortstat`, `--raw`) pass through untouched; a closed list of
+  value-taking options keeps `--grep --pretty` from reading the search term as a format flag;
+  `restore_double_dash` puts back the `--` pathspec separator clap consumes, for `log` and
+  `commit`; and `-U`/`--unified`/`--expand-tabs`/`--max-parents`/`--min-parents` take attached
+  values only.
+- A multi-line `[[ … ]]` conditional is no longer split in half by the multiline rewriter. The
+  four hand-rolled quote-state walkers behind the independence checks are now one shared
+  `QuoteScan`.
+- Filters no longer report success on a failing child. The never-worse guard is extended from
+  output size to exit status across `cargo test`/`nextest`, `pytest`, `ruff`, `mypy`, `tsc`,
+  `vitest`/`jest`, `go vet`, `go test -json`, `golangci-lint` and the lint fallback.
+- `prettier --check` reads its file list from stderr, where prettier has written it since 1.19,
+  instead of discarding every `[warn]` line and reporting "All files formatted correctly" beside
+  exit 1.
+- Path-based search no longer buffers the whole result set twice; capture goes through the
+  streaming path that caps retention at 10 MiB and reports truncation. The same fix applies to
+  `grep_cmd`, which has no upstream counterpart.
+- `[filters].ignore_dirs` and `ignore_files` reach the system commands. They had no readers
+  anywhere in the engine.
+- `find` compares its guard against the plain listing at the same cap rather than the full match
+  list, adds a tee tail hint when it truncates on its own initiative, and passes through
+  invocations carrying flags it cannot filter (`-not`, `-exec`) instead of failing.
+- `du -s` and `du -d N` keep every row. Each is an independent total, so the 40-line cap dropped
+  the largest consumers while reporting a confident answer.
+- `turbo`, `quarto-render`, `bundle-install`, `gcc`, `spring-boot`, `liquibase` and `ssh`
+  declarative filters no longer match commands they should never touch or discard their own
+  pass/fail tally.
+- `rtk lint <path>` no longer reads a bare path as a linter name and reports a verdict for a run
+  that never happened.
+- `playwright --reporter list` no longer leaves `list` behind as a positional test filter.
+- `prisma migrate status` counts migrations instead of occurrences of the word "applied" in
+  prose, and falls back to the raw text rather than asserting "0 applied, 0 pending".
+- `curl` uses `-sS`, so a failure keeps curl's own error message. `git commit` announces its own
+  failure instead of ending on a pre-commit hook's `...Passed` line, and `git diff` works with an
+  external diff driver configured.
+- `ls` reports how many noise directories it omitted, and `head`/`tail` honour
+  `exclude_commands`.
+- Signal deaths keep their stderr diagnostic when output is captured; both capture helpers route
+  through one function so a `128 + signal` code is never reported without saying why.
+
+### Added
+
+- `jsonpack`: lossless re-encoding of JSON that removes the field names repeated on every row and
+  nothing else. A top-level array of objects becomes a declaration line plus CSV rows; an
+  envelope object stays valid JSON with dense inner arrays rendered as `{"_cols":…,"_rows":…}`.
+  `pack()` decodes its own output and requires exact equality with the parsed input before
+  emitting a byte, so an encoder bug or adversarial data returns the raw bytes unchanged.
+- `gh api` uses it in place of a preview that truncated strings past 200 characters and arrays to
+  five items. `gh <cmd> --json` stays exact passthrough unless `RTK_GH_PACK_JSON=1` or
+  `[gh] pack_json = true` is set; `--jq` and `--template` are never touched.
+- `pass_through_if_args` in the declarative TOML filter engine, so any filter can opt out of
+  filtering for specific invocation shapes.
+- `RTK_QUIET=1` / `[hooks] quiet = true` suppresses informational stderr about commands that
+  succeeded. Real errors and truncation warnings are never suppressed.
+- `npm`/`npx` stream filtered output instead of retaining it until the child exits.
+- Tee recovery-hint filenames collapse a long slug to a short prefix plus hash.
+
+### Changed
+
+- The `hzr stats` evasion panel lists every class that occurred instead of the top ten. The
+  taxonomy has eleven entries as of this release, and a capped list reads as a complete one.
+- **Measured savings move in both directions.** Passing `git log --stat` through unchanged is the
+  correct answer and produces more tokens than mangling it did, so those invocations get worse on
+  paper. `gh api` improves while also no longer discarding content. A ledger delta across this
+  boundary is a change of behaviour, not a regression.
+
 ## [0.4.6] - 2026-08-21
 
 ### Fixed

@@ -234,6 +234,12 @@ fn run_vitest(args: &[String], verbose: u8) -> Result<()> {
     let filtered = format_test_output(&stdout, &combined, effective_args.passthrough, verbose);
 
     let exit_code = output.status.code().unwrap_or(1); // upstream sync: tee integration
+                                                       // A failed suite that the JSON parser could not attribute must not surface
+                                                       // as a green run just because no individual test was marked failing.
+    let filtered = FormattedTestOutput {
+        text: crate::guard::guard_exit(&combined, exit_code, "vitest", &filtered.text),
+        ..filtered
+    };
     let rendered = render_test_output(&filtered, &combined, "vitest_run", exit_code);
     let shown = crate::guard::never_worse(&combined, &rendered);
     println!("{}", shown);

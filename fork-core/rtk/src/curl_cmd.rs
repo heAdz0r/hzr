@@ -7,14 +7,18 @@ use std::process::Command;
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
     let mut cmd = Command::new("curl");
-    cmd.arg("-s"); // Silent mode (no progress bar)
+    // `-sS`, not a bare `-s`: `-s` also suppresses curl's *error* messages, so a
+    // DNS, connection or TLS failure printed only "FAILED: curl " with no reason
+    // and the agent had to re-run the command outside the filter to learn why.
+    // `-S` restores the error text while `-s` still hides the progress meter.
+    cmd.arg("-sS");
 
     for arg in args {
         cmd.arg(arg);
     }
 
     if verbose > 0 {
-        eprintln!("Running: curl -s {}", args.join(" "));
+        eprintln!("Running: curl -sS {}", args.join(" "));
     }
 
     let output = cmd.output().context("Failed to run curl")?;
@@ -180,6 +184,23 @@ fn compact_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn curl_failure_keeps_the_reason() {
+        // `-sS` must survive: with a bare `-s` this run reports no reason at all.
+        let output = std::process::Command::new("curl")
+            .arg("-sS")
+            .arg("http://127.0.0.1:1/definitely-not-listening")
+            .output();
+        let Ok(output) = output else {
+            return; // curl not installed on this host
+        };
+        assert!(!output.status.success());
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+            "curl -sS must still explain why it failed"
+        );
+    }
 
     #[test]
     fn test_filter_curl_json() {

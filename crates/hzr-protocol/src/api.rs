@@ -560,6 +560,7 @@ pub enum EvasionClass {
     E8NativeTool,
     E9DiagnosticBypass,
     E10CapabilityGap,
+    E11PrivilegedPrefix,
 }
 
 impl EvasionClass {
@@ -576,6 +577,7 @@ impl EvasionClass {
             Self::E8NativeTool => "e8",
             Self::E9DiagnosticBypass => "e9",
             Self::E10CapabilityGap => "e10",
+            Self::E11PrivilegedPrefix => "e11",
         }
     }
 
@@ -593,6 +595,7 @@ impl EvasionClass {
             Self::E8NativeTool => "host-native file tool",
             Self::E9DiagnosticBypass => "direct HZR diagnostic access",
             Self::E10CapabilityGap => "no first-class route",
+            Self::E11PrivilegedPrefix => "privilege elevation prefix",
         }
     }
 
@@ -630,6 +633,10 @@ impl EvasionClass {
             }
             Self::E10CapabilityGap => {
                 "no managed route covers this command; approving runs it as tracked raw"
+            }
+            Self::E11PrivilegedPrefix => {
+                "elevation was granted to one binary; HZR stays out of it and runs the command \
+                 verbatim — drop the elevation to get a managed route"
             }
         }
     }

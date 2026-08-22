@@ -63,7 +63,8 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
 
     // Auto-inject -I pattern unless user wants all or already specified -I
     if !show_all && !has_ignore {
-        let ignore_pattern = NOISE_DIRS.join("|");
+        // Built-in noise set merged with the user's `[filters].ignore_dirs`.
+        let ignore_pattern = crate::config::Config::merged_ignore_dirs(NOISE_DIRS).join("|");
         cmd.arg("-I").arg(&ignore_pattern);
     }
 

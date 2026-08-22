@@ -31,6 +31,7 @@ mod hook_audit_cmd; // upstream sync: hook rewrite audit metrics // grepai exter
 mod init;
 mod integrity; // fork: hook integrity verification (SHA-256)
 mod json_cmd;
+mod jsonpack; // lossless CSV+schema repacking for gh --json / gh api
 mod learn;
 mod lint_cmd;
 mod local_llm;
@@ -1821,6 +1822,11 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
     } else {
         toml_filter::find_matching_filter(&lookup_cmd)
     };
+
+    // A filter may declare invocation shapes it must not touch (see
+    // `pass_through_if_args`); those fall through to the raw passthrough below
+    // instead of being truncated.
+    let toml_match = toml_match.filter(|filter| !filter.should_pass_through(&args[1..]));
 
     if let Some(filter) = toml_match {
         let result = if filter.filter_stderr {

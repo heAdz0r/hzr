@@ -387,7 +387,24 @@ fn tokenize_inner(input: &str, emit_newline: bool) -> Vec<ParsedToken> {
                 });
                 current_start = byte_pos;
             }
-            '\n' | '\r' if emit_newline => {
+            // `\n`, and the `\r` of a CRLF pair, are command separators. A LONE `\r`
+            // (classic-Mac EOL, not followed by `\n`) is not: bash treats a bare CR as
+            // an ordinary character inside a word, so `git status\rrm -rf ~` is one
+            // mangled git command and never runs the `rm`. Emitting a separator for it
+            // over-segmented the permission split and let the rewriter re-join the
+            // pieces into something the permission layer never approved. A lone `\r`
+            // now falls through to the whitespace arm — a word break at most.
+            '\n' if emit_newline => {
+                flush_arg(&mut tokens, &mut current, current_start);
+                tokens.push(ParsedToken {
+                    kind: TokenKind::Operator,
+                    value: "\n".into(),
+                    offset: byte_pos,
+                });
+                byte_pos += char_len;
+                current_start = byte_pos;
+            }
+            '\r' if emit_newline && chars.peek() == Some(&'\n') => {
                 flush_arg(&mut tokens, &mut current, current_start);
                 tokens.push(ParsedToken {
                     kind: TokenKind::Operator,

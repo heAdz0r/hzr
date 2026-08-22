@@ -59,7 +59,10 @@ fn write_evasion(output: &mut impl Write, report: &StatsReport, color: bool) -> 
         style("EVASION", "1;38;5;208", color),
         style("aggregate-only · payloads omitted", "2;37", color)
     )?;
-    for class in evasion.by_class.iter().take(10) {
+    // The taxonomy is closed and small, so every class that occurred is listed.
+    // A `take(n)` here would silently drop the lowest-volume class as the
+    // taxonomy grows, and a truncated list reads as "these are all of them".
+    for class in &evasion.by_class {
         writeln!(
             output,
             "   {:<4} calls {:>8} · delivered {:>10} · avoidable {:>10}",
@@ -83,7 +86,7 @@ fn write_evasion(output: &mut impl Write, report: &StatsReport, color: bool) -> 
         "   policy attempts {} (separate from executed operations)",
         format_count(evasion.policy_attempts)
     )?;
-    for event in evasion.policy_by_class.iter().take(10) {
+    for event in &evasion.policy_by_class {
         writeln!(
             output,
             "   {:<4} {:<10} attempts {:>8} · avoidable {:>8}",
@@ -1008,6 +1011,51 @@ mod tests {
         assert!(rendered.contains("e7") && rendered.contains("ask"));
         for sentinel in ["/private/path", "SELECT *", "secret=value", "HEREDOC"] {
             assert!(!rendered.contains(sentinel));
+        }
+    }
+
+    #[test]
+    fn evasion_panel_lists_every_class_that_occurred() {
+        // The panel used to `take(10)`; with an 11-class taxonomy that silently
+        // dropped the lowest-volume class while still reading as a full list.
+        let classes = [
+            EvasionClass::E1QuotedCoveredCommand,
+            EvasionClass::E2ShellWrapper,
+            EvasionClass::E3InterpreterRead,
+            EvasionClass::E4ExecutablePath,
+            EvasionClass::E5PipelineOrRedirect,
+            EvasionClass::E6NestedUnboundedReader,
+            EvasionClass::E7FidelityHatch,
+            EvasionClass::E8NativeTool,
+            EvasionClass::E9DiagnosticBypass,
+            EvasionClass::E10CapabilityGap,
+            EvasionClass::E11PrivilegedPrefix,
+        ];
+        let rendered = render(&StatsReport {
+            evasion: Some(EvasionSummary {
+                by_class: classes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, class)| EvasionClassSummary {
+                        class: *class,
+                        operations: 1,
+                        // Descending, so the last class is the one a cap would drop.
+                        delivered_tokens: (classes.len() - index) as u64 * 100,
+                        avoidable_operations: 0,
+                        avoidable_tokens: 0,
+                    })
+                    .collect(),
+                default_allowance: FidelityAllowance::default(),
+                ..EvasionSummary::default()
+            }),
+            ..report(LedgerSummary::default(), Vec::new())
+        });
+        for class in classes {
+            assert!(
+                rendered.contains(class.as_str()),
+                "{} is missing from the evasion panel",
+                class.as_str()
+            );
         }
     }
 

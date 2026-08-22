@@ -1,7 +1,7 @@
-# HZR 0.4.6 — fork-core parity ledger
+# HZR 0.5.0 — fork-core parity ledger
 
-**Audit date:** 2026-08-21
-**Status:** HZR 0.4.6 intent-aware anti-evasion and compact-route delta; full deterministic gate green
+**Audit date:** 2026-08-22
+**Status:** HZR 0.5.0 upstream-sync fidelity delta; full deterministic gate green
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -37,10 +37,38 @@ Snapshot v2 includes ordered path, entry type, Git-portable mode, size and conte
 
 Baseline identity immutable. `fork-core/rtk` after `v0.1.0` develops directly into HZR: each delta is required to preserve the inherited capability surface, update the current-engine identity/parity and go through a full regression suite. The old `/Users/andrew/Programming/rtk` is not changed.
 
-The 0.4.6 gate verified current engine manifest
-`f7a74cec9df190541f4dfb95c0cc1c6085c0ea008a6b60f1c7e3629fb24d6047`, 1,874 passed tests,
-one intentionally ignored test, a 526-file current-engine set, and the reviewed 141-warning
-inherited Clippy ratchet.
+The 0.5.0 gate verified current engine manifest
+`aa7da8fb5b31d1c064a98caef64fdba74624dc3587728eaeb5fe3a763487c73e`, 1,925 passed tests,
+one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
+inherited Clippy ratchet. The ratchet count is unchanged from 0.4.6; its recorded hash moved
+because the sync edited many of the same files and the ratchet pins each warning's source line.
+
+### 0.5.0 upstream-sync delta
+
+0.5.0 adopts upstream `rtk-ai/rtk` work published after the `v0.44.1` import base — 59 commits to
+`develop` @ `f8d636d`, plus reviewed unmerged proposals. Because the trees diverged structurally
+(upstream `src/{core,cmds/<lang>,hooks}` against our flat `src/*.rs`), no change is a merge; each
+is a re-implementation with its own tests. The full analysis, the items deliberately **not**
+adopted, and the reasoning per item are recorded in
+[`docs/PRD_HZR_UPSTREAM_RTK_SYNC_0_4_7.md`](docs/PRD_HZR_UPSTREAM_RTK_SYNC_0_4_7.md).
+
+Three inherited defects lost agent-visible output and are closed here: a non-UTF-8 byte truncated
+the remainder of a stream and the loss was booked as a saving; `git log --stat` and its
+neighbours were reformatted instead of passed through; and a multi-line `[[ … ]]` could be split
+into a command that cannot parse. One inherited rewrite rule inserted the engine into `sudo`
+elevation, leaving root-owned state in a user-owned data root — privilege prefixes now stop the
+rewrite and are accounted as the non-avoidable `e11_privileged_prefix` class. Data files are
+created owner-only rather than tightened after the write.
+
+`gh api` moved from a lossy preview — strings cut at 200 characters, arrays at five items — to
+`jsonpack`, a lossless re-encoding that verifies its own round-trip before emitting a byte and
+returns the raw bytes when it cannot. `gh --json` stays exact passthrough behind an explicit
+switch. Filters no longer render an all-green summary beside a non-zero child exit, which is the
+one failure mode a token-efficiency layer must not have.
+
+Passing raw diff shapes through unchanged **reduces** measured savings on those invocations. That
+is the correct direction, and a ledger delta across this boundary is a behaviour change rather
+than a regression.
 
 ### Current command-output parity delta
 
@@ -62,10 +90,11 @@ stage use closed fields; query text, paths and contents are omitted. Fork-core r
 `final_delivery`. The legacy nested Claude routing block was removed because it could override the
 current managed HZR contract; this changes instruction precedence without reducing the fork CLI.
 
-HZR 0.4.6 adds one canonical typed rewrite plan over the fork lexer and registry. It recognizes
+HZR 0.4.6 added one canonical typed rewrite plan over the fork lexer and registry. It recognizes
 shell/env/utility prefixes, quoted ranges and bounded pipelines, and returns a closed decision plus
-payload-free E1–E10 attribution. Operational replacement text remains ephemeral and is never used
-as ledger metadata. The 85-case fixture includes ambiguous, native and no-equivalent cases so normalization
+payload-free attribution — E1–E10 then, E1–E11 since 0.5.0 added the non-avoidable
+`e11_privileged_prefix` for `sudo`/`doas`/`pkexec`. Operational replacement text remains ephemeral and is never used
+as ledger metadata. The fixture (85 cases at 0.4.6, 91 since 0.5.0) includes ambiguous, native and no-equivalent cases so normalization
 cannot silently broaden into source interpretation. New compact routes cover grouped blame,
 budgeted batch reads, SELECT-only SQLite, tar listing and bounded remote Docker logs. The shared
 fidelity validator rejects missing, unknown and incompatible exact-output reasons before spawning
@@ -78,13 +107,13 @@ failure-first filtering cannot change a failing verification command into succes
 |---|---|
 | ✅ |Implemented and locally tested in the specified area|
 | 🟡 |There is a working path, but an honestly described border remains|
-| ⚪ |Not knowingly included in 0.4.6; exact compatibility path is not affected|
+| ⚪ |Not knowingly included in 0.5.0; exact compatibility path is not affected|
 
 ## Capability and routing matrix
 
 | Surface |Actual HZR route|Check/bound|Status|
 |---|---|---|---|
-| Exact source snapshot | `fork-core/rtk` + manifest v2 |526 files, modes/types/bytes/deletions/exclusions; verifier before build| ✅ |
+| Exact source snapshot | `fork-core/rtk` + manifest v2 |528 files, modes/types/bytes/deletions/exclusions; verifier before build| ✅ |
 | Exact fork build |`cargo build --locked --release` inside snapshot|Bundle only accepts output `rtk 0.44.1-fork.1`| ✅ |
 | Fork regression suite | Synthetic temporary Git history + `cargo test --locked --all-targets` |Git history is needed by the staff `git_churn`; `.git` is not included in the snapshot| ✅ |
 | No stock RTK fallback | Runtime pin — fork; upstream RTK — `reference-only` |Bundle not fetch/build/install stock RTK| ✅ |
@@ -173,13 +202,13 @@ An external grepai process that does not respect HZR `hzr-owner.lock` cannot be 
 
 ## Caveman boundary
 
-Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.4.6 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
+Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.5.0 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
 
 Response density is set before generation by a short cache-stable contract. HZR Codec remains a separate explicit protected transform for CLI/API. Text quality is protected by instructions, native layer guards and raw exact tools; this is not a formal semantic equivalence proof.
 
 ## Release gates
 
-### Functional 0.4.6 gates
+### Functional 0.5.0 gates
 
 - [x] Exact dirty fork snapshot v2 imported and verified.
 - [x] Exact fork builds and its synthetic-Git suite passes.
@@ -193,10 +222,16 @@ Response density is set before generation by a short cache-stable contract. HZR 
 - [x] Actual and estimated usage fields remain separate.
 - [x] Daemon singleton/auth/path/capture boundaries.
 - [x] Relocatable assembled local-platform bundle and compatibility alias.
-- [x] Typed anti-evasion plan and 85-case E1–E10 acceptance matrix.
+- [x] Typed anti-evasion plan and 91-case E1–E11 acceptance matrix.
 - [x] Closed fidelity reason validation and per-session allowance.
 - [x] Compact blame, batch-read, SQLite, tar-list and remote-log routes.
 - [x] Internal policy attribution consumed before child execution and written to one tracking row.
+- [x] Child output survives invalid UTF-8 on every capture and streaming route.
+- [x] Privilege prefixes stop the rewrite and are accounted as non-avoidable `e11`.
+- [x] Engine and HZR data files created owner-only, including SQLite `-wal`/`-shm` siblings.
+- [x] Raw `git` diff shapes pass through byte-for-byte with the child's exit code.
+- [x] Tool filters cannot render a green summary beside a non-zero child exit.
+- [x] `gh api` repacking verifies its own round-trip before emitting and falls back to raw bytes.
 
 ### Honestly left boundaries
 

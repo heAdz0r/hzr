@@ -325,6 +325,7 @@ mod tests {
             EvasionClass::E8NativeTool,
             EvasionClass::E9DiagnosticBypass,
             EvasionClass::E10CapabilityGap,
+            EvasionClass::E11PrivilegedPrefix,
         ];
         let reasons = [
             FidelityReason::Binary,
@@ -342,7 +343,10 @@ mod tests {
                 path_form: EvasionPathForm::AbsoluteSystem,
                 stage_count: 2,
                 hatch_marker: class == EvasionClass::E7FidelityHatch,
-                avoidable: class != EvasionClass::E10CapabilityGap,
+                avoidable: !matches!(
+                    class,
+                    EvasionClass::E10CapabilityGap | EvasionClass::E11PrivilegedPrefix
+                ),
                 tier: EnforcementTier::T1NamedCorrection,
                 fidelity_reason: Some(reasons[index % reasons.len()]),
                 fidelity_validation: FidelityValidation::Valid,

@@ -57,6 +57,11 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     if exit_code != 0 && exit_code != PYTEST_EXIT_NO_TESTS && filtered == PYTEST_NO_TESTS {
         filtered = truncate(clean.trim(), 2000);
     }
+    // A collection error exits non-zero while the summary still reads green;
+    // the guard replaces any such verdict with the failure fallback.
+    if exit_code != PYTEST_EXIT_NO_TESTS {
+        filtered = crate::guard::guard_exit(&clean, exit_code, "pytest", &filtered);
+    }
     if let Some(hint) = crate::tee::tee_and_hint(&raw, "pytest", exit_code) {
         // upstream sync: tee
         println!("{}\n{}", filtered, hint);

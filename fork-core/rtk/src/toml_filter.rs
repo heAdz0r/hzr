@@ -105,6 +105,13 @@ struct TomlFilterDef {
     /// Use for tools like liquibase that emit banners/logs to stderr.
     #[serde(default)]
     filter_stderr: bool,
+    /// Skip filtering entirely when the invoked command carries any of these
+    /// argument prefixes. Lets a declarative filter stay flag-aware where
+    /// truncation would drop the answer itself: every row of `du -s` is an
+    /// independent total for its own root, so a line cap silently hid the
+    /// largest consumers while still reporting a confident result.
+    #[serde(default)]
+    pass_through_if_args: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +157,34 @@ pub struct CompiledFilter {
     on_empty: Option<String>,
     /// When true, the runner should capture stderr and merge it with stdout.
     pub filter_stderr: bool,
+    /// If any invoked arg matches, the filter is skipped and the command runs
+    /// as raw passthrough.
+    pass_through_if_args: Vec<String>,
+}
+
+impl CompiledFilter {
+    /// True when any invoked arg matches an entry in `pass_through_if_args`.
+    /// Prefix matching covers combined short flags (`-sk`) and value-bearing
+    /// long flags (`--max-depth=1`); a short-option cluster where the needle is
+    /// not first (`-hs`) is matched by scanning the cluster for its character.
+    pub fn should_pass_through(&self, args: &[String]) -> bool {
+        self.pass_through_if_args.iter().any(|needle| {
+            args.iter().any(|arg| {
+                if arg == needle || arg.starts_with(needle) {
+                    return true;
+                }
+                let single = needle
+                    .strip_prefix('-')
+                    .filter(|c| !needle.starts_with("--") && c.chars().count() == 1);
+                match single {
+                    Some(c) => {
+                        arg.starts_with('-') && !arg.starts_with("--") && arg[1..].contains(c)
+                    }
+                    None => false,
+                }
+            })
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +413,7 @@ fn compile_filter(name: String, def: TomlFilterDef) -> Result<CompiledFilter, St
         max_lines: def.max_lines,
         on_empty: def.on_empty,
         filter_stderr: def.filter_stderr,
+        pass_through_if_args: def.pass_through_if_args,
     })
 }
 
@@ -929,6 +965,44 @@ max_lines = 3
         // 3 content lines + 1 truncated message = 4 lines output
         assert_eq!(line_count, 4);
         assert!(out.contains("lines truncated"));
+    }
+
+    #[test]
+    fn test_pass_through_if_args_exact_prefix_and_cluster() {
+        let filters = make_filters(
+            r#"
+schema_version = 1
+[filters.f]
+match_command = "^cmd"
+pass_through_if_args = ["-s", "--summarize", "-d", "--max-depth"]
+"#,
+        );
+        let filter = find_filter_in("cmd", &filters).expect("filter");
+
+        for shape in [
+            vec!["-s".to_string()],
+            vec!["-sk".to_string()],
+            vec!["-hs".to_string()],
+            vec!["--summarize".to_string()],
+            vec!["-d".to_string(), "1".to_string()],
+            vec!["--max-depth=1".to_string()],
+        ] {
+            assert!(
+                filter.should_pass_through(&shape),
+                "{shape:?} must skip filtering"
+            );
+        }
+
+        for shape in [
+            vec!["-h".to_string()],
+            vec![".".to_string()],
+            vec!["--apparent-size".to_string()],
+        ] {
+            assert!(
+                !filter.should_pass_through(&shape),
+                "{shape:?} must stay filtered"
+            );
+        }
     }
 
     #[test]

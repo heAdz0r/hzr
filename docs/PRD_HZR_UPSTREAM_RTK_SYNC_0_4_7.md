@@ -1,6 +1,7 @@
 # HZR ← upstream RTK selective sync — Product Requirements Document
 
-Status: Draft for approval — no work scheduled until items are ticked in §11
+Status: **Approved and implemented in HZR 0.5.0** (2026-08-22). §11 records what shipped.
+Sections 1–10 preserve the pre-implementation analysis as it was written.
 Owner: HZR control plane
 Date: 2026-08-22
 HZR version probed: 0.4.6 (fork-core `rtk 0.44.1-fork.1`)
@@ -615,36 +616,43 @@ Tick to schedule. Nothing below is started without a tick.
 
 **P0 — recommended, 0.4.7**
 
-- [ ] A1 — lossy per-line child-output decoding (`stream.rs`)
-- [ ] A2 — never rewrite `sudo`-prefixed commands; typed tracked bypass instead
-- [ ] A3 — owner-only data files (fork-core + HZR ledger/daemon)
-- [ ] A4 — `git log` argument model + `restore_double_dash`
-- [ ] A5 — `QuoteScan` + cross-line `[[ … ]]` bail + lone-`\r` split
-- [ ] B2 — bounded search/grep capture (agent-OOM class)
-- [ ] B3 — never-worse **exit-code** guard across tool filters
+- [x] A1 — lossy per-line child-output decoding (`stream.rs`)
+- [x] A2 — never rewrite `sudo`-prefixed commands; typed tracked bypass instead
+- [x] A3 — owner-only data files (fork-core + HZR ledger/daemon)
+- [x] A4 — `git log` argument model + `restore_double_dash`
+- [x] A5 — `QuoteScan` + cross-line `[[ … ]]` bail + lone-`\r` split
+- [x] B2 — bounded search/grep capture (agent-OOM class)
+- [x] B3 — never-worse **exit-code** guard across tool filters
 
 **P1 — recommended, 0.4.7.x**
 
-- [ ] B4 — wire `ignore_dirs` / `ignore_files`
-- [ ] B5 — `find` guard against the capped listing + tee tail hint + unfilterable passthrough
-- [ ] B7 — declarative filter corrections (turbo, quarto, bundle-install, gcc, spring-boot, liquibase, ssh)
-- [ ] A6 — tee slug shortening
+- [x] B4 — wire `ignore_dirs` / `ignore_files`
+- [x] B5 — `find` guard against the capped listing + tee tail hint + unfilterable passthrough
+- [x] B7 — declarative filter corrections (turbo, quarto, bundle-install, gcc, spring-boot, liquibase, ssh)
+- [x] A6 — tee slug shortening
 
 **P2 — optional**
 
-- [ ] B6 — `pass_through_if_args` in the TOML engine
-- [ ] B8 — quiet informational stderr
-- [ ] B9 — stream `npm`/`npx` (after `verify`)
-- [ ] B10 — small correctness batch (curl `-sS`, git commit `--`/hook failure/external diff driver, prettier stderr, `ls` hidden count, `head`/`tail` exclusions, + 4 `verify` items)
+- [x] B6 — `pass_through_if_args` in the TOML engine
+- [x] B8 — quiet informational stderr
+- [x] B9 — stream `npm`/`npx` (after `verify`)
+- [x] B10 — small correctness batch. All four `verify` items were checked on our side: prisma
+      and lint reproduced and are fixed; playwright reproduced in a different form (our build
+      appends `--reporter=json` *before* the caller's, so theirs won and the JSON parse failed)
+      and is fixed; gradle is not applicable — we ship `gradle.toml`, not a `gradlew_cmd.rs`.
 
 **Gated — separate decision**
 
-- [ ] B1 — `gh api` lossless packing (then observation window, then `gh --json` behind a flag)
-- [ ] C1 — `uv` and/or `glab` native modules
-- [ ] C2 — five `pulumi-*` TOML filters
-- [ ] C3 — Codex / Vibe / Prime Agent host coverage
-- [ ] C4 — Windows block (incl. A7 code-page decoding)
-- [ ] §8 — streaming filter framework as the authoring surface (0.4.8+)
+- [x] B1 — `gh api` lossless packing shipped. `gh --json` is implemented but gated behind
+      `RTK_GH_PACK_JSON=1` / `[gh] pack_json = true` pending an observation window, as staged.
+      Note the finding that changed this item: our `gh api` was not passthrough like upstream's
+      but a *lossy* preview (strings cut at 200 chars, arrays at five items), so replacing it is
+      a fidelity gain as well as a token one.
+- [ ] C1 — `uv` and/or `glab` native modules — **not adopted in 0.5.0**
+- [ ] C2 — five `pulumi-*` TOML filters — **not adopted in 0.5.0**
+- [ ] C3 — Codex / Vibe / Prime Agent host coverage — **not adopted in 0.5.0**
+- [ ] C4 — Windows block (incl. A7 code-page decoding) — **not adopted in 0.5.0**
+- [ ] §8 — streaming filter framework as the authoring surface (0.4.8+) — **not adopted in 0.5.0**
 
 ---
 

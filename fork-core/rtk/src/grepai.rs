@@ -350,7 +350,7 @@ pub fn execute_search(
         Some(o) => o,
         None => {
             // Timeout — grepai hung (unreachable backend, missing model, etc.)
-            eprintln!(
+            crate::rtk_info!(
                 "rgai: grepai search timed out after {}s, falling back to built-in",
                 GREPAI_SEARCH_TIMEOUT_SECS
             );

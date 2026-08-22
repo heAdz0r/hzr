@@ -103,6 +103,11 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         truncate(raw.trim(), 2000)
     };
 
+    // Preserve exit code for CI/CD — and read it before rendering, so a parse
+    // error cannot be reported as "All files formatted correctly".
+    let exit_code = crate::stream::status_to_exit_code(output.status);
+    let filtered = crate::guard::guard_exit(&raw, exit_code, "ruff", &filtered);
+
     println!("{}", filtered);
 
     timer.track(
@@ -112,8 +117,6 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         &filtered,
     );
 
-    // Preserve exit code for CI/CD
-    let exit_code = crate::stream::status_to_exit_code(output.status);
     if exit_code != 0 {
         std::process::exit(exit_code);
     }

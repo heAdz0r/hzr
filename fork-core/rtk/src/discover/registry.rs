@@ -561,6 +561,22 @@ pub struct CanonicalAttribution {
     pub fidelity_validation: &'static str,
 }
 
+/// Leading privilege-elevation word, if the command starts with one.
+///
+/// The user granted elevation to exactly one binary. Re-attaching the prefix in
+/// front of a rewritten command inserts a second one, and an elevated engine
+/// then writes the history DB, tee files and audit log as root inside a
+/// user-owned data root — files the user can only remove with another `sudo`.
+/// Detection accepts the plain word and an absolute path to it, because
+/// `/usr/bin/sudo docker ps` elevates just the same.
+pub fn privilege_prefix(cmd: &str) -> Option<&'static str> {
+    const ELEVATORS: [&str; 3] = ["sudo", "doas", "pkexec"];
+    let trimmed = cmd.trim_start();
+    let word = trimmed.split_whitespace().next()?;
+    let base = word.rsplit('/').next().unwrap_or(word);
+    ELEVATORS.into_iter().find(|elevator| base == *elevator)
+}
+
 pub fn canonical_attribution(
     command: &str,
     outcome: &RewriteOutcome,
@@ -589,7 +605,9 @@ pub fn canonical_attribution(
     let nested_dump = aggregate_dump_requires_ask(command);
     let diagnostic = ledger_sqlite_requires_ask(command);
 
-    let class = if hatch.requested {
+    let class = if privilege_prefix(command).is_some() {
+        "e11_privileged_prefix"
+    } else if hatch.requested {
         "e7_fidelity_hatch"
     } else if diagnostic {
         "e9_diagnostic_bypass"
@@ -614,7 +632,12 @@ pub fn canonical_attribution(
         return None;
     };
 
-    let avoidable = !matches!(class, "e7_fidelity_hatch" | "e10_capability_gap");
+    // A privileged prefix is a deliberate refusal to rewrite, not something the
+    // agent could have phrased better, so it is not counted as avoidable.
+    let avoidable = !matches!(
+        class,
+        "e7_fidelity_hatch" | "e10_capability_gap" | "e11_privileged_prefix"
+    );
     let tier = if class == "e7_fidelity_hatch" {
         "t4_hatch_quarantine"
     } else if matches!(
@@ -914,118 +937,146 @@ const BLOCK_KEYWORDS: &[&str] = &[
     "select", "function", "coproc", "{", "}", "(", ")",
 ];
 
-fn comment_start(line: &str) -> Option<usize> {
-    let bytes = line.as_bytes();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' if !in_single => {
-                i += 2;
+/// Shared quote-state byte walker for every line scanner below. Yields
+/// `(offset, byte, in_single_before, in_double_before)`, skipping backslash
+/// escape pairs outside single quotes and toggling quote state — the same model
+/// the lexer applies. Four hand-rolled copies of this walk had already drifted
+/// apart before it was extracted.
+struct QuoteScan<'a> {
+    bytes: &'a [u8],
+    i: usize,
+    in_single: bool,
+    in_double: bool,
+}
+
+impl<'a> QuoteScan<'a> {
+    fn new(s: &'a str) -> Self {
+        Self {
+            bytes: s.as_bytes(),
+            i: 0,
+            in_single: false,
+            in_double: false,
+        }
+    }
+
+    fn balanced(&self) -> bool {
+        !self.in_single && !self.in_double
+    }
+}
+
+impl Iterator for QuoteScan<'_> {
+    type Item = (usize, u8, bool, bool);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.i < self.bytes.len() {
+            let i = self.i;
+            let b = self.bytes[i];
+            if b == b'\\' && !self.in_single {
+                self.i += 2;
                 continue;
             }
-            b'\'' if !in_double => in_single = !in_single,
-            b'"' if !in_single => in_double = !in_double,
-            b'#' if !in_single
-                && !in_double
-                && (i == 0
-                    || bytes[i - 1].is_ascii_whitespace()
-                    || matches!(bytes[i - 1], b'|' | b'&' | b';' | b'(' | b')')) =>
-            {
-                return Some(i)
+            let item = (i, b, self.in_single, self.in_double);
+            match b {
+                b'\'' if !self.in_double => self.in_single = !self.in_single,
+                b'"' if !self.in_single => self.in_double = !self.in_double,
+                _ => {}
             }
-            _ => {}
+            self.i += 1;
+            return Some(item);
         }
-        i += 1;
+        None
     }
-    None
+}
+
+fn comment_start(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    // `#` starts a comment at any word start, including after an operator byte —
+    // but not after `{`, because `${#var}` is an expansion, not a comment.
+    QuoteScan::new(line).find_map(|(i, b, in_single, in_double)| {
+        (b == b'#'
+            && !in_single
+            && !in_double
+            && (i == 0
+                || bytes[i - 1].is_ascii_whitespace()
+                || matches!(bytes[i - 1], b'|' | b'&' | b';' | b'(' | b')')))
+        .then_some(i)
+    })
 }
 
 fn line_has_unbalanced_grouping(code: &str) -> bool {
-    let bytes = code.as_bytes();
-    let mut in_single = false;
-    let mut in_double = false;
     let mut paren = 0i32;
     let mut brace = 0i32;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' if !in_single => {
-                i += 2;
-                continue;
-            }
-            b'\'' if !in_double => in_single = !in_single,
-            b'"' if !in_single => in_double = !in_double,
-            b'(' if !in_single && !in_double => paren += 1,
-            b')' if !in_single && !in_double => paren -= 1,
-            b'{' if !in_single && !in_double => brace += 1,
-            b'}' if !in_single && !in_double => brace -= 1,
+    for (_, b, in_single, in_double) in QuoteScan::new(code) {
+        if in_single || in_double {
+            continue;
+        }
+        match b {
+            b'(' => paren += 1,
+            b')' => paren -= 1,
+            b'{' => brace += 1,
+            b'}' => brace -= 1,
             _ => {}
         }
         if paren < 0 || brace < 0 {
             return true;
         }
-        i += 1;
     }
     paren != 0 || brace != 0
 }
 
+/// Unquoted `[[` / `]]` *words* that do not balance within the line. Bash lets a
+/// conditional expression span lines (`[[ -f a &&` / `-f b ]]`), so the lines
+/// around one are not independent commands and the block must pass through
+/// whole — otherwise the first half is rewritten into a command that cannot
+/// parse.
+fn line_has_unbalanced_test_brackets(code: &str) -> bool {
+    let bytes = code.as_bytes();
+    let mut depth = 0i32;
+    for (i, b, in_single, in_double) in QuoteScan::new(code) {
+        if in_single || in_double || !matches!(b, b'[' | b']') {
+            continue;
+        }
+        let word_start = i == 0 || bytes[i - 1].is_ascii_whitespace();
+        let word_end = bytes.get(i + 2).is_none_or(|c| c.is_ascii_whitespace());
+        if bytes.get(i + 1) == Some(&b) && word_start && word_end {
+            depth += if b == b'[' { 1 } else { -1 };
+            if depth < 0 {
+                return true;
+            }
+        }
+    }
+    depth != 0
+}
+
+// Only `\'` inside `$'…'` diverges: bash keeps the string open, the lexer closes
+// it — an extra split point the newline-count check cannot see.
 fn ansi_c_quote_defeats_lexer(cmd: &str) -> bool {
     let bytes = cmd.as_bytes();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' if !in_single => {
-                i += 2;
-                continue;
+    let mut ansi_span = false;
+    let mut backslash_run = 0u32;
+    for (i, b, in_single, in_double) in QuoteScan::new(cmd) {
+        if b == b'\'' && !in_double {
+            if !in_single {
+                ansi_span = i > 0 && bytes[i - 1] == b'$';
+                backslash_run = 0;
+            } else if ansi_span && backslash_run % 2 == 1 {
+                return true;
             }
-            b'\'' if !in_double => in_single = !in_single,
-            b'"' if !in_single => in_double = !in_double,
-            b'$' if !in_single && !in_double && bytes.get(i + 1) == Some(&b'\'') => {
-                i += 2;
-                while i < bytes.len() {
-                    match bytes[i] {
-                        b'\\' => {
-                            if bytes.get(i + 1) == Some(&b'\'') {
-                                return true;
-                            }
-                            i += 2;
-                            continue;
-                        }
-                        b'\'' => break,
-                        _ => {}
-                    }
-                    i += 1;
-                }
+        } else if in_single {
+            if b == b'\\' {
+                backslash_run += 1;
+            } else {
+                backslash_run = 0;
             }
-            _ => {}
         }
-        i += 1;
     }
     false
 }
 
 fn quotes_balanced(cmd: &str) -> bool {
-    let bytes = cmd.as_bytes();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\\' if !in_single => {
-                i += 2;
-                continue;
-            }
-            b'\'' if !in_double => in_single = !in_single,
-            b'"' if !in_single => in_double = !in_double,
-            _ => {}
-        }
-        i += 1;
-    }
-    !in_single && !in_double
+    let mut scan = QuoteScan::new(cmd);
+    scan.by_ref().for_each(drop);
+    scan.balanced()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1051,6 +1102,7 @@ fn classify_line(line: &str) -> LineRole {
         || code.starts_with("((")
         || code.ends_with("))")
         || line_has_unbalanced_grouping(code)
+        || line_has_unbalanced_test_brackets(code)
     {
         return LineRole::Unsafe;
     }
@@ -1078,7 +1130,16 @@ fn rewrite_multiline_block(
     if ansi_c_quote_defeats_lexer(cmd) {
         return None;
     }
-    let raw_breaks = cmd.chars().filter(|c| matches!(c, '\n' | '\r')).count();
+    // The lexer emits a newline token for each `\n` and for the `\r` of a CRLF
+    // pair (CRLF = two tokens), but not for a lone `\r`, which is not a
+    // separator. Count exactly that set, so the parity check flags only newlines
+    // the lexer swallowed via quote state — never a bare CR.
+    let bytes = cmd.as_bytes();
+    let raw_breaks = bytes
+        .iter()
+        .enumerate()
+        .filter(|&(i, &b)| b == b'\n' || (b == b'\r' && bytes.get(i + 1) == Some(&b'\n')))
+        .count();
     if raw_breaks != newline_offsets.len() {
         if newline_offsets.is_empty() && quotes_balanced(cmd) {
             return rewrite_single(cmd, excluded, transparent_prefixes);
@@ -1757,12 +1818,18 @@ fn rewrite_segment_inner(
         return None;
     }
 
+    // Never insert the engine into an elevation the user granted to one binary.
+    // The command runs verbatim and is accounted as `e11_privileged_prefix`.
+    if privilege_prefix(trimmed).is_some() {
+        return None;
+    }
+
     let (env_prefix, rest_after_env) = strip_disabled_prefix(trimmed);
     if !env_prefix.is_empty() {
         // #345: RTK_DISABLED=1 in env prefix → skip rewrite entirely
         // #508: warn on stderr so agents learn to stop overusing it
         if env_prefix.contains("RTK_DISABLED=") {
-            eprintln!(
+            crate::rtk_info!(
                 "[rtk] RTK_DISABLED=1 detected — skipping filter for this command. \
                  Remove RTK_DISABLED=1 to restore token savings."
             );
@@ -1841,6 +1908,12 @@ fn rewrite_segment_inner(
             || cmd_part.starts_with("sed -n ")
             || cmd_part.starts_with("nl -ba "))
     {
+        // These four are routed before the generic rule table, which is where
+        // the exclusion list is normally consulted — so `exclude_commands =
+        // ["head"]` was silently ignored for exactly the commands it named.
+        if is_excluded(cmd_part.trim(), excluded) {
+            return None;
+        }
         return rewrite_line_range(cmd_part).map(|r| format!("{}{}", r, redirect_suffix));
     }
 
@@ -1913,9 +1986,16 @@ fn rewrite_segment_inner(
     // rtk gh would corrupt — skip rewrite so the caller gets raw JSON.
     if rule.rtk_cmd == "rtk gh" {
         let args_lower = cmd_part.to_lowercase();
+        // `--jq` / `--template` are the caller's own projection: always exact
+        // passthrough. `--json` is routable only when the lossless repacker is
+        // switched on, because packing emits a notation the caller did not ask
+        // for; a redirect to a file is never routed, since a program will parse
+        // that file.
+        if args_lower.contains("--jq") || args_lower.contains("--template") {
+            return None;
+        }
         if args_lower.contains("--json")
-            || args_lower.contains("--jq")
-            || args_lower.contains("--template")
+            && (!crate::config::gh_pack_json() || cmd_part.contains('>'))
         {
             return None;
         }
@@ -2544,6 +2624,49 @@ mod tests {
 
     mod multiline_rewrite {
         use super::*;
+
+        #[test]
+        fn cross_line_test_brackets_pass_through() {
+            // `[[ … ]]` may span lines; rewriting the first half alone emits a
+            // command that cannot parse.
+            assert_eq!(
+                rewrite_command_no_prefixes("[[ -f a &&\n-f b ]] && git status", &[]),
+                None
+            );
+            assert_eq!(
+                rewrite_command_no_prefixes("git status\n[[ -f a &&\n-f b ]]", &[]),
+                None
+            );
+        }
+
+        #[test]
+        fn balanced_test_brackets_on_one_line_still_rewrite() {
+            assert_eq!(
+                rewrite_command_no_prefixes("git status\n[[ -f a ]] && git log -3", &[]),
+                Some("rtk git status\n[[ -f a ]] && rtk git log -3".into())
+            );
+        }
+
+        #[test]
+        fn bracket_lookalikes_are_not_test_brackets() {
+            // Array indexing and globs use single brackets; only the `[[`/`]]`
+            // *words* open a conditional.
+            assert_eq!(
+                rewrite_command_no_prefixes("git status\ngrep -rn 'a[[]b' src", &[]),
+                Some("rtk git status\nrtk grep -rn 'a[[]b' src".into())
+            );
+        }
+
+        #[test]
+        fn lone_cr_is_one_command_with_a_single_prefix() {
+            // A bare `\r` is not a line break: bash runs the whole string as one
+            // (mangled) command, so it gets exactly one prefix — matching the
+            // single segment the permission layer gates.
+            assert_eq!(
+                rewrite_command_no_prefixes("git status\rgit log --oneline -3", &[]),
+                Some("rtk git status\rgit log --oneline -3".into())
+            );
+        }
 
         #[test]
         fn rewrites_each_line() {
@@ -5311,11 +5434,41 @@ mod tests {
     // --- sudo / env prefix + rewrite ---
 
     #[test]
-    fn test_rewrite_sudo_docker() {
+    fn test_sudo_is_never_rewritten() {
+        // Elevation was granted to `docker`, not to the engine. Rewriting here
+        // would run the engine as root and leave root-owned state in a
+        // user-owned data root.
+        assert_eq!(rewrite_command_no_prefixes("sudo docker ps", &[]), None);
+        assert_eq!(rewrite_command_no_prefixes("doas docker ps", &[]), None);
+        assert_eq!(rewrite_command_no_prefixes("pkexec docker ps", &[]), None);
         assert_eq!(
-            rewrite_command_no_prefixes("sudo docker ps", &[]),
-            Some("sudo rtk docker ps".into())
+            rewrite_command_no_prefixes("/usr/bin/sudo docker ps", &[]),
+            None
         );
+    }
+
+    #[test]
+    fn test_sudo_lookalike_words_still_rewrite() {
+        // Only the elevation word itself bails; a command that merely starts
+        // with the same letters is ordinary.
+        assert_eq!(
+            rewrite_command_no_prefixes("sudoku docker ps", &[]),
+            None,
+            "unknown binary has no rtk equivalent"
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("docker ps", &[]),
+            Some("rtk docker ps".into())
+        );
+    }
+
+    #[test]
+    fn test_sudo_attribution_is_privileged_and_unavoidable() {
+        let attribution =
+            super::canonical_attribution("sudo docker ps", &RewriteOutcome::NoEquivalent)
+                .expect("privileged prefix must be attributed");
+        assert_eq!(attribution.class, "e11_privileged_prefix");
+        assert!(!attribution.avoidable);
     }
 
     #[test]
@@ -5391,6 +5544,28 @@ mod tests {
         assert_eq!(
             rewrite_command_no_prefixes("git status && curl https://api.example.com", &excluded),
             Some("rtk git status && curl https://api.example.com".into())
+        );
+    }
+
+    #[test]
+    fn test_exclude_commands_applies_to_head_and_tail() {
+        // head/tail/sed/nl are routed ahead of the generic rule table, which is
+        // where exclusions are normally applied.
+        assert_eq!(
+            rewrite_command_no_prefixes("head -20 README.md", &[]),
+            Some("rtk read README.md --max-lines 20".into())
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("head -20 README.md", &["head".to_string()]),
+            None
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("tail -20 README.md", &["tail".to_string()]),
+            None
+        );
+        assert_eq!(
+            rewrite_command_no_prefixes("sed -n '1,3p' README.md", &["sed".to_string()]),
+            None
         );
     }
 
@@ -5869,9 +6044,15 @@ mod tests {
 
     #[test]
     fn test_env_prefix_composed_with_builtin() {
+        // The builtin prefix composes, but an elevation prefix in front of it
+        // still stops the rewrite.
+        assert_eq!(
+            rewrite_command_no_prefixes("noglob git status", &[]),
+            Some("noglob rtk git status".into())
+        );
         assert_eq!(
             rewrite_command_no_prefixes("sudo noglob git status", &[]),
-            Some("sudo noglob rtk git status".into())
+            None
         );
     }
 

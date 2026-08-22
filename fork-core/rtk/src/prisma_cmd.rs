@@ -299,35 +299,80 @@ fn filter_migrate_dev(output: &str) -> String {
     result.trim().to_string()
 }
 
+/// A migration directory name: a timestamp followed by `_<label>`.
+///
+/// Counting migrations by looking for the *word* "applied" on a line counted
+/// prose instead: "Following migrations have not yet been applied:" scored as
+/// one applied migration while the names below it scored as none, so a database
+/// with pending work reported "1 applied, 0 pending" — backwards.
+fn migration_name(line: &str) -> Option<&str> {
+    let token = line.trim();
+    if token.is_empty() || token.contains(char::is_whitespace) {
+        return None;
+    }
+    let (digits, rest) = token.split_at(token.find('_')?);
+    (digits.len() >= 8 && digits.chars().all(|c| c.is_ascii_digit()) && rest.len() > 1)
+        .then_some(token)
+}
+
 /// Filter migrate status output
 fn filter_migrate_status(output: &str) -> String {
-    let mut applied_count = 0;
-    let mut pending_count = 0;
-    let mut latest_migration = String::new();
+    let mut total_found: Option<usize> = None;
+    let mut pending: Vec<&str> = Vec::new();
+    let mut applied: Vec<&str> = Vec::new();
+    let mut in_pending_section = false;
+    let mut up_to_date = false;
 
     for line in output.lines() {
-        if line.contains("applied") {
-            applied_count += 1;
-            if latest_migration.is_empty() && line.contains("202") {
-                if let Some(pos) = line.find("202") {
-                    let end = line[pos..].find(|c: char| c.is_whitespace()).unwrap_or(20);
-                    latest_migration = line[pos..pos + end].to_string();
-                }
-            }
+        let trimmed = line.trim();
+
+        if let Some(count) = trimmed
+            .split_whitespace()
+            .next()
+            .and_then(|word| word.parse::<usize>().ok())
+            .filter(|_| trimmed.contains("migration") && trimmed.contains("found"))
+        {
+            total_found = Some(count);
+            continue;
         }
-        if line.contains("pending") || line.contains("unapplied") {
-            pending_count += 1;
+        if trimmed.contains("not yet been applied") || trimmed.contains("have not yet been") {
+            in_pending_section = true;
+            continue;
+        }
+        if trimmed.contains("Database schema is up to date") {
+            up_to_date = true;
+            continue;
+        }
+        if let Some(name) = migration_name(trimmed) {
+            if in_pending_section {
+                pending.push(name);
+            } else {
+                applied.push(name);
+            }
         }
     }
 
-    let mut result = String::new();
-    result.push_str(&format!(
+    let pending_count = pending.len();
+    let applied_count = match (total_found, up_to_date) {
+        (Some(total), _) => total.saturating_sub(pending_count),
+        (None, true) => applied.len(),
+        (None, false) => applied.len(),
+    };
+
+    // Nothing recognisable was parsed: reporting a confident "0 applied, 0
+    // pending" would be an invented answer, so hand back the raw text and let
+    // the never-worse guard at the call site pick the cheaper rendering.
+    if total_found.is_none() && !up_to_date && applied.is_empty() && pending.is_empty() {
+        return output.trim().to_string();
+    }
+
+    let mut result = format!(
         "Migrations: {} applied, {} pending\n",
         applied_count, pending_count
-    ));
+    );
 
-    if !latest_migration.is_empty() {
-        result.push_str(&format!("Latest: {}\n", latest_migration));
+    if let Some(latest) = pending.first().or_else(|| applied.last()) {
+        result.push_str(&format!("Latest: {}\n", latest));
     }
 
     result.trim().to_string()
@@ -435,6 +480,40 @@ fn extract_index_name(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrate_status_counts_migrations_not_prose() {
+        let output = "\
+3 migrations found in prisma/migrations
+
+Following migrations have not yet been applied:
+20240301120000_add_orders
+20240401090000_add_index
+";
+        let filtered = filter_migrate_status(output);
+        assert!(
+            filtered.contains("1 applied, 2 pending"),
+            "counted prose instead of migrations: {filtered}"
+        );
+        assert!(filtered.contains("Latest: 20240301120000_add_orders"));
+    }
+
+    #[test]
+    fn migrate_status_up_to_date_reports_no_pending() {
+        let output = "\
+2 migrations found in prisma/migrations
+
+Database schema is up to date!
+";
+        let filtered = filter_migrate_status(output);
+        assert!(filtered.contains("2 applied, 0 pending"), "got: {filtered}");
+    }
+
+    #[test]
+    fn migrate_status_falls_back_rather_than_inventing_zeroes() {
+        let output = "Environment variables loaded from .env\nsomething unexpected\n";
+        assert_eq!(filter_migrate_status(output), output.trim());
+    }
 
     #[test]
     fn test_filter_generate() {

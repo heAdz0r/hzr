@@ -230,6 +230,25 @@ fn extract_failures_regex(output: &str) -> Vec<TestFailure> {
     failures
 }
 
+/// Remove the caller's `--reporter` in every form playwright accepts, including
+/// the value token of the space-separated form.
+fn strip_reporter_flags(args: &[String]) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--reporter" || arg == "-r" {
+            // Consume the value so it cannot survive as a positional filter.
+            let _ = iter.next();
+            continue;
+        }
+        if arg.starts_with("--reporter=") || arg.starts_with("-r=") {
+            continue;
+        }
+        kept.push(arg.clone());
+    }
+    kept
+}
+
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
@@ -237,8 +256,15 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
 
     // fix #193: --reporter=json must come AFTER the subcommand (e.g. "playwright test --reporter=json")
     // Playwright rejects flags before the subcommand.
+    //
+    // The caller's own reporter is dropped, not merely overridden: playwright is
+    // last-flag-wins, so a trailing `--reporter list` beat the injected JSON one
+    // and the parse failed. Dropping it must also consume its *value* — the
+    // space-separated form leaves a bare `list` behind, which playwright reads as
+    // a positional test filter and silently runs the wrong (usually empty) set.
+    let filtered_args = strip_reporter_flags(args);
     let mut inserted_reporter = false;
-    for (i, arg) in args.iter().enumerate() {
+    for (i, arg) in filtered_args.iter().enumerate() {
         cmd.arg(arg);
         if i == 0 && !arg.starts_with("-") && !inserted_reporter {
             // First positional arg is the subcommand — insert reporter flag right after
@@ -307,6 +333,38 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn owned(args: &[&str]) -> Vec<String> {
+        args.iter().map(|a| (*a).to_string()).collect()
+    }
+
+    #[test]
+    fn space_separated_reporter_value_is_consumed_too() {
+        // Leaving `list` behind turns it into a positional test filter: 0 tests
+        // run, exit 1, "No tests found matching …".
+        assert_eq!(
+            strip_reporter_flags(&owned(&["test", "--reporter", "list"])),
+            owned(&["test"])
+        );
+    }
+
+    #[test]
+    fn attached_and_short_reporter_forms_are_removed() {
+        assert_eq!(
+            strip_reporter_flags(&owned(&["test", "--reporter=line", "e2e/"])),
+            owned(&["test", "e2e/"])
+        );
+        assert_eq!(
+            strip_reporter_flags(&owned(&["test", "-r", "dot"])),
+            owned(&["test"])
+        );
+    }
+
+    #[test]
+    fn unrelated_arguments_survive_untouched() {
+        let args = owned(&["test", "--workers=4", "e2e/login.spec.ts", "--headed"]);
+        assert_eq!(strip_reporter_flags(&args), args);
+    }
 
     // fix #193: updated to use real Playwright JSON format (specs, ok, errors array, f64 duration)
     #[test]

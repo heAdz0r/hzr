@@ -584,7 +584,7 @@ fn try_grepai_delegation(
             Ok(output) => Ok(output),
             Err(e) => {
                 if verbose > 0 {
-                    eprintln!(
+                    crate::rtk_info!(
                         "rgai: grepai search failed: {}, falling back to built-in",
                         e
                     );
@@ -610,7 +610,7 @@ fn try_grepai_delegation(
                     Ok(()) => get_raw(binary)?,
                     Err(e) => {
                         if verbose > 0 {
-                            eprintln!(
+                            crate::rtk_info!(
                                 "rgai: grepai auto-init failed: {}, falling back to built-in",
                                 e
                             );
@@ -1043,7 +1043,7 @@ fn try_ripgrep_search(
         Some(s) => s,
         None => {
             if verbose > 0 {
-                eprintln!("rgai[rg]: path is not valid UTF-8, falling back to built-in");
+                crate::rtk_info!("rgai[rg]: path is not valid UTF-8, falling back to built-in");
             }
             return Ok(None);
         }
@@ -1089,7 +1089,7 @@ fn try_ripgrep_search(
         Ok(o) => o,
         Err(e) => {
             if verbose > 0 {
-                eprintln!(
+                crate::rtk_info!(
                     "rgai[rg]: failed to run rg: {}, falling back to built-in",
                     e
                 );
@@ -1103,7 +1103,7 @@ fn try_ripgrep_search(
         Some(0) | Some(1) => {}
         other => {
             if verbose > 0 {
-                eprintln!(
+                crate::rtk_info!(
                     "rgai[rg]: rg exited with {:?}, falling back to built-in",
                     other
                 );

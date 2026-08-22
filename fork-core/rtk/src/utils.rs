@@ -194,6 +194,78 @@ pub fn ok_confirmation(action: &str, detail: &str) -> String {
     }
 }
 
+/// Exit code of a finished `.output()` call: the real code, or `128 + signal`
+/// per Unix convention when the child was killed rather than exiting.
+///
+/// The signal case also emits a one-line stderr diagnostic. Without it an
+/// OOM-killed child reports a bare `137` and the caller has no way to tell a
+/// kill apart from a program that chose that exit code.
+pub fn exit_code_from_output(output: &std::process::Output, label: &str) -> i32 {
+    exit_code_from_status(&output.status, label)
+}
+
+/// [`exit_code_from_output`] for a `.status()` call, which carries no captured
+/// output to inspect.
+pub fn exit_code_from_status(status: &std::process::ExitStatus, label: &str) -> i32 {
+    match status.code() {
+        Some(code) => code,
+        None => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                if let Some(sig) = status.signal() {
+                    eprintln!("[rtk] {}: process terminated by signal {}", label, sig);
+                    return 128 + sig;
+                }
+            }
+            eprintln!("[rtk] {}: process terminated by signal", label);
+            1
+        }
+    }
+}
+
+/// Create a directory owner-only (0700 on Unix), tightening one that already
+/// exists. `create_dir_all` alone leaves every intermediate component at the
+/// process umask, so the parent is created as its own step by the callers that
+/// need the whole chain private.
+pub fn create_private_dir(path: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path)?;
+    set_owner_only(path, 0o700);
+    Ok(())
+}
+
+/// Restrict an existing file to owner-only access (0600 on Unix).
+pub fn restrict_file(path: &std::path::Path) {
+    set_owner_only(path, 0o600);
+}
+
+/// Open a file owner-only (0600 on Unix), applied at creation so its content is
+/// never briefly readable under a permissive umask. The mode is ignored for a
+/// file that already exists, which is why the permissions are re-applied after
+/// the open rather than only requested before it.
+pub fn open_private(
+    opts: &mut std::fs::OpenOptions,
+    path: &std::path::Path,
+) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let file = opts.open(path)?;
+    set_owner_only(path, 0o600);
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn set_owner_only(path: &std::path::Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
+}
+
+#[cfg(not(unix))]
+fn set_owner_only(_path: &std::path::Path, _mode: u32) {}
+
 /// Merge stdout and stderr into a single raw string for token tracking.
 /// Avoids trailing double-newline when stderr is empty.
 ///

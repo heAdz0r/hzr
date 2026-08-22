@@ -134,10 +134,10 @@ verify_sha256 \
   "bda0d206fe9d9402d6d007254286c07b39a841f31279ebec806db10346817484" \
   "${HZR_CAVEMAN_ROOT}/bridge.mjs"
 verify_sha256 \
-  "7e8f919093b7a54fb289580318189d87de610a0a58700033057862e3b9e12c06" \
+  "ed3eaf0d5ba490c9fb679e2befc0f41433870dce637e160685dd3594061d6f9b" \
   "${HZR_CAVEMAN_ROOT}/package.json"
 verify_sha256 \
-  "3f0447b23174cc99cd7f09eef6ad614d8c615366d488e3022c31d097e6371cae" \
+  "dc12bca14bdbb409e163ad2abe74b1eaa85b18b61f1248d3b54712adbe93b2da" \
   "${HZR_CAVEMAN_ROOT}/package-lock.json"
 verify_sha256 \
   "a59d764d9dc37eafb32f11d3dea0262a0711a59dfe469777025d858653954f28" \
@@ -205,7 +205,7 @@ verify_sha256 \
 PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ls \
   --omit=dev --all --prefix "${HZR_CAVEMAN_ROOT}" >/dev/null
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.4.6" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.5.0" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
@@ -351,7 +351,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-  if (report.protocol_version !== 1 || report.hzr_version !== "0.4.6") {
+  if (report.protocol_version !== 1 || report.hzr_version !== "0.5.0") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -391,7 +391,7 @@ fi
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
       const ids = new Set(report.services.map((service) => service.id));
-      if (response.status !== 200 || report.hzr_version !== "0.4.6" ||
+      if (response.status !== 200 || report.hzr_version !== "0.5.0" ||
           !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
         throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
       }

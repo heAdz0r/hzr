@@ -22,7 +22,9 @@ walkdir = "2"
 regex = "1"
 lazy_static = "1.4"
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+# float_roundtrip: a packed number must re-serialize to the exact digits the API
+# sent, otherwise the losslessness check in jsonpack would reject its own output.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 csv = "1"
 colored = "2"
 dirs = "5"

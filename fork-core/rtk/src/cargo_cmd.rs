@@ -57,7 +57,15 @@ where
         .status
         .code()
         .unwrap_or(if output.status.success() { 0 } else { 1 });
+    // Two invariants applied centrally for every cargo subcommand: a compacted
+    // summary never costs more tokens than the raw output, and it never reads
+    // green next to a non-zero child exit. A tiny `cargo test` run and a
+    // compile error that the parser could not attribute both used to violate one
+    // of them.
     let filtered = filter_fn(&raw);
+    let filtered =
+        crate::guard::guard_exit(&raw, exit_code, &format!("cargo {}", subcommand), &filtered);
+    let filtered = crate::guard::never_worse(&raw, &filtered).to_string();
 
     if let Some(hint) = crate::tee::tee_and_hint(&raw, &format!("cargo_{}", subcommand), exit_code)
     // upstream sync: tee
@@ -106,6 +114,9 @@ where
     let raw = format!("{}\n{}", stdout, stderr);
     let exit_code = crate::stream::status_to_exit_code(output.status);
     let filtered = filter_fn(&raw, exit_code);
+    let filtered =
+        crate::guard::guard_exit(&raw, exit_code, &format!("cargo {}", subcommand), &filtered);
+    let filtered = crate::guard::never_worse(&raw, &filtered).to_string();
 
     if let Some(hint) = crate::tee::tee_and_hint(&raw, &format!("cargo_{}", subcommand), exit_code)
     {

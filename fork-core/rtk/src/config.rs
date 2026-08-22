@@ -18,6 +18,17 @@ pub struct Config {
     pub mem: MemConfig, // memory layer config (cache TTL, project limit, symbol limit)
     #[serde(default)]
     pub hooks: HooksConfig, // fork: ported from upstream v0.42.4 (rewrite engine config)
+    #[serde(default)]
+    pub gh: GhConfig,
+}
+
+/// GitHub CLI routing options.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct GhConfig {
+    /// Route `gh <cmd> --json …` through the lossless repacker instead of
+    /// leaving it as exact passthrough. Off by default — see [`gh_pack_json`].
+    #[serde(default)]
+    pub pack_json: bool,
 }
 
 /// Hook rewrite engine config (fork: ported from upstream v0.42.4).
@@ -30,6 +41,60 @@ pub struct HooksConfig {
     /// (e.g. ["docker exec mycontainer", "poetry run"]). Literal match, not pattern.
     #[serde(default)]
     pub transparent_prefixes: Vec<String>,
+    /// Suppress informational stderr diagnostics — notes about commands that
+    /// *succeeded*. In a terminal they are a useful signal; inside an agent the
+    /// host merges stderr into the model's context, so a note about a command
+    /// that worked costs more tokens than the filter saved. Real errors and
+    /// truncation warnings are never suppressed.
+    #[serde(default)]
+    pub quiet: bool,
+}
+
+/// True when `gh <cmd> --json …` may be routed through the lossless repacker.
+///
+/// Off by default and opt-in via `RTK_GH_PACK_JSON=1` or `[gh] pack_json = true`.
+/// `gh api` is packed unconditionally because its previous rendering was a lossy
+/// preview; `--json`, by contrast, is currently exact passthrough, and emitting
+/// a notation the caller did not ask for is a product decision rather than a bug
+/// fix — so it stays behind a switch until measured.
+pub fn gh_pack_json() -> bool {
+    static PACK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *PACK.get_or_init(|| {
+        if std::env::var("RTK_GH_PACK_JSON").ok().as_deref() == Some("1") {
+            return true;
+        }
+        Config::load()
+            .map(|config| config.gh.pack_json)
+            .unwrap_or(false)
+    })
+}
+
+/// True when informational diagnostics should be suppressed: `RTK_QUIET=1`, or
+/// `[hooks] quiet = true` in `config.toml`.
+///
+/// `Config::load()` re-reads and re-parses the file on every call and this sits
+/// on the command path, so the answer is cached for the process lifetime — one
+/// read, not one per diagnostic.
+pub fn quiet_diagnostics() -> bool {
+    static QUIET: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *QUIET.get_or_init(|| {
+        if std::env::var("RTK_QUIET").ok().as_deref() == Some("1") {
+            return true;
+        }
+        Config::load()
+            .map(|config| config.hooks.quiet)
+            .unwrap_or(false)
+    })
+}
+
+/// `eprintln!` for informational diagnostics, silenced by [`quiet_diagnostics`].
+#[macro_export]
+macro_rules! rtk_info {
+    ($($arg:tt)*) => {
+        if !$crate::config::quiet_diagnostics() {
+            eprintln!($($arg)*);
+        }
+    };
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -228,6 +293,40 @@ impl Config {
         } else {
             Ok(Config::default())
         }
+    }
+
+    /// Ignore lists actually used by the system commands: the built-in noise set
+    /// merged with `[filters].ignore_dirs` / `ignore_files` from `config.toml`.
+    ///
+    /// Those two config keys existed but had no reader — a user could set them
+    /// and nothing happened. The built-ins stay as the floor so the default
+    /// behaviour is unchanged; config entries are added on top, de-duplicated
+    /// and order-stable so the generated ignore patterns are deterministic.
+    pub fn merged_ignore_dirs(builtin: &[&str]) -> Vec<String> {
+        Self::merge_ignore_list(builtin, |filters| &filters.ignore_dirs)
+    }
+
+    pub fn merged_ignore_files(builtin: &[&str]) -> Vec<String> {
+        Self::merge_ignore_list(builtin, |filters| &filters.ignore_files)
+    }
+
+    fn merge_ignore_list(
+        builtin: &[&str],
+        select: fn(&FilterConfig) -> &Vec<String>,
+    ) -> Vec<String> {
+        let mut merged: Vec<String> = builtin.iter().map(|entry| (*entry).to_string()).collect();
+        // Config I/O is deliberately kept off the hot path: one cached read per
+        // process, not one per command that needs the list.
+        static CACHED: std::sync::OnceLock<Option<Config>> = std::sync::OnceLock::new();
+        let cached = CACHED.get_or_init(|| Config::load().ok());
+        if let Some(config) = cached {
+            for entry in select(&config.filters) {
+                if !merged.iter().any(|existing| existing == entry) {
+                    merged.push(entry.clone());
+                }
+            }
+        }
+        merged
     }
 
     pub fn save(&self) -> Result<()> {
