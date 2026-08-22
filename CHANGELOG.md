@@ -4,6 +4,34 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-23
+
+Post-release audit of 0.5.0 for correctness, races and efficiency headroom.
+
+### Fixed
+
+- `sudo` was still rewritten when it was not the first word. The prefix regex folds
+  `sudo`, `env` and `VAR=value` into one run, so `SUDO_ASKPASS=... sudo docker ps` and
+  `env sudo docker ps` reached the rewriter with the elevation already stripped into the
+  prefix — re-creating the root-owned-state problem 0.5.0 closed. The guard now skips the
+  assignment/`env` run the way the shell would and stops at the first real command word,
+  so an elevator name appearing only as an argument still rewrites.
+- `playwright` no longer strips `-r` and its value. Playwright has no `-r` alias for
+  `--reporter` (that is mocha's `--require`), so an unrelated short flag was being removed
+  from the invocation along with its argument.
+
+### Changed
+
+- A bounded read stops at the bound. `hzr read <file> --max-lines N` loaded the whole file
+  to keep N lines and then read it again to count newlines for the "N of M" notice. The read
+  now stops where the bound is, the file total streams through a fixed buffer, and the filter
+  path borrows the content instead of cloning it twice. Output is byte-identical; on a 20 MB
+  log, `--max-lines 20` drops from 51.7 MB to 10.5 MB peak and no longer scales with file
+  size, and a filtered whole-file read drops from 199 MB to 137 MB.
+- `jsonpack` collects columns in one pass with a name index. It previously scanned the column
+  vector linearly for every leaf of every row and then re-walked every path per column to
+  decide nullability — quadratic in the payload on a wide `gh api` page.
+
 ## [0.5.0] - 2026-08-22
 
 Selective adoption of upstream `rtk-ai/rtk` work published after the `v0.44.1` import base

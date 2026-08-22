@@ -236,12 +236,15 @@ fn strip_reporter_flags(args: &[String]) -> Vec<String> {
     let mut kept = Vec::with_capacity(args.len());
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        if arg == "--reporter" || arg == "-r" {
+        // Only the long forms. Playwright has no `-r` alias for `--reporter`
+        // (that is mocha's `--require`), and swallowing an unrelated short flag
+        // together with its value would be a worse bug than the one this fixes.
+        if arg == "--reporter" {
             // Consume the value so it cannot survive as a positional filter.
             let _ = iter.next();
             continue;
         }
-        if arg.starts_with("--reporter=") || arg.starts_with("-r=") {
+        if arg.starts_with("--reporter=") {
             continue;
         }
         kept.push(arg.clone());
@@ -349,15 +352,19 @@ mod tests {
     }
 
     #[test]
-    fn attached_and_short_reporter_forms_are_removed() {
+    fn attached_reporter_form_is_removed() {
         assert_eq!(
             strip_reporter_flags(&owned(&["test", "--reporter=line", "e2e/"])),
             owned(&["test", "e2e/"])
         );
-        assert_eq!(
-            strip_reporter_flags(&owned(&["test", "-r", "dot"])),
-            owned(&["test"])
-        );
+    }
+
+    #[test]
+    fn unrelated_short_flags_keep_their_values() {
+        // `-r` is not a playwright reporter alias; eating it and its value would
+        // be a worse bug than the one the stripper fixes.
+        let args = owned(&["test", "-r", "something", "-j", "4"]);
+        assert_eq!(strip_reporter_flags(&args), args);
     }
 
     #[test]

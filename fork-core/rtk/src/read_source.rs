@@ -70,6 +70,63 @@ pub fn read_file_bytes(file: &Path, from: Option<usize>, to: Option<usize>) -> R
     Ok(selected)
 }
 
+/// The first `lines` lines of `file`, stopping as soon as they are in hand.
+///
+/// `head -n N big.log` rewrites to a bounded read, and loading the whole file to
+/// keep its first twenty lines is the cost this avoids — the point of the bound
+/// is that the rest is never wanted.
+pub fn read_head_lines(file: &Path, lines: usize) -> Result<Vec<u8>> {
+    let handle =
+        File::open(file).with_context(|| format!("Failed to read file: {}", file.display()))?;
+    let mut reader = BufReader::new(handle);
+    let mut selected = Vec::new();
+    let mut line_buf = Vec::new();
+    for _ in 0..lines {
+        line_buf.clear();
+        let read = reader
+            .read_until(b'\n', &mut line_buf)
+            .with_context(|| format!("Failed to read file: {}", file.display()))?;
+        if read == 0 {
+            break;
+        }
+        selected.extend_from_slice(&line_buf);
+    }
+    Ok(selected)
+}
+
+/// Newlines in `bytes`, counting a final unterminated line.
+#[must_use]
+pub fn count_lines_in(bytes: &[u8]) -> usize {
+    memchr::memchr_iter(b'\n', bytes).count()
+        + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n"))
+}
+
+/// Newlines in `file`, without ever holding more than one buffer of it.
+///
+/// Used to report the file total behind a bounded read. Loading the file to
+/// count its lines doubled peak memory for every ranged read of a large file.
+pub fn count_lines(file: &Path) -> Result<usize> {
+    let handle =
+        File::open(file).with_context(|| format!("Failed to read file: {}", file.display()))?;
+    let mut reader = BufReader::new(handle);
+    let mut total = 0usize;
+    let mut last_byte = None;
+    loop {
+        let chunk = reader
+            .fill_buf()
+            .with_context(|| format!("Failed to read file: {}", file.display()))?;
+        if chunk.is_empty() {
+            break;
+        }
+        total += memchr::memchr_iter(b'\n', chunk).count();
+        last_byte = chunk.last().copied();
+        let consumed = chunk.len();
+        reader.consume(consumed);
+    }
+    // A file whose last byte is not a newline still ends in a line.
+    Ok(total + usize::from(matches!(last_byte, Some(byte) if byte != b'\n')))
+}
+
 // ── Stdin bytes ─────────────────────────────────────────────
 
 pub fn read_stdin_bytes() -> Result<Vec<u8>> {
@@ -213,6 +270,76 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    fn temp_with(contents: &[u8]) -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("temp file");
+        file.write_all(contents).expect("write");
+        file.flush().expect("flush");
+        file
+    }
+
+    #[test]
+    fn count_lines_matches_a_whole_file_count() {
+        for body in [
+            &b""[..],
+            b"one\n",
+            b"one\ntwo\n",
+            b"one\ntwo",
+            b"\n\n\n",
+            b"trailing spaces   \nlast",
+        ] {
+            let file = temp_with(body);
+            assert_eq!(
+                count_lines(file.path()).expect("count"),
+                count_lines_in(body),
+                "streamed and in-memory counts disagree for {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn count_lines_spans_more_than_one_buffer() {
+        // The streaming counter reads in chunks; a file larger than one buffer
+        // must not lose the lines that straddle a chunk boundary.
+        let body: Vec<u8> = (0..50_000)
+            .flat_map(|i| format!("line {i}\n").into_bytes())
+            .collect();
+        let file = temp_with(&body);
+        assert_eq!(count_lines(file.path()).expect("count"), 50_000);
+    }
+
+    #[test]
+    fn read_head_lines_is_a_verbatim_prefix() {
+        let file = temp_with(b"a\nb\nc\nd\n");
+        assert_eq!(read_head_lines(file.path(), 2).expect("head"), b"a\nb\n");
+        // Asking for more lines than the file has yields the whole file, not an
+        // error and not padding.
+        assert_eq!(
+            read_head_lines(file.path(), 99).expect("head"),
+            b"a\nb\nc\nd\n"
+        );
+        assert_eq!(read_head_lines(file.path(), 0).expect("head"), b"");
+    }
+
+    #[test]
+    fn read_head_lines_keeps_an_unterminated_last_line() {
+        let file = temp_with(b"a\nb");
+        assert_eq!(read_head_lines(file.path(), 2).expect("head"), b"a\nb");
+    }
+
+    #[test]
+    fn read_head_lines_matches_the_prefix_of_a_full_read() {
+        let body = b"alpha\nbeta\r\ngamma\n\ndelta";
+        let file = temp_with(body);
+        for n in 0..=6 {
+            let head = read_head_lines(file.path(), n).expect("head");
+            let full = read_file_bytes(file.path(), None, None).expect("full");
+            assert!(
+                full.starts_with(&head),
+                "bounded read must be a verbatim prefix at n={n}"
+            );
+        }
+    }
 
     #[test]
     fn normalize_valid_range() -> Result<()> {

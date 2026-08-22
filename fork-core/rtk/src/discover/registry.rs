@@ -571,10 +571,31 @@ pub struct CanonicalAttribution {
 /// `/usr/bin/sudo docker ps` elevates just the same.
 pub fn privilege_prefix(cmd: &str) -> Option<&'static str> {
     const ELEVATORS: [&str; 3] = ["sudo", "doas", "pkexec"];
-    let trimmed = cmd.trim_start();
-    let word = trimmed.split_whitespace().next()?;
-    let base = word.rsplit('/').next().unwrap_or(word);
-    ELEVATORS.into_iter().find(|elevator| base == *elevator)
+
+    // The elevator is not always the first word: `ENV_PREFIX` treats
+    // `sudo`, `env` and `VAR=value` as one interchangeable run, so
+    // `SUDO_ASKPASS=x sudo docker ps` and `env sudo docker ps` arrive with the
+    // elevation buried behind tokens that carry no privilege themselves.
+    // Checking only the head let both through and re-introduced the very
+    // rewrite this guard exists to stop. Skip the run of assignments and `env`
+    // invocations the same way the shell would, and test what actually runs.
+    for word in cmd.split_whitespace() {
+        let base = word.rsplit('/').next().unwrap_or(word);
+        if let Some(elevator) = ELEVATORS.into_iter().find(|elevator| base == *elevator) {
+            return Some(elevator);
+        }
+        let is_assignment = word
+            .split_once('=')
+            .is_some_and(|(name, _)| !name.is_empty() && !name.contains(char::is_whitespace));
+        if is_assignment || base == "env" {
+            continue;
+        }
+        // A real command word that is not an elevator: nothing beyond this point
+        // is a prefix, so stop rather than scanning the arguments. Otherwise
+        // `git commit -m 'run sudo later'` would look privileged.
+        return None;
+    }
+    None
 }
 
 pub fn canonical_attribution(
@@ -5444,6 +5465,35 @@ mod tests {
         assert_eq!(
             rewrite_command_no_prefixes("/usr/bin/sudo docker ps", &[]),
             None
+        );
+    }
+
+    #[test]
+    fn test_sudo_behind_env_assignments_is_still_refused() {
+        // `ENV_PREFIX` swallows `sudo`, `env` and `VAR=value` as one run, so an
+        // elevation that is not the first word used to survive the guard and be
+        // rewritten anyway.
+        for command in [
+            "SUDO_ASKPASS=/bin/true sudo docker ps",
+            "env sudo docker ps",
+            "FOO=1 env sudo docker ps",
+            "env /usr/bin/sudo docker ps",
+        ] {
+            assert_eq!(
+                rewrite_command_no_prefixes(command, &[]),
+                None,
+                "elevation survived the guard in: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_elevator_word_in_arguments_does_not_block_a_rewrite() {
+        // The scan stops at the first real command word, so an elevator name
+        // that appears only as an argument is not treated as a prefix.
+        assert_eq!(
+            rewrite_command_no_prefixes("git commit -m 'run sudo later'", &[]),
+            Some("rtk git commit -m 'run sudo later'".into())
         );
     }
 

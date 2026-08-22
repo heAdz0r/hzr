@@ -153,12 +153,26 @@ pub fn run(
     }
 
     // ── Read file content ───────────────────────────────────
-    let content_bytes = read_source::read_file_bytes(file, from, to)?;
+    // A head bound with no explicit range never needs the tail of the file, so
+    // only the requested lines are read. Everything downstream that reported
+    // "N of M" then has to take M from the streamed count rather than from the
+    // bytes in hand, because the bytes in hand are no longer the whole file.
+    let head_bounded = from.is_none() && to.is_none() && tail_lines.is_none();
+    let content_bytes = match max_lines {
+        Some(max) if head_bounded => read_source::read_head_lines(file, max)?,
+        _ => read_source::read_file_bytes(file, from, to)?,
+    };
+    // The file total is needed to report what a bound omitted. Reading the whole
+    // file again to count its newlines held a second full copy alongside the one
+    // just read — on a large log that is twice the file in memory to produce one
+    // integer. When the bytes in hand already are the whole file the count is
+    // free; otherwise it streams without holding the file.
     let full_line_count = if to.is_some() || max_lines.is_some() || tail_lines.is_some() {
-        std::fs::read(file).ok().map(|full| {
-            full.iter().filter(|byte| **byte == b'\n').count()
-                + usize::from(!full.is_empty() && !full.ends_with(b"\n"))
-        })
+        if from.is_none() && to.is_none() && !(max_lines.is_some() && head_bounded) {
+            Some(read_source::count_lines_in(&content_bytes))
+        } else {
+            read_source::count_lines(file).ok()
+        }
     } else {
         None
     };
@@ -286,8 +300,15 @@ pub fn run(
 
     let input_line_count = content.lines().count();
     let range_start = from.unwrap_or(1);
-    let range_end = range_start.saturating_add(input_line_count.saturating_sub(1));
     let file_line_count = full_line_count.unwrap_or(input_line_count);
+    // The recovery range must end at the last line the caller could still ask
+    // for. A head-bounded read stops early, so deriving the end from the bytes
+    // in hand would emit an inverted range like `--from 21 --to 20`.
+    let range_end = if head_bounded && max_lines.is_some() {
+        file_line_count
+    } else {
+        range_start.saturating_add(input_line_count.saturating_sub(1))
+    };
     let (bounded_content, bound_notice) = if let Some(tail) = tail_lines {
         let shown = input_line_count.min(tail);
         let omitted = input_line_count.saturating_sub(shown);
@@ -298,10 +319,19 @@ pub fn run(
                 range_start.saturating_add(omitted).saturating_sub(1)
             )
         });
-        (keep_tail_lines(&content, tail), notice)
+        (
+            std::borrow::Cow::Owned(keep_tail_lines(&content, tail)),
+            notice,
+        )
     } else if let Some(max) = max_lines {
         let shown = input_line_count.min(max);
-        let omitted = input_line_count.saturating_sub(shown);
+        // With a head-bounded read the bytes in hand stop at `shown`, so what
+        // was omitted has to come from the file total rather than from them.
+        let omitted = if head_bounded {
+            file_line_count.saturating_sub(shown)
+        } else {
+            input_line_count.saturating_sub(shown)
+        };
         let notice = (omitted > 0).then(|| {
             format!(
                 "[showing {shown} bounded lines from file of {file_line_count}; {omitted} omitted from requested range; recovery: `hzr rtk -- read {} --from {} --to {range_end} --level none`]",
@@ -309,9 +339,15 @@ pub fn run(
                 range_start.saturating_add(shown)
             )
         });
-        (keep_head_lines(&content, max), notice)
+        (
+            std::borrow::Cow::Owned(keep_head_lines(&content, max)),
+            notice,
+        )
     } else {
-        (content.clone(), None)
+        // Borrow rather than clone: the unbounded path is the default read, and
+        // copying the whole file just to hand it to the filter doubled peak
+        // memory for no gain.
+        (std::borrow::Cow::Borrowed(content.as_str()), None)
     };
 
     let filter = filter::get_filter(level);
@@ -347,11 +383,22 @@ pub fn run(
             raw_start
         };
         (
-            read_render::format_with_line_numbers_from(&bounded_content, raw_start),
-            read_render::format_with_line_numbers_from(&filtered, output_start),
+            std::borrow::Cow::Owned(read_render::format_with_line_numbers_from(
+                &bounded_content,
+                raw_start,
+            )),
+            std::borrow::Cow::Owned(read_render::format_with_line_numbers_from(
+                &filtered,
+                output_start,
+            )),
         )
     } else {
-        (bounded_content.clone(), filtered.clone())
+        // Both sides only feed the never-worse comparison, so neither needs its
+        // own copy of the file on the common path.
+        (
+            std::borrow::Cow::Borrowed(bounded_content.as_ref()),
+            std::borrow::Cow::Borrowed(filtered.as_str()),
+        )
     };
     let shown = crate::guard::never_worse(&raw, &rtk_output).to_string();
     if let Some(key) = cache_key.as_deref() {

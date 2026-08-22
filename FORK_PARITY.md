@@ -1,7 +1,7 @@
-# HZR 0.5.0 — fork-core parity ledger
+# HZR 0.5.1 — fork-core parity ledger
 
-**Audit date:** 2026-08-22
-**Status:** HZR 0.5.0 upstream-sync fidelity delta; full deterministic gate green
+**Audit date:** 2026-08-23
+**Status:** HZR 0.5.1 audit delta on the 0.5.0 upstream sync; full deterministic gate green
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -37,11 +37,37 @@ Snapshot v2 includes ordered path, entry type, Git-portable mode, size and conte
 
 Baseline identity immutable. `fork-core/rtk` after `v0.1.0` develops directly into HZR: each delta is required to preserve the inherited capability surface, update the current-engine identity/parity and go through a full regression suite. The old `/Users/andrew/Programming/rtk` is not changed.
 
-The 0.5.0 gate verified current engine manifest
-`aa7da8fb5b31d1c064a98caef64fdba74624dc3587728eaeb5fe3a763487c73e`, 1,925 passed tests,
+The 0.5.1 gate verified current engine manifest
+`be0459b8d4dde1a76dcfe836afd77fe0432cf5cb22e83845c522c4568f6a3f53`, 1,940 passed tests,
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
-inherited Clippy ratchet. The ratchet count is unchanged from 0.4.6; its recorded hash moved
-because the sync edited many of the same files and the ratchet pins each warning's source line.
+inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
+
+### 0.5.1 audit delta
+
+A post-release audit of 0.5.0 for correctness, races and efficiency headroom found two defects
+in 0.5.0's own new code and one long-standing cost in the most-used route.
+
+The privilege guard only inspected the head of the command, but `ENV_PREFIX` folds `sudo`, `env`
+and `VAR=value` into one interchangeable run — so `SUDO_ASKPASS=… sudo docker ps` and
+`env sudo docker ps` arrived with the elevation already stripped into the prefix and were
+rewritten, re-creating the root-owned-state problem 0.5.0 closed. The guard now skips the
+assignment/`env` run the way the shell would and stops at the first real command word. The
+`playwright` reporter stripper also removed `-r` and its value, which is not a playwright
+reporter alias.
+
+`hzr read <file> --max-lines N` loaded the whole file to keep N lines and read it a second time
+to count newlines for the bound notice. The read now stops at the bound, the file total streams
+through a fixed buffer, and the filter path borrows rather than cloning. Output is byte-identical;
+peak memory for a bounded read of a 20 MB log falls from 51.7 MB to 10.5 MB and no longer scales
+with file size, and a filtered whole-file read falls from 199 MB to 137 MB. `jsonpack` column
+collection went from quadratic to one indexed pass.
+
+Verified in the same audit and recorded so it need not be re-derived: the ledger writer is a
+single-threaded actor over a bounded channel with one connection; SQLite is WAL with a busy
+timeout on every path, the shorter timeout on read-only dashboard queries being deliberate;
+`Cancellation` registers its `Notify` future before checking the flag, closing the lost-wakeup
+race; the exec capture path is bounded with overflow to disk and a `truncated` flag; and
+`ensure_watcher` serializes per worktree under the lifecycle read guard.
 
 ### 0.5.0 upstream-sync delta
 
@@ -107,7 +133,7 @@ failure-first filtering cannot change a failing verification command into succes
 |---|---|
 | ✅ |Implemented and locally tested in the specified area|
 | 🟡 |There is a working path, but an honestly described border remains|
-| ⚪ |Not knowingly included in 0.5.0; exact compatibility path is not affected|
+| ⚪ |Not knowingly included in 0.5.1; exact compatibility path is not affected|
 
 ## Capability and routing matrix
 
@@ -202,13 +228,13 @@ An external grepai process that does not respect HZR `hzr-owner.lock` cannot be 
 
 ## Caveman boundary
 
-Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.5.0 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
+Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.5.1 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
 
 Response density is set before generation by a short cache-stable contract. HZR Codec remains a separate explicit protected transform for CLI/API. Text quality is protected by instructions, native layer guards and raw exact tools; this is not a formal semantic equivalence proof.
 
 ## Release gates
 
-### Functional 0.5.0 gates
+### Functional 0.5.1 gates
 
 - [x] Exact dirty fork snapshot v2 imported and verified.
 - [x] Exact fork builds and its synthetic-Git suite passes.

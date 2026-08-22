@@ -26,6 +26,8 @@
 //! project (Apache-2.0); every lossy path it carries — retrieval pointers, row
 //! dropping under budget, stringified-JSON rewriting — is deliberately absent.
 
+use std::collections::HashMap;
+
 use serde_json::{Map, Value};
 
 /// Widening the flatten pass is quadratic in column count, so a pathological
@@ -126,7 +128,7 @@ fn pack_top_level_array(rows: &[Value]) -> Option<String> {
     Some(out)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ColumnKind {
     Int,
     Float,
@@ -190,30 +192,39 @@ struct Column {
     path: Vec<String>,
     kind: ColumnKind,
     nullable: bool,
+    /// Rows that carried this key. Fewer than the row count means the key is
+    /// absent somewhere, which is what makes the column nullable.
+    present_rows: usize,
 }
 
 /// Build the column set, flattening uniform nested objects into dotted paths.
+///
+/// One pass over the rows, with a name→index map rather than a linear scan per
+/// leaf: a `gh api` page is easily hundreds of rows wide by tens of columns, and
+/// scanning the column vector for every leaf of every row made this quadratic in
+/// the payload. Nullability is decided in the same pass by counting the rows
+/// that set each column, instead of a second pass that re-walked every path.
 fn collect_columns(objects: &[&Map<String, Value>]) -> Option<Vec<Column>> {
     let mut columns: Vec<Column> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut prefix: Vec<&str> = Vec::new();
     for object in objects {
-        collect_from(object, &mut Vec::new(), &mut columns)?;
+        collect_from(object, &mut prefix, &mut columns, &mut index)?;
+        debug_assert!(prefix.is_empty(), "prefix must unwind to empty per row");
     }
-    // A key absent from some rows is nullable; so is an explicit JSON null.
+    // A key absent from some row is nullable, and so is an explicit JSON null
+    // (recorded during the walk).
     for column in &mut columns {
-        if objects
-            .iter()
-            .any(|object| lookup(object, &column.path).is_none())
-        {
-            column.nullable = true;
-        }
+        column.nullable |= column.present_rows < objects.len();
     }
     Some(columns)
 }
 
-fn collect_from(
-    object: &Map<String, Value>,
-    prefix: &mut Vec<String>,
+fn collect_from<'a>(
+    object: &'a Map<String, Value>,
+    prefix: &mut Vec<&'a str>,
     columns: &mut Vec<Column>,
+    index: &mut HashMap<String, usize>,
 ) -> Option<()> {
     for (key, value) in object {
         // A key carrying the separator or the marker prefix would make the
@@ -221,29 +232,37 @@ fn collect_from(
         if key.contains('.') || key.contains(',') || key.starts_with('_') {
             return None;
         }
-        prefix.push(key.clone());
+        prefix.push(key.as_str());
         match value {
             Value::Object(inner) if !inner.is_empty() => {
-                collect_from(inner, prefix, columns)?;
+                collect_from(inner, prefix, columns, index)?;
             }
             _ => {
                 let name = prefix.join(".");
                 let kind = ColumnKind::of(value);
-                let nullable = value.is_null();
-                match columns.iter_mut().find(|column| column.name == name) {
-                    Some(existing) => {
-                        existing.kind = existing.kind.clone().merge(kind);
-                        existing.nullable |= nullable;
+                match index.get(&name) {
+                    Some(&position) => {
+                        let existing = &mut columns[position];
+                        existing.kind = existing.kind.merge(kind);
+                        existing.nullable |= value.is_null();
+                        existing.present_rows += 1;
                     }
-                    None => columns.push(Column {
-                        name,
-                        path: prefix.clone(),
-                        kind,
-                        nullable,
-                    }),
-                }
-                if columns.len() > MAX_COLUMNS {
-                    return None;
+                    None => {
+                        index.insert(name.clone(), columns.len());
+                        columns.push(Column {
+                            name,
+                            path: prefix
+                                .iter()
+                                .map(|segment| (*segment).to_string())
+                                .collect(),
+                            kind,
+                            nullable: value.is_null(),
+                            present_rows: 1,
+                        });
+                        if columns.len() > MAX_COLUMNS {
+                            return None;
+                        }
+                    }
                 }
             }
         }
@@ -335,6 +354,9 @@ fn unpack_table(rest: &str) -> Result<Value, String> {
             path: name.split('.').map(str::to_string).collect(),
             kind,
             nullable,
+            // Decoding reads the declaration; the count only matters while
+            // building one from rows.
+            present_rows: 0,
         });
     }
 
@@ -724,6 +746,45 @@ mod tests {
                 serde_json::from_str::<Value>(input).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn wide_and_tall_payloads_stay_linear_and_lossless() {
+        // 400 columns x 300 rows. Under the previous linear column scan this
+        // was ~36M string comparisons per pack; the name index makes it one
+        // hash lookup per leaf. The assertion here is correctness — the cost is
+        // what makes the test finish.
+        let mut rows = Vec::with_capacity(300);
+        for row in 0..300 {
+            let mut object = Map::new();
+            for column in 0..400 {
+                object.insert(format!("c{column}"), Value::from(row * 400 + column));
+            }
+            rows.push(Value::Object(object));
+        }
+        let input = Value::Array(rows).to_string();
+        let packed = pack(&input).expect("a wide, tall table packs");
+        assert_eq!(
+            unpack(&packed).expect("round-trips"),
+            serde_json::from_str::<Value>(&input).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_key_absent_from_a_later_row_is_still_nullable() {
+        // Nullability used to come from a second pass over every path; it is now
+        // decided from a per-column presence count in the same walk, so a key
+        // that disappears only in the last row must still mark the column.
+        let input = r#"[{"a":1,"b":2},{"a":3,"b":4},{"a":5}]"#;
+        let packed = pack(input).expect("packs");
+        assert!(
+            packed.contains("b:int?"),
+            "column b must be marked nullable: {packed}"
+        );
+        assert_eq!(
+            unpack(&packed).unwrap(),
+            serde_json::from_str::<Value>(input).unwrap()
+        );
     }
 
     #[test]
