@@ -206,9 +206,16 @@ struct CapabilityBatchResponse {
     supported: Vec<bool>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// One rewrite decision together with the payload-free attribution that explains it.
+///
+/// The attribution travels with the decision because the process that records the operation is
+/// not the process that classified it: the daemon knows the evasion class, the host runs the
+/// approved command, and the engine writes the ledger row. Returning the decision alone left the
+/// recorded row unattributed, so per-session avoidable figures could never move.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RtkRewriteOutcome {
     pub decision: RewriteDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evasion: Option<EvasionAttribution>,
 }
 

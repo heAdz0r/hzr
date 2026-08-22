@@ -11,7 +11,7 @@ import {
 import { Type } from "@sinclair/typebox";
 
 const EXPECTED_VERSION = "0.65.2";
-const EXPECTED_HZR_VERSION = "0.4.5";
+const EXPECTED_HZR_VERSION = "0.4.6";
 const EXPECTED_PROTOCOL_VERSION = 1;
 const CUSTOM_TOOL_NAMES = [
   "hzr_context",

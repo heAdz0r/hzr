@@ -4,23 +4,33 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-08-21
+
 ### Fixed
 
-- Hook-approved commands now carry `HZR_SESSION_ID` into the process that records them. The hook
-  receives the session on stdin, but the engine it approves runs as a fresh process that could
-  only learn the session from its environment, so executed operations landed with a null session
-  while policy events carried one. That asymmetry is why a Stop scorecard could report
-  corrections and a top evasion class while its per-session operation count stayed empty.
-
-### Known gap
-
-- The per-session shadow budget still reports `avoidable=0`. Session attribution is now correct,
-  but the `avoidable` column is written from `HZR_INTERNAL_EVASION_JSON`, which the hook exports
-  only on the T4 fidelity path; an ordinary approved command reaches the engine without it. The
-  daemon computes the attribution and returns a bare `RewriteDecision`, so the hook cannot
-  forward what it never receives. Closing this means either extending `/v1/exec/rewrite` to
-  return the attribution, or classifying at record time inside the engine — an engine change that
-  carries parity documentation and the full fork regression gate.
+- HZR no longer prompts for commands the host has already authorized. It derives its own verdict
+  from the settings file, so an operator running Claude Code in `bypassPermissions` with no
+  `permissions` block was asked to approve every rewritten command — a prompt answering a
+  question they had already answered. The hook now reads the reported permission mode; an
+  explicit `deny` rule still stands, and every decision is still recorded.
+- Environment carried to the recording process is now exported rather than assigned. The managed
+  command is a script whose first line is already a run of assignments, so a bare `VAR=value`
+  prefix became one more assignment in that run and never crossed the process boundary — the
+  script's own `export` statement lists only the RTK variables.
+- Per-session evasion accounting reported zero however much a session actually bypassed. Two
+  independent breaks produced one symptom, and both are closed here.
+  - Hook-approved commands now carry `HZR_SESSION_ID` into the process that records them. The
+    hook receives the session on stdin, but the engine it approves runs as a fresh process that
+    could only learn the session from its environment, so executed operations landed with a null
+    session while policy events carried one.
+  - `/v1/exec/rewrite` now returns the classification alongside the decision, and the hook
+    forwards it as `HZR_INTERNAL_EVASION_JSON` for every approved command rather than only on the
+    fidelity path. The daemon knew the evasion class, the host ran the command and the engine
+    wrote the row, so the `avoidable` column was never set for ordinary traffic.
+- Attribution failures no longer change a decision. For a fidelity request the attribution stays
+  a precondition and a failure remains an Ask; for every other command it is accounting, and
+  accounting must not turn a working command into a prompt. The agent-facing source and reason of
+  an approved decision now survive attribution instead of being replaced by the fidelity wording.
 
 ## [0.4.5] - 2026-08-21
 

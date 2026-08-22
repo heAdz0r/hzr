@@ -378,10 +378,10 @@ mod tests {
 
     fn report(engines: Vec<EngineCheck>) -> BuildReport {
         BuildReport {
-            version: "0.4.5".to_owned(),
+            version: "0.4.6".to_owned(),
             platform: "darwin-arm64".to_owned(),
             bundle: "/tmp/dist".into(),
-            version_root: "/tmp/versions/v0.4.5-darwin-arm64".into(),
+            version_root: "/tmp/versions/v0.4.6-darwin-arm64".into(),
             current: "/tmp/current".into(),
             previous_target: None,
             switched: true,
@@ -447,7 +447,7 @@ mod tests {
         let started = Instant::now();
         let error = wait_for_daemon_version_with_timeout(
             &binary,
-            "0.4.5",
+            "0.4.6",
             std::time::Duration::from_millis(150),
         )
         .expect_err("hung status must time out");

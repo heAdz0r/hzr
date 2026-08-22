@@ -187,12 +187,14 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         None
     };
     let daemon_recorded_policy = managed.is_some();
+    let mut managed_evasion = None;
     let decision = match managed {
-        Some(decision) => {
+        Some(outcome) => {
             // The daemon answered, so any earlier gap is now behind us: close it instead of
             // leaving `hzr stats` pinned to INCOMPLETE for the rest of the installation.
             let _ = clear_reconciled_rewrites(config);
-            decision
+            managed_evasion = outcome.evasion;
+            outcome.decision
         }
         None => {
             let _ = record_degraded_rewrite(config);
@@ -200,7 +202,11 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         }
     };
     let decision = steer_to_first_class(raw, decision);
-    let decision = attach_hook_evasion(raw, decision, fidelity_evasion.as_ref());
+    // Fidelity attribution is authoritative when present; otherwise the daemon's classification
+    // of this exact command is what the recording process needs.
+    let evasion = fidelity_evasion.or(managed_evasion);
+    let decision = honor_host_permission_mode(input, decision);
+    let decision = attach_hook_evasion(raw, decision, evasion.as_ref());
     let decision = attach_policy_feedback(config, input, decision);
     let decision = attach_session_attribution(input, decision);
     if !daemon_recorded_policy {
@@ -292,6 +298,12 @@ fn hook_fidelity_preflight(
     }
 }
 
+/// Carry the classification into the process that will record the command.
+///
+/// Two different guarantees share this path. For a fidelity request the attribution is a
+/// precondition: an unattributed T4 execution must not happen silently, so a failure becomes an
+/// Ask. For every other command the attribution is accounting, and accounting must never turn a
+/// working command into a prompt — a failure there leaves the decision exactly as it was.
 fn attach_hook_evasion(
     raw: &str,
     decision: RewriteDecision,
@@ -300,43 +312,82 @@ fn attach_hook_evasion(
     let Some(evasion) = evasion else {
         return decision;
     };
+    let strict = evasion.hatch_marker;
     let Ok(encoded) = serde_json::to_string(evasion) else {
-        return RewriteDecision::Ask {
-            proposed: Some(CanonicalCommand::shell(raw)),
-            reason: "T4 fidelity attribution could not be serialized".into(),
-        };
-    };
-    let command = match &decision {
-        RewriteDecision::AllowRaw { .. } => raw.to_owned(),
-        RewriteDecision::AllowRewrite { command, .. } => match render_command(command) {
-            Ok(command) => command,
-            Err(_) => {
-                return RewriteDecision::Ask {
-                    proposed: Some(CanonicalCommand::shell(raw)),
-                    reason: "T4 fidelity execution could not preserve the approved command".into(),
-                };
+        return if strict {
+            RewriteDecision::Ask {
+                proposed: Some(CanonicalCommand::shell(raw)),
+                reason: "T4 fidelity attribution could not be serialized".into(),
             }
-        },
-        RewriteDecision::Ask { .. } | RewriteDecision::Deny { .. } => return decision,
-    };
-    let Some(command) = attributed_hook_command(&encoded, &command) else {
-        return RewriteDecision::Ask {
-            proposed: Some(CanonicalCommand::shell(raw)),
-            reason: "T4 fidelity execution needs explicit approval on this host".into(),
+        } else {
+            decision
         };
     };
-    RewriteDecision::AllowRewrite {
-        command: CanonicalCommand::shell(command),
-        source: RewriteSource::HzrPolicy,
-        reason: "T4 fidelity execution carries closed typed attribution".into(),
+    match decision {
+        RewriteDecision::AllowRaw { .. } if strict => {
+            match attributed_hook_command(&encoded, raw) {
+                Some(command) => RewriteDecision::AllowRewrite {
+                    command: CanonicalCommand::shell(command),
+                    source: RewriteSource::HzrPolicy,
+                    reason: "T4 fidelity execution carries closed typed attribution".into(),
+                },
+                None => RewriteDecision::Ask {
+                    proposed: Some(CanonicalCommand::shell(raw)),
+                    reason: "T4 fidelity execution needs explicit approval on this host".into(),
+                },
+            }
+        }
+        RewriteDecision::AllowRewrite {
+            command,
+            source,
+            reason,
+        } => {
+            let unchanged = |command, source, reason| RewriteDecision::AllowRewrite {
+                command,
+                source,
+                reason,
+            };
+            let refuse = || RewriteDecision::Ask {
+                proposed: Some(CanonicalCommand::shell(raw)),
+                reason: "T4 fidelity execution could not preserve the approved command".into(),
+            };
+            let Ok(rendered) = render_command(&command) else {
+                return if strict {
+                    refuse()
+                } else {
+                    unchanged(command, source, reason)
+                };
+            };
+            match attributed_hook_command(&encoded, &rendered) {
+                // The source and reason stay the agent-facing ones the decision already carried;
+                // only the environment the command runs in changes.
+                Some(attributed) => unchanged(CanonicalCommand::shell(attributed), source, reason),
+                None if strict => refuse(),
+                None => unchanged(command, source, reason),
+            }
+        }
+        other => other,
     }
+}
+
+/// Prefix a managed command with an exported variable.
+///
+/// A bare `VAR=value <command>` prefix only works when a command follows on the same line. The
+/// managed command is a script whose first line is already a run of assignments, so a bare
+/// prefix became one more assignment in that run and never reached the engine process — the
+/// script's own `export` statement lists only the RTK variables. Exporting explicitly is what
+/// actually crosses the process boundary.
+#[cfg(unix)]
+fn exported_hook_command(variable: &str, value: &str, command: &str) -> String {
+    format!("export {variable}={};\n{command}", shell_quote(value))
 }
 
 #[cfg(unix)]
 fn attributed_hook_command(encoded: &str, command: &str) -> Option<String> {
-    Some(format!(
-        "HZR_INTERNAL_EVASION_JSON={} {command}",
-        shell_quote(encoded)
+    Some(exported_hook_command(
+        "HZR_INTERNAL_EVASION_JSON",
+        encoded,
+        command,
     ))
 }
 
@@ -386,9 +437,10 @@ fn attach_session_attribution(input: &Value, decision: RewriteDecision) -> Rewri
         };
     }
     RewriteDecision::AllowRewrite {
-        command: CanonicalCommand::shell(format!(
-            "HZR_SESSION_ID={} {rendered}",
-            shell_quote(session)
+        command: CanonicalCommand::shell(exported_hook_command(
+            "HZR_SESSION_ID",
+            session,
+            &rendered,
         )),
         source,
         reason,
@@ -626,6 +678,45 @@ fn steer_to_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision
         return decision;
     };
     hzr_policy_rewrite(replacement)
+}
+
+/// Whether the host has already decided that commands run without prompting.
+///
+/// Claude Code reports its permission mode on every hook call. `bypassPermissions` is an explicit
+/// operator decision to stop being asked.
+fn host_grants_execution(input: &Value) -> bool {
+    ["permission_mode", "permissionMode"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("bypassPermissions"))
+}
+
+/// Do not re-litigate a permission the operator has already granted.
+///
+/// HZR derives its own verdict from the settings file, which is how a host running in
+/// `bypassPermissions` still saw prompts: the hook synthesized an Ask the operator had already
+/// answered. Routing and accounting are HZR's job; deciding whether a command may run is not.
+/// A Deny still stands — that is an explicit rule, not an absent one — and the decision is still
+/// recorded, so the ledger and the scorecard lose nothing.
+fn honor_host_permission_mode(input: &Value, decision: RewriteDecision) -> RewriteDecision {
+    if !host_grants_execution(input) {
+        return decision;
+    }
+    let RewriteDecision::Ask { proposed, reason } = decision else {
+        return decision;
+    };
+    match proposed {
+        Some(command) => RewriteDecision::AllowRewrite {
+            command,
+            source: RewriteSource::HzrPolicy,
+            reason: format!(
+                "{reason}; host permission mode grants execution, so HZR recorded it instead of prompting"
+            ),
+        },
+        None => RewriteDecision::allow_raw(
+            "host permission mode grants execution; HZR recorded the bypass instead of prompting",
+        ),
+    }
 }
 
 fn hzr_policy_rewrite(replacement: hzr_core::RawReplacement) -> RewriteDecision {
@@ -1248,10 +1339,10 @@ mod tests {
     use super::{
         HookFidelityPreflight, agent_attribution, agent_identity, attach_policy_feedback,
         attach_session_attribution, clear_reconciled_rewrites, context_brief,
-        degraded_rewrite_coverage, fallback_decision, hook_fidelity_preflight,
-        native_observation_policy, native_replacement, observe_input, read_session,
-        record_degraded_rewrite_at, record_local_policy_decision, record_native_correction,
-        render_command, steer_to_first_class,
+        degraded_rewrite_coverage, fallback_decision, honor_host_permission_mode,
+        hook_fidelity_preflight, native_observation_policy, native_replacement, observe_input,
+        read_session, record_degraded_rewrite_at, record_local_policy_decision,
+        record_native_correction, render_command, steer_to_first_class,
     };
 
     #[test]
@@ -1654,6 +1745,60 @@ mod tests {
     /// every scorecard reported `tokens=0/250000` regardless of what the session did — a shadow
     /// window that can never calibrate the threshold it exists to calibrate. Both halves now
     /// come from the ledger, so an executed avoidable bypass has to move them.
+    /// A host that already grants execution must not be prompted by HZR.
+    ///
+    /// HZR derives its verdict from the settings file, so an operator running in
+    /// `bypassPermissions` with no `permissions` block still got an Ask on every rewritten
+    /// command — a prompt answering a question they had already answered. Deny is different: it
+    /// is an explicit rule and survives.
+    #[test]
+    fn acceptance_gate_bypass_permissions_is_not_re_litigated() {
+        let bypass = serde_json::json!({"permission_mode": "bypassPermissions"});
+        let default = serde_json::json!({"permission_mode": "default"});
+
+        let proposed = honor_host_permission_mode(
+            &bypass,
+            RewriteDecision::Ask {
+                proposed: Some(CanonicalCommand::shell("rtk ps aux")),
+                reason: "fork-core permission policy requires approval".into(),
+            },
+        );
+        assert!(
+            matches!(&proposed, RewriteDecision::AllowRewrite { command, .. }
+                if render_command(command).ok().as_deref() == Some("rtk ps aux")),
+            "an approved host must run the managed form"
+        );
+
+        let unproposed = honor_host_permission_mode(
+            &bypass,
+            RewriteDecision::Ask {
+                proposed: None,
+                reason: "opaque wrapper".into(),
+            },
+        );
+        assert!(matches!(unproposed, RewriteDecision::AllowRaw { .. }));
+
+        let denied = honor_host_permission_mode(
+            &bypass,
+            RewriteDecision::Deny {
+                reason: "explicit deny rule".into(),
+            },
+        );
+        assert!(
+            matches!(denied, RewriteDecision::Deny { .. }),
+            "an explicit deny is a rule, not an absent one"
+        );
+
+        let untouched = honor_host_permission_mode(
+            &default,
+            RewriteDecision::Ask {
+                proposed: None,
+                reason: "opaque wrapper".into(),
+            },
+        );
+        assert!(matches!(untouched, RewriteDecision::Ask { .. }));
+    }
+
     /// The executed command must carry the session that will be charged for it.
     ///
     /// Policy events are recorded by the hook, which knows the session; operations are recorded
@@ -1683,7 +1828,7 @@ mod tests {
         ))
         .expect("approval must stay an approval");
         assert!(
-            attributed.starts_with("HZR_SESSION_ID='private-session' "),
+            attributed.starts_with("export HZR_SESSION_ID='private-session';\n"),
             "unattributed command: {attributed}"
         );
         assert!(attributed.ends_with("rtk proxy /bin/sh -c 'cat a | tail -5'"));

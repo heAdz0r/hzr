@@ -1620,7 +1620,7 @@ pub async fn operation(
 pub async fn exec_rewrite(
     State(state): State<AppState>,
     Json(request): Json<ExecApiRequest>,
-) -> Result<Json<RewriteDecision>, ApiError> {
+) -> Result<Json<RtkRewriteOutcome>, ApiError> {
     if request.command.trim().is_empty() {
         return Err(ApiError::bad_request("command must not be empty"));
     }
@@ -1644,7 +1644,12 @@ pub async fn exec_rewrite(
     }
     let decision = enforce_first_class(&request.command, outcome.decision);
     record_exec_policy_event(&state, &request, &cwd, outcome.evasion.as_ref(), &decision).await?;
-    Ok(Json(decision))
+    // The attribution travels with the decision: the hook forwards it to the process that will
+    // execute and record the command, which has no other way to learn how it was classified.
+    Ok(Json(RtkRewriteOutcome {
+        decision,
+        evasion: outcome.evasion,
+    }))
 }
 
 async fn daemon_fidelity_preflight(

@@ -1,7 +1,7 @@
-# HZR 0.4.5 — fork-core parity ledger
+# HZR 0.4.6 — fork-core parity ledger
 
 **Audit date:** 2026-08-21
-**Status:** HZR 0.4.5 intent-aware anti-evasion and compact-route delta; full deterministic gate green
+**Status:** HZR 0.4.6 intent-aware anti-evasion and compact-route delta; full deterministic gate green
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -37,7 +37,7 @@ Snapshot v2 includes ordered path, entry type, Git-portable mode, size and conte
 
 Baseline identity immutable. `fork-core/rtk` after `v0.1.0` develops directly into HZR: each delta is required to preserve the inherited capability surface, update the current-engine identity/parity and go through a full regression suite. The old `/Users/andrew/Programming/rtk` is not changed.
 
-The 0.4.5 gate verified current engine manifest
+The 0.4.6 gate verified current engine manifest
 `f7a74cec9df190541f4dfb95c0cc1c6085c0ea008a6b60f1c7e3629fb24d6047`, 1,874 passed tests,
 one intentionally ignored test, a 526-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet.
@@ -62,7 +62,7 @@ stage use closed fields; query text, paths and contents are omitted. Fork-core r
 `final_delivery`. The legacy nested Claude routing block was removed because it could override the
 current managed HZR contract; this changes instruction precedence without reducing the fork CLI.
 
-HZR 0.4.5 adds one canonical typed rewrite plan over the fork lexer and registry. It recognizes
+HZR 0.4.6 adds one canonical typed rewrite plan over the fork lexer and registry. It recognizes
 shell/env/utility prefixes, quoted ranges and bounded pipelines, and returns a closed decision plus
 payload-free E1–E10 attribution. Operational replacement text remains ephemeral and is never used
 as ledger metadata. The 85-case fixture includes ambiguous, native and no-equivalent cases so normalization
@@ -78,7 +78,7 @@ failure-first filtering cannot change a failing verification command into succes
 |---|---|
 | ✅ |Implemented and locally tested in the specified area|
 | 🟡 |There is a working path, but an honestly described border remains|
-| ⚪ |Not knowingly included in 0.4.5; exact compatibility path is not affected|
+| ⚪ |Not knowingly included in 0.4.6; exact compatibility path is not affected|
 
 ## Capability and routing matrix
 
@@ -173,13 +173,13 @@ An external grepai process that does not respect HZR `hzr-owner.lock` cannot be 
 
 ## Caveman boundary
 
-Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.4.5 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
+Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.4.6 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
 
 Response density is set before generation by a short cache-stable contract. HZR Codec remains a separate explicit protected transform for CLI/API. Text quality is protected by instructions, native layer guards and raw exact tools; this is not a formal semantic equivalence proof.
 
 ## Release gates
 
-### Functional 0.4.5 gates
+### Functional 0.4.6 gates
 
 - [x] Exact dirty fork snapshot v2 imported and verified.
 - [x] Exact fork builds and its synthetic-Git suite passes.

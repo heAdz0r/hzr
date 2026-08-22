@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use hzr_codec::Transform;
 use hzr_core::{Config, EngineManifest};
-use hzr_exec::{ExecutionOutcome, RewriteDecision};
+use hzr_exec::{ExecutionOutcome, RtkRewriteOutcome};
 use hzr_memory::{MemoryRecord, MemoryTransport};
 use hzr_protocol::{
     CodecApiRequest, ContextPlanApiRequest, ContextPlanApiResponse, ErrorResponse, ExecApiRequest,
@@ -118,7 +118,7 @@ impl DaemonClient {
     pub async fn exec_rewrite(
         &self,
         request: &ExecApiRequest,
-    ) -> Result<RewriteDecision, ClientError> {
+    ) -> Result<RtkRewriteOutcome, ClientError> {
         self.post("/v1/exec/rewrite", request).await
     }
 
@@ -348,7 +348,7 @@ mod tests {
             let rendered = String::from_utf8_lossy(&request[..read]).to_ascii_lowercase();
             assert!(rendered.contains("get /v1/health http/1.1"));
             assert!(rendered.contains(&expected_auth));
-            let body = br#"{"protocol_version":1,"hzr_version":"0.4.5","state":"ready","workspace_root":null,"engines":[],"capabilities":[]}"#;
+            let body = br#"{"protocol_version":1,"hzr_version":"0.4.6","state":"ready","workspace_root":null,"engines":[],"capabilities":[]}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                 body.len()
@@ -372,7 +372,7 @@ mod tests {
             .expect("typed health response");
         server.await.expect("test server completion");
 
-        assert_eq!(health.hzr_version, "0.4.5");
+        assert_eq!(health.hzr_version, "0.4.6");
         assert_eq!(health.protocol_version, 1);
     }
 }
