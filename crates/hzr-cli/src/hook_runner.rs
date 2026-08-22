@@ -202,6 +202,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     let decision = steer_to_first_class(raw, decision);
     let decision = attach_hook_evasion(raw, decision, fidelity_evasion.as_ref());
     let decision = attach_policy_feedback(config, input, decision);
+    let decision = attach_session_attribution(input, decision);
     if !daemon_recorded_policy {
         let _ = record_local_policy_decision(config, input, &decision, None);
     }
@@ -342,6 +343,61 @@ fn attributed_hook_command(encoded: &str, command: &str) -> Option<String> {
 #[cfg(windows)]
 fn attributed_hook_command(_encoded: &str, _command: &str) -> Option<String> {
     None
+}
+
+/// Carry the session into the process that will record the operation.
+///
+/// The hook receives the session on stdin, but the command it approves runs in a fresh engine
+/// process that can only learn the session from its environment. Without this the executed rows
+/// land with a null session, so per-session avoidable operations and tokens read zero however
+/// much bypass a session actually performed — the policy events carry the session and the
+/// operations do not, which is why a scorecard could show corrections while its budget stayed
+/// empty. The engine already reads `HZR_SESSION_ID` and stores only a keyed hash of it.
+#[cfg(unix)]
+fn attach_session_attribution(input: &Value, decision: RewriteDecision) -> RewriteDecision {
+    let Some(session) = input
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|session| !session.is_empty())
+    else {
+        return decision;
+    };
+    let RewriteDecision::AllowRewrite {
+        command,
+        source,
+        reason,
+    } = decision
+    else {
+        return decision;
+    };
+    let Ok(rendered) = render_command(&command) else {
+        return RewriteDecision::AllowRewrite {
+            command,
+            source,
+            reason,
+        };
+    };
+    if rendered.contains("HZR_SESSION_ID=") {
+        return RewriteDecision::AllowRewrite {
+            command,
+            source,
+            reason,
+        };
+    }
+    RewriteDecision::AllowRewrite {
+        command: CanonicalCommand::shell(format!(
+            "HZR_SESSION_ID={} {rendered}",
+            shell_quote(session)
+        )),
+        source,
+        reason,
+    }
+}
+
+#[cfg(windows)]
+fn attach_session_attribution(_input: &Value, decision: RewriteDecision) -> RewriteDecision {
+    decision
 }
 
 fn native_pre_tool(config: &Config, input: &Value, mode: NativeToolMode) -> Result<()> {
@@ -1191,10 +1247,11 @@ mod tests {
     };
     use super::{
         HookFidelityPreflight, agent_attribution, agent_identity, attach_policy_feedback,
-        clear_reconciled_rewrites, context_brief, degraded_rewrite_coverage, fallback_decision,
-        hook_fidelity_preflight, native_observation_policy, native_replacement, observe_input,
-        read_session, record_degraded_rewrite_at, record_local_policy_decision,
-        record_native_correction, steer_to_first_class,
+        attach_session_attribution, clear_reconciled_rewrites, context_brief,
+        degraded_rewrite_coverage, fallback_decision, hook_fidelity_preflight,
+        native_observation_policy, native_replacement, observe_input, read_session,
+        record_degraded_rewrite_at, record_local_policy_decision, record_native_correction,
+        render_command, steer_to_first_class,
     };
 
     #[test]
@@ -1597,6 +1654,57 @@ mod tests {
     /// every scorecard reported `tokens=0/250000` regardless of what the session did — a shadow
     /// window that can never calibrate the threshold it exists to calibrate. Both halves now
     /// come from the ledger, so an executed avoidable bypass has to move them.
+    /// The executed command must carry the session that will be charged for it.
+    ///
+    /// Policy events are recorded by the hook, which knows the session; operations are recorded
+    /// by the engine process the hook approves, which does not. That asymmetry made every
+    /// per-session avoidable figure read zero while the same traffic was plainly visible in the
+    /// aggregate.
+    #[test]
+    fn acceptance_gate_an_approved_command_carries_its_session_to_the_engine() {
+        fn approved(decision: RewriteDecision) -> Option<String> {
+            match decision {
+                RewriteDecision::AllowRewrite { command, .. } => render_command(&command).ok(),
+                _ => None,
+            }
+        }
+        fn rewrite(command: &str) -> RewriteDecision {
+            RewriteDecision::AllowRewrite {
+                command: CanonicalCommand::shell(command),
+                source: RewriteSource::HzrPolicy,
+                reason: "replacement".into(),
+            }
+        }
+
+        let input = serde_json::json!({"session_id": "private-session"});
+        let attributed = approved(attach_session_attribution(
+            &input,
+            rewrite("rtk proxy /bin/sh -c 'cat a | tail -5'"),
+        ))
+        .expect("approval must stay an approval");
+        assert!(
+            attributed.starts_with("HZR_SESSION_ID='private-session' "),
+            "unattributed command: {attributed}"
+        );
+        assert!(attributed.ends_with("rtk proxy /bin/sh -c 'cat a | tail -5'"));
+
+        // A session-less host must not gain an empty attribution.
+        let anonymous = approved(attach_session_attribution(
+            &serde_json::json!({}),
+            rewrite("rtk read README.md"),
+        ))
+        .expect("approval must stay an approval");
+        assert_eq!(anonymous, "rtk read README.md");
+
+        // An already attributed command must not be wrapped twice.
+        let twice = approved(attach_session_attribution(
+            &input,
+            attach_session_attribution(&input, rewrite("rtk read README.md")),
+        ))
+        .expect("approval must stay an approval");
+        assert_eq!(twice.matches("HZR_SESSION_ID=").count(), 1);
+    }
+
     #[test]
     fn acceptance_gate_the_shadow_budget_reflects_recorded_avoidable_bypass() {
         let directory = tempdir().expect("temporary directory");

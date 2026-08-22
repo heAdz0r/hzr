@@ -4,6 +4,24 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Fixed
+
+- Hook-approved commands now carry `HZR_SESSION_ID` into the process that records them. The hook
+  receives the session on stdin, but the engine it approves runs as a fresh process that could
+  only learn the session from its environment, so executed operations landed with a null session
+  while policy events carried one. That asymmetry is why a Stop scorecard could report
+  corrections and a top evasion class while its per-session operation count stayed empty.
+
+### Known gap
+
+- The per-session shadow budget still reports `avoidable=0`. Session attribution is now correct,
+  but the `avoidable` column is written from `HZR_INTERNAL_EVASION_JSON`, which the hook exports
+  only on the T4 fidelity path; an ordinary approved command reaches the engine without it. The
+  daemon computes the attribution and returns a bare `RewriteDecision`, so the hook cannot
+  forward what it never receives. Closing this means either extending `/v1/exec/rewrite` to
+  return the attribution, or classifying at record time inside the engine — an engine change that
+  carries parity documentation and the full fork regression gate.
+
 ## [0.4.5] - 2026-08-21
 
 ### Added
