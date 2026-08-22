@@ -343,16 +343,37 @@ fn require_success(response: &reqwest::Response, label: &str) -> Result<()> {
     }
 }
 
+/// Bundle-relative installer paths to try, from the invoked executable path and
+/// its resolved target.
+fn installer_candidates(executable: &Path, resolved: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::with_capacity(2);
+    for path in [Some(executable), resolved].into_iter().flatten() {
+        if let Some(root) = path.parent().and_then(Path::parent) {
+            let candidate = root.join("share/hzr/install.sh");
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+    }
+    candidates
+}
+
 fn locate_installer() -> Result<PathBuf> {
     let executable = std::env::current_exe().context("failed to locate the current hzr binary")?;
-    let bundle_candidate = executable
-        .parent()
-        .and_then(Path::parent)
-        .map(|root| root.join("share/hzr/install.sh"));
+    // `current_exe()` can return the symlink that was invoked rather than its
+    // target, and `~/.local/bin/hzr` — the symlink the installer puts on PATH —
+    // is exactly that. Deriving the bundle root from it yields
+    // `~/.local/share/hzr/install.sh`, which does not exist, so `hzr update`
+    // failed for every install that did not also happen to have the source tree
+    // at the compiled-in path. Try the resolved location as well.
+    let resolved = executable.canonicalize().ok();
     let source_candidate = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("install.sh");
-    for candidate in bundle_candidate.into_iter().chain([source_candidate]) {
+    let candidates = installer_candidates(&executable, resolved.as_deref())
+        .into_iter()
+        .chain([source_candidate]);
+    for candidate in candidates {
         let Ok(metadata) = fs::symlink_metadata(&candidate) else {
             continue;
         };
@@ -637,11 +658,50 @@ fn classify_cache(cached: &CachedRelease, now: u64, current: ReleaseVersion) -> 
 mod tests {
     use super::{
         AvailableRelease, CacheStatus, CachedRelease, CheckOutcome, check_exit_code, check_json,
-        checksum_for_artifact, classify_cache, classify_check, notice, parse_release_version,
-        select_release, session_start_payload, startup_notice, write_cache,
+        checksum_for_artifact, classify_cache, classify_check, installer_candidates, notice,
+        parse_release_version, select_release, session_start_payload, startup_notice, write_cache,
     };
+    use std::path::{Path, PathBuf};
     use std::process::ExitCode;
     use tempfile::tempdir;
+
+    #[test]
+    fn installer_is_found_through_the_symlink_the_installer_puts_on_path() {
+        // `~/.local/bin/hzr` is a symlink into the versioned bundle, and it is
+        // what goes on PATH. `current_exe()` may hand back that symlink rather
+        // than its target, in which case the bundle root derived from it is
+        // `~/.local/share/hzr`, which holds no installer — `hzr update` then
+        // failed on every install without the source tree at the compiled-in
+        // path. The resolved target must also be offered.
+        let invoked = Path::new("/home/u/.local/bin/hzr");
+        let resolved = Path::new("/home/u/.local/share/hzr/versions/v9.9.9-linux-x64/bin/hzr");
+        let candidates = installer_candidates(invoked, Some(resolved));
+        assert!(
+            candidates.contains(&PathBuf::from(
+                "/home/u/.local/share/hzr/versions/v9.9.9-linux-x64/share/hzr/install.sh"
+            )),
+            "the resolved bundle installer must be a candidate: {candidates:?}"
+        );
+    }
+
+    #[test]
+    fn installer_candidates_do_not_repeat_an_unsymlinked_executable() {
+        let executable = Path::new("/opt/hzr/bin/hzr");
+        let candidates = installer_candidates(executable, Some(executable));
+        assert_eq!(
+            candidates,
+            vec![PathBuf::from("/opt/hzr/share/hzr/install.sh")]
+        );
+    }
+
+    #[test]
+    fn installer_candidates_survive_a_missing_resolution() {
+        let executable = Path::new("/opt/hzr/bin/hzr");
+        assert_eq!(
+            installer_candidates(executable, None),
+            vec![PathBuf::from("/opt/hzr/share/hzr/install.sh")]
+        );
+    }
 
     #[test]
     fn selects_highest_usable_release_including_github_prereleases() {

@@ -4,6 +4,16 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Fixed
+
+- `hzr update` could not find its own installer when invoked through `~/.local/bin/hzr` — the
+  symlink the installer itself puts on PATH. `current_exe()` can return that symlink rather than
+  its target, so the bundle root derived from it was `~/.local/share/hzr`, which holds no
+  installer; the only remaining candidate was the source tree at the compiled-in path, which
+  exists on a build machine and nowhere else. Every install built by CI therefore failed to
+  self-update, with `hzr update` reporting the installer as absent. The resolved target is now
+  tried as well.
+
 ## [0.5.1] - 2026-08-23
 
 Post-release audit of 0.5.0 for correctness, races and efficiency headroom.
