@@ -50,7 +50,8 @@ public_estimate_enabled = true
 harness = "codex"
 provider = "openai"
 model = "gpt-5.6-terra"
-method = "standard_short_context"
+method = "standard_short_context_lte_272k"
+context_window_tokens = 100000
 pricing_basis = "input"
 # pricing_file = "/absolute/path/to/private-pricing.json"
 ```
