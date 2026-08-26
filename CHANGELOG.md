@@ -56,6 +56,35 @@ running the gates, not by lowering them.
   reports it under `fleet_instruction_exemptions` instead of passing it in silence. Only
   instruction-directive rules are waivable; no file on disk can waive an execution route.
 
+### Changed
+
+- **Bundle provenance stops restating digests it can compute.** Thirteen artifacts HZR ships
+  out of its own tree were verified against transcribed SHA-256 constants, so every legitimate
+  edit to a contract, patch or licence broke the release build at the last step with a magic
+  number to hand-copy. The bundle copy is now compared directly against the reviewed
+  repository source, which states the same property — "the bundle carries exactly what was
+  reviewed" — and cannot go stale. Digests stay pinned only where the file comes from outside
+  this repository: the vendored extract-zip snapshot and the grepai and ICM upstream licences,
+  where the pin is the supply-chain control rather than a restated diff.
+- The Caveman bridge manifest restates the product version, and the managed runtime refuses to
+  start when it drifts. A one-second test now asserts it against `Cargo.toml`, instead of the
+  drift surfacing three minutes into a bundle build.
+
+### Added
+
+- **`hzr doctor --reconcile-fleet` repairs the drift doctor reports.** Doctor could name 158
+  stale managed contract blocks but not fix them, so the only remedy was opening 79 workspaces
+  by hand — which is how a fleet drifts in the first place. One command now refreshes every
+  registered workspace that reports a stale block, and `--dry-run` lists the exact files first.
+  It never adopts a workspace that has no managed block, never rewrites a user-authored
+  directive, and names each file where such a directive survives so a refresh cannot read as
+  "this workspace is clean". It also refuses to run from a source checkout: a contract path
+  inside a developer's tree is unreadable from every other project, and writing it across the
+  fleet would replace real drift with worse drift.
+- `hzr init --dry-run --if-needed` is now a legal combination, and the plan carries a top-level
+  `changes_required`. Reconciling a fleet no longer means writing to a repository to discover
+  whether it needed writing.
+
 ### Documentation
 
 - The README carries the control-plane banner again, and its architecture diagram is redrawn

@@ -51,6 +51,8 @@ pub struct DoctorReport {
     pub repair: Option<IndexMigrationOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fidelity_reconcile: Option<hzr_protocol::FidelityReconcileReceipt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fleet_reconcile: Option<FleetReconcileReport>,
 }
 
 pub async fn repair_legacy_index(
@@ -247,6 +249,102 @@ fn workspace_instruction_health_check(
     }
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct FleetContractRewrite {
+    pub path: PathBuf,
+    pub surface: &'static str,
+    pub changed: bool,
+    pub error: Option<String>,
+}
+
+/// What `hzr doctor --reconcile-fleet` did, or would do.
+#[derive(Clone, Debug, Serialize)]
+pub struct FleetReconcileReport {
+    pub dry_run: bool,
+    pub workspaces_scanned: usize,
+    pub rewritten: Vec<FleetContractRewrite>,
+    /// Files whose managed block is stale *and* which also carry a user-authored directive.
+    /// The block is still refreshed; the conflicting line is reported, never rewritten.
+    pub conflicts_left_for_the_owner: Vec<PathBuf>,
+    /// Set when nothing was written because the running binary has no portable contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+}
+
+/// Whether a contract path is one every workspace in the fleet can follow.
+///
+/// `contract_asset_path` resolves relative to the running executable, so a binary started
+/// from a source checkout points at that checkout's `HZR.md`. Writing that path into another
+/// project's instructions hands it a contract it cannot read. Only the bundled
+/// `share/hzr/HZR.md` — the `current` pointer or a versioned release root — is portable.
+fn contract_is_portable(contract: &Path) -> bool {
+    contract.ends_with("share/hzr/HZR.md") && contract.is_file()
+}
+
+/// Refresh the managed contract block in every registered workspace reporting a stale one.
+///
+/// Doctor could name the stale set but not repair it, so the only remedy was visiting each
+/// workspace by hand — which is how a fleet drifts to 158 stale files in the first place.
+/// This walks the same registry the check walks and applies the same instruction install the
+/// workspace's own `hzr init` would. It never touches a workspace that has no managed block:
+/// adopting a new project stays an explicit `hzr init`. User-authored lines outside the block
+/// are never rewritten here either — they remain a reported finding for their owner.
+pub fn reconcile_fleet_contracts(
+    config: &Config,
+    contract: &Path,
+    current_workspace: &Path,
+    dry_run: bool,
+) -> FleetReconcileReport {
+    let snapshot = registered_workspaces(&config.data_dir);
+    let mut report = FleetReconcileReport {
+        dry_run,
+        workspaces_scanned: 0,
+        rewritten: Vec::new(),
+        conflicts_left_for_the_owner: Vec::new(),
+        refused: None,
+    };
+    // Fail closed rather than teach 158 files a path only this machine's checkout has.
+    if !dry_run && !contract_is_portable(contract) {
+        report.refused = Some(format!(
+            "{} is not a bundled contract; run `hzr doctor --reconcile-fleet` from an installed HZR so every workspace is given a contract path it can read",
+            contract.display()
+        ));
+        return report;
+    }
+    for registration in snapshot.registrations {
+        if registration.root == current_workspace || !registration.root.is_dir() {
+            continue;
+        }
+        report.workspaces_scanned = report.workspaces_scanned.saturating_add(1);
+        for (surface, path) in activation::local_instruction_paths(&registration.root) {
+            let Ok(audit) = instructions::audit(surface, &path) else {
+                continue;
+            };
+            if !audit.installed || (audit.current && audit.contract_readable) {
+                continue;
+            }
+            if !audit.conflicting_mandates.is_empty() {
+                report.conflicts_left_for_the_owner.push(path.clone());
+            }
+            match instructions::install(surface, &path, contract, dry_run, true) {
+                Ok(installed) => report.rewritten.push(FleetContractRewrite {
+                    path,
+                    surface: surface.as_str(),
+                    changed: installed.changed,
+                    error: None,
+                }),
+                Err(error) => report.rewritten.push(FleetContractRewrite {
+                    path,
+                    surface: surface.as_str(),
+                    changed: false,
+                    error: Some(format!("{error:#}")),
+                }),
+            }
+        }
+    }
+    report
+}
+
 fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) -> Vec<DoctorCheck> {
     let snapshot = registered_workspaces(&config.data_dir);
     let mut checks = Vec::new();
@@ -344,7 +442,7 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
             "fleet_stale_managed_contracts",
             CheckStatus::Error,
             format!(
-                "{} registered instruction files have a stale/unreadable managed block; examples: {}; reconcile each owning workspace explicitly with `hzr init --if-needed` ({} more not expanded)",
+                "{} registered instruction files have a stale/unreadable managed block; examples: {}; refresh them all with `hzr doctor --reconcile-fleet` (add `--dry-run` to see the exact files first), or reconcile one owning workspace with `hzr init --if-needed` ({} more not expanded)",
                 stale_paths.len(),
                 examples,
                 stale_paths.len().saturating_sub(8)
@@ -893,6 +991,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         checks,
         repair: None,
         fidelity_reconcile: None,
+        fleet_reconcile: None,
     }
 }
 
@@ -1520,12 +1619,12 @@ mod tests {
     use crate::instructions::{self, Surface};
 
     use super::{
-        CheckStatus, attest_active_bundle, bounded, claude_code_mcp_check,
+        CheckStatus, attest_active_bundle, bounded, claude_code_mcp_check, contract_is_portable,
         direct_icm_registration_detail, effective_workspace_mcp_statuses, fidelity_allowance_check,
         fidelity_durability_status_check, fleet_instruction_health_checks, hook_ownership_check,
         index_readiness_check, install_transaction_check, instruction_health_check,
-        integration_layout, repair_legacy_index, workspace_binding_check,
-        workspace_instruction_health_check,
+        integration_layout, reconcile_fleet_contracts, repair_legacy_index,
+        workspace_binding_check, workspace_instruction_health_check,
     };
 
     #[test]
@@ -1863,6 +1962,43 @@ mod tests {
         );
         let check = workspace_binding_check(&statuses, workspace);
         assert_eq!(check.status, CheckStatus::Pass);
+    }
+
+    #[test]
+    fn a_source_tree_contract_is_never_written_across_the_fleet() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Config::default()
+        };
+        let checkout_contract = fixture.path().join("HZR.md");
+        fs::write(&checkout_contract, "contract").expect("contract fixture");
+        assert!(!contract_is_portable(&checkout_contract));
+
+        let report = reconcile_fleet_contracts(
+            &config,
+            &checkout_contract,
+            fixture.path(),
+            /* dry_run */ false,
+        );
+        assert!(
+            report.refused.is_some(),
+            "a checkout-local contract path is unreadable from any other workspace"
+        );
+        assert!(report.rewritten.is_empty());
+
+        // The same request may still be planned: a plan writes nothing.
+        let planned = reconcile_fleet_contracts(&config, &checkout_contract, fixture.path(), true);
+        assert!(planned.refused.is_none());
+    }
+
+    #[test]
+    fn a_bundled_contract_is_portable_across_the_fleet() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let bundled = fixture.path().join("current/share/hzr/HZR.md");
+        fs::create_dir_all(bundled.parent().expect("parent")).expect("bundle layout");
+        fs::write(&bundled, "contract").expect("contract fixture");
+        assert!(contract_is_portable(&bundled));
     }
 
     #[test]

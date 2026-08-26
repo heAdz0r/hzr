@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+HZR_REPOSITORY_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 HZR_BUNDLE_ROOT="${1:-}"
 if [[ -z "${HZR_BUNDLE_ROOT}" || ! -d "${HZR_BUNDLE_ROOT}" ]]; then
   echo "usage: scripts/smoke-bundle.sh /absolute/path/to/hzr-bundle" >&2
@@ -132,36 +133,55 @@ verify_sha256() {
   fi
 }
 
-verify_sha256 \
-  "e000365dc6c835cdeb82ba354f2efac049cf947cc4d853a55af6ecafd259490d" \
-  "${HZR_CAVEMAN_ROOT}/bridge.mjs"
-verify_sha256 \
-  "983b73647c6a2674fb4ad3e702644f37c8eb008bd9cec3af42a4f333bbe2ce5d" \
-  "${HZR_CAVEMAN_ROOT}/agent-capabilities.json"
-verify_sha256 \
-  "34dbaff52ff8e6779b3e55e3bd768c672433142fcffa1debee0b98183decbb52" \
-  "${HZR_CAVEMAN_ROOT}/package.json"
-verify_sha256 \
-  "f4e16e1ac5b2c6560115058379daa5e37a4a49e5a7d238f7a2183f661711d15d" \
-  "${HZR_CAVEMAN_ROOT}/package-lock.json"
-verify_sha256 \
-  "a59d764d9dc37eafb32f11d3dea0262a0711a59dfe469777025d858653954f28" \
-  "${HZR_CAVEMAN_ROOT}/verify-safe-extract.mjs"
+# A file HZR ships out of its own tree needs no transcribed digest. The property worth
+# checking is "the bundle carries exactly the reviewed source", and comparing the two
+# directly states it without a constant that goes stale the moment the file is edited. A
+# transcribed digest for an in-repo file only relocates a code review into a build failure.
+#
+# Keep `verify_sha256` for artifacts that come from outside this repository: there the pin is
+# the only thing standing between an upstream change and a silent bundle change.
+verify_matches_repository() {
+  local HZR_ARTIFACT="$1"
+  local HZR_SOURCE="${HZR_REPOSITORY_ROOT}/$2"
+
+  if [[ ! -f "${HZR_SOURCE}" ]]; then
+    echo "bundle provenance source is missing from the repository: ${HZR_SOURCE}" >&2
+    exit 1
+  fi
+  verify_sha256 "$(shasum -a 256 "${HZR_SOURCE}" | awk '{print $1}')" "${HZR_ARTIFACT}"
+}
+
+verify_matches_repository \
+  "${HZR_CAVEMAN_ROOT}/bridge.mjs" \
+  "integrations/caveman-code/bridge.mjs"
+verify_matches_repository \
+  "${HZR_CAVEMAN_ROOT}/agent-capabilities.json" \
+  "contracts/agent-capabilities.json"
+verify_matches_repository \
+  "${HZR_CAVEMAN_ROOT}/package.json" \
+  "integrations/caveman-code/package.json"
+verify_matches_repository \
+  "${HZR_CAVEMAN_ROOT}/package-lock.json" \
+  "integrations/caveman-code/package-lock.json"
+verify_matches_repository \
+  "${HZR_CAVEMAN_ROOT}/verify-safe-extract.mjs" \
+  "integrations/caveman-code/verify-safe-extract.mjs"
+# Vendored third-party code: the pin is the supply-chain control, not a restated diff.
 verify_sha256 \
   "dc8d9f6d6b26bee37d6e0ccf563789e4325cfffae3f9910feef8333c52968e46" \
   "${HZR_CAVEMAN_ROOT}/vendor/SHA256SUMS"
 verify_sha256 \
   "caa31d7dfbd9292ed71ecf2a4955b7b228c0faadb7e5bdf66e558a28c42d69b0" \
   "${HZR_CAVEMAN_ROOT}/vendor/extract-zip/index.js"
-verify_sha256 \
-  "673e3c1b195fb488f3f670cdcebe21f424ba23794ca4fadcd751143dcab5b08f" \
-  "${HZR_PROVENANCE_ROOT}/engines.lock.toml"
-verify_sha256 \
-  "f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16" \
-  "${HZR_PROVENANCE_ROOT}/fork-core/SNAPSHOT_V2.tsv"
-verify_sha256 \
-  "072a62adc754b728ec99a507d2c1a223d83077d067a9249a26d357eec890b4cc" \
-  "${HZR_PROVENANCE_ROOT}/fork-core/SHA256SUMS"
+verify_matches_repository \
+  "${HZR_PROVENANCE_ROOT}/engines.lock.toml" \
+  "engines.lock.toml"
+verify_matches_repository \
+  "${HZR_PROVENANCE_ROOT}/fork-core/SNAPSHOT_V2.tsv" \
+  "fork-core/SNAPSHOT_V2.tsv"
+verify_matches_repository \
+  "${HZR_PROVENANCE_ROOT}/fork-core/SHA256SUMS" \
+  "fork-core/SHA256SUMS"
 
 HZR_CURRENT_MANIFEST_SHA256="$(
   sed -n 's/^manifest_sha256 = "\([0-9a-f][0-9a-f]*\)"$/\1/p' \
@@ -175,27 +195,29 @@ verify_sha256 "${HZR_CURRENT_MANIFEST_SHA256}" \
   "${HZR_PROVENANCE_ROOT}/fork-core/CURRENT_ENGINE_V1.tsv"
 verify_sha256 "${HZR_CURRENT_CONTENT_SHA256}" \
   "${HZR_PROVENANCE_ROOT}/fork-core/CURRENT_SHA256SUMS"
-verify_sha256 \
-  "55535352bc9f4837198c652b8c44ec54a0a7ef82fbd81e11b4ec11f4c4082991" \
-  "${HZR_PROVENANCE_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
-verify_sha256 \
-  "cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586" \
-  "${HZR_PROVENANCE_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
-verify_sha256 \
-  "c8c0bdfa8f8a8a606fac9ef50f1be51f46ee28afe63a94aa2430ee75342a9e2c" \
-  "${HZR_BUNDLE_ROOT}/licenses/HZR-Apache-2.0.txt"
-verify_sha256 \
-  "1231ac74c1d872c6d40a64bb61921c04b1482dcb0a4f01dcff04779d0c98947f" \
-  "${HZR_BUNDLE_ROOT}/licenses/rtk-fork-core-MIT.txt"
+verify_matches_repository \
+  "${HZR_PROVENANCE_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch" \
+  "patches/grepai/0.35.0-disable-worktree-discovery.patch"
+verify_matches_repository \
+  "${HZR_PROVENANCE_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch" \
+  "patches/icm/0.10.61-refresh-workspace-lock.patch"
+verify_matches_repository \
+  "${HZR_BUNDLE_ROOT}/licenses/HZR-Apache-2.0.txt" \
+  "LICENSE"
+verify_matches_repository \
+  "${HZR_BUNDLE_ROOT}/licenses/rtk-fork-core-MIT.txt" \
+  "fork-core/rtk/LICENSE"
+# grepai and ICM licences arrive from their upstream clones, so their digests are pinned:
+# an upstream relicence must fail the build rather than be repackaged silently.
 verify_sha256 \
   "49966552514373129de9faea43a890bf6a8b04f158b2966876a57fdf915980e5" \
   "${HZR_BUNDLE_ROOT}/licenses/grepai-MIT.txt"
 verify_sha256 \
   "db0693db32ddac486c96656ec8b827467c1d5d7dc7468eaa0051298425edf2cc" \
   "${HZR_BUNDLE_ROOT}/licenses/ICM-Apache-2.0.txt"
-verify_sha256 \
-  "3c295c1f04099384f08061343c1b321455c0cb581160b6012cb7a840401dbe7b" \
-  "${HZR_BUNDLE_ROOT}/licenses/caveman-code-MIT.txt"
+verify_matches_repository \
+  "${HZR_BUNDLE_ROOT}/licenses/caveman-code-MIT.txt" \
+  "licenses/caveman-code-MIT.txt"
 
 "${HZR_NODE_BINARY}" --check "${HZR_CAVEMAN_ROOT}/bridge.mjs"
 (

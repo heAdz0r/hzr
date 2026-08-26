@@ -335,6 +335,47 @@ pub fn print_stats(report: &StatsReport) -> io::Result<()> {
     crate::stats_output::print(report)
 }
 
+pub fn print_fleet_reconcile(report: &crate::diagnostics::FleetReconcileReport) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    if let Some(refused) = &report.refused {
+        return writeln!(output, "fleet contract: refused - {refused}");
+    }
+    let verb = if report.dry_run {
+        "would refresh"
+    } else {
+        "refreshed"
+    };
+    let changed = report
+        .rewritten
+        .iter()
+        .filter(|entry| entry.changed)
+        .count();
+    writeln!(
+        output,
+        "fleet contract: {verb} {changed} managed block(s) across {} registered workspace(s)",
+        report.workspaces_scanned
+    )?;
+    for entry in report.rewritten.iter().filter(|entry| entry.changed) {
+        writeln!(output, "  {} {}", entry.surface, entry.path.display())?;
+    }
+    for entry in &report.rewritten {
+        if let Some(error) = &entry.error {
+            writeln!(output, "  FAILED {}: {error}", entry.path.display())?;
+        }
+    }
+    // A refreshed block next to a surviving user directive is still a finding. Name those
+    // files so the refresh cannot read as "this workspace is now clean".
+    for path in &report.conflicts_left_for_the_owner {
+        writeln!(
+            output,
+            "  conflict left for the owner: {} (user-authored directives are never rewritten)",
+            path.display()
+        )?;
+    }
+    Ok(())
+}
+
 pub fn print_doctor(report: &DoctorReport) -> io::Result<()> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
@@ -599,6 +640,7 @@ mod tests {
             ],
             repair: None,
             fidelity_reconcile: None,
+            fleet_reconcile: None,
         }
     }
 

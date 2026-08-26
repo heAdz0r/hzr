@@ -109,7 +109,11 @@ pub enum Command {
         #[arg(long, requires = "force")]
         reset: bool,
         /// Print the initialization plan without changing config, registry, instructions, or services
-        #[arg(long, conflicts_with_all = ["if_needed", "if_enabled"])]
+        ///
+        /// Combines with `--if-needed`, which is what fleet reconciliation needs: the plan
+        /// carries `changes_required`, so a caller can see which workspaces would be written
+        /// before writing to any of them.
+        #[arg(long, conflicts_with = "if_enabled")]
         dry_run: bool,
         /// Override the private HZR data directory for this workspace
         #[arg(long, value_name = "DIR")]
@@ -225,6 +229,12 @@ pub enum Command {
         /// Safely migrate one unambiguous legacy .grepai before diagnosing
         #[arg(long)]
         fix: bool,
+        /// Refresh the managed contract block in every registered workspace reporting a stale one
+        #[arg(long)]
+        reconcile_fleet: bool,
+        /// Show what --reconcile-fleet would rewrite, without writing
+        #[arg(long, requires = "reconcile_fleet")]
+        dry_run: bool,
         /// Resolve one doctor-reported unknown fidelity reservation through hzrd
         #[arg(long, value_name = "RESERVATION_ID")]
         resolve_fidelity: Option<String>,
@@ -1006,6 +1016,26 @@ mod tests {
             out.push(ch);
         }
         out
+    }
+
+    /// Fleet reconciliation has to see which workspaces would be written before writing to
+    /// any of them, so the plan and the "only where needed" guard must combine.
+    #[test]
+    fn init_plans_without_writing_where_reconciliation_is_needed() {
+        let cli = Cli::try_parse_from(["hzr", "init", "--dry-run", "--if-needed"])
+            .expect("--dry-run must combine with --if-needed");
+        assert!(matches!(
+            cli.command,
+            Command::Init {
+                dry_run: true,
+                if_needed: true,
+                ..
+            }
+        ));
+        assert!(
+            Cli::try_parse_from(["hzr", "init", "--dry-run", "--if-enabled"]).is_err(),
+            "--if-enabled decides activation, which a plan cannot answer"
+        );
     }
 
     #[test]

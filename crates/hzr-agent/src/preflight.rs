@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -15,10 +16,12 @@ use crate::process::{ProcessGroupGuard, configure_process_group};
 
 pub const CAVEMAN_CODE_NPM_VERSION: &str = "0.65.2";
 pub const CAVEMAN_CODE_NPM_INTEGRITY: &str = "sha512-rs7sOI7WCycpBq8qNQ3MQagxfiXAgymfyj2BjPnoaVNNPsgtFK08calhYGEhMkrH0N6prHt0KHJm4AOuuMNEpw==";
-// Recomputed for the 0.5.1 version bump; the dependency tree is unchanged, only
-// the package's own version field moved.
-pub const PACKAGE_LOCK_SHA256: &str =
-    "f4e16e1ac5b2c6560115058379daa5e37a4a49e5a7d238f7a2183f661711d15d";
+/// The lock file this binary was built with.
+///
+/// Derived from the embedded bytes rather than transcribed. A constant here had to be
+/// recomputed on every version bump — the lock file restates the product version — and going
+/// stale failed the release at its last step with a digest to copy by hand.
+pub static PACKAGE_LOCK_SHA256: LazyLock<String> = LazyLock::new(|| sha256(BUNDLED_PACKAGE_LOCK));
 pub const NODE_MINIMUM_VERSION: NodeVersion = NodeVersion {
     major: 20,
     minor: 18,
@@ -33,7 +36,6 @@ pub const NODE_MAXIMUM_VERSION_EXCLUSIVE: NodeVersion = NodeVersion {
 const BUNDLED_BRIDGE: &[u8] = include_bytes!("../../../integrations/caveman-code/bridge.mjs");
 const BUNDLED_AGENT_CAPABILITIES: &[u8] =
     include_bytes!("../../../contracts/agent-capabilities.json");
-#[cfg(test)]
 const BUNDLED_PACKAGE_LOCK: &[u8] =
     include_bytes!("../../../integrations/caveman-code/package-lock.json");
 
@@ -137,8 +139,11 @@ pub async fn preflight(
 
     let package_lock_path = canonical_file(&integration.package_lock())?;
     let package_lock_bytes = read_file(&package_lock_path)?;
-    let package_lock_sha256 =
-        verify_digest(&package_lock_path, &package_lock_bytes, PACKAGE_LOCK_SHA256)?;
+    let package_lock_sha256 = verify_digest(
+        &package_lock_path,
+        &package_lock_bytes,
+        &PACKAGE_LOCK_SHA256,
+    )?;
     let package_lock = parse_json::<PackageLock>(&package_lock_path, &package_lock_bytes)?;
     let lock_entry = package_lock
         .packages
@@ -349,7 +354,7 @@ mod tests {
 
     use super::{
         BUNDLED_PACKAGE_LOCK, NODE_MAXIMUM_VERSION_EXCLUSIVE, NODE_MINIMUM_VERSION,
-        PACKAGE_LOCK_SHA256, PreflightError, parse_node_version, sha256, validate_node_version,
+        PACKAGE_LOCK_SHA256, PreflightError, parse_node_version, validate_node_version,
         verify_bridge_version, verify_digest,
     };
 
@@ -383,9 +388,18 @@ mod tests {
         ));
     }
 
+    /// The embedded lock restates the product version, and preflight refuses to start when
+    /// the shipped tree disagrees with the binary. Assert the two here, where it costs
+    /// nothing, instead of discovering it at the end of a release bundle build.
     #[test]
-    fn test_package_lock_digest_matches_compiled_provenance() {
-        assert_eq!(sha256(BUNDLED_PACKAGE_LOCK), PACKAGE_LOCK_SHA256);
+    fn test_embedded_package_lock_declares_the_binary_version() {
+        let lock: serde_json::Value =
+            serde_json::from_slice(BUNDLED_PACKAGE_LOCK).expect("embedded lock is JSON");
+        assert_eq!(
+            lock["version"].as_str(),
+            Some(env!("CARGO_PKG_VERSION")),
+            "bump integrations/caveman-code/package-lock.json with the workspace version"
+        );
     }
 
     #[test]
@@ -394,7 +408,7 @@ mod tests {
             verify_digest(
                 Path::new("package-lock.json"),
                 b"tampered",
-                PACKAGE_LOCK_SHA256
+                &PACKAGE_LOCK_SHA256
             ),
             Err(PreflightError::DigestMismatch { .. })
         ));

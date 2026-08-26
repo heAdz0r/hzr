@@ -69,10 +69,10 @@ use crate::input::read_text;
 use crate::invocation::normalize;
 use crate::migration::scan;
 use crate::output::{
-    print_agent, print_context, print_doctor, print_engines, print_execution, print_health,
-    print_index_init, print_index_status, print_json, print_memories, print_memory_health,
-    print_migration, print_migration_apply, print_rewrite, print_stats, print_transform,
-    render_search,
+    print_agent, print_context, print_doctor, print_engines, print_execution,
+    print_fleet_reconcile, print_health, print_index_init, print_index_status, print_json,
+    print_memories, print_memory_health, print_migration, print_migration_apply, print_rewrite,
+    print_stats, print_transform, render_search,
 };
 
 #[tokio::main]
@@ -256,6 +256,20 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         ..
     } = &cli.command
     {
+        // `--if-needed --dry-run` asks the same question the writing path asks, without
+        // writing: the plan's `changes_required` is the answer.
+        if *if_needed && *dry_run {
+            return initialize(
+                &config_path,
+                *force,
+                *reset,
+                true,
+                data_dir.as_deref(),
+                *skip_service,
+                cli.json,
+            )
+            .await;
+        }
         if *if_needed {
             return initialize_if_needed(
                 &config_path,
@@ -349,11 +363,25 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Doctor {
             workspace,
             fix,
+            reconcile_fleet,
+            dry_run,
             resolve_fidelity,
             acknowledge_executed,
             prove_not_executed,
         } => {
             let workspace = canonical_directory(workspace.as_deref())?;
+            // Reconcile before diagnosing, so the report that follows is the state the
+            // operator is left in rather than the one they arrived with.
+            let fleet_reconcile = if reconcile_fleet {
+                let executable =
+                    std::env::current_exe().context("cannot resolve the HZR executable")?;
+                let contract = contract_asset_path(&executable_source_directory(&executable)?);
+                Some(diagnostics::reconcile_fleet_contracts(
+                    &config, &contract, &workspace, dry_run,
+                ))
+            } else {
+                None
+            };
             let repair = if fix {
                 repair_legacy_index(&config, &workspace).await?
             } else {
@@ -382,11 +410,15 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             let mut report = doctor(&config_path, &config, &workspace).await;
             report.repair = repair;
             report.fidelity_reconcile = fidelity_reconcile;
+            report.fleet_reconcile = fleet_reconcile;
             if cli.json {
                 print_json(&report)?;
             } else {
                 if let Some(outcome) = &report.repair {
                     print_migration_apply(outcome)?;
+                }
+                if let Some(fleet) = &report.fleet_reconcile {
+                    print_fleet_reconcile(fleet)?;
                 }
                 print_doctor(&report)?;
             }
@@ -1771,8 +1803,19 @@ async fn initialize(
                 Some("only when an installed service definition exists"),
             ));
         }
+        // Whether anything on disk would actually change. Registry and service mutations are
+        // always listed, so their presence alone cannot answer "is this workspace stale?".
+        let changes_required = !existed
+            || reset
+            || data_dir_changed
+            || instruction_plan.iter().any(|report| report.changed)
+            || project_mcp_plan.changed
+            || init_layout_directories(&config)
+                .iter()
+                .any(|directory| !directory.exists());
         let payload = serde_json::json!({
             "dry_run": true,
+            "changes_required": changes_required,
             "config": path,
             "config_exists": existed,
             "config_action": if reset { "reset_with_backup" } else if existed { "preserve" } else { "create" },

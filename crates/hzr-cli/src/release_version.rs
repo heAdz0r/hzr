@@ -5,7 +5,6 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 const ROOT_VERSION_SURFACES: &[&str] = &[
     "AGENTS.md",
@@ -35,25 +34,6 @@ const VERSION_SURFACES: &[&str] = &[
 
 const CAVEMAN_PACKAGE_LOCK: &str = "integrations/caveman-code/package-lock.json";
 const CARGO_LOCK: &str = "Cargo.lock";
-
-const RUNTIME_DIGEST_SURFACES: &[(&str, &str)] = &[
-    (
-        "integrations/caveman-code/bridge.mjs",
-        "${HZR_CAVEMAN_ROOT}/bridge.mjs",
-    ),
-    (
-        "integrations/caveman-code/package.json",
-        "${HZR_CAVEMAN_ROOT}/package.json",
-    ),
-    (
-        "integrations/caveman-code/package-lock.json",
-        "${HZR_CAVEMAN_ROOT}/package-lock.json",
-    ),
-    (
-        "contracts/agent-capabilities.json",
-        "${HZR_CAVEMAN_ROOT}/agent-capabilities.json",
-    ),
-];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct VersionReport {
@@ -130,7 +110,6 @@ pub fn synchronize(repository: &Path, target: &str, dry_run: bool) -> Result<Ver
             changed_files.push(PathBuf::from("CHANGELOG.md"));
         }
     }
-    synchronize_runtime_digests(repository, &previous, target, dry_run, &mut changed_files)?;
     changed_files.sort();
     changed_files.dedup();
     if !dry_run && previous != target {
@@ -147,132 +126,6 @@ pub fn synchronize(repository: &Path, target: &str, dry_run: bool) -> Result<Ver
         changed_files,
         dry_run,
     })
-}
-
-fn synchronize_runtime_digests(
-    repository: &Path,
-    previous: &str,
-    target: &str,
-    dry_run: bool,
-    changed_files: &mut Vec<PathBuf>,
-) -> Result<()> {
-    let smoke_relative = PathBuf::from("scripts/smoke-bundle.sh");
-    let smoke_path = repository.join(&smoke_relative);
-    let smoke_before = fs::read_to_string(&smoke_path)
-        .context("failed to read scripts/smoke-bundle.sh for runtime digest synchronization")?;
-    let mut smoke_after = if dry_run && previous != target {
-        smoke_before.replace(previous, target)
-    } else {
-        smoke_before.clone()
-    };
-
-    let mut package_lock_digest = None;
-    for (source_relative, bundle_artifact) in RUNTIME_DIGEST_SURFACES {
-        let source_path = repository.join(source_relative);
-        let source_before = fs::read_to_string(&source_path).with_context(|| {
-            format!("failed to read {source_relative} for digest synchronization")
-        })?;
-        let source_after = if dry_run && previous != target {
-            if *source_relative == CAVEMAN_PACKAGE_LOCK {
-                replace_caveman_package_lock_versions(&source_before, previous, target)?
-            } else {
-                source_before.replace(previous, target)
-            }
-        } else {
-            source_before
-        };
-        let digest = format!("{:x}", Sha256::digest(source_after.as_bytes()));
-        smoke_after = replace_digest_for_artifact(&smoke_after, bundle_artifact, &digest)?;
-        if *source_relative == "integrations/caveman-code/package-lock.json" {
-            package_lock_digest = Some(digest);
-        }
-    }
-
-    if smoke_after != smoke_before {
-        if !dry_run {
-            atomic_replace(&smoke_path, smoke_after.as_bytes())?;
-        }
-        changed_files.push(smoke_relative);
-    }
-
-    let package_lock_digest = package_lock_digest.context("package-lock digest surface missing")?;
-    let preflight_relative = PathBuf::from("crates/hzr-agent/src/preflight.rs");
-    let preflight_path = repository.join(&preflight_relative);
-    let preflight_before = fs::read_to_string(&preflight_path)
-        .context("failed to read Caveman preflight digest pin")?;
-    let (preflight_after, previous_digest) = replace_digest_after_marker(
-        &preflight_before,
-        "pub const PACKAGE_LOCK_SHA256",
-        &package_lock_digest,
-    )?;
-    if preflight_after != preflight_before {
-        if !dry_run {
-            atomic_replace(&preflight_path, preflight_after.as_bytes())?;
-        }
-        changed_files.push(preflight_relative);
-    }
-
-    let readme_relative = PathBuf::from("integrations/caveman-code/README.md");
-    let readme_path = repository.join(&readme_relative);
-    let readme_before = fs::read_to_string(&readme_path)
-        .context("failed to read Caveman bridge digest documentation")?;
-    let readme_after = readme_before.replace(&previous_digest, &package_lock_digest);
-    if readme_after != readme_before {
-        if !dry_run {
-            atomic_replace(&readme_path, readme_after.as_bytes())?;
-        }
-        changed_files.push(readme_relative);
-    } else if !readme_before.contains(&package_lock_digest) {
-        bail!("Caveman bridge README is missing its package-lock digest pin");
-    }
-    Ok(())
-}
-
-fn replace_digest_for_artifact(before: &str, artifact: &str, digest: &str) -> Result<String> {
-    let artifact_marker = format!("  \"{artifact}\"");
-    let artifact_position = before
-        .find(&artifact_marker)
-        .with_context(|| format!("smoke bundle is missing digest target {artifact}"))?;
-    let prefix = &before[..artifact_position];
-    let digest_end = prefix
-        .rfind('"')
-        .context("smoke bundle digest is missing a closing quote")?;
-    let digest_start = prefix[..digest_end]
-        .rfind('"')
-        .context("smoke bundle digest is missing an opening quote")?
-        + 1;
-    let existing = &before[digest_start..digest_end];
-    if existing.len() != 64 || !existing.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        bail!("invalid pinned SHA-256 for {artifact}: {existing:?}");
-    }
-    let mut after = before.to_owned();
-    after.replace_range(digest_start..digest_end, digest);
-    Ok(after)
-}
-
-fn replace_digest_after_marker(
-    before: &str,
-    marker: &str,
-    digest: &str,
-) -> Result<(String, String)> {
-    let marker_position = before
-        .find(marker)
-        .with_context(|| format!("digest source is missing marker {marker:?}"))?;
-    let relative_start = before[marker_position..]
-        .find('"')
-        .with_context(|| format!("digest marker {marker:?} has no opening quote"))?;
-    let digest_start = marker_position + relative_start + 1;
-    let relative_end = before[digest_start..]
-        .find('"')
-        .with_context(|| format!("digest marker {marker:?} has no closing quote"))?;
-    let digest_end = digest_start + relative_end;
-    let existing = &before[digest_start..digest_end];
-    if existing.len() != 64 || !existing.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        bail!("invalid SHA-256 after {marker:?}: {existing:?}");
-    }
-    let mut after = before.to_owned();
-    after.replace_range(digest_start..digest_end, digest);
-    Ok((after, existing.to_owned()))
 }
 
 fn tracked_version_surfaces(repository: &Path) -> Result<Vec<PathBuf>> {
@@ -565,8 +418,7 @@ mod tests {
     use super::{
         is_version_surface, release_changelog, replace_cargo_lock_versions,
         replace_cargo_manifest_version, replace_caveman_package_lock_versions,
-        replace_digest_after_marker, replace_digest_for_artifact, synchronize_release_line,
-        validate_version,
+        synchronize_release_line, validate_version,
     };
 
     #[test]
@@ -675,40 +527,5 @@ mod tests {
         assert!(after.contains("## [1.3.0] - 2026-08-01\n\n### Added"));
         assert_eq!(after.matches("## [1.3.0]").count(), 1);
         assert!(after.contains("[1.3.0]: https://github.com/heAdz0r/hzr/compare/v1.2.3...v1.3.0"));
-    }
-
-    #[test]
-    fn runtime_digest_pin_is_replaced_for_the_exact_artifact() {
-        let before = concat!(
-            "verify_sha256 \\\n",
-            "  \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" \\\n",
-            "  \"${HZR_CAVEMAN_ROOT}/bridge.mjs\"\n",
-        );
-        let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-        let after = replace_digest_for_artifact(before, "${HZR_CAVEMAN_ROOT}/bridge.mjs", digest)
-            .expect("digest replacement");
-
-        assert!(after.contains(digest));
-        assert!(
-            !after.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-        );
-    }
-
-    #[test]
-    fn compiled_digest_pin_is_replaced_after_its_named_marker() {
-        let before = concat!(
-            "pub const PACKAGE_LOCK_SHA256: &str =\n",
-            "    \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\";\n",
-        );
-        let digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-        let (after, previous) =
-            replace_digest_after_marker(before, "pub const PACKAGE_LOCK_SHA256", digest)
-                .expect("compiled digest replacement");
-
-        assert_eq!(
-            previous,
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-        assert!(after.contains(digest));
     }
 }

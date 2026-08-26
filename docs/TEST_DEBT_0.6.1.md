@@ -39,11 +39,16 @@ silently. Waivers are declared for the two repositories whose measured subject i
 The user-global direct-ICM directive is routed through `hzr memory store`. MCP ownership is
 workspace-aware (item 10), so the Claude Code pin no longer conflicts across projects.
 
-Open: 158 registered instruction files across roughly 79 workspaces still carry a stale managed
-block. Each needs `hzr init --if-needed` in its own workspace, and that should follow the 0.6.1
-install so the refreshed block is the current contract rather than one that goes stale again.
-Sequencing this behind item 8 is deliberate: reconciling 79 working trees before `init` reports
-its project-local writes would create exactly the pollution item 8 is about.
+The 158 stale managed blocks across roughly 79 workspaces are now repairable from one place
+rather than by opening each workspace: `hzr doctor --reconcile-fleet`, with `--dry-run` to list
+the exact files first. Verified by plan: it reports the same 158 blocks across 81 workspaces the
+check reports.
+
+Open: the apply step itself. It must run from an installed 0.6.1, not from this checkout —
+`contract_asset_path` resolves relative to the running binary, so a source build would write a
+repository-local `HZR.md` path into every other project's instructions. The command refuses that
+case rather than trusting the operator to notice, but it does mean the fleet is reconciled after
+the release is installed, not before it is built.
 
 ### 3. Completeness of filtered output — partial
 
@@ -85,14 +90,20 @@ cancellation, and the daemon-down and malformed-response paths.
 
 Excluded from this release by explicit decision. It needs days of wall-clock time.
 
-### 8. `init` must not pollute a repository — partial
+### 8. `init` must not pollute a repository — closed
 
-`hzr init --dry-run` already prints every project-local mutation with before/after SHA-256 and
-the backup path, which satisfies "show the required changes in advance".
+`hzr init --dry-run` prints every project-local mutation with before/after SHA-256 and the
+backup path, and a writing `init --if-needed` already names each instruction file and project
+MCP config it updated. Both halves of "leave the tree clean or say in advance what must change"
+were therefore met except for one gap, now fixed: `--dry-run` was rejected together with
+`--if-needed`, which is precisely the combination fleet reconciliation needs. The plan carries a
+top-level `changes_required`, so a caller can tell a stale workspace from a current one without
+parsing the mutation list — registry and service entries are always present and never mean the
+tree is stale.
 
-Open: `--dry-run` is rejected when combined with `--if-needed`, which is precisely the
-combination fleet reconciliation needs; and a non-dry-run `init` does not summarise the
-project-local files it wrote.
+```bash
+hzr init --dry-run --if-needed --json
+```
 
 ### 9. Unambiguous self-restart installer — open
 

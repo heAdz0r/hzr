@@ -275,6 +275,23 @@ same `hzrd` boundary. The executable contract is
 | durable memory | `hzr_memory_recall`, `hzr_memory_store`, `hzr_memory_update`, `hzr_memory_forget`, `hzr_memory_prune` |
 | operations | `hzr_observability`, `hzr_doctor`, `hzr_codec` |
 
+## Keeping a fleet of projects current
+
+Every registered workspace carries a managed contract block. When the contract moves, those
+blocks go stale, and a report that can only name 158 stale files across 79 projects is a chore,
+not a fix. One command repairs them:
+
+```bash
+hzr doctor --reconcile-fleet --dry-run   # exact files first
+hzr doctor --reconcile-fleet
+```
+
+It refreshes only the managed block, only where one already exists — adopting a new project
+stays an explicit `hzr init`. User-authored directives outside the block are never rewritten;
+each file where one survives is named, so a refresh can never be mistaken for a clean workspace.
+Run it from an installed HZR: a binary started inside a source checkout would hand every other
+project a contract path only that checkout has, so the command refuses instead.
+
 ## When a project genuinely cannot route through HZR
 
 Some repositories have to name an engine directly: a benchmark whose measured subject *is*

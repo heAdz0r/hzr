@@ -311,3 +311,22 @@ test("usage outbox survives a failed send and replays exactly once", async (t) =
   assert.deepEqual(await readdir(outbox), []);
   assert.equal((await stat(outbox)).mode & 0o777, 0o700);
 });
+
+// The bridge manifest restates the product version, and `prepareManagedRuntime` refuses to
+// start when it drifts. Catch that here, in a one-second test, instead of three minutes into
+// a release bundle build.
+test("bridge manifest version tracks the workspace version", async () => {
+  const [manifest, workspaceManifest] = await Promise.all([
+    readFile(new URL("./package.json", import.meta.url), "utf8").then(JSON.parse),
+    readFile(new URL("../../Cargo.toml", import.meta.url), "utf8"),
+  ]);
+  const workspaceVersion = workspaceManifest.match(
+    /^\[workspace\.package\][\s\S]*?^version = "([^"]+)"/m,
+  )?.[1];
+  assert.ok(workspaceVersion, "workspace version is declared in Cargo.toml");
+  assert.equal(
+    manifest.version,
+    workspaceVersion,
+    "bump integrations/caveman-code/package.json (and its lock) with the workspace version",
+  );
+});
