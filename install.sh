@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-HZR_VERSION="${HZR_VERSION:-0.6.2}"
+HZR_VERSION="${HZR_VERSION:-0.6.3}"
 HZR_REPOSITORY="${HZR_REPOSITORY:-heAdz0r/hzr}"
 HZR_INSTALL_ROOT="${HZR_INSTALL_ROOT:-${HOME}/.local/share/hzr}"
 HZR_BIN_DIR="${HZR_BIN_DIR:-${HOME}/.local/bin}"

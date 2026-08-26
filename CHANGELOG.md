@@ -2,6 +2,92 @@
 
 All notable HZR changes are documented here. HZR follows semantic versioning while the public API is in `0.x` development.
 
+## [0.6.3] - 2026-08-26
+
+0.6.3 turns HZR's efficiency evidence into a product loop: choose the efficient route, see what
+the session saved, understand which command families created the value, and — when explicitly
+enabled — translate potentially avoided model-input tokens into a preliminary public-list price
+estimate. The same release closes the operational gaps that could make healthy-looking state
+untrustworthy across a fleet.
+
+This is the qualitative change: HZR no longer asks an agent to follow an efficiency convention
+and leaves the operator to infer the result. The control plane enforces the route, attributes the
+executed work, exposes the benefit, and diagnoses drift against the same workspace identity.
+
+### Added — visible session economics
+
+- **Session ROI now has an optional money lens.** HZR prices estimated potentially avoided
+  model-input tokens against an exact harness/provider/model/method entry. The result is labelled
+  preliminary and potential, keeps its currency and catalog identity, and never masquerades as a
+  provider bill.
+- **A versioned public catalog ships with the product.** It records dated first-party price
+  sources for popular OpenAI, Anthropic, Google, DeepSeek, Qwen, Mistral, and xAI API models,
+  including method-specific and expiry boundaries where the provider requires them.
+- **Pricing is operator-owned.** Estimates are disabled by default. `hzr billing catalog` shows
+  the evidence, and an absolute JSON `pricing_file` merges strict overrides by exact pricing
+  key. Unknown, ambiguous, unsupported, expired, or mixed-currency selections fail closed;
+  HZR performs no FX conversion and never borrows a nearby price.
+- **Receipts and estimates remain different evidence.** A CLI-imported receipt is user-supplied,
+  not verified provider evidence; only a trusted adapter may upgrade provenance. Public-list
+  arithmetic is never promoted to invoice truth. Replay is idempotent, and attribution stays
+  bound to the canonical project/session.
+- **The value story stays privacy-safe.** End-of-session output combines estimated net token
+  reduction, measured commands, top command families, prevented bypasses, and avoidable leakage
+  without revealing paths, queries, arguments, or raw session identifiers.
+
+### Changed — the efficient path is the rewarded path
+
+- An effective managed replacement still makes RAW execution forbidden, but 0.6.3 connects that
+  policy to the session story: bypasses receive zero efficiency credit, named replacements are
+  actionable, and a clean zero means **no proven avoidable leakage**, not “HZR saved nothing”.
+- Wrapped shell forms remain subject to the same route decision. An agent cannot recover credit
+  by hiding a managed command behind a shell, environment wrapper, or neighbouring instruction.
+- Explicit fidelity remains available for real exactness requirements, with one closed reason,
+  a budget, and an auditable receipt. It is a controlled capability, not an escape hatch.
+
+### Fixed — doctor now tests reality
+
+- **Semantic readiness is executable evidence.** Doctor performs a typed runtime probe instead
+  of declaring grepai healthy merely because index files exist. Complete fork runtime
+  configuration is accepted, incompatible schema is surfaced, and stale state cannot present a
+  dead semantic route as ready.
+- **Global install recovery is global only after proof.** A completed journal is accepted from
+  another workspace only after its schema, exact terminal stage receipts, and state validate.
+  Incomplete recovery remains tied to the workspace that owns it.
+- **Waivers mean the same thing locally and across the fleet.** Current-workspace doctor honours
+  the same narrow, auditable RTK instruction waiver as fleet inspection; malformed or broader
+  exemptions remain failures.
+- **ICM and index ownership remain centralized.** Health, supervision, canonical worktree
+  identity, and cache/index readiness are evaluated as one control-plane state instead of
+  allowing an orphan process or old files to stand in for a live engine.
+
+### Added — fleet reconciliation that completes the job
+
+- `hzr doctor --reconcile-fleet` now creates missing managed Claude/Codex instruction surfaces
+  and Codex project MCP pins for registered workspaces in addition to refreshing existing blocks.
+  Claude Code `.mcp.json` remains an explicit project registration.
+- Fleet writes require canonical registered-root identity and reject escaping symlink paths.
+  User-authored text outside managed blocks is preserved and reported.
+- `--migrate-legacy-indexes` transactionally handles an unambiguous root `.grepai` while nested
+  or ambiguous duplicates remain explicit operator decisions.
+- `hzr migrate archive-index --dry-run` previews the exact nested source, content hash, backup,
+  and manifest; `--force` applies it. Active writers are refused, backups are retained, and a
+  source recreated at the same path produces an explicit conflict without mutation instead of
+  being hidden by an old idempotency record.
+
+### Fixed — truthful client and codec coverage
+
+- Codex and Claude Code prefer project-scoped MCP pins. Linked worktrees use their exact project
+  scope without rewriting shared local state.
+- Claude Desktop's one global selected workspace is modelled honestly: every other project is
+  `unavailable_for_this_workspace` with a retarget-or-CLI action, never a false green fleet pin.
+- Generated MCP snippets serialize paths safely rather than interpolating executable or
+  workspace strings into TOML/JSON.
+- Codec coverage is derived from audited activation surfaces and reports `applied`,
+  `shadow_measured`, `instructed`, or `unavailable`. Only a payload HZR actually transforms can
+  receive estimated codec credit. Codex and Claude cannot currently expose trusted global final
+  response replacement, so that path stays visible with zero economic credit.
+
 ## [0.6.2] - 2026-08-26
 
 0.6.2 turns session accounting into visible product value. HZR already had the data to prove that
@@ -1170,6 +1256,7 @@ First public HZR release.
 [0.2.0]: https://github.com/heAdz0r/hzr/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/heAdz0r/hzr/releases/tag/v0.1.0
 [0.4.3]: https://github.com/heAdz0r/hzr/compare/v0.4.2...v0.4.3
+[0.6.3]: https://github.com/heAdz0r/hzr/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/heAdz0r/hzr/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/heAdz0r/hzr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0

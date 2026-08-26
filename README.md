@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-<a href="Cargo.toml"><img alt="Version 0.6.2" src="https://img.shields.io/badge/version-0.6.2-e64a19"></a>
+<a href="Cargo.toml"><img alt="Version 0.6.3" src="https://img.shields.io/badge/version-0.6.3-e64a19"></a>
   <a href="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/heAdz0r/hzr/releases"><img alt="Release" src="https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/control_plane-Apache--2.0-37474f"></a>
@@ -60,7 +60,8 @@ flowchart TB
     D <--> C["Caveman-derived<br/>response density"]
 
     D ==> L[("Typed operation ledger")]
-    L --> O["Doctor · Stats · Observatory"]
+    L --> O["Doctor · Stats · Session ROI · Observatory"]
+    P["Versioned public pricing<br/>opt-in · overridable"] -. "preliminary estimate" .-> O
     O -. "repair · policy feedback" .-> D
 
     style D fill:#e64a19,stroke:#7f2704,stroke-width:3px,color:#ffffff
@@ -97,13 +98,13 @@ observable gates for bounded reads, exact recovery, and safe writes.
 
 These values use `ceil(UTF-8 bytes / 4)`. They measure delivered command-output size,
 not provider billing, total-session savings, or generic semantic equivalence. HZR keeps
-provider receipts and estimates separate, and does not declare economic success without
-paired billed measurements. See the [methodology](benchmarks/hzr-vs-rtk-upstream-v0.44.1/README.md)
+provider receipts and public-list estimates separate. See the
+[methodology](benchmarks/hzr-vs-rtk-upstream-v0.44.1/README.md)
 and [recorded run](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RESULTS.md).
 
 ## Install
 
-HZR 0.6.2 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
+HZR 0.6.3 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
 Apple Silicon/Intel. System Git is the only engine prerequisite; Node.js, RTK,
 grepai, and ICM are bundled. Windows is not currently published.
 
@@ -111,7 +112,7 @@ Download, inspect, then run the installer:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.6.2/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.6.3/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -154,37 +155,18 @@ loopback views are bounded and pseudonymized; authenticated detail remains proje
 ## Daily control plane
 
 ```bash
-# Understand and recover exact evidence
 hzr read README.md --outline
-hzr read src/main.rs -n
 hzr read README.md --from 120 --to 180
-hzr read --batch --max-tokens 1200 README.md src/main.rs
-
-# Search and plan from one canonical project index
 hzr search "authorization boundary" --mode auto
-hzr rgai "where requests enter policy"
 hzr context plan "change authorization boundary"
-
-# Apply confined, atomic mutations
 hzr write patch app.rs --old @/tmp/old.txt --new @/tmp/new.txt --cas
-hzr write set config.json --key agent.enabled --value true --value-type bool
-hzr write batch --plan '[{"op":"replace","file":"a.txt","from":"old","to":"new"}]'
-
-# Route shell work through policy and accounting
-hzr exec rewrite 'cargo test 2>&1 | tail -80'
-hzr exec run 'cargo test 2>&1 | tail -80'
-
-# Operate the system
-hzr doctor
-hzr engines status
-hzr index status
 hzr memory recall "release decision"
+hzr exec run 'cargo test 2>&1 | tail -80'
 hzr stats --evasion --since 7d
 ```
 
-`hzr build` is an inherited fork-core maintenance compatibility command, not a generic
-project build wrapper. Build projects through `hzr exec run '<project build command>'`.
-`hzr release` rebuilds and installs HZR itself.
+Bounded reads retain exact-range recovery; writes are atomic and confined. `hzr build` is an
+inherited fork-core command, so build projects through `hzr exec run '<project build command>'`.
 
 ## Session ROI where the agent can see it
 
@@ -206,9 +188,28 @@ without inventing savings. Zero leakage therefore reads as the good result it is
 ledger reads `unknown`, never a reassuring fake zero. Top commands are privacy-safe families,
 not paths, queries, or arguments.
 
-This session boundary is also the join point for future cost reporting. A model-priced provider
-receipt can later add `$` savings to the same card without converting today's byte-derived token
-estimate into a billing claim.
+The same session boundary can now translate potentially avoided model-input tokens into a
+**preliminary public-list price estimate**. It is opt-in, labels the exact catalog identity and
+pricing method, and is never presented as a provider invoice:
+
+```toml
+[billing]
+public_estimate_enabled = true
+harness = "codex"
+provider = "openai"
+model = "gpt-5.6-terra"
+method = "standard_short_context"
+pricing_basis = "input"
+# pricing_file = "/absolute/path/to/private-pricing.json"
+```
+
+Run `hzr billing catalog` before selecting a model. The built-in, versioned catalog covers
+current public API prices from OpenAI, Anthropic, Google, DeepSeek, Qwen, Mistral, and xAI.
+Set `pricing_file` to an absolute JSON path to merge strict overrides by exact pricing key.
+HZR fails closed on an unknown model, method, currency, or expired price; it performs no FX
+conversion. Receipt imports remain a separate evidence class and are labelled user-supplied
+unless a trusted adapter verifies their provenance. Public prices never turn an estimate into a
+provider bill.
 
 ## Make the efficient path the easy path
 
@@ -251,30 +252,19 @@ credit. If a managed equivalent exists, the direct bypass remains forbidden.
 
 ## One workspace, one index, one memory plane
 
-HZR derives identity from the Git common directory and worktree, or from the canonical
-path before `git init`. It owns one grepai store per worktree and one centrally supervised
-ICM database with positive project/global namespace checks.
-
-```text
-<hzr-data>/
-  runtime/                             daemon token + singleton locks
-  workspaces/<repo>/<worktree>/index/grepai/
-  workspaces/<repo>/<worktree>/workspace.json
-  memory/icm/                          one supervised store
-  ledger/hzr.sqlite                    operations, receipts, estimates
-```
+HZR derives identity from the Git common directory and worktree, or from the canonical path
+before `git init`. It owns one grepai store per worktree, one centrally supervised ICM database,
+and one typed ledger with positive project/global namespace checks.
 
 Legacy and foreign stores are diagnosed, never silently adopted. `doctor` is read-only by
 default; `doctor --fix` only applies bounded, unambiguous repair paths with backups and CAS.
+Fleet reconciliation can migrate one unambiguous root store transactionally. Ambiguous nested
+duplicates require an explicit `hzr migrate archive-index --dry-run`, followed by `--force`
+after reviewing the source, hash manifest, and retained backup. If a source is recreated at the
+same path, HZR reports an explicit conflict and makes no mutation; an old manifest cannot hide it.
 
-Project-only adoption is available when global activation is undesirable:
-
-```bash
-hzr install --project-only --dry-run
-hzr install --project-only --force
-hzr enable --workspace /path/to/project
-hzr disable --workspace /path/to/project
-```
+Use `hzr install --project-only --dry-run` when global activation is undesirable; explicit
+`hzr enable` and `hzr disable` keep that scope visible.
 
 ## MCP without a second control plane
 
@@ -323,11 +313,20 @@ hzr doctor --reconcile-fleet --dry-run   # exact files first
 hzr doctor --reconcile-fleet
 ```
 
-It refreshes only the managed block, only where one already exists — adopting a new project
-stays an explicit `hzr init`. User-authored directives outside the block are never rewritten;
-each file where one survives is named, so a refresh can never be mistaken for a clean workspace.
-Run it from an installed HZR: a binary started inside a source checkout would hand every other
-project a contract path only that checkout has, so the command refuses instead.
+It refreshes stale blocks and creates missing managed Claude/Codex instruction surfaces and
+Codex project MCP pins for already registered workspaces. Claude Code `.mcp.json` remains an
+explicit project registration. HZR does not register arbitrary directories. Canonical-root
+and symlink-confinement checks keep every write inside its intended workspace, while user-authored
+directives outside the block are preserved and reported. Run it from an installed HZR: a binary
+started inside a source checkout would hand every other project a contract path only that checkout
+has, so the command refuses instead.
+
+Doctor also validates the runtime path, not just the presence of index files. A typed semantic
+readiness probe catches an incompatible grepai configuration, supervised ICM failures stay
+visible, and a stale cache cannot masquerade as a healthy search plane. Completed global install
+journals become global facts only after their schema, exact terminal stage receipts, and state
+validate; incomplete recovery remains bound to its owning
+workspace. The same auditable waiver rules apply to both current-workspace and fleet checks.
 
 SessionStart uses the same audit for the current project and user-global Claude/Codex surfaces.
 If it repairs drift or finds a conflict it cannot safely rewrite, the agent receives an immediate
@@ -350,23 +349,20 @@ reason = "benchmark-subject"
 justification = "This checkout is the upstream RTK baseline that HZR measures itself against."
 ```
 
-A waiver covers only the rule it names, needs a justification a reviewer can audit, and never
-applies to the managed contract block itself. `hzr doctor` reports every honoured waiver under
-`fleet_instruction_exemptions`, so an exemption is visible rather than indistinguishable from a
-hidden bypass. Execution routes are not waivable: `direct-rtk`, `direct-grepai` and
-`direct-icm` are instruction directives, and no file on disk can buy an exception to a bypass
-HZR could have replaced at execution time.
+A waiver covers only the named instruction rule, requires an auditable justification, and is
+reported under `fleet_instruction_exemptions`. It never waives the managed block or execution
+policy: no repository file can buy an exception to a bypass HZR could replace at runtime.
 
 ## Honest boundaries
 
-| Guarantee | 0.6.2 posture |
+| Guarantee | 0.6.3 posture |
 |---|---|
 | one versioned control plane and pinned engine bundle | implemented |
 | one canonical index owner per worktree | implemented |
-| actual provider usage separated from estimates | implemented |
+| actual provider usage separated from preliminary public-list estimates | implemented |
 | fidelity bypasses receive zero savings credit | implemented |
 | commands, paths, queries, and raw identifiers excluded from public telemetry | implemented |
-| paired provider-billed savings benchmark | **not completed** |
+| provider-verified invoice attribution | **not inferred from public prices** |
 | Windows release artifact | **not available** |
 
 HZR never upgrades an estimate into a billing claim. A daemon-free fallback can preserve
@@ -388,21 +384,16 @@ lives in `fork-core/rtk`; provenance and regression rules are documented in
 
 ## Build and contribute
 
-Source builds require Rust 1.85+, Go, Git, Bash, curl, and standard Unix tools.
+Source builds require Rust 1.85+, Go, Git, Bash, curl, and standard Unix tools:
 
 ```bash
 scripts/build-bundle.sh "$PWD/dist"
 scripts/package-release.sh "$PWD/dist" "$PWD/dist-release"
 ```
 
-Release gates and contributor workflow live in [`CONTRIBUTING.md`](CONTRIBUTING.md).
-For the current release, start with [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
-
-- [`HZR.md`](HZR.md) — agent routing contract
-- [`SECURITY.md`](SECURITY.md) — supported versions and vulnerability reporting
-- [`CHANGELOG.md`](CHANGELOG.md) — public release history
-- [`docs/releases/`](docs/releases/) — immutable release archive
-- [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — bundled-engine attribution
+See [`CONTRIBUTING.md`](CONTRIBUTING.md), [`RELEASE_NOTES.md`](RELEASE_NOTES.md),
+[`CHANGELOG.md`](CHANGELOG.md), [`SECURITY.md`](SECURITY.md), and the immutable
+[`release archive`](docs/releases/).
 
 The HZR control plane is Apache-2.0. Fork-core and bundled engines retain their own
 licenses and provenance; see [`NOTICE`](NOTICE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

@@ -3892,14 +3892,14 @@ mod tests {
     fn acceptance_gate_session_start_combines_drift_and_update_without_losing_actions() {
         let payload = session_start_payload(
             Some("Run `hzr doctor` before continuing."),
-            Some("HZR 0.6.2 is available."),
+            Some("HZR 0.6.3 is available."),
             Some(response_codec_session_notice()),
         )
         .expect("session payload");
         let rendered = payload.to_string();
 
         assert!(rendered.contains("Run `hzr doctor` before continuing."));
-        assert!(rendered.contains("HZR 0.6.2 is available."));
+        assert!(rendered.contains("HZR 0.6.3 is available."));
         assert!(rendered.contains("Inform the user once"));
         assert!(rendered.contains("Do not install it without explicit approval."));
         assert!(rendered.contains("instructed-only"));
