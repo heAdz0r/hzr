@@ -1135,7 +1135,13 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             checks.push(check("claude_code_mcp", CheckStatus::Warning, error));
         }
     }
-    let response_codec_coverage = response_codec_coverage(&client_workspace_bindings);
+    let codec_instruction_surfaces =
+        audited_codec_instruction_surfaces(config.activation.mode, workspace_enabled, workspace);
+    let response_codec_coverage = response_codec_coverage(
+        &client_workspace_bindings,
+        codec_instruction_surfaces,
+        workspace,
+    );
     for coverage in &response_codec_coverage {
         checks.push(check(
             format!("{}_global_codec", coverage.client.replace('-', "_")),
@@ -1490,30 +1496,93 @@ fn effective_workspace_mcp_statuses(
     global
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CodecInstructionSurfaces {
+    workspace_active: bool,
+    claude: bool,
+    codex: bool,
+}
+
+fn audited_codec_instruction_surfaces(
+    mode: hzr_core::ActivationMode,
+    workspace_enabled: bool,
+    workspace: &Path,
+) -> CodecInstructionSurfaces {
+    let workspace_active = mode == hzr_core::ActivationMode::All || workspace_enabled;
+    if !workspace_active {
+        return CodecInstructionSurfaces {
+            workspace_active,
+            claude: false,
+            codex: false,
+        };
+    }
+    let healthy = |surface| {
+        let local = match surface {
+            instructions::Surface::Claude => workspace.join("CLAUDE.md"),
+            instructions::Surface::Codex => workspace.join("AGENTS.md"),
+        };
+        instructions::audit(surface, &local).is_ok_and(|audit| audit.healthy())
+            || (mode == hzr_core::ActivationMode::All
+                && surface
+                    .default_path()
+                    .ok()
+                    .and_then(|path| instructions::audit(surface, &path).ok())
+                    .is_some_and(|audit| audit.healthy()))
+    };
+    CodecInstructionSurfaces {
+        workspace_active,
+        claude: healthy(instructions::Surface::Claude),
+        codex: healthy(instructions::Surface::Codex),
+    }
+}
+
 fn response_codec_coverage(
     bindings: &[client_config::ClientWorkspaceBinding],
+    instructions: CodecInstructionSurfaces,
+    workspace: &Path,
 ) -> Vec<ResponseCodecCoverage> {
     let desktop_available = bindings.iter().any(|binding| {
         binding.client == client_config::Client::ClaudeDesktop
             && binding.availability == client_config::WorkspaceAvailability::Available
     });
+    let instructed = |client: &str, active: bool, mechanism: &str| ResponseCodecCoverage {
+        client: client.into(),
+        state: if active {
+            ResponseCodecCoverageState::Instructed
+        } else {
+            ResponseCodecCoverageState::Unavailable
+        },
+        mechanism: if active {
+            mechanism.into()
+        } else if instructions.workspace_active {
+            "missing_or_stale_managed_instruction".into()
+        } else {
+            "workspace_activation_disabled".into()
+        },
+        global_response_replacement_confirmed: false,
+        global_response_token_credit_eligible: false,
+        action: if active {
+            "call `hzr_codec` for eligible long prose and use the returned content; otherwise report instructed-only coverage".into()
+        } else if instructions.workspace_active {
+            format!(
+                "run `hzr doctor --workspace {}` and `hzr init` from that workspace before claiming instructed codec coverage",
+                workspace.display()
+            )
+        } else {
+            format!(
+                "enable {} with `hzr enable --workspace {}` and run `hzr init`; until then codec coverage is unavailable",
+                workspace.display(),
+                workspace.display()
+            )
+        },
+    };
     vec![
-        ResponseCodecCoverage {
-            client: "claude-code".into(),
-            state: ResponseCodecCoverageState::Instructed,
-            mechanism: "managed_instruction_and_session_start".into(),
-            global_response_replacement_confirmed: false,
-            global_response_token_credit_eligible: false,
-            action: "call `hzr_codec` for eligible long prose and use the returned content; otherwise report instructed-only coverage".into(),
-        },
-        ResponseCodecCoverage {
-            client: "codex".into(),
-            state: ResponseCodecCoverageState::Instructed,
-            mechanism: "managed_instruction".into(),
-            global_response_replacement_confirmed: false,
-            global_response_token_credit_eligible: false,
-            action: "call `hzr_codec` for eligible long prose and use the returned content; otherwise report instructed-only coverage".into(),
-        },
+        instructed(
+            "claude-code",
+            instructions.claude,
+            "audited_managed_instruction",
+        ),
+        instructed("codex", instructions.codex, "audited_managed_instruction"),
         ResponseCodecCoverage {
             client: "claude-desktop".into(),
             state: if desktop_available {
@@ -2218,13 +2287,14 @@ mod tests {
     use crate::instructions::{self, Surface};
 
     use super::{
-        CheckStatus, attest_active_bundle, bounded, claude_code_mcp_check, contract_is_portable,
+        CheckStatus, CodecInstructionSurfaces, attest_active_bundle,
+        audited_codec_instruction_surfaces, bounded, claude_code_mcp_check, contract_is_portable,
         direct_icm_registration_detail, effective_workspace_mcp_statuses, fidelity_allowance_check,
         fidelity_durability_status_check, fleet_instruction_health_checks, hook_ownership_check,
         index_readiness_check, install_transaction_check, instruction_health_check,
         instruction_health_check_with_exemptions, integration_layout, reconcile_fleet_contracts,
-        repair_legacy_index, workspace_binding_check, workspace_instruction_health_check,
-        response_codec_coverage,
+        repair_legacy_index, response_codec_coverage, workspace_binding_check,
+        workspace_instruction_health_check,
     };
 
     #[test]
@@ -2619,7 +2689,15 @@ justification = "This repository measures upstream RTK as the explicit benchmark
             &desktop,
             std::path::Path::new("/work/app"),
         )];
-        let coverage = response_codec_coverage(&bindings);
+        let coverage = response_codec_coverage(
+            &bindings,
+            CodecInstructionSurfaces {
+                workspace_active: true,
+                claude: true,
+                codex: true,
+            },
+            std::path::Path::new("/work/app"),
+        );
 
         assert_eq!(coverage.len(), 3);
         assert!(
@@ -2636,6 +2714,85 @@ justification = "This repository measures upstream RTK as the explicit benchmark
             item.client == "claude-code"
                 && item.state == hzr_codec::ResponseCodecCoverageState::Instructed
         }));
+    }
+
+    #[test]
+    fn acceptance_gate_codec_instructions_are_unavailable_when_disabled_or_missing() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let missing = audited_codec_instruction_surfaces(
+            hzr_core::ActivationMode::Selected,
+            true,
+            directory.path(),
+        );
+        assert!(missing.workspace_active);
+        assert!(!missing.claude);
+        assert!(!missing.codex);
+        let missing_coverage = response_codec_coverage(&[], missing, directory.path());
+        assert!(
+            missing_coverage
+                .iter()
+                .filter(|item| item.client != "claude-desktop")
+                .all(
+                    |item| item.state == hzr_codec::ResponseCodecCoverageState::Unavailable
+                        && item.mechanism == "missing_or_stale_managed_instruction"
+                )
+        );
+
+        let disabled = audited_codec_instruction_surfaces(
+            hzr_core::ActivationMode::Selected,
+            false,
+            directory.path(),
+        );
+        let coverage = response_codec_coverage(&[], disabled, directory.path());
+        assert!(
+            coverage
+                .iter()
+                .filter(|item| item.client != "claude-desktop")
+                .all(
+                    |item| item.state == hzr_codec::ResponseCodecCoverageState::Unavailable
+                        && item.mechanism == "workspace_activation_disabled"
+                )
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_codec_instructions_require_current_audited_surfaces() {
+        let directory = tempfile::tempdir().expect("temporary workspace");
+        let contract = directory.path().join("HZR.md");
+        fs::write(&contract, "canonical contract\n").expect("contract");
+        instructions::install(
+            Surface::Claude,
+            &directory.path().join("CLAUDE.md"),
+            &contract,
+            false,
+            true,
+        )
+        .expect("Claude instructions");
+        instructions::install(
+            Surface::Codex,
+            &directory.path().join("AGENTS.md"),
+            &contract,
+            false,
+            true,
+        )
+        .expect("Codex instructions");
+
+        let audited = audited_codec_instruction_surfaces(
+            hzr_core::ActivationMode::Selected,
+            true,
+            directory.path(),
+        );
+        assert!(audited.claude);
+        assert!(audited.codex);
+
+        fs::write(directory.path().join("AGENTS.md"), "stale\n").expect("stale surface");
+        let stale = audited_codec_instruction_surfaces(
+            hzr_core::ActivationMode::Selected,
+            true,
+            directory.path(),
+        );
+        assert!(stale.claude);
+        assert!(!stale.codex);
     }
 
     #[test]

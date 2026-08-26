@@ -783,6 +783,39 @@ fn test_the_registration_snippet_pins_the_workspace() {
     assert!(claude_code.contains("-s project"));
 }
 
+#[test]
+fn acceptance_gate_registration_snippets_escape_hostile_paths() {
+    let binary_text = "/tmp/hzr\"\\\n[mcp_servers.injected]";
+    let workspace_text = "/tmp/project\"\\\ncommand = 'injected'";
+    let binary = std::path::Path::new(binary_text);
+    let workspace = std::path::Path::new(workspace_text);
+
+    let codex = registration_snippet(McpClientArg::Codex, binary, Some(workspace));
+    let document = codex
+        .parse::<toml_edit::DocumentMut>()
+        .expect("hostile paths remain valid TOML");
+    let registration = &document["mcp_servers"]["hzr"];
+    assert_eq!(registration["command"].as_str(), Some(binary_text));
+    let args = registration["args"].as_array().expect("TOML args");
+    assert_eq!(args.len(), 4);
+    assert_eq!(
+        args.get(3).and_then(toml_edit::Value::as_str),
+        Some(workspace_text)
+    );
+    assert!(document["mcp_servers"].get("injected").is_none());
+
+    for client in [McpClientArg::ClaudeDesktop, McpClientArg::ClaudeCode] {
+        let snippet = registration_snippet(client, binary, Some(workspace));
+        let json_start = snippet.find('{').expect("JSON object");
+        let document: Value =
+            serde_json::from_str(&snippet[json_start..]).expect("hostile paths remain valid JSON");
+        let registration = &document["mcpServers"]["hzr"];
+        assert_eq!(registration["command"], binary_text);
+        assert_eq!(registration["args"][3], workspace_text);
+        assert!(document["mcpServers"].get("injected").is_none());
+    }
+}
+
 /// The converse: a real repository path must still bind, including one that has not been
 /// `git init`-ed yet, because HZR supports those projects everywhere else.
 #[test]

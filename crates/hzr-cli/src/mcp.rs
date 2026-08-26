@@ -41,6 +41,7 @@ use hzr_protocol::{
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
+use toml_edit::{Array, Value as TomlValue};
 
 use crate::cli::McpClientArg;
 use crate::client::DaemonClient;
@@ -1241,14 +1242,16 @@ pub fn registration_snippet(
     binary: &std::path::Path,
     workspace: Option<&std::path::Path>,
 ) -> String {
-    let binary = binary.display();
+    let binary_text = binary.to_string_lossy().into_owned();
+    let toml_binary = TomlValue::from(binary_text.as_str()).to_string();
+    let json_binary = Value::String(binary_text).to_string();
     let (toml_args, json_args) = match workspace {
         Some(path) => {
-            let path = path.display();
-            (
-                format!("[\"mcp\", \"serve\", \"--workspace\", \"{path}\"]"),
-                format!("[\"mcp\", \"serve\", \"--workspace\", \"{path}\"]"),
-            )
+            let path = path.to_string_lossy().into_owned();
+            let args = ["mcp", "serve", "--workspace", path.as_str()];
+            let mut toml = Array::new();
+            toml.extend(args);
+            (toml.to_string(), json!(args).to_string())
         }
         None => (
             "[\"mcp\", \"serve\"]".to_owned(),
@@ -1272,7 +1275,7 @@ pub fn registration_snippet(
                  # `icm serve` entry spawns a second writer per session and leaks orphans.\n\
                  {hint}\
                  [mcp_servers.hzr]\n\
-                 command = \"{binary}\"\n\
+                 command = {toml_binary}\n\
                  args = {toml_args}\n"
             )
         }
@@ -1285,7 +1288,7 @@ pub fn registration_snippet(
             };
             format!(
                 "// claude_desktop_config.json — replace the \"icm\" server with this.\n\
-                 {hint}{{\n  \"mcpServers\": {{\n    \"hzr\": {{\n      \"command\": \"{binary}\",\n      \"args\": {json_args}\n    }}\n  }}\n}}\n"
+                 {hint}{{\n  \"mcpServers\": {{\n    \"hzr\": {{\n      \"command\": {json_binary},\n      \"args\": {json_args}\n    }}\n  }}\n}}\n"
             )
         }
         McpClientArg::ClaudeCode => {
@@ -1299,8 +1302,8 @@ pub fn registration_snippet(
             format!(
                 "// .mcp.json — project scope is isolated per worktree. HZR never writes\n\
                  // Claude Code's user state. Equivalent CLI: `claude mcp add -s project hzr\n\
-                 // -- {binary} mcp serve --workspace <dir>`.\n\
-                 {hint}{{\n  \"mcpServers\": {{\n    \"hzr\": {{\n      \"command\": \"{binary}\",\n      \"args\": {json_args}\n    }}\n  }}\n}}\n"
+                 // -- <hzr-binary> mcp serve --workspace <dir>`.\n\
+                 {hint}{{\n  \"mcpServers\": {{\n    \"hzr\": {{\n      \"command\": {json_binary},\n      \"args\": {json_args}\n    }}\n  }}\n}}\n"
             )
         }
     }
