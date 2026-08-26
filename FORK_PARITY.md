@@ -1,7 +1,7 @@
-# HZR 0.6.1 — fork-core parity ledger
+# HZR 0.6.2 — fork-core parity ledger
 
 **Audit date:** 2026-08-26
-**Status:** HZR 0.6.1 guard correction on the 0.6.0 audit delta; full deterministic gate green
+**Status:** HZR 0.6.2 retains the 0.6.1 guard correction on the 0.6.0 audit delta; full deterministic gate green
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 

@@ -1455,7 +1455,15 @@ fn agent_instruction_targets(
 ) -> Result<(PathBuf, Vec<(instructions::Surface, PathBuf)>)> {
     let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
     let contract = contract_asset_path(&executable_source_directory(&executable)?);
-    let targets = match config.activation.mode {
+    let targets = scoped_instruction_targets(config.activation.mode, workspace_root)?;
+    Ok((contract, targets))
+}
+
+fn scoped_instruction_targets(
+    activation_mode: hzr_core::ActivationMode,
+    workspace_root: &Path,
+) -> Result<Vec<(instructions::Surface, PathBuf)>> {
+    let targets = match activation_mode {
         hzr_core::ActivationMode::All => {
             let mut targets = [instructions::Surface::Claude, instructions::Surface::Codex]
                 .into_iter()
@@ -1470,7 +1478,7 @@ fn agent_instruction_targets(
             activation::local_instruction_paths(workspace_root).to_vec()
         }
     };
-    Ok((contract, targets))
+    Ok(targets)
 }
 
 /// Locate `HZR.md`. An assembled bundle ships it under `share/hzr/`; a development
@@ -2476,7 +2484,11 @@ async fn initialize_if_needed(
     // while Codex remains globally or cross-workspace bound.
     let (instruction_reports, project_mcp) =
         reconcile_session_surfaces(config_path, &config, &workspace_root)?;
-    let instruction_alert = session_instruction_drift_alert(&workspace_root, &instruction_reports);
+    let instruction_alert = session_instruction_drift_alert(
+        config.activation.mode,
+        &workspace_root,
+        &instruction_reports,
+    )?;
     let (workspace, outcome, changed, git_backed, registration) =
         initialize_workspace_at(&config, &workspace_root).await?;
     let dashboard = format!("http://{}", config.daemon.bind);
@@ -2568,16 +2580,12 @@ async fn initialize_if_needed(
 }
 
 fn session_instruction_drift_alert(
+    activation_mode: hzr_core::ActivationMode,
     workspace_root: &Path,
     reports: &[instructions::InstructionReport],
-) -> Option<String> {
-    let mut targets = activation::local_instruction_paths(workspace_root).to_vec();
-    for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
-        if let Ok(path) = surface.default_path() {
-            targets.push((surface, path));
-        }
-    }
-    instruction_drift_alert_for_targets(reports, targets)
+) -> Result<Option<String>> {
+    let targets = scoped_instruction_targets(activation_mode, workspace_root)?;
+    Ok(instruction_drift_alert_for_targets(reports, targets))
 }
 
 fn instruction_drift_alert_for_targets(
@@ -3693,8 +3701,31 @@ mod tests {
     use super::{
         bounded_read_arguments, canonical_directory, contract_asset_path,
         executable_source_directory, forwarded_fork_args, instruction_drift_alert_for_targets,
-        payload_limit, reject_direct_fork_bypass, session_start_payload,
+        payload_limit, reject_direct_fork_bypass, scoped_instruction_targets,
+        session_instruction_drift_alert, session_start_payload,
     };
+
+    #[test]
+    fn acceptance_gate_selected_activation_does_not_require_global_instructions() {
+        let directory = tempdir().expect("temporary directory");
+        let contract = directory.path().join("HZR.md");
+        fs::write(&contract, "canonical contract\n").expect("contract");
+        for (surface, path) in
+            scoped_instruction_targets(hzr_core::ActivationMode::Selected, directory.path())
+                .expect("selected targets")
+        {
+            crate::instructions::install(surface, &path, &contract, false, true)
+                .expect("managed local instructions");
+        }
+
+        let alert = session_instruction_drift_alert(
+            hzr_core::ActivationMode::Selected,
+            directory.path(),
+            &[],
+        )
+        .expect("drift audit");
+        assert!(alert.is_none());
+    }
 
     #[test]
     fn acceptance_gate_session_start_alerts_when_user_instructions_drift() {

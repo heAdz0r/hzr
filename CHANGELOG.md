@@ -39,10 +39,10 @@ should make its benefit obvious at the moment the work finishes.
 - `E10` is rendered as `e10-capability-gap`, so the dominant class is understandable without
   memorising the evasion taxonomy.
 - **Instruction drift can no longer wait silently for a manual doctor run.** SessionStart audits
-  the current project and user-global Claude/Codex instruction surfaces with the same canonical
-  audit used by doctor. If it repaired a managed block or still finds an unhealthy surface, it
-  tells the agent to run `hzr doctor` before continuing and to preview fleet repair with
-  `hzr doctor --reconcile-fleet --dry-run`.
+  every Claude/Codex instruction surface owned by the active all-project or project-only policy
+  with the same canonical audit used by doctor. If it repaired a managed block or still finds an
+  unhealthy surface, it tells the agent to run `hzr doctor` before continuing and to preview
+  fleet repair with `hzr doctor --reconcile-fleet --dry-run`.
 
 ### Acceptance gate
 
@@ -1170,5 +1170,6 @@ First public HZR release.
 [0.2.0]: https://github.com/heAdz0r/hzr/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/heAdz0r/hzr/releases/tag/v0.1.0
 [0.4.3]: https://github.com/heAdz0r/hzr/compare/v0.4.2...v0.4.3
+[0.6.2]: https://github.com/heAdz0r/hzr/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/heAdz0r/hzr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0
