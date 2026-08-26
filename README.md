@@ -199,13 +199,15 @@ harness = "codex"
 provider = "openai"
 model = "gpt-5.6-terra"
 method = "standard_short_context_lte_272k"
-context_window_tokens = 100000
+request_input_tokens = 100000
 pricing_basis = "input"
 # pricing_file = "/absolute/path/to/private-pricing.json"
 ```
 
 Run `hzr billing catalog` before selecting a model. The built-in, versioned catalog covers
 current public API prices from OpenAI, Anthropic, Google, DeepSeek, Qwen, Mistral, and xAI.
+`request_input_tokens` is the actual priced request/session input, not the model's maximum
+context capacity; tiered prices fail closed when that evidence is absent or outside the method.
 Set `pricing_file` to an absolute JSON path to merge strict overrides by exact pricing key.
 HZR fails closed on an unknown model, method, currency, or expired price; it performs no FX
 conversion. Receipt imports remain a separate evidence class and are labelled user-supplied

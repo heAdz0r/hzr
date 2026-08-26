@@ -51,7 +51,7 @@ harness = "codex"
 provider = "openai"
 model = "gpt-5.6-terra"
 method = "standard_short_context_lte_272k"
-context_window_tokens = 100000
+request_input_tokens = 100000
 pricing_basis = "input"
 # pricing_file = "/absolute/path/to/private-pricing.json"
 ```
@@ -59,7 +59,9 @@ pricing_basis = "input"
 Use `hzr billing catalog` to inspect the embedded evidence. Set `pricing_file` to an absolute
 JSON path when your contract, gateway, region, or internal chargeback uses different rates. The
 file uses the same strict, versioned schema and merges overrides by exact pricing key; HZR does
-not select an approximate neighbour or perform FX conversion.
+not select an approximate neighbour or perform FX conversion. `request_input_tokens` is the
+actual priced request/session input, not the model's maximum context capacity; tiered prices
+fail closed without matching evidence.
 
 The displayed dollar figure is a **preliminary RAW estimate based on potentially avoided
 session tokens and a public list price**. It is not a provider bill, subscription saving, or
