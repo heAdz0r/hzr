@@ -6,6 +6,44 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [0.6.0] - 2026-08-26
 
+### Why this is a qualitative leap
+
+0.5.x made individual routes safer and cheaper. 0.6.0 changes the class of the product: HZR is
+no longer a collection of adjacent wrappers around RTK, grepai, ICM, and Caveman. It is one
+owned control plane with a shared project identity, lifecycle, policy boundary, typed protocol,
+accounting model, diagnostic surface, and local observatory.
+
+Before 0.6.0, a filter could be correct while a neighbouring path still bypassed it; a watcher
+could die while the UI looked idle; a cache could outlive its project; an uncertain execution
+could be retried; and an estimated reduction could look like billed savings. The components were
+useful, but correctness still depended on them behaving independently in compatible ways.
+
+0.6.0 closes that loop:
+
+```text
+agent intent → HZR policy → managed engines → typed validation → ledger → doctor / traces / UI
+```
+
+That architectural shift gives users materially stronger guarantees:
+
+- **One owner instead of competing processes.** A worktree has one grepai index owner and HZR
+  supervises one durable ICM process; lifecycle failures remain visible and recoverable.
+- **No invisible escape hatch.** A replacement-capable command that bypasses managed filtering is
+  a policy failure. Explicit exact-output recovery is bounded, durable, and receives zero savings
+  credit.
+- **Truth before headline savings.** Provider receipts, byte-based estimates, excluded traffic,
+  native unobserved traffic, regressions, and unknown replacement capability remain distinct.
+- **Failures become state, not folklore.** Post-spawn uncertainty survives restart, interrupted
+  adoption has a forward-recovery journal, and doctor reports concrete desired-state gaps.
+- **The system explains itself.** The same typed events drive MCP receipts, lifecycle diagnostics,
+  traces, memory/index topology, accounting posture, and the local UI.
+- **New capabilities compose instead of creating another side channel.** CLI and MCP share the
+  daemon-owned schema, confinement, validation, and accounting boundary.
+
+The result is not merely stronger compression. It is a safer and more operable mechanism for
+earning token reduction without hiding incomplete output, duplicate work, cross-project state,
+or missing economic evidence.
+
 ### Added
 
 - A typed local observability plane now connects daemon lifecycle, RTK routing, grepai watcher
@@ -45,9 +83,6 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 - Sequential multi-workspace installation no longer keeps the first workspace as the global owner.
 - MCP rejects outside-workspace reads/writes and refuses success when its typed output contract or
   accounting receipt is incomplete.
-
-### Fixed
-
 - `hzr update` could not find its own installer when invoked through `~/.local/bin/hzr` — the
   symlink the installer itself puts on PATH. `current_exe()` can return that symlink rather than
   its target, so the bundle root derived from it was `~/.local/share/hzr`, which holds no
@@ -55,6 +90,14 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   exists on a build machine and nowhere else. Every install built by CI therefore failed to
   self-update, with `hzr update` reporting the installer as absent. The resolved target is now
   tried as well.
+
+### Evidence boundary
+
+The four native release bundles passed clean-install verification, including the daemon, managed
+engines, memory readiness, project search, stats, MCP, and atomic current-version switching. This
+is still not a provider-billed proof of economic savings: `economic_claim_ready` remains `false`,
+and the deferred full workspace, browser, fleet, and fault-injection gates are tracked explicitly
+in `docs/TEST_DEBT_0.6.0.md` rather than being presented as completed.
 
 ## [0.5.1] - 2026-08-23
 
