@@ -5,6 +5,11 @@
 </p>
 
 <p align="center">
+  <a href="docs/assets/hzr-promo-1080p.mp4"><img alt="HZR in 58 seconds - benchmark, control plane, money lens" src="docs/assets/hzr-promo-poster.png" width="880"></a><br>
+  <sub><a href="docs/assets/hzr-promo-1080p.mp4"><strong>&#9654; HZR in 58 seconds</strong></a> &mdash; the recorded benchmark, what interception actually removes, the control plane, and the opt-in public-list cost estimate</sub>
+</p>
+
+<p align="center">
   <strong>One local control plane for efficient coding agents.</strong><br>
   Search once. Remember once. Execute through policy. Measure what actually happened.
 </p>
