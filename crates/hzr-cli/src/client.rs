@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hzr_codec::Transform;
-use hzr_core::{Config, EngineManifest};
+use hzr_core::{Config, EngineManifest, ProviderEconomicReceipt, ProviderReceiptRecordResult};
 use hzr_exec::{ExecutionOutcome, RtkRewriteOutcome};
 use hzr_memory::{MemoryRecord, MemoryTransport};
 use hzr_protocol::{
@@ -161,6 +161,13 @@ impl DaemonClient {
         request: &OperationApiRequest,
     ) -> Result<OperationApiResponse, ClientError> {
         self.post("/v1/operations", request).await
+    }
+
+    pub async fn record_provider_receipt(
+        &self,
+        receipt: &ProviderEconomicReceipt,
+    ) -> Result<ProviderReceiptRecordResult, ClientError> {
+        self.post("/v1/billing/receipts", receipt).await
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &'static str) -> Result<T, ClientError> {

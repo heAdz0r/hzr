@@ -6,8 +6,8 @@ use anyhow::Result;
 use hzr_core::{
     BypassSummary, CURRENT_ACCOUNTING_POLICY_VERSION, Config, EfficiencySummary, EvasionSummary,
     Ledger, LedgerSummary, OperationChannel, OperationFamilySummary, OperationModeSummary,
-    OperationRoute, ReadPipelineSummary, ReplacementCapability, StatsQuery, classify_operation,
-    privacy_identity_hash,
+    OperationRoute, RawPublicEstimate, ReadPipelineSummary, ReplacementCapability, StatsQuery,
+    classify_operation, load_pricing_catalog, price_avoided_input_tokens, privacy_identity_hash,
 };
 use serde::Serialize;
 
@@ -81,6 +81,9 @@ pub struct StatsReport {
     pub coverage: AccountingCoverage,
     pub runtime_accounting_complete: bool,
     pub economic_claim_ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_public_estimate: Option<RawPublicEstimate>,
+    pub raw_public_estimate_unavailable_reason: Option<String>,
     pub notes: Vec<&'static str>,
 }
 
@@ -211,7 +214,7 @@ pub async fn collect(
         recovery.push_str(" --since 7d");
     }
     let coverage = hook_runner::degraded_rewrite_coverage(config)?;
-    Ok(build_report_with_command_limit(
+    let mut report = build_report_with_command_limit(
         ReportInputs {
             gain: snapshot.efficiency,
             observed_model_usage: snapshot.provider_usage,
@@ -227,7 +230,27 @@ pub async fn collect(
             command_limit: (!include_all_commands).then_some(DEFAULT_COMMAND_LIMIT),
             recovery: Some(recovery),
         },
-    ))
+    );
+    if config.billing.public_estimate_enabled {
+        match load_pricing_catalog(config.billing.pricing_file.as_deref()).and_then(|catalog| {
+            price_avoided_input_tokens(
+                &catalog,
+                &config.billing.harness,
+                &config.billing.provider,
+                &config.billing.model,
+                &config.billing.method,
+                config.billing.effective_pricing_basis(),
+                report.direct_savings.net_avoided_tokens_estimated.max(0) as u64,
+            )
+        }) {
+            Ok(estimate) => report.raw_public_estimate = Some(estimate),
+            Err(error) => report.raw_public_estimate_unavailable_reason = Some(error.to_string()),
+        }
+    } else {
+        report.raw_public_estimate_unavailable_reason =
+            Some("public pricing estimate is opt-in; run `hzr billing catalog`, then configure [billing] public_estimate_enabled, harness, provider, model, method, and pricing_basis in the HZR config".into());
+    }
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -424,6 +447,8 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         coverage,
         runtime_accounting_complete: traffic_complete,
         economic_claim_ready: false,
+        raw_public_estimate: None,
+        raw_public_estimate_unavailable_reason: None,
         notes: provider_usage_notes(observed_model_usage_scope),
     }
 }

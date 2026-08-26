@@ -38,6 +38,7 @@ fn write_stats(output: &mut impl Write, report: &StatsReport, color: bool) -> io
     )?;
 
     write_local_reduction(output, report, color)?;
+    write_raw_public_estimate(output, report, color)?;
     write_optimizer_bypass(output, report, color)?;
     write_evasion(output, report, color)?;
     write_operation_families(output, report, color)?;
@@ -46,6 +47,59 @@ fn write_stats(output: &mut impl Write, report: &StatsReport, color: bool) -> io
     write_hot_paths(output, report, color)?;
     write_provider_usage(output, report, color)?;
     write_integrity(output, report, color)
+}
+
+fn write_raw_public_estimate(
+    output: &mut impl Write,
+    report: &StatsReport,
+    color: bool,
+) -> io::Result<()> {
+    writeln!(output)?;
+    writeln!(
+        output,
+        "{}  {}",
+        style("POTENTIAL COST", "1;38;5;208", color),
+        style(
+            "raw_public_estimate · preliminary · not an invoice",
+            "2;37",
+            color
+        )
+    )?;
+    if let Some(estimate) = &report.raw_public_estimate {
+        writeln!(
+            output,
+            "   potential saved {} {} from {} avoided input tokens",
+            estimate.currency,
+            format_microunits(estimate.savings_microunits),
+            format_count(estimate.avoided_input_tokens_estimated),
+        )?;
+        writeln!(
+            output,
+            "   {} / {} / {} / {} · basis={} · catalog={} retrieved={}",
+            estimate.harness,
+            estimate.provider,
+            estimate.model,
+            estimate.method,
+            estimate.pricing_basis,
+            estimate.price_table_identity,
+            estimate.retrieved_at,
+        )?;
+        writeln!(output, "   {}", estimate.disclaimer)?;
+    } else {
+        writeln!(
+            output,
+            "   unavailable: {}",
+            report
+                .raw_public_estimate_unavailable_reason
+                .as_deref()
+                .unwrap_or("no exact pricing evidence")
+        )?;
+    }
+    Ok(())
+}
+
+fn format_microunits(value: u64) -> String {
+    format!("{}.{:06}", value / 1_000_000, value % 1_000_000)
 }
 
 fn write_evasion(output: &mut impl Write, report: &StatsReport, color: bool) -> io::Result<()> {
@@ -776,6 +830,8 @@ mod tests {
             },
             runtime_accounting_complete: false,
             economic_claim_ready: false,
+            raw_public_estimate: None,
+            raw_public_estimate_unavailable_reason: Some("opt-in disabled".into()),
             notes: Vec::new(),
         }
     }

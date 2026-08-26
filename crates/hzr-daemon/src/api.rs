@@ -7,8 +7,10 @@ use axum::extract::{Path as AxumPath, Query, State};
 use hzr_context::{ContextError, PlanRequest, SearchRequest};
 use hzr_core::{
     FidelityAllowance, FidelityBudget, FidelityPreflight, Ledger, LedgerRecord,
-    ProjectOperationRoute, ProjectOperationSummary, RawFidelityReason, RawFidelityRequest,
-    efficient_route_replacement, first_class_replacement, locked_engines, raw_fidelity_request,
+    ProjectOperationRoute, ProjectOperationSummary, ProviderEconomicReceipt,
+    ProviderReceiptRecordResult, RawFidelityReason, RawFidelityRequest,
+    efficient_route_replacement, first_class_replacement, load_pricing_catalog, locked_engines,
+    raw_fidelity_request, validate_receipt,
 };
 use hzr_exec::{
     AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent,
@@ -2625,6 +2627,22 @@ pub async fn usage(
         .await
         .map_err(|error| ApiError::internal(format!("usage ledger write failed: {error}")))?;
     Ok(Json(UsageApiResponse { recorded: true }))
+}
+
+pub async fn provider_receipt(
+    State(state): State<AppState>,
+    Json(mut receipt): Json<ProviderEconomicReceipt>,
+) -> Result<Json<ProviderReceiptRecordResult>, ApiError> {
+    validate_receipt(&receipt).map_err(|error| ApiError::bad_request(error.to_string()))?;
+    receipt.project_path = normalize_usage_project_path(Some(&receipt.project_path));
+    let catalog = load_pricing_catalog(state.config.billing.pricing_file.as_deref())
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let result = state
+        .ledger
+        .record_provider_receipt(receipt, catalog)
+        .await
+        .map_err(|error| ApiError::internal(format!("provider receipt write failed: {error}")))?;
+    Ok(Json(result))
 }
 
 pub async fn operation(

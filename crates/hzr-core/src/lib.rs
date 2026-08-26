@@ -1,13 +1,21 @@
+mod billing;
 mod budget;
 mod config;
 mod engines;
 mod ledger;
 mod operation;
 
+pub use billing::{
+    BUILTIN_PRICING_CATALOG_IDENTITY, BillingError, EconomicAmount, PricingCatalog, PricingEntry,
+    ProviderEconomicReceipt, ProviderReceiptRecordResult, ProviderTokenUsage, PublicEstimate,
+    RawPublicEstimate, SessionEconomicSummary, TokenRates, builtin_pricing_catalog,
+    load_pricing_catalog, price_avoided_input_tokens, price_receipt, receipt_payload_hash,
+    validate_receipt,
+};
 pub use budget::{BudgetPlanner, FusionInput};
 pub use config::{
-    ActivationConfig, ActivationMode, Config, ConfigError, ConfigPaths, DaemonConfig,
-    EnabledWorkspace, EngineConfig, PrivacyConfig,
+    ActivationConfig, ActivationMode, BillingConfig, Config, ConfigError, ConfigPaths,
+    DaemonConfig, EnabledWorkspace, EngineConfig, PrivacyConfig,
 };
 pub use engines::{EngineManifest, EnginePin, locked_engines};
 pub use ledger::{

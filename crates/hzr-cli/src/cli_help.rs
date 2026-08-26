@@ -62,6 +62,7 @@ Distribution:
   update     Install a newer GitHub release when available
   build      Run the inherited fork-core self-build pipeline
   stats      Show cumulative efficiency gains
+  billing    Inspect pricing evidence or ingest provider receipts
 
 Legacy:
   migrate    Inspect or centralize legacy state

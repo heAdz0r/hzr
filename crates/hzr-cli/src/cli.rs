@@ -298,6 +298,11 @@ pub enum Command {
         #[command(subcommand)]
         command: CodecCommand,
     },
+    #[command(about = "Inspect pricing evidence or ingest provider receipts")]
+    Billing {
+        #[command(subcommand)]
+        command: BillingCommand,
+    },
     #[command(
         about = "Run the managed caveman-code agent",
         long_about = AGENT_LONG_ABOUT,
@@ -434,6 +439,18 @@ pub enum McpCommand {
         after_help = MCP_STATUS_AFTER_HELP
     )]
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BillingCommand {
+    #[command(about = "Show the embedded and optional user-overridden public pricing catalog")]
+    Catalog,
+    #[command(about = "Ingest one strict JSON provider receipt through the authenticated daemon")]
+    Receipt {
+        /// JSON file containing one paired provider receipt; stdin is not accepted implicitly
+        #[arg(long, value_name = "FILE")]
+        file: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

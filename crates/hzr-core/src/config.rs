@@ -17,6 +17,7 @@ pub struct Config {
     pub policy: PolicyConfig,
     pub privacy: PrivacyConfig,
     pub activation: ActivationConfig,
+    pub billing: BillingConfig,
 }
 
 impl Default for Config {
@@ -30,6 +31,32 @@ impl Default for Config {
             policy: PolicyConfig::default(),
             privacy: PrivacyConfig::default(),
             activation: ActivationConfig::default(),
+            billing: BillingConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BillingConfig {
+    /// Public list-price estimates are opt-in and never represent an invoice.
+    pub public_estimate_enabled: bool,
+    pub harness: String,
+    pub provider: String,
+    pub model: String,
+    pub method: String,
+    /// `input` by default; `cache_read` requires evidence that avoided context would be cached.
+    pub pricing_basis: String,
+    /// Optional strict schema-v1 catalog whose exact keys replace built-in entries.
+    pub pricing_file: Option<PathBuf>,
+}
+
+impl BillingConfig {
+    pub fn effective_pricing_basis(&self) -> &str {
+        if self.pricing_basis.is_empty() {
+            "input"
+        } else {
+            &self.pricing_basis
         }
     }
 }
@@ -166,6 +193,29 @@ impl Config {
                 || !workspace.root.is_absolute()
             {
                 return Err(ConfigError::InvalidActivation);
+            }
+        }
+        if self.billing.public_estimate_enabled {
+            let fields = [
+                self.billing.harness.as_str(),
+                self.billing.provider.as_str(),
+                self.billing.model.as_str(),
+                self.billing.method.as_str(),
+            ];
+            if fields
+                .into_iter()
+                .any(|value| value.is_empty() || value.len() > 128 || !value.is_ascii())
+                || !matches!(
+                    self.billing.effective_pricing_basis(),
+                    "input" | "cache_read"
+                )
+                || self
+                    .billing
+                    .pricing_file
+                    .as_ref()
+                    .is_some_and(|path| !path.is_absolute())
+            {
+                return Err(ConfigError::InvalidBilling);
             }
         }
         Ok(())
@@ -466,6 +516,10 @@ pub enum ConfigError {
     InvalidPolicyBudget,
     #[error("activation workspaces require absolute roots and lowercase SHA-256 identities")]
     InvalidActivation,
+    #[error(
+        "billing selection requires bounded ASCII identifiers, input/cache_read basis, and an absolute pricing_file"
+    )]
+    InvalidBilling,
 }
 
 #[cfg(unix)]

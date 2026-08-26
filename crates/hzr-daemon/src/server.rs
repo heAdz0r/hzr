@@ -44,6 +44,7 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         .route("/v1/fork/run", post(api::fork_run))
         .route("/v1/codec/compile", post(api::codec_compile))
         .route("/v1/usage", post(api::usage))
+        .route("/v1/billing/receipts", post(api::provider_receipt))
         .route("/v1/operations", post(api::operation))
         .route_layer(middleware::from_fn_with_state(token, authorize));
     let public = Router::new()

@@ -11,7 +11,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hzr_core::{
     DetailedOperationAttribution, FidelityAllowance, FidelitySessionUsage, Ledger, LedgerError,
     LedgerRecord, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-    PrivacyPseudonymizer, PrivacySafeFidelityOperation, privacy_identity_hash,
+    PricingCatalog, PrivacyPseudonymizer, PrivacySafeFidelityOperation, ProviderEconomicReceipt,
+    ProviderReceiptRecordResult, privacy_identity_hash,
 };
 use hzr_protocol::{FidelityReconcileReceipt, FidelityUnknownResolution, TraceId};
 use thiserror::Error;
@@ -33,6 +34,11 @@ enum WriteCommand {
         // Box: LedgerRecord с workspace identity раздувает enum — держим варианты компактными.
         record: Box<LedgerRecord>,
         reply: oneshot::Sender<Result<(), LedgerError>>,
+    },
+    ProviderReceipt {
+        receipt: Box<ProviderEconomicReceipt>,
+        catalog: Box<PricingCatalog>,
+        reply: oneshot::Sender<Result<ProviderReceiptRecordResult, LedgerError>>,
     },
     /// An HZR-owned reduction, written to the same table the pinned engine uses so it is
     /// summarized by exactly the same queries.
@@ -529,6 +535,13 @@ impl LedgerWriter {
                         WriteCommand::Usage { record, reply } => {
                             let _ = reply.send(ledger.record(&record));
                         }
+                        WriteCommand::ProviderReceipt {
+                            receipt,
+                            catalog,
+                            reply,
+                        } => {
+                            let _ = reply.send(ledger.record_provider_receipt(&receipt, &catalog));
+                        }
                         WriteCommand::Operation {
                             record,
                             reply,
@@ -921,6 +934,23 @@ impl LedgerWriter {
             .map_err(|_| LedgerWriterError::Unavailable)?;
         result.await.map_err(|_| LedgerWriterError::Unavailable)??;
         Ok(())
+    }
+
+    pub async fn record_provider_receipt(
+        &self,
+        receipt: ProviderEconomicReceipt,
+        catalog: PricingCatalog,
+    ) -> Result<ProviderReceiptRecordResult, LedgerWriterError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriteCommand::ProviderReceipt {
+                receipt: Box::new(receipt),
+                catalog: Box::new(catalog),
+                reply,
+            })
+            .await
+            .map_err(|_| LedgerWriterError::Unavailable)?;
+        Ok(result.await.map_err(|_| LedgerWriterError::Unavailable)??)
     }
 
     pub async fn record_operation(&self, record: OperationRecord) -> Result<(), LedgerWriterError> {

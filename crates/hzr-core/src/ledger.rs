@@ -19,6 +19,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::billing::{
+    BillingError, EconomicAmount, PricingCatalog, ProviderEconomicReceipt,
+    ProviderReceiptRecordResult, SessionEconomicSummary, price_receipt, receipt_payload_hash,
+    validate_receipt,
+};
+
 pub const CURRENT_ACCOUNTING_POLICY_VERSION: &str = "privacy_typed_v2";
 const LEGACY_ACCOUNTING_POLICY_VERSION_V1: &str = "privacy_typed_v1";
 const IDENTITY_HMAC_UUID_V1: &str = "hmac_sha256_uuid_v1";
@@ -541,10 +547,10 @@ pub struct LegacyEfficiencyMigration {
 
 #[derive(Clone, Copy, Debug)]
 pub struct PriceTable {
-    pub input_per_million_usd: f64,
-    pub output_per_million_usd: f64,
-    pub cache_write_per_million_usd: f64,
-    pub cache_read_per_million_usd: f64,
+    pub input_microusd_per_million: u64,
+    pub output_microusd_per_million: u64,
+    pub cache_write_microusd_per_million: u64,
+    pub cache_read_microusd_per_million: u64,
 }
 
 impl PriceTable {
@@ -553,11 +559,17 @@ impl PriceTable {
         let output = usage.actual.output_tokens?;
         let cache_write = usage.actual.cache_write_tokens.unwrap_or_default();
         let cache_read = usage.actual.cache_read_tokens.unwrap_or_default();
-        let usd = input as f64 * self.input_per_million_usd / 1_000_000.0
-            + output as f64 * self.output_per_million_usd / 1_000_000.0
-            + cache_write as f64 * self.cache_write_per_million_usd / 1_000_000.0
-            + cache_read as f64 * self.cache_read_per_million_usd / 1_000_000.0;
-        Some((usd * 1_000_000.0).round() as u64)
+        let total = [
+            (input, self.input_microusd_per_million),
+            (output, self.output_microusd_per_million),
+            (cache_write, self.cache_write_microusd_per_million),
+            (cache_read, self.cache_read_microusd_per_million),
+        ]
+        .into_iter()
+        .try_fold(0_u128, |total, (tokens, rate)| {
+            total.checked_add(u128::from(tokens).checked_mul(u128::from(rate))?)
+        })?;
+        u64::try_from(total.div_ceil(1_000_000)).ok()
     }
 }
 
@@ -1348,6 +1360,35 @@ impl Ledger {
                     ON policy_events(timestamp);
                  CREATE INDEX IF NOT EXISTS idx_policy_events_session
                     ON policy_events(session_hash, timestamp);
+                 CREATE TABLE IF NOT EXISTS provider_economic_receipts (
+                    receipt_hash TEXT PRIMARY KEY,
+                    payload_hash TEXT NOT NULL,
+                    created_at_ms INTEGER NOT NULL,
+                    observed_at_ms INTEGER NOT NULL,
+                    source TEXT NOT NULL,
+                    harness TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    method TEXT NOT NULL,
+                    currency TEXT NOT NULL,
+                    session_hash TEXT NOT NULL,
+                    project_hash TEXT NOT NULL DEFAULT '',
+                    project_scope_hashes TEXT NOT NULL DEFAULT '',
+                    baseline_usage_json TEXT NOT NULL,
+                    delivered_usage_json TEXT NOT NULL,
+                    invoice_baseline_microunits INTEGER,
+                    invoice_delivered_microunits INTEGER,
+                    public_baseline_microunits INTEGER,
+                    public_delivered_microunits INTEGER,
+                    price_table_identity TEXT,
+                    price_entry_version TEXT,
+                    public_estimate_enabled INTEGER NOT NULL,
+                    producer_version TEXT NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_provider_economic_session
+                    ON provider_economic_receipts(session_hash, observed_at_ms);
+                 CREATE INDEX IF NOT EXISTS idx_provider_economic_project
+                    ON provider_economic_receipts(project_hash, observed_at_ms);
                  CREATE TABLE IF NOT EXISTS legacy_command_imports (
                     source_id TEXT NOT NULL,
                     source_row_id INTEGER NOT NULL,
@@ -1496,6 +1537,174 @@ impl Ledger {
             )
             .map_err(LedgerError::Database)?;
         Ok(())
+    }
+
+    pub fn record_provider_receipt(
+        &self,
+        receipt: &ProviderEconomicReceipt,
+        catalog: &PricingCatalog,
+    ) -> Result<ProviderReceiptRecordResult, LedgerError> {
+        validate_receipt(receipt).map_err(LedgerError::Billing)?;
+        let key = ledger_identity_key(&self.connection)?;
+        let public_payload_hash = receipt_payload_hash(receipt).map_err(LedgerError::Billing)?;
+        let payload_hash = keyed_identity_hash(
+            key.as_bytes(),
+            "provider-receipt-payload",
+            &public_payload_hash,
+        );
+        let receipt_hash =
+            keyed_identity_hash(key.as_bytes(), "provider-receipt", &receipt.receipt_id);
+        let existing = self
+            .connection
+            .query_row(
+                "SELECT payload_hash FROM provider_economic_receipts WHERE receipt_hash = ?1",
+                [&receipt_hash],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(LedgerError::Database)?;
+        let invoice_actual = match (
+            receipt.actual_baseline_cost_microunits,
+            receipt.actual_delivered_cost_microunits,
+        ) {
+            (Some(baseline), Some(delivered)) => Some(EconomicAmount {
+                currency: receipt.currency.clone(),
+                baseline_microunits: baseline,
+                delivered_microunits: delivered,
+                savings_microunits: signed_u64_difference(baseline, delivered)?,
+            }),
+            (None, None) => None,
+            _ => {
+                return Err(LedgerError::Billing(BillingError::InvalidReceipt(
+                    "actual provider cost requires both baseline and delivered amounts".into(),
+                )));
+            }
+        };
+        let (public_estimate, unavailable_reason) = if receipt.enable_public_estimate {
+            match price_receipt(catalog, receipt) {
+                Ok(estimate) => (Some(estimate), None),
+                Err(BillingError::PricingUnavailable(reason)) => (None, Some(reason)),
+                Err(error) => return Err(LedgerError::Billing(error)),
+            }
+        } else {
+            (
+                None,
+                Some("public pricing estimate is disabled for this receipt".into()),
+            )
+        };
+        if let Some(existing) = existing {
+            if existing != payload_hash {
+                return Err(LedgerError::InvalidOperation(
+                    "provider receipt id was already used with different content".into(),
+                ));
+            }
+            return Ok(ProviderReceiptRecordResult {
+                recorded: false,
+                idempotent_replay: true,
+                receipt_hash,
+                invoice_actual,
+                public_estimate,
+                unavailable_reason,
+            });
+        }
+        let (project_hash, project_scope_hashes) = project_hashes(&receipt.project_path);
+        let session_hash = session_identity_hash(&self.connection, &receipt.session_id)?;
+        let baseline_json =
+            serde_json::to_string(&receipt.baseline).map_err(LedgerError::Serialize)?;
+        let delivered_json =
+            serde_json::to_string(&receipt.delivered).map_err(LedgerError::Serialize)?;
+        self.connection
+            .execute(
+                "INSERT INTO provider_economic_receipts (
+                    receipt_hash, payload_hash, created_at_ms, observed_at_ms, source,
+                    harness, provider, model, method, currency, session_hash,
+                    project_hash, project_scope_hashes, baseline_usage_json, delivered_usage_json,
+                    invoice_baseline_microunits, invoice_delivered_microunits,
+                    public_baseline_microunits, public_delivered_microunits,
+                    price_table_identity, price_entry_version, public_estimate_enabled,
+                    producer_version
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                    ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+                params![
+                    receipt_hash,
+                    payload_hash,
+                    now_ms(),
+                    receipt.observed_at_ms,
+                    receipt.source,
+                    receipt.harness,
+                    receipt.provider,
+                    receipt.model,
+                    receipt.method,
+                    receipt.currency,
+                    session_hash,
+                    project_hash,
+                    project_scope_hashes,
+                    baseline_json,
+                    delivered_json,
+                    invoice_actual
+                        .as_ref()
+                        .map(|value| value.baseline_microunits),
+                    invoice_actual
+                        .as_ref()
+                        .map(|value| value.delivered_microunits),
+                    public_estimate
+                        .as_ref()
+                        .map(|value| value.amount.baseline_microunits),
+                    public_estimate
+                        .as_ref()
+                        .map(|value| value.amount.delivered_microunits),
+                    public_estimate
+                        .as_ref()
+                        .map(|value| value.price_table_identity.as_str()),
+                    public_estimate
+                        .as_ref()
+                        .map(|value| value.entry_version.as_str()),
+                    receipt.enable_public_estimate,
+                    CURRENT_PRODUCER_VERSION,
+                ],
+            )
+            .map_err(LedgerError::Database)?;
+        Ok(ProviderReceiptRecordResult {
+            recorded: true,
+            idempotent_replay: false,
+            receipt_hash,
+            invoice_actual,
+            public_estimate,
+            unavailable_reason,
+        })
+    }
+
+    pub fn session_economic_summary(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionEconomicSummary, LedgerError> {
+        let (session_hash, legacy_session_hash) =
+            session_identity_hashes(&self.connection, session_id)?;
+        let rows = self
+            .connection
+            .prepare_cached(
+                "SELECT currency,
+                        invoice_baseline_microunits, invoice_delivered_microunits,
+                        public_baseline_microunits, public_delivered_microunits,
+                        price_table_identity
+                   FROM provider_economic_receipts
+                  WHERE session_hash IN (?1, ?2)",
+            )
+            .map_err(LedgerError::Database)?
+            .query_map(params![session_hash, legacy_session_hash], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<u64>>(1)?,
+                    row.get::<_, Option<u64>>(2)?,
+                    row.get::<_, Option<u64>>(3)?,
+                    row.get::<_, Option<u64>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            })
+            .map_err(LedgerError::Database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LedgerError::Database)?;
+        aggregate_economic_rows(&rows)
     }
 
     pub fn find(&self, trace_id: &TraceId) -> Result<Option<LedgerRecord>, LedgerError> {
@@ -3497,6 +3706,101 @@ fn detach_legacy(connection: &Connection) -> Result<(), LedgerError> {
         .map_err(LedgerError::Database)
 }
 
+type EconomicRow = (
+    String,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+    Option<String>,
+);
+
+fn aggregate_economic_rows(rows: &[EconomicRow]) -> Result<SessionEconomicSummary, LedgerError> {
+    let mut summary = SessionEconomicSummary {
+        paired_receipts: u64::try_from(rows.len()).unwrap_or(u64::MAX),
+        public_estimate_preliminary: true,
+        ..SessionEconomicSummary::default()
+    };
+    if rows.is_empty() {
+        summary
+            .unavailable_reasons
+            .push("no paired provider receipt is attributed to this session".into());
+        return Ok(summary);
+    }
+    let currencies = rows
+        .iter()
+        .map(|row| row.0.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if currencies.len() != 1 {
+        summary.unavailable_reasons.push(
+            "session receipts contain multiple currencies; no hidden FX conversion was applied"
+                .into(),
+        );
+        return Ok(summary);
+    }
+    let currency = currencies.first().ok_or_else(|| {
+        LedgerError::Billing(BillingError::InvalidReceipt(
+            "provider receipt currency is missing".into(),
+        ))
+    })?;
+    let invoice_pairs = rows
+        .iter()
+        .filter_map(|row| row.1.zip(row.2))
+        .collect::<Vec<_>>();
+    if invoice_pairs.len() == rows.len() {
+        summary.invoice_actual = Some(sum_economic_pairs(currency, &invoice_pairs)?);
+    } else {
+        summary.unavailable_reasons.push(
+            "actual billed savings require baseline and delivered provider cost on every receipt"
+                .into(),
+        );
+    }
+    let public_pairs = rows
+        .iter()
+        .filter_map(|row| row.3.zip(row.4))
+        .collect::<Vec<_>>();
+    if public_pairs.len() == rows.len() {
+        summary.public_estimate = Some(sum_economic_pairs(currency, &public_pairs)?);
+        summary.price_table_identities = rows
+            .iter()
+            .filter_map(|row| row.5.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+    } else {
+        summary.unavailable_reasons.push(
+            "public estimate requires an opted-in exact pricing match for every receipt".into(),
+        );
+    }
+    Ok(summary)
+}
+
+fn sum_economic_pairs(currency: &str, pairs: &[(u64, u64)]) -> Result<EconomicAmount, LedgerError> {
+    let (baseline, delivered) = pairs
+        .iter()
+        .try_fold(
+            (0_u64, 0_u64),
+            |(baseline_total, delivered_total), (baseline, delivered)| {
+                Some((
+                    baseline_total.checked_add(*baseline)?,
+                    delivered_total.checked_add(*delivered)?,
+                ))
+            },
+        )
+        .ok_or_else(|| LedgerError::Billing(BillingError::ArithmeticOverflow))?;
+    Ok(EconomicAmount {
+        currency: currency.into(),
+        baseline_microunits: baseline,
+        delivered_microunits: delivered,
+        savings_microunits: signed_u64_difference(baseline, delivered)?,
+    })
+}
+
+fn signed_u64_difference(baseline: u64, delivered: u64) -> Result<i64, LedgerError> {
+    i64::try_from(i128::from(baseline) - i128::from(delivered))
+        .map_err(|_| LedgerError::Billing(BillingError::ArithmeticOverflow))
+}
+
 fn import_legacy_usage(connection: &Connection, path: &Path) -> Result<(), LedgerError> {
     const KEY: &str = "usage_sqlite_v1";
     if !path.is_file() || migration_complete(connection, KEY)? {
@@ -3586,6 +3890,8 @@ pub enum LedgerError {
     InvalidPath(PathBuf),
     #[error("failed to serialize migration manifest: {0}")]
     Serialize(serde_json::Error),
+    #[error(transparent)]
+    Billing(BillingError),
 }
 
 fn now_ms() -> u64 {
@@ -5215,10 +5521,10 @@ mod tests {
     #[test]
     fn test_price_requires_actual_input_and_output() {
         let prices = PriceTable {
-            input_per_million_usd: 10.0,
-            output_per_million_usd: 20.0,
-            cache_write_per_million_usd: 0.0,
-            cache_read_per_million_usd: 0.0,
+            input_microusd_per_million: 10_000_000,
+            output_microusd_per_million: 20_000_000,
+            cache_write_microusd_per_million: 0,
+            cache_read_microusd_per_million: 0,
         };
         let usage = Usage {
             actual: ActualUsage {
@@ -5231,5 +5537,80 @@ mod tests {
 
         assert_eq!(prices.cost_microusd(&usage), Some(20_000));
         assert_eq!(prices.cost_microusd(&Usage::default()), None);
+    }
+
+    #[test]
+    fn provider_receipts_are_private_idempotent_and_session_scoped() {
+        let directory = tempdir().expect("temp directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        let catalog = crate::builtin_pricing_catalog().expect("catalog");
+        let mut receipt = crate::ProviderEconomicReceipt {
+            receipt_id: "external-receipt-private".into(),
+            source: "provider-api".into(),
+            observed_at_ms: 42,
+            harness: "codex".into(),
+            provider: "openai".into(),
+            model: "gpt-5.6-sol".into(),
+            method: "standard_short_context".into(),
+            currency: "USD".into(),
+            session_id: "session-private".into(),
+            project_path: "/private/project".into(),
+            baseline: crate::ProviderTokenUsage {
+                input_tokens: 1_000_000,
+                output_tokens: 100_000,
+                ..crate::ProviderTokenUsage::default()
+            },
+            delivered: crate::ProviderTokenUsage {
+                input_tokens: 500_000,
+                output_tokens: 50_000,
+                ..crate::ProviderTokenUsage::default()
+            },
+            actual_baseline_cost_microunits: Some(8_000_000),
+            actual_delivered_cost_microunits: Some(4_000_000),
+            enable_public_estimate: true,
+        };
+
+        let first = ledger
+            .record_provider_receipt(&receipt, &catalog)
+            .expect("first receipt");
+        let replay = ledger
+            .record_provider_receipt(&receipt, &catalog)
+            .expect("idempotent replay");
+        let summary = ledger
+            .session_economic_summary("session-private")
+            .expect("session summary");
+        let other = ledger
+            .session_economic_summary("other-session")
+            .expect("other summary");
+
+        assert!(first.recorded);
+        assert!(!first.receipt_hash.contains("external-receipt-private"));
+        assert!(replay.idempotent_replay);
+        assert_eq!(summary.paired_receipts, 1);
+        assert_eq!(
+            summary
+                .invoice_actual
+                .expect("actual pair")
+                .savings_microunits,
+            4_000_000
+        );
+        assert_eq!(other.paired_receipts, 0);
+        let stored: (String, String, String) = ledger
+            .connection
+            .query_row(
+                "SELECT receipt_hash, session_hash, project_hash FROM provider_economic_receipts",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("stored receipt");
+        assert!(stored.0.starts_with("hmac-sha256:"));
+        assert!(stored.1.starts_with("hmac-sha256:"));
+        assert!(stored.2.starts_with("sha256:"));
+
+        receipt.delivered.input_tokens += 1;
+        let conflict = ledger
+            .record_provider_receipt(&receipt, &catalog)
+            .expect_err("conflicting replay");
+        assert!(conflict.to_string().contains("different content"));
     }
 }

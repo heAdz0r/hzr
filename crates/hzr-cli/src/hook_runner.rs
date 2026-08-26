@@ -8,9 +8,10 @@ use fs2::FileExt;
 use hzr_core::{
     Config, DetailedOperationAttribution, FidelityAllowance, FidelityBudget, FidelityPreflight,
     Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-    PolicyEvent, RawFidelityRequest, SessionEfficiencySummary, SessionEvasionSummary,
-    efficient_route_replacement, fidelity_preflight_required, first_class_replacement,
-    raw_fidelity_request,
+    PolicyEvent, RawFidelityRequest, RawPublicEstimate, SessionEconomicSummary,
+    SessionEfficiencySummary, SessionEvasionSummary, efficient_route_replacement,
+    fidelity_preflight_required, first_class_replacement, load_pricing_catalog,
+    price_avoided_input_tokens, raw_fidelity_request,
 };
 use hzr_exec::{
     CanonicalCommand, ForkRuntimePaths, PinnedRtkAdapter, RewriteDecision, RewriteSource,
@@ -961,9 +962,11 @@ fn read_session(config: &Config, input: &Value) -> Option<SessionFeedback> {
 }
 
 fn scorecard_message(
+    config: &Config,
     state: &SessionFeedback,
     session_summary: Option<&SessionEvasionSummary>,
     efficiency: Option<&SessionEfficiencySummary>,
+    economics: Option<&SessionEconomicSummary>,
 ) -> String {
     let (savings, commands) = match efficiency {
         Some(summary) if summary.operations > 0 => {
@@ -1050,10 +1053,83 @@ fn scorecard_message(
             state.corrections, state.native_denials, state.operations,
         ),
     };
+    let economic = economic_message(config, efficiency, economics);
     format!(
-        "HZR session ROI\n{savings}\n{commands}\n{policy}\nShadow guard: T3 observe-only | limit {} ops / {} tokens",
+        "HZR session ROI\n{savings}\n{economic}\n{commands}\n{policy}\nShadow guard: T3 observe-only | limit {} ops / {} tokens",
         SESSION_BYPASS_COUNT_BUDGET, SESSION_BYPASS_TOKEN_BUDGET,
     )
+}
+
+fn economic_message(
+    config: &Config,
+    efficiency: Option<&SessionEfficiencySummary>,
+    economics: Option<&SessionEconomicSummary>,
+) -> String {
+    let invoice = economics
+        .and_then(|summary| summary.invoice_actual.as_ref())
+        .map(|amount| {
+            format!(
+                "\nProvider invoice evidence: saved {} {} ({} -> {})",
+                amount.currency,
+                format_signed_microunits(amount.savings_microunits),
+                format_microunits(amount.baseline_microunits),
+                format_microunits(amount.delivered_microunits),
+            )
+        })
+        .unwrap_or_default();
+    if !config.billing.public_estimate_enabled {
+        return "Potential public-list savings: unavailable (opt-in disabled; not an invoice)"
+            .into();
+    }
+    let Some(efficiency) = efficiency else {
+        return "Potential public-list savings: unavailable (ledger unavailable; not an invoice)"
+            .into();
+    };
+    let avoided_tokens = efficiency
+        .net_avoided_tokens_estimated
+        .max(0)
+        .unsigned_abs();
+    let estimate =
+        load_pricing_catalog(config.billing.pricing_file.as_deref()).and_then(|catalog| {
+            price_avoided_input_tokens(
+                &catalog,
+                &config.billing.harness,
+                &config.billing.provider,
+                &config.billing.model,
+                &config.billing.method,
+                config.billing.effective_pricing_basis(),
+                avoided_tokens,
+            )
+        });
+    match estimate {
+        Ok(RawPublicEstimate {
+            currency,
+            savings_microunits,
+            model,
+            method,
+            pricing_basis,
+            price_table_identity,
+            ..
+        }) => format!(
+            "Potential public-list savings: {currency} {} preliminary from {avoided_tokens} avoided input tokens ({model}/{method}, basis={pricing_basis}, catalog={price_table_identity}); not an invoice{invoice}",
+            format_microunits(savings_microunits),
+        ),
+        Err(error) => {
+            format!("Potential public-list savings: unavailable ({error}); not an invoice{invoice}")
+        }
+    }
+}
+
+fn format_microunits(value: u64) -> String {
+    format!("{}.{:06}", value / 1_000_000, value % 1_000_000)
+}
+
+fn format_signed_microunits(value: i64) -> String {
+    if value < 0 {
+        format!("-{}", format_microunits(value.unsigned_abs()))
+    } else {
+        format_microunits(value.unsigned_abs())
+    }
 }
 
 /// Emit bounded feedback for prompt and completion hooks. This hook is deliberately
@@ -1078,11 +1154,12 @@ pub async fn feedback(config: &Config) {
                         .session_evasion_summary(session_id, FidelityAllowance::default())
                         .ok(),
                     ledger.session_efficiency_summary(session_id).ok(),
+                    ledger.session_economic_summary(session_id).ok(),
                 ))
             });
     let session_summary = session_summaries
         .as_ref()
-        .and_then(|(evasion, _)| evasion.as_ref());
+        .and_then(|(evasion, _, _)| evasion.as_ref());
     let crosses_threshold = state.corrections >= SESSION_CORRECTION_NUDGE
         || session_summary.is_some_and(|summary| {
             summary.avoidable_operations > 0
@@ -1110,9 +1187,12 @@ pub async fn feedback(config: &Config) {
         "Stop" | "SubagentStop" => {
             let efficiency = session_summaries
                 .as_ref()
-                .and_then(|(_, efficiency)| efficiency.as_ref());
+                .and_then(|(_, efficiency, _)| efficiency.as_ref());
+            let economics = session_summaries
+                .as_ref()
+                .and_then(|(_, _, economics)| economics.as_ref());
             let _ = write_hook_json(json!({
-                "systemMessage": scorecard_message(&state, session_summary, efficiency)
+                "systemMessage": scorecard_message(config, &state, session_summary, efficiency, economics)
             }));
         }
         _ => {}
@@ -2049,9 +2129,11 @@ mod tests {
             "session ROI exposed a command payload"
         );
         let message = scorecard_message(
+            &Config::default(),
             &SessionFeedback::default(),
             Some(&summary),
             Some(&efficiency),
+            None,
         );
         assert!(message.contains("4096 -> 4096"));
         assert!(message.contains("avoidable leakage 1 ops / 4096 tokens"));
@@ -2123,7 +2205,13 @@ mod tests {
             ..SessionEfficiencySummary::default()
         };
 
-        let message = scorecard_message(&state, Some(&summary), Some(&efficiency));
+        let message = scorecard_message(
+            &Config::default(),
+            &state,
+            Some(&summary),
+            Some(&efficiency),
+            None,
+        );
 
         assert!(message.contains("Saved (estimated net): 8000 tokens (66.7%"));
         assert!(message.contains("12000 -> 4000"));
@@ -2145,7 +2233,7 @@ mod tests {
             nudged: false,
         };
 
-        let message = scorecard_message(&state, None, None);
+        let message = scorecard_message(&Config::default(), &state, None, None, None);
 
         assert!(message.contains("Savings: unknown (ledger unavailable, not zero)"));
         assert!(message.contains("avoidable leakage unknown"));

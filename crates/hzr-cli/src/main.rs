@@ -38,8 +38,8 @@ use clap::Parser;
 use fs2::FileExt;
 use hzr_agent::{BearerToken, HzrApi, ManagedAgent, ManagedAgentConfig};
 use hzr_core::{
-    Config, ConfigPaths, Ledger, PolicyEvent, discover_legacy_rtk_history,
-    inspect_legacy_efficiency,
+    Config, ConfigPaths, Ledger, PolicyEvent, ProviderEconomicReceipt, discover_legacy_rtk_history,
+    inspect_legacy_efficiency, load_pricing_catalog,
 };
 use hzr_index::{
     Deadlines, GrepAi, IndexPlacement, InitOptions, InitOutcome, Workspace, WorkspaceRegistration,
@@ -60,9 +60,9 @@ use sha2::{Digest, Sha256};
 use toml_edit::{DocumentMut, value};
 
 use crate::cli::{
-    ActivationCommand, AgentCommand, Cli, CodecCommand, Command, ContextCommand, ContextPlanArgs,
-    DaemonCommand, EnginesCommand, ExecArgs, ExecCommand, HooksCommand, IndexCommand, McpCommand,
-    MemoryCommand, MigrateCommand, SearchArgs, ServiceCommand,
+    ActivationCommand, AgentCommand, BillingCommand, Cli, CodecCommand, Command, ContextCommand,
+    ContextPlanArgs, DaemonCommand, EnginesCommand, ExecArgs, ExecCommand, HooksCommand,
+    IndexCommand, McpCommand, MemoryCommand, MigrateCommand, SearchArgs, ServiceCommand,
 };
 use crate::client::DaemonClient;
 use crate::diagnostics::{doctor, integration_layout, repair_legacy_index};
@@ -498,6 +498,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Memory { command } => execute_memory(&config, command, cli.json).await,
         Command::Exec { command } => execute_command(&config, command, cli.json).await,
         Command::Codec { command } => execute_codec(&config, command, cli.json).await,
+        Command::Billing { command } => execute_billing(&config, command, cli.json).await,
         Command::Agent { command } => execute_agent(&config, command, cli.json).await,
         Command::Mcp { command } => match command {
             McpCommand::Serve { workspace } => {
@@ -3611,6 +3612,71 @@ async fn execute_codec(config: &Config, command: CodecCommand, json: bool) -> Re
         print_json(&transform)?;
     } else {
         print_transform(&transform)?;
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+async fn execute_billing(config: &Config, command: BillingCommand, json: bool) -> Result<ExitCode> {
+    match command {
+        BillingCommand::Catalog => {
+            let catalog = load_pricing_catalog(config.billing.pricing_file.as_deref())?;
+            if json {
+                print_json(&catalog)?;
+            } else {
+                println!(
+                    "pricing-catalog identity={} retrieved={} entries={} runtime-network=false override={}",
+                    catalog.identity,
+                    catalog.retrieved_at,
+                    catalog.entries.len(),
+                    config
+                        .billing
+                        .pricing_file
+                        .as_ref()
+                        .map_or_else(|| "none".into(), |path| path.display().to_string()),
+                );
+                for entry in catalog.entries {
+                    println!(
+                        "{} {} {} {} {} source={}",
+                        entry.harness,
+                        entry.provider,
+                        entry.model,
+                        entry.method,
+                        entry.currency,
+                        entry.source_url,
+                    );
+                }
+            }
+        }
+        BillingCommand::Receipt { file } => {
+            let metadata = std::fs::symlink_metadata(&file)
+                .with_context(|| format!("failed to inspect {}", file.display()))?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 262_144
+            {
+                bail!(
+                    "provider receipt must be a regular non-symlink file of at most 262144 bytes"
+                );
+            }
+            let bytes = std::fs::read(&file)
+                .with_context(|| format!("failed to read {}", file.display()))?;
+            let receipt: ProviderEconomicReceipt = serde_json::from_slice(&bytes)
+                .with_context(|| format!("invalid provider receipt JSON in {}", file.display()))?;
+            let result = DaemonClient::from_config(config)?
+                .record_provider_receipt(&receipt)
+                .await?;
+            if json {
+                print_json(&result)?;
+            } else {
+                println!(
+                    "provider-receipt recorded={} idempotent-replay={} receipt={} invoice-actual={} public-estimate={} reason={}",
+                    result.recorded,
+                    result.idempotent_replay,
+                    result.receipt_hash,
+                    result.invoice_actual.is_some(),
+                    result.public_estimate.is_some(),
+                    result.unavailable_reason.as_deref().unwrap_or("none"),
+                );
+            }
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
