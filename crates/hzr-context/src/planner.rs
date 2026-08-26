@@ -1153,9 +1153,24 @@ struct ForkConfigOutput {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ForkRuntimeConfig {
     grepai: ForkGrepaiConfig,
+    /// RTK schema v2 emits the complete runtime config. HZR consumes only `grepai`, but keeping
+    /// the current sibling typed catches shape drift without making unrelated new sections break
+    /// semantic search. The outer envelope and the consumed `grepai` object remain strict.
+    #[serde(default, rename = "tracking")]
+    _tracking: Option<ForkTrackingConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForkTrackingConfig {
+    #[serde(rename = "enabled")]
+    _enabled: bool,
+    #[serde(rename = "history_days")]
+    _history_days: u32,
+    #[serde(rename = "database_path")]
+    _database_path: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -1500,6 +1515,16 @@ mod tests {
         let parsed = parse_fork_search_config(&output.to_string(), &managed).expect("typed config");
         assert_eq!(parsed.path, directory.path().join("config.toml"));
         assert_eq!(parsed.validation, Ok(()));
+
+        let mut complete_runtime = output.clone();
+        complete_runtime["config"]["tracking"] = serde_json::json!({
+            "enabled": true,
+            "history_days": 90,
+            "database_path": null
+        });
+        complete_runtime["config"]["display"] = serde_json::json!({"color": true});
+        parse_fork_search_config(&complete_runtime.to_string(), &managed)
+            .expect("schema-v2 sibling sections must not break grepai inspection");
 
         let mut missing_enabled = output.clone();
         missing_enabled["config"]["grepai"]
