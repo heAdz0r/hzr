@@ -36,7 +36,15 @@ jobs:
           cache-dependency-path: integrations/caveman-code/package-lock.json
       - run: scripts/build-bundle.sh "$RUNNER_TEMP/hzr-dist"
       - run: scripts/package-release.sh "$RUNNER_TEMP/hzr-dist" "$RUNNER_TEMP/hzr-release"
-      - run: scripts/smoke-install.sh "$RUNNER_TEMP/hzr-release/hzr-v0.6.2-linux-x64.tar.gz" "$RUNNER_TEMP/hzr-release/SHA256SUMS"
+      - name: Smoke-install the workspace version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(p["version"] for p in data["packages"] if p["name"] == "hzr-cli"))')"
+          scripts/smoke-install.sh \
+            "$RUNNER_TEMP/hzr-release/hzr-v${version}-linux-x64.tar.gz" \
+            "$RUNNER_TEMP/hzr-release/SHA256SUMS"
 
   fork-core:
     runs-on: ubuntu-latest
