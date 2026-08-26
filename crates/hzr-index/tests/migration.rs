@@ -4,6 +4,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use fs2::FileExt;
@@ -124,10 +125,27 @@ async fn test_archive_duplicate_index_is_explicit_hashed_and_idempotent() {
     .expect("first archive must apply");
     assert!(manifest_path.is_file());
     assert!(!duplicate.exists());
+    assert!(backup.starts_with(fixture.data.path()));
+    assert!(!backup.starts_with(fixture.project.path()));
     assert_eq!(
         fs::read(backup.join("index.gob")).expect("archived vectors"),
         b"duplicate vectors"
     );
+    let initialized = Command::new("git")
+        .arg("init")
+        .arg("--quiet")
+        .arg(fixture.project.path())
+        .status()
+        .expect("run git init");
+    assert!(initialized.success());
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(fixture.project.path())
+        .args(["status", "--short", "--untracked-files=all"])
+        .output()
+        .expect("run git status");
+    assert!(status.status.success());
+    assert!(!String::from_utf8_lossy(&status.stdout).contains("hzr-archive"));
 
     let replay = archive_duplicate_index(
         fixture.project.path(),

@@ -398,6 +398,14 @@ pub fn print_fleet_reconcile(report: &crate::diagnostics::FleetReconcileReport) 
         output,
         "fleet project Codex MCP: {verb} {mcp_changed} pin(s)"
     )?;
+    writeln!(
+        output,
+        "fleet legacy index audit: {}",
+        match report.legacy_index_audit {
+            "full" => "full recursive audit requested",
+            _ => "not requested (use --migrate-legacy-indexes for the recursive audit)",
+        }
+    )?;
     for entry in report
         .project_codex_mcp
         .iter()

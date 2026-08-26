@@ -184,7 +184,7 @@ pub async fn archive_duplicate_index(
     };
     if let Some(manifest) = read_manifest::<IndexArchiveManifest>(&applied_path)? {
         validate_archive_manifest(&workspace, &source, &manifest)?;
-        validate_archive_backup(&source, &manifest)?;
+        validate_archive_backup(&workspace, data_root, &manifest)?;
         if source_present {
             return Err(conflict(format!(
                 "duplicate index source {} was recreated after archive {}; refusing to treat a live generation as already archived",
@@ -207,7 +207,7 @@ pub async fn archive_duplicate_index(
             ))
         })?;
         validate_archive_manifest(&workspace, &source, &manifest)?;
-        validate_archive_backup(&source, &manifest)?;
+        validate_archive_backup(&workspace, data_root, &manifest)?;
         if !apply {
             return Ok(IndexArchiveOutcome::Planned {
                 manifest_path: applied_path,
@@ -240,10 +240,7 @@ pub async fn archive_duplicate_index(
     }
     let source_snapshot = snapshot(&source)?;
     let suffix = migration_suffix(&source_snapshot.digest)?;
-    let backup = source
-        .parent()
-        .ok_or_else(|| conflict("duplicate index has no parent"))?
-        .join(format!(".grepai.hzr-archive-{suffix}"));
+    let backup = archive_backup_path(data_root, &workspace, &archive_id, suffix);
     let mut manifest = IndexArchiveManifest {
         schema_version: INDEX_MIGRATION_SCHEMA_VERSION,
         archive_id,
@@ -268,7 +265,15 @@ pub async fn archive_duplicate_index(
             )));
         }
     } else if apply {
-        create_directory(&manifest_dir, "create index archive manifest directory")?;
+        ensure_target_relationships(&workspace.identity.root, data_root)?;
+        create_directory(data_root, "create HZR data root")?;
+        ensure_safe_target(&workspace.identity.root, data_root, &backup)?;
+        let backup_parent = backup
+            .parent()
+            .ok_or_else(|| conflict("duplicate index archive has no parent"))?;
+        create_directory(backup_parent, "create managed index archive directory")?;
+        ensure_no_symlink_components(data_root, backup_parent)?;
+        ensure_same_filesystem(&source, backup_parent)?;
         write_new_manifest(&prepared_path, &manifest)?;
     }
     ensure_absent(&backup, "duplicate index archive")?;
@@ -284,6 +289,7 @@ pub async fn archive_duplicate_index(
         source: source_error,
     })?;
     sync_directory(source.parent().unwrap_or_else(|| Path::new(".")))?;
+    sync_directory(backup.parent().unwrap_or(data_root))?;
     if snapshot(&backup)?.digest != manifest.tree_sha256 {
         return Err(conflict(format!(
             "archived duplicate differs from its source manifest: {}",
@@ -348,23 +354,61 @@ fn validate_archive_manifest(
     Ok(())
 }
 
-fn validate_archive_backup(source: &Path, manifest: &IndexArchiveManifest) -> Result<()> {
+fn validate_archive_backup(
+    workspace: &Workspace,
+    data_root: &Path,
+    manifest: &IndexArchiveManifest,
+) -> Result<()> {
     let suffix = migration_suffix(&manifest.tree_sha256)?;
-    let backup = source
-        .parent()
-        .ok_or_else(|| conflict("duplicate index has no parent"))?
-        .join(format!(".grepai.hzr-archive-{suffix}"));
+    let backup = archive_backup_path(data_root, workspace, &manifest.archive_id, suffix);
     if !manifest.backup.matches(&backup) {
         return Err(conflict(
             "duplicate index archive manifest names a foreign backup",
         ));
     }
+    ensure_safe_target(&workspace.identity.root, data_root, &backup)?;
     if snapshot(&backup)?.digest != manifest.tree_sha256 {
         return Err(conflict(format!(
             "duplicate index archive no longer matches its manifest: {}",
             backup.display()
         )));
     }
+    Ok(())
+}
+
+fn archive_backup_path(
+    data_root: &Path,
+    workspace: &Workspace,
+    archive_id: &str,
+    suffix: &str,
+) -> PathBuf {
+    data_root
+        .join("migrations")
+        .join(&workspace.identity.repository_id)
+        .join(&workspace.identity.worktree_id)
+        .join("archives")
+        .join(format!("{archive_id}-{suffix}"))
+}
+
+#[cfg(unix)]
+fn ensure_same_filesystem(source: &Path, target_parent: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    let source_metadata = metadata(source, "inspect duplicate index filesystem")?;
+    let target_metadata = metadata(target_parent, "inspect archive filesystem")?;
+    if source_metadata.dev() != target_metadata.dev() {
+        return Err(conflict(format!(
+            "managed archive {} is on a different filesystem from {}; refusing a non-atomic move",
+            target_parent.display(),
+            source.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_same_filesystem(_source: &Path, _target_parent: &Path) -> Result<()> {
+    // `rename` below remains the atomicity gate where a portable device id is unavailable.
     Ok(())
 }
 

@@ -336,6 +336,8 @@ pub struct FleetContractRewrite {
 pub struct FleetReconcileReport {
     pub dry_run: bool,
     pub workspaces_scanned: usize,
+    /// Recursive duplicate-index discovery is opt-in because it walks each repository tree.
+    pub legacy_index_audit: &'static str,
     pub rewritten: Vec<FleetContractRewrite>,
     pub project_codex_mcp: Vec<FleetProjectMcpRewrite>,
     pub legacy_indexes: Vec<FleetLegacyIndexAction>,
@@ -537,6 +539,11 @@ pub async fn reconcile_fleet_contracts(
     let mut report = FleetReconcileReport {
         dry_run,
         workspaces_scanned: 0,
+        legacy_index_audit: if migrate_legacy_indexes {
+            "full"
+        } else {
+            "not_requested"
+        },
         rewritten: Vec::new(),
         project_codex_mcp: Vec::new(),
         legacy_indexes: Vec::new(),
@@ -674,14 +681,9 @@ pub async fn reconcile_fleet_contracts(
                 error: Some(format!("{error:#}")),
             }),
         }
-        reconcile_legacy_index(
-            config,
-            &registration.root,
-            dry_run,
-            migrate_legacy_indexes,
-            &mut report,
-        )
-        .await;
+        if migrate_legacy_indexes {
+            reconcile_legacy_index(config, &registration.root, dry_run, &mut report).await;
+        }
     }
     report
 }
@@ -690,7 +692,6 @@ async fn reconcile_legacy_index(
     config: &Config,
     workspace_root: &Path,
     dry_run: bool,
-    migrate: bool,
     report: &mut FleetReconcileReport,
 ) {
     let deadline = Deadlines::default().version;
@@ -847,22 +848,14 @@ async fn reconcile_legacy_index(
         });
         return;
     }
-    if !migrate || dry_run {
+    if dry_run {
         report.legacy_indexes.push(FleetLegacyIndexAction {
             workspace: workspace_root.to_path_buf(),
-            state: if migrate {
-                "would_migrate"
-            } else {
-                "migration_available"
-            },
+            state: "would_migrate",
             source: Some(source),
             duplicate_paths: Vec::new(),
             changed: false,
-            required_action: Some(if migrate {
-                "review_dry_run_then_apply"
-            } else {
-                "run_reported_command_or_enable_fleet_migration"
-            }),
+            required_action: Some("review_dry_run_then_apply"),
             next_action: Some(next_action),
             resolution_commands: Vec::new(),
             outcome: None,
@@ -3006,9 +2999,16 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         .await
         .expect("workspace discovery");
         discovered.register().expect("workspace registration");
+        let deep_duplicate =
+            workspace.join("vendor/deep/tree/that/default/reconcile/must/not/walk/.grepai");
+        fs::create_dir_all(&deep_duplicate).expect("deep duplicate sentinel");
+        fs::write(deep_duplicate.join("config.yaml"), "version: 1\n")
+            .expect("deep duplicate config");
 
         let planned = reconcile_fleet_contracts(&config, &contract, &binary, true, false).await;
         assert_eq!(planned.workspaces_scanned, 1);
+        assert_eq!(planned.legacy_index_audit, "not_requested");
+        assert!(planned.legacy_indexes.is_empty());
         assert_eq!(
             planned.rewritten.iter().filter(|item| item.changed).count(),
             2
@@ -3180,6 +3180,7 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         fs::write(&binary, "binary").expect("binary fixture");
 
         let report = reconcile_fleet_contracts(&config, &contract, &binary, true, true).await;
+        assert_eq!(report.legacy_index_audit, "full");
         let action = report.legacy_indexes.first().expect("legacy action");
         assert_eq!(action.state, "blocked_duplicates");
         assert_eq!(
