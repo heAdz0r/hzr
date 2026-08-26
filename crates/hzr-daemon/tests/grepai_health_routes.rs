@@ -88,6 +88,23 @@ async fn live_and_failed_grepai_watcher_are_visible_through_health_and_dashboard
         String::from_utf8_lossy(&search_body)
     );
 
+    let readiness = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/search/readiness")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "workspace": root }).to_string(),
+                ))
+                .expect("readiness request"),
+        )
+        .await
+        .expect("readiness response");
+    assert_eq!(readiness.status(), StatusCode::OK);
+
     assert_grepai_health(&application, "ready", "1 active watcher(s), 0 failed").await;
     assert_dashboard_watcher(
         &application,
@@ -289,7 +306,7 @@ case "$1" in
     fi
     ;;
   config)
-    printf '%s\n' '{"schema_version":2,"config_path":"/tmp/hzr-daemon-test-no-rtk-config","config_exists":false,"config_sha256":null,"config":{"grepai":{"enabled":true,"auto_init":true,"binary_path":null}}}'
+    printf '%s\n' '{"schema_version":2,"config_path":"/tmp/hzr-daemon-test-no-rtk-config","config_exists":false,"config_sha256":null,"config":{"grepai":{"enabled":true,"auto_init":true,"binary_path":null},"tracking":{"enabled":true,"history_days":90,"database_path":null}}}'
     ;;
   rgai)
     printf '%s\n' '{"query":"indexed_symbol","path":".","total_hits":1,"shown_hits":1,"scanned_files":1,"skipped_large":0,"skipped_binary":0,"hits":[{"path":"src/lib.rs","score":9.5,"matched_lines":1,"snippets":[{"lines":[{"line":1,"text":"pub fn indexed_symbol() {}"}],"matched_terms":["indexed_symbol"]}]}]}'
