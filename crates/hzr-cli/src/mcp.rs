@@ -658,10 +658,12 @@ fn mcp_operation_request(
     let attribution = Some(match kind {
         ToolKind::Search => search_accounting_attribution(arguments, response)?,
         ToolKind::Read => read_accounting_attribution(arguments),
+        // A tool call is the whole operation: no engine stage records it separately,
+        // so `final_delivery` would drop it from every efficiency total.
         ToolKind::Write => simple_accounting_attribution(
             AccountingOperationKind::Write,
             AccountingOperationMode::Write,
-            AccountingStage::FinalDelivery,
+            AccountingStage::StandaloneDelivery,
         ),
         ToolKind::ContextPlan => simple_accounting_attribution(
             AccountingOperationKind::Context,
@@ -770,7 +772,7 @@ fn read_accounting_attribution(arguments: &Value) -> AccountingAttribution {
     let mut attribution = simple_accounting_attribution(
         AccountingOperationKind::Read,
         mode,
-        AccountingStage::FinalDelivery,
+        AccountingStage::StandaloneDelivery,
     );
     attribution.from_line = arguments.get("from").and_then(Value::as_u64);
     attribution.to_line = arguments.get("to").and_then(Value::as_u64);
@@ -1073,9 +1075,10 @@ fn read_fork_request(workspace: &str, arguments: &Value) -> Result<ForkRunApiReq
     if let (Some(from), Some(to)) = (
         arguments.get("from").and_then(Value::as_u64),
         arguments.get("to").and_then(Value::as_u64),
-    ) && from > to
-    {
-        anyhow::bail!("argument `from` must not exceed `to`");
+    ) {
+        if from > to {
+            anyhow::bail!("argument `from` must not exceed `to`");
+        }
     }
     Ok(ForkRunApiRequest {
         cwd: workspace.to_owned(),

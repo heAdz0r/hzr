@@ -1,7 +1,7 @@
-# HZR 0.6.0 — fork-core parity ledger
+# HZR 0.6.1 — fork-core parity ledger
 
-**Audit date:** 2026-08-23
-**Status:** HZR 0.6.0 audit delta on the 0.5.0 upstream sync; full deterministic gate green
+**Audit date:** 2026-08-26
+**Status:** HZR 0.6.1 guard correction on the 0.6.0 audit delta; full deterministic gate green
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -41,6 +41,28 @@ The 0.6.0 gate verified current engine manifest
 `be0459b8d4dde1a76dcfe836afd77fe0432cf5cb22e83845c522c4568f6a3f53`, 1,940 passed tests,
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
+
+### 0.6.1 guard delta
+
+Running the deferred fork-core suite against the immutable 0.6.0 tree failed two tests, and both
+failures were real defects in the never-worse guard rather than stale expectations.
+
+`exact_machine_protocol` trimmed its input before testing for git porcelain. Porcelain encodes
+status in the first two columns, so left-trimming removed the very bytes that identify the
+format: the protocol was never recognized, and `git status --porcelain` could be replaced by a
+filtered rendering. The porcelain test now runs on `trim_end()` only.
+
+The same predicate treated any valid JSON as an exact machine protocol and returned raw whenever
+the filtered text differed at all. That disabled every rendering the caller had explicitly asked
+for — `rtk json` is a schema view and `rtk read` produces CSV/JSON digests, and all of them fell
+back to raw bytes, so the commands rendered nothing. The guard now separates two contracts: an
+*automatic* filter keeps the machine-protocol fallback and additionally allows a lossless
+re-rendering that parses back to the same value, while an *explicitly requested* summary uses
+`never_worse_summary`, which still refuses to lose content, a failure signal, or size.
+
+Changed files: `src/guard.rs`, `src/json_cmd.rs`, `src/read.rs`. `CURRENT_ENGINE.toml`,
+`CURRENT_ENGINE_V1.tsv` and `CURRENT_SHA256SUMS` were refreshed with
+`scripts/refresh-current-engine.sh`; the v0.1.0 import baseline is untouched.
 
 ### 0.6.0 audit delta
 

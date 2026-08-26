@@ -70,6 +70,14 @@ const readyProjectCount = computed(
   () => snapshot.value?.projects.filter((project) => project.state === "ready").length ?? 0,
 );
 
+// `Standby` covers two different situations. Say which one this is, so an idle daemon is
+// never read as a stalled one.
+const postureLabel = computed(() =>
+  snapshot.value?.overall_state === "standby" && selectedProjectId.value === null
+    ? "No project selected"
+    : undefined,
+);
+
 const projectSnapshotCurrent = computed(
   () =>
     snapshot.value === null ||
@@ -365,7 +373,7 @@ onBeforeUnmount(() => {
         <div class="hero-status" v-if="snapshot && projectSnapshotCurrent">
           <div class="hero-status-head">
             <span>System posture</span>
-            <StatusChip :state="snapshot.overall_state" />
+            <StatusChip :state="snapshot.overall_state" :label="postureLabel" />
           </div>
           <strong>{{ readyProjectCount }}/{{ snapshot.projects.length }}</strong>
           <span>projects index-ready</span>

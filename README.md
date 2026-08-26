@@ -1,12 +1,16 @@
 # HZR
 
 <p align="center">
+  <img alt="HZR control-plane banner" src="docs/assets/hzr-hero.png" width="880">
+</p>
+
+<p align="center">
   <strong>One local control plane for efficient coding agents.</strong><br>
   Search once. Remember once. Execute through policy. Measure what actually happened.
 </p>
 
 <p align="center">
-  <a href="Cargo.toml"><img alt="Version 0.6.0" src="https://img.shields.io/badge/version-0.6.0-e64a19"></a>
+  <a href="Cargo.toml"><img alt="Version 0.6.1" src="https://img.shields.io/badge/version-0.6.1-e64a19"></a>
   <a href="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/heAdz0r/hzr/releases"><img alt="Release" src="https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/control_plane-Apache--2.0-37474f"></a>
@@ -39,23 +43,27 @@ HZR assigns one owner to each concern:
 ## Architecture
 
 ```mermaid
-flowchart LR
-    A["Agent / IDE / MCP client"] --> P["HZR policy + workspace boundary"]
+flowchart TB
+    CC["Claude Code<br/>hook · MCP stdio"]
+    CX["Codex · IDE · other agents"]
+    CLI["hzr CLI"]
 
-    subgraph E["One owned execution plane"]
-      P --> X["Exec router<br/>RTK fork-core"]
-      P --> S["Code intelligence<br/>grepai"]
-      P --> M["Durable memory<br/>ICM"]
-      P --> C["Agent loop + density<br/>Caveman-derived"]
-    end
+    CC --> D
+    CX --> D
+    CLI --> D
 
-    X --> L["Typed ledger + traces"]
-    S --> L
-    M --> L
-    C --> L
+    D{{"HZRD — control plane<br/>policy · workspace identity · supervision · accounting"}}
 
-    L --> O["Doctor · Stats · Local UI"]
-    O -. "repair / policy feedback" .-> P
+    D <--> X["RTK fork-core<br/>exec router + output filters"]
+    D <--> S["grepai<br/>semantic index + symbols"]
+    D <--> M["ICM<br/>durable memory"]
+    D <--> C["Caveman-derived<br/>response density"]
+
+    D ==> L[("Typed operation ledger")]
+    L --> O["Doctor · Stats · Observatory"]
+    O -. "repair · policy feedback" .-> D
+
+    style D fill:#e64a19,stroke:#7f2704,stroke-width:3px,color:#ffffff
 ```
 
 This architecture gives HZR three properties that a loose tool collection cannot:
@@ -95,7 +103,7 @@ and [recorded run](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RES
 
 ## Install
 
-HZR 0.6.0 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
+HZR 0.6.1 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
 Apple Silicon/Intel. System Git is the only engine prerequisite; Node.js, RTK,
 grepai, and ICM are bundled. Windows is not currently published.
 
@@ -103,7 +111,7 @@ Download, inspect, then run the installer:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.6.0/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.6.1/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -178,6 +186,28 @@ hzr stats --evasion --since 7d
 project build wrapper. Build projects through `hzr exec run '<project build command>'`.
 `hzr release` rebuilds and installs HZR itself.
 
+## Make the efficient path the easy path
+
+Having a good filter is not enough if an agent can reach a familiar RAW command faster. HZR 0.6
+closes that incentive gap: the normal route needs less judgment than the bypass.
+
+```text
+effective managed route exists  → use it; RAW is forbidden
+no equivalent route exists      → tracked fallback; no invented savings
+exact bytes are truly required  → explicit reason + bounded fidelity allowance
+native bypass is still observed → E10 finding + zero credit + named replacement
+```
+
+`hzr exec run` accepts the original shell string and chooses the first-class implementation. It
+looks through common shell and environment wrappers, so wrapping `rg`, `git`, `curl`, or another
+managed command does not turn it into an invisible escape hatch. If `hzr exec rewrite` proves an
+`allow_rewrite` decision, an unfiltered route cannot override it.
+
+This is more than a warning in a prompt. Avoidable bypass is recorded outside the optimized
+bucket, contributes zero reduction, lowers visible coverage, and returns the HZR command that
+should replace it. A genuinely unsupported operation remains available and auditable instead of
+being falsely called optimized.
+
 ## Exactness is a controlled capability
 
 Bounded output must identify what it represents, what was omitted, and how to recover
@@ -245,9 +275,32 @@ same `hzrd` boundary. The executable contract is
 | durable memory | `hzr_memory_recall`, `hzr_memory_store`, `hzr_memory_update`, `hzr_memory_forget`, `hzr_memory_prune` |
 | operations | `hzr_observability`, `hzr_doctor`, `hzr_codec` |
 
+## When a project genuinely cannot route through HZR
+
+Some repositories have to name an engine directly: a benchmark whose measured subject *is*
+RTK, or the engine's own source tree. Rewriting those instructions would destroy the thing
+they measure. Such a project declares a waiver instead of being quietly skipped:
+
+```toml
+# .hzr/policy.toml
+schema_version = 1
+
+[[exemption]]
+rule = "direct-rtk"
+reason = "benchmark-subject"
+justification = "This checkout is the upstream RTK baseline that HZR measures itself against."
+```
+
+A waiver covers only the rule it names, needs a justification a reviewer can audit, and never
+applies to the managed contract block itself. `hzr doctor` reports every honoured waiver under
+`fleet_instruction_exemptions`, so an exemption is visible rather than indistinguishable from a
+hidden bypass. Execution routes are not waivable: `direct-rtk`, `direct-grepai` and
+`direct-icm` are instruction directives, and no file on disk can buy an exception to a bypass
+HZR could have replaced at execution time.
+
 ## Honest boundaries
 
-| Guarantee | 0.6.0 posture |
+| Guarantee | 0.6.1 posture |
 |---|---|
 | one versioned control plane and pinned engine bundle | implemented |
 | one canonical index owner per worktree | implemented |

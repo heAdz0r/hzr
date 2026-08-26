@@ -214,7 +214,7 @@ pub fn run(
     {
         let content_str = String::from_utf8_lossy(&content_bytes);
         if let Some(digest) = read_digest::try_special_digest(file, &content_str, level) {
-            let shown = crate::guard::never_worse(&content_str, &digest).to_string();
+            let shown = crate::guard::never_worse_summary(&content_str, &digest).to_string();
             print!("{shown}");
             if !shown.ends_with('\n') {
                 println!();
@@ -242,7 +242,7 @@ pub fn run(
             match read_digest::build_tabular_digest(&content_bytes, delimiter, level) {
                 Ok(digest) => {
                     let input = String::from_utf8_lossy(&content_bytes);
-                    let shown = crate::guard::never_worse(&input, &digest).to_string();
+                    let shown = crate::guard::never_worse_summary(&input, &digest).to_string();
                     print!("{shown}");
                     if !shown.ends_with('\n') {
                         println!();

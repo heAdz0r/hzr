@@ -652,7 +652,11 @@ fn json_direct_icm_count(document: &Value) -> usize {
 }
 
 fn json_hzr_registration(document: &Value) -> Option<Registration> {
-    let hzr = json_servers(document)?.get("hzr")?;
+    json_registration_entry(json_servers(document)?)
+}
+
+fn json_registration_entry(servers: &Map<String, Value>) -> Option<Registration> {
+    let hzr = servers.get("hzr")?;
     Some(Registration {
         command: hzr.get("command")?.as_str()?.to_owned(),
         args: hzr
@@ -665,6 +669,56 @@ fn json_hzr_registration(document: &Value) -> Option<Registration> {
             })
             .unwrap_or_default(),
     })
+}
+
+/// Claude Code keeps a per-project `mcpServers` map inside the one user config file.
+///
+/// That project scope is what Claude Code actually launches inside the workspace, so a
+/// user-global entry pinned to some other project is a fallback, not the effective pin.
+/// Auditing only the global entry made one directory permanently "wrong" for every other.
+fn json_project_servers<'a>(
+    document: &'a Value,
+    workspace: &Path,
+) -> Option<&'a Map<String, Value>> {
+    document
+        .get("projects")?
+        .as_object()?
+        .get(workspace.to_str()?)?
+        .get("mcpServers")?
+        .as_object()
+}
+
+pub fn claude_code_project_status(workspace: &Path) -> Result<Option<ClientMcpStatus>> {
+    let Some((_, path)) = audit_paths()?
+        .into_iter()
+        .find(|(client, _)| *client == Client::ClaudeCode)
+    else {
+        return Ok(None);
+    };
+    let bytes = read_optional(&path)?;
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let document: Value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let Some(servers) = json_project_servers(&document, workspace) else {
+        return Ok(None);
+    };
+    let Some(registration) = json_registration_entry(servers) else {
+        return Ok(None);
+    };
+    Ok(Some(ClientMcpStatus {
+        client: Client::ClaudeCode,
+        path,
+        config_exists: true,
+        registered: registration.is_native_hzr(),
+        pinned_workspace: registration.pinned_workspace(),
+        command: Some(registration.command),
+        args: registration.args,
+        direct_icm_registrations: count_direct_icm(Some(servers)),
+        lifecycle: MCP_LIFECYCLE,
+        started_by_init: false,
+    }))
 }
 
 fn migrate_claude_desktop(

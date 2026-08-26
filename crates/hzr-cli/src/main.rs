@@ -7,6 +7,7 @@ mod cli_subcommand_help;
 mod client;
 mod client_config;
 mod diagnostics;
+mod fleet_exemption;
 mod foreign;
 mod fork;
 mod hook_runner;

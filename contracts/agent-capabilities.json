@@ -87,19 +87,17 @@
       "instruction_file": null,
       "native_hook_routing": false,
       "tool_names": [
-        "hzr_context_plan",
+        "hzr_context",
         "hzr_search",
         "hzr_read",
+        "hzr_edit",
         "hzr_write",
         "hzr_memory_recall",
         "hzr_memory_store",
         "hzr_memory_forget",
         "hzr_memory_update",
         "hzr_memory_prune",
-        "hzr_exec",
-        "hzr_observability",
-        "hzr_doctor",
-        "hzr_codec"
+        "hzr_exec"
       ]
     }
   }

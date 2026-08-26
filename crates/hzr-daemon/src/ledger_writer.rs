@@ -1020,7 +1020,7 @@ impl LedgerWriter {
             })
             .await
             .map_err(|_| LedgerWriterError::Unavailable)?;
-        Ok(result.await.map_err(|_| LedgerWriterError::Unavailable)??)
+        result.await.map_err(|_| LedgerWriterError::Unavailable)?
     }
 
     pub async fn complete_fidelity(

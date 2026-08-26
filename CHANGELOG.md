@@ -4,6 +4,63 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-26
+
+0.6.1 is the verification hotfix for 0.6.0. The deferred acceptance runs listed in
+`docs/TEST_DEBT_0.6.0.md` were executed against the immutable 0.6.0 source, and every gate that
+failed is fixed here. Nothing was reclassified as passing: the defects below were found by
+running the gates, not by lowering them.
+
+### Fixed
+
+- **The declared MSRV did not build.** `hzr-daemon` and `hzr-cli` used `let` chains, which Rust
+  stabilized in 1.88, while the workspace advertises `rust-version = 1.85` and the README
+  promises "Rust 1.85+". Twenty conditions are now nested plainly, and `cargo +1.85.0 check
+  --locked --workspace --all-targets --all-features` passes.
+- **MCP reads and writes reached no ledger at all.** `hzr_read` and `hzr_write` were recorded
+  with `accounting_stage = final_delivery`, a stage the efficiency summary excludes so that the
+  last hop of a multi-stage pipeline is not counted twice. An MCP tool call has no earlier
+  stage, so every MCP read and write was silently absent from `hzr stats`. They are recorded as
+  standalone deliveries now, like the memory and context tools beside them.
+- **fork-core could replace `git status --porcelain` with a summary.** The never-worse guard
+  trimmed its input before testing for porcelain, which removed the two leading status columns
+  that define the format, so the protocol was never recognized and the exact bytes were not
+  preserved.
+- **The same guard neutered every explicitly requested digest.** Any valid JSON counted as an
+  exact machine protocol, so `rtk json` and the `rtk read` CSV/JSON digests always fell back to
+  raw — a schema view that never rendered. An explicitly requested summary now uses its own
+  guard, which still refuses to lose content, a failure signal, or size.
+- **MCP ownership was not workspace-aware.** HZR audited only Claude Code's user-global
+  `mcpServers` and ignored the per-project `projects[<path>].mcpServers` scope that Claude Code
+  actually launches, so one global pin left every other project permanently mismatched. The
+  project scope now takes precedence, mirroring the existing Codex behaviour.
+- **The capability contract described the wrong surface.** `harnesses.managed_agent.tool_names`
+  carried the 13-tool MCP inventory instead of the 11 tools the Caveman bridge implements, so
+  the managed runtime refused to start against its own contract.
+- **Doctor's fidelity remediation lost its safety wording.** An unknown execution may already
+  have been billed; the operator guidance says so again, and names idempotent replay.
+- **The integration suite was flaky under full parallel load.** ICM liveness gates waited two
+  seconds for a process spawn, which is not enough on a machine running the whole suite.
+- **System posture read `Rebuilding` on a healthy idle daemon.** `dashboard_overall_state`
+  scored every registered workspace, so any project that had never been indexed counted as a
+  rebuild in progress — 75 of 82 here, which pinned the chip to `Rebuilding` permanently. The
+  posture now describes this control plane and the project in view; fleet progress keeps its own
+  reading in `projects_index_ready / projects_total`, and an unselected daemon reports
+  `standby` labelled "No project selected".
+
+### Changed
+
+- **Fleet exemptions are declared, not inferred.** A hardcoded path heuristic silently exempted
+  one directory from fleet instruction policy. A project now declares a waiver in
+  `.hzr/policy.toml` with the rule it covers and an auditable justification, and `hzr doctor`
+  reports it under `fleet_instruction_exemptions` instead of passing it in silence. Only
+  instruction-directive rules are waivable; no file on disk can waive an execution route.
+
+### Documentation
+
+- The README carries the control-plane banner again, and its architecture diagram is redrawn
+  with HZRD at the centre as the control plane rather than as one box among the engines.
+
 ## [0.6.0] - 2026-08-26
 
 ### Why this is a qualitative leap
@@ -23,6 +80,26 @@ useful, but correctness still depended on them behaving independently in compati
 ```text
 agent intent → HZR policy → managed engines → typed validation → ledger → doctor / traces / UI
 ```
+
+#### Closing the agent incentive gap
+
+The previous gap was behavioural as much as technical: even when an efficient command existed,
+an LLM could still prefer a familiar native tool, RAW wrapper, shell indirection, or generic
+fallback. That shortcut was easier to request, difficult to distinguish from legitimate exact
+work, and could disappear from the denominator while making the remaining savings ratio look
+better.
+
+0.6.0 changes those incentives instead of relying on prompt obedience. `hzr exec run` is the one
+easy route and selects the managed implementation itself. Policy recursively inspects common
+shell/environment wrappers; `allow_rewrite` makes RAW forbidden; direct RAW/proxy entry points are
+rejected; and legitimate byte-exact recovery requires a closed reason plus a durable bounded
+allowance. A bypass that is still observed receives equal baseline and delivered cost, zero
+savings credit, a typed E10 classification, and a concrete first-class replacement in stats or
+the agent scorecard.
+
+The effect is deliberate: following HZR requires less agent judgment than bypassing it, while a
+real unsupported command remains usable through a tracked no-equivalent fallback. HZR therefore
+discourages avoidable bypass without pretending every command already has an effective filter.
 
 That architectural shift gives users materially stronger guarantees:
 
@@ -1016,4 +1093,5 @@ First public HZR release.
 [0.2.0]: https://github.com/heAdz0r/hzr/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/heAdz0r/hzr/releases/tag/v0.1.0
 [0.4.3]: https://github.com/heAdz0r/hzr/compare/v0.4.2...v0.4.3
+[0.6.1]: https://github.com/heAdz0r/hzr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0

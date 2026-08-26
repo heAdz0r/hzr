@@ -210,7 +210,7 @@ verify_sha256 \
 PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ls \
   --omit=dev --all --prefix "${HZR_CAVEMAN_ROOT}" >/dev/null
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.6.0" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.6.1" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
@@ -356,7 +356,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-  if (report.protocol_version !== 1 || report.hzr_version !== "0.6.0") {
+  if (report.protocol_version !== 1 || report.hzr_version !== "0.6.1") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -396,7 +396,7 @@ fi
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
       const ids = new Set(report.services.map((service) => service.id));
-      if (response.status !== 200 || report.hzr_version !== "0.6.0" ||
+      if (response.status !== 200 || report.hzr_version !== "0.6.1" ||
           !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
         throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
       }

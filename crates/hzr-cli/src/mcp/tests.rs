@@ -127,7 +127,7 @@ fn acceptance_gate_every_non_dedicated_mcp_tool_has_typed_accounting() {
             json!({"path": "private/source", "outline": true}),
             AccountingOperationKind::Read,
             AccountingOperationMode::ReadOutline,
-            AccountingStage::FinalDelivery,
+            AccountingStage::StandaloneDelivery,
         ),
         (
             ToolKind::Write,
@@ -135,7 +135,7 @@ fn acceptance_gate_every_non_dedicated_mcp_tool_has_typed_accounting() {
             json!({}),
             AccountingOperationKind::Write,
             AccountingOperationMode::Write,
-            AccountingStage::FinalDelivery,
+            AccountingStage::StandaloneDelivery,
         ),
         (
             ToolKind::ContextPlan,

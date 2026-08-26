@@ -26,6 +26,7 @@ pub enum DaemonError {
     Io(io::Error),
 }
 
+#[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
     code: &'static str,

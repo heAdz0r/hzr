@@ -19,6 +19,7 @@ use tokio::time::timeout;
 
 use crate::cli::ServiceCommand;
 use crate::client::DaemonClient;
+use crate::fleet_exemption;
 use crate::{
     activation, adoption, client_config, foreign, hook_runner, instructions, prefix, service,
 };
@@ -157,7 +158,7 @@ fn fidelity_durability_status_check(
         "fidelity_durability",
         CheckStatus::Error,
         format!(
-            "reserved={}, executing_unknown={}, executed_pending_replay={}, corrupt={} in {}; unknown_ids={}; reconcile with `hzr doctor --resolve-fidelity <ID> --acknowledge-executed` (records zero unmeasured tokens) or only after proof use `hzr doctor --resolve-fidelity <ID> --prove-not-executed`; restart hzrd to replay executed records; preserve corrupt records because corruption blocks new fidelity execution",
+            "reserved={}, executing_unknown={}, executed_pending_replay={}, corrupt={} in {}; unknown_ids={}; never retry or delete an unknown execution because it may already have been billed - reconcile it with `hzr doctor --resolve-fidelity <ID> --acknowledge-executed` (records zero unmeasured tokens) or only after proof use `hzr doctor --resolve-fidelity <ID> --prove-not-executed`; restart hzrd to idempotently replay executed records; preserve corrupt records because corruption blocks new fidelity execution",
             status.reserved,
             status.executing_unknown,
             status.executed_pending_replay,
@@ -258,11 +259,23 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
             format!("{}: {}", warning.path.display(), warning.detail),
         ));
     }
+    let mut waived_projects = Vec::new();
     for registration in snapshot.registrations {
-        if registration.root == current_workspace || intentionally_unmanaged_rtk(&registration.root)
-        {
+        if registration.root == current_workspace {
             continue;
         }
+        // A waiver is read once per project and reported, never inferred from the path.
+        let exemptions = match fleet_exemption::load(&registration.root) {
+            Ok(exemptions) => exemptions,
+            Err(error) => {
+                checks.push(check(
+                    "fleet_instruction_exemption",
+                    CheckStatus::Error,
+                    format!("{error:#}; an unauditable waiver is not honoured"),
+                ));
+                fleet_exemption::FleetExemptions::default()
+            }
+        };
         for (surface, path) in activation::local_instruction_paths(&registration.root) {
             let audit = match instructions::audit(surface, &path) {
                 Ok(audit) => audit,
@@ -278,8 +291,25 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
             if !audit.installed && audit.conflicting_mandates.is_empty() {
                 continue;
             }
-            if audit.conflicting_mandates.is_empty() {
-                if !audit.healthy() {
+            // A declared waiver removes only the rules it names. Anything left is still a
+            // finding, so a policy file cannot broaden itself into a blanket opt-out.
+            let unwaived: Vec<&String> = audit
+                .conflicting_mandates
+                .iter()
+                .filter(|conflict| !exemptions.covers(conflict))
+                .collect();
+            if unwaived.is_empty() {
+                if !audit.conflicting_mandates.is_empty() {
+                    waived_projects.push(format!(
+                        "{} ({} directive(s); {})",
+                        path.display(),
+                        audit.conflicting_mandates.len(),
+                        exemptions.summary()
+                    ));
+                }
+                // A waiver covers directives, never the managed block itself: a stale or
+                // unreadable contract stays a finding even in an exempt project.
+                if !audit.installed || !audit.current || !audit.contract_readable {
                     stale_paths.push(path);
                 }
                 continue;
@@ -321,6 +351,19 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
             ),
         ));
     }
+    if !waived_projects.is_empty() {
+        waived_projects.sort();
+        checks.push(check(
+            "fleet_instruction_exemptions",
+            CheckStatus::Warning,
+            format!(
+                "{} instruction file(s) keep a direct engine directive under a declared `{}` waiver, so they are reported rather than silently passed: {}",
+                waived_projects.len(),
+                fleet_exemption::POLICY_RELATIVE_PATH,
+                waived_projects.join("; ")
+            ),
+        ));
+    }
     if conflict_count > 32 {
         checks.push(check(
             "fleet_instruction_conflicts_truncated",
@@ -339,14 +382,6 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
         ));
     }
     checks
-}
-
-fn intentionally_unmanaged_rtk(path: &Path) -> bool {
-    path.file_name().is_some_and(|name| name == "rtk")
-        && path
-            .parent()
-            .and_then(Path::file_name)
-            .is_some_and(|name| name == "Programming")
 }
 
 pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> DoctorReport {
@@ -500,7 +535,8 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                     // Trusted project configuration has precedence over the user-global Codex
                     // registration. Audit the effective pin instead of reporting a stale global
                     // fallback that Codex will not launch in this workspace.
-                    statuses = effective_workspace_mcp_statuses(statuses, Some(project_codex));
+                    statuses =
+                        effective_workspace_mcp_statuses(statuses, Some(project_codex), None);
                 }
                 Ok(_) => {}
                 Err(error) => checks.push(check(
@@ -510,6 +546,19 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                         "invalid project Codex MCP {}: {error}",
                         project_codex_path.display()
                     ),
+                )),
+            }
+            // Claude Code stores its per-project servers inside the same user config. The
+            // project scope wins for this workspace; the user-global entry is only a fallback.
+            match client_config::claude_code_project_status(workspace) {
+                Ok(project_claude_code) => {
+                    statuses =
+                        effective_workspace_mcp_statuses(statuses, None, project_claude_code);
+                }
+                Err(error) => checks.push(check(
+                    "project_claude_code_mcp",
+                    CheckStatus::Error,
+                    format!("invalid project Claude Code MCP scope: {error}"),
                 )),
             }
             checks.push(workspace_binding_check(&statuses, workspace));
@@ -850,10 +899,15 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
 fn effective_workspace_mcp_statuses(
     mut global: Vec<client_config::ClientMcpStatus>,
     project_codex: Option<client_config::ClientMcpStatus>,
+    project_claude_code: Option<client_config::ClientMcpStatus>,
 ) -> Vec<client_config::ClientMcpStatus> {
     if let Some(project_codex) = project_codex.filter(|status| status.registered) {
         global.retain(|status| status.client != client_config::Client::Codex);
         global.push(project_codex);
+    }
+    if let Some(project_claude_code) = project_claude_code.filter(|status| status.registered) {
+        global.retain(|status| status.client != client_config::Client::ClaudeCode);
+        global.push(project_claude_code);
     }
     global
 }
@@ -1544,8 +1598,10 @@ mod tests {
         fs::create_dir_all(&current).expect("current workspace");
         fs::create_dir_all(&fleet).expect("fleet workspace");
         fs::write(&contract, "contract").expect("contract fixture");
-        let mut config = Config::default();
-        config.data_dir = fixture.path().join("data");
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Default::default()
+        };
         let workspace = Workspace::discover_managed(
             &fleet,
             Path::new("git"),
@@ -1803,9 +1859,33 @@ mod tests {
                 registration(Client::ClaudeDesktop, Some("/Users/andrew/code/app")),
             ],
             Some(registration(Client::Codex, Some("/Users/andrew/code/app"))),
+            None,
         );
         let check = workspace_binding_check(&statuses, workspace);
         assert_eq!(check.status, CheckStatus::Pass);
+    }
+
+    #[test]
+    fn project_claude_code_scope_takes_precedence_over_stale_global_claude_pin() {
+        let workspace = std::path::Path::new("/Users/andrew/code/app");
+        let statuses = effective_workspace_mcp_statuses(
+            vec![
+                registration(Client::ClaudeCode, Some("/Users/andrew/code/other")),
+                registration(Client::Codex, Some("/Users/andrew/code/app")),
+            ],
+            None,
+            Some(registration(
+                Client::ClaudeCode,
+                Some("/Users/andrew/code/app"),
+            )),
+        );
+        let check = workspace_binding_check(&statuses, workspace);
+        assert_eq!(
+            check.status,
+            CheckStatus::Pass,
+            "the per-project Claude Code scope is what launches here: {}",
+            check.detail
+        );
     }
 
     #[test]

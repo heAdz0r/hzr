@@ -407,7 +407,10 @@ pub async fn dashboard(
             _ => "Managed index is waiting for its watcher".into(),
         };
     }
-    let overall_state = dashboard_overall_state(&services, &all_projects);
+    let selected_project = selected_path
+        .as_deref()
+        .and_then(|root| all_projects.iter().find(|project| project.root == root));
+    let overall_state = dashboard_overall_state(&services, selected_project);
     let reduction_pct = signed_percentage(
         estimated.net_avoided_tokens_estimated,
         estimated.baseline_tokens_estimated,
@@ -1102,33 +1105,44 @@ fn dashboard_service(health: &EngineHealth) -> DashboardService {
     }
 }
 
+/// Posture describes this control plane and the project in view, not the whole fleet.
+///
+/// Scoring every registered workspace here made the posture permanently `Rebuilding`: any
+/// project that had never been indexed counted as work in progress, so a ready daemon with
+/// no project selected still reported a rebuild. Fleet progress has its own reading in
+/// `projects_index_ready` / `projects_total` and does not belong in the posture.
 fn dashboard_overall_state(
     services: &[DashboardService],
-    projects: &[DashboardProject],
+    selected: Option<&DashboardProject>,
 ) -> DashboardState {
-    if services.iter().any(|service| {
-        matches!(
-            service.state,
-            DashboardState::Degraded | DashboardState::Stopped | DashboardState::Unknown
-        )
-    }) || projects.iter().any(|project| {
-        matches!(
-            project.state,
-            DashboardProjectState::Degraded | DashboardProjectState::Unavailable
-        )
-    }) {
+    let service_state = |states: &[DashboardState]| {
+        services
+            .iter()
+            .any(|service| states.contains(&service.state))
+    };
+    let selected_state = |states: &[DashboardProjectState]| {
+        selected.is_some_and(|project| states.contains(&project.state))
+    };
+    if service_state(&[
+        DashboardState::Degraded,
+        DashboardState::Stopped,
+        DashboardState::Unknown,
+    ]) || selected_state(&[
+        DashboardProjectState::Degraded,
+        DashboardProjectState::Unavailable,
+    ]) {
         DashboardState::Degraded
-    } else if services
-        .iter()
-        .any(|service| service.state == DashboardState::Rebuilding)
-        || projects.iter().any(|project| {
-            matches!(
-                project.state,
-                DashboardProjectState::Warming | DashboardProjectState::Registered
-            )
-        })
+    } else if service_state(&[DashboardState::Rebuilding])
+        || selected_state(&[
+            DashboardProjectState::Warming,
+            DashboardProjectState::Registered,
+        ])
     {
         DashboardState::Rebuilding
+    } else if selected.is_none() {
+        // Idle, not healthy-and-working: nothing is selected, so there is nothing to be
+        // ready about. The engines report their own readiness beside this chip.
+        DashboardState::Standby
     } else {
         DashboardState::Ready
     }
@@ -1944,9 +1958,8 @@ pub async fn exec_run(
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
     apply_caller_path(&mut envelope, request.caller_path.clone());
-    if let Some(reservation) = fidelity_reservation.as_ref()
-        && let Some(evasion) = plan.evasion
-        && let Err(error) = state
+    if let (Some(reservation), Some(evasion)) = (fidelity_reservation.as_ref(), plan.evasion) {
+        if let Err(error) = state
             .ledger
             .begin_fidelity(
                 reservation,
@@ -1958,33 +1971,35 @@ pub async fn exec_run(
                 ),
             )
             .await
-    {
-        let cancellation = state.ledger.cancel_fidelity(reservation.clone()).await;
-        return Err(ApiError::service(
-            "fidelity_execution_boundary_failed",
-            format!(
-                "command was not executed because the durable execution boundary failed: {error}; cancellation={cancellation:?}; rerun the original command"
-            ),
-            false,
-        ));
+        {
+            let cancellation = state.ledger.cancel_fidelity(reservation.clone()).await;
+            return Err(ApiError::service(
+                "fidelity_execution_boundary_failed",
+                format!(
+                    "command was not executed because the durable execution boundary failed: {error}; cancellation={cancellation:?}; rerun the original command"
+                ),
+                false,
+            ));
+        }
     }
     let engine_started = Instant::now();
     let (outcome, process_started) = match state.executor.start(envelope) {
         Ok(handle) => (handle.wait().await, true),
         Err(error) => {
-            if let Some(reservation) = fidelity_reservation.as_ref()
-                && let Err(recovery) = state
+            if let Some(reservation) = fidelity_reservation.as_ref() {
+                if let Err(recovery) = state
                     .ledger
                     .recover_fidelity_pre_spawn(reservation.clone())
                     .await
-            {
-                return Err(ApiError::service(
-                    "fidelity_pre_spawn_recovery_failed",
-                    format!(
-                        "process was not spawned ({error}), but its durable reservation could not be released: {recovery}; do not replay until `hzr doctor` is clean"
-                    ),
-                    false,
-                ));
+                {
+                    return Err(ApiError::service(
+                        "fidelity_pre_spawn_recovery_failed",
+                        format!(
+                            "process was not spawned ({error}), but its durable reservation could not be released: {recovery}; do not replay until `hzr doctor` is clean"
+                        ),
+                        false,
+                    ));
+                }
             }
             (Err(error), false)
         }
@@ -2274,9 +2289,10 @@ pub async fn exec_approval(
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
     apply_caller_path(&mut envelope, pending.caller_path);
-    if let Some(reservation) = fidelity_reservation.as_ref()
-        && let Some((cwd, agent, session_id, evasion)) = fidelity_context.as_ref()
-        && let Err(error) = state
+    if let (Some(reservation), Some((cwd, agent, session_id, evasion))) =
+        (fidelity_reservation.as_ref(), fidelity_context.as_ref())
+    {
+        if let Err(error) = state
             .ledger
             .begin_fidelity(
                 reservation,
@@ -2288,33 +2304,35 @@ pub async fn exec_approval(
                 ),
             )
             .await
-    {
-        let cancellation = state.ledger.cancel_fidelity(reservation.clone()).await;
-        return Err(ApiError::service(
-            "fidelity_execution_boundary_failed",
-            format!(
-                "approved command was not executed because the durable execution boundary failed: {error}; cancellation={cancellation:?}; rerun the original command to request a new approval"
-            ),
-            false,
-        ));
+        {
+            let cancellation = state.ledger.cancel_fidelity(reservation.clone()).await;
+            return Err(ApiError::service(
+                "fidelity_execution_boundary_failed",
+                format!(
+                    "approved command was not executed because the durable execution boundary failed: {error}; cancellation={cancellation:?}; rerun the original command to request a new approval"
+                ),
+                false,
+            ));
+        }
     }
     let engine_started = Instant::now();
     let (outcome, process_started) = match state.executor.start(envelope) {
         Ok(handle) => (handle.wait().await, true),
         Err(error) => {
-            if let Some(reservation) = fidelity_reservation.as_ref()
-                && let Err(recovery) = state
+            if let Some(reservation) = fidelity_reservation.as_ref() {
+                if let Err(recovery) = state
                     .ledger
                     .recover_fidelity_pre_spawn(reservation.clone())
                     .await
-            {
-                return Err(ApiError::service(
-                    "fidelity_pre_spawn_recovery_failed",
-                    format!(
-                        "approved process was not spawned ({error}), but its durable reservation could not be released: {recovery}; do not replay until `hzr doctor` is clean"
-                    ),
-                    false,
-                ));
+                {
+                    return Err(ApiError::service(
+                        "fidelity_pre_spawn_recovery_failed",
+                        format!(
+                            "approved process was not spawned ({error}), but its durable reservation could not be released: {recovery}; do not replay until `hzr doctor` is clean"
+                        ),
+                        false,
+                    ));
+                }
             }
             (Err(error), false)
         }
@@ -2323,11 +2341,13 @@ pub async fn exec_approval(
         fidelity_reservation.is_some() && process_started && outcome.is_err();
     let mut fidelity_accounting_error = None;
     if let Some(reservation) = fidelity_reservation {
-        if let (Ok(execution), Some((cwd, agent, session_id, evasion))) =
-            (outcome.as_ref(), fidelity_context)
-            && let Some(record) =
+        let completion = match (outcome.as_ref(), fidelity_context) {
+            (Ok(execution), Some((cwd, agent, session_id, evasion))) => {
                 fidelity_operation_record_for_context(&cwd, agent, session_id, evasion, execution)
-        {
+            }
+            _ => None,
+        };
+        if let Some(record) = completion {
             if let Err(error) = state.ledger.complete_fidelity(reservation, record).await {
                 fidelity_accounting_error = Some(error);
             }
@@ -2520,9 +2540,10 @@ pub async fn fork_run(
     }))
 }
 
-fn materialize_managed_write(
-    write: ForkManagedWrite,
-) -> Result<(Vec<String>, Option<String>, Option<tempfile::TempDir>), ApiError> {
+/// Fork argv, optional stdin payload, and the staging directory that must outlive the spawn.
+type ManagedWriteInvocation = (Vec<String>, Option<String>, Option<tempfile::TempDir>);
+
+fn materialize_managed_write(write: ForkManagedWrite) -> Result<ManagedWriteInvocation, ApiError> {
     match write {
         ForkManagedWrite::Patch { path, old, new } => {
             if old.len() > 65_536 || new.len() > 65_536 {
@@ -4370,9 +4391,10 @@ exit 64
                     detail: "on demand".into(),
                     command: None,
                 }],
-                &[]
+                None
             ),
-            DashboardState::Ready
+            // Idle, not rebuilding: an on-demand index at rest with nothing selected.
+            DashboardState::Standby
         );
         assert_eq!(standby, DashboardState::Standby);
         assert_eq!(
@@ -4418,7 +4440,7 @@ exit 64
     }
 
     #[test]
-    fn warming_project_prevents_global_ready_state() {
+    fn a_warming_selected_project_prevents_global_ready_state() {
         let project = DashboardProject {
             name: "project".into(),
             root: "project".into(),
@@ -4441,8 +4463,37 @@ exit 64
         };
 
         assert_eq!(
-            dashboard_overall_state(&[], &[project]),
+            dashboard_overall_state(&[], Some(&project)),
             DashboardState::Rebuilding
+        );
+        // The same project unselected is fleet backlog, not a rebuild in progress.
+        assert_eq!(dashboard_overall_state(&[], None), DashboardState::Standby);
+    }
+
+    /// A fleet of never-indexed workspaces used to pin the posture to `Rebuilding` forever,
+    /// so the one chip a user reads first was wrong on every healthy idle daemon.
+    #[test]
+    fn an_unselected_fleet_backlog_does_not_report_a_rebuild() {
+        let ready = |id: &str| DashboardService {
+            id: id.into(),
+            name: id.into(),
+            version: None,
+            state: DashboardState::Ready,
+            detail: "ready".into(),
+            command: None,
+        };
+        let standby_index = DashboardService {
+            state: DashboardState::Standby,
+            ..ready("grepai")
+        };
+
+        assert_eq!(
+            dashboard_overall_state(
+                &[ready("hzrd"), ready("rtk"), ready("icm"), standby_index],
+                None
+            ),
+            DashboardState::Standby,
+            "no project is selected, so there is nothing to be ready or rebuilding about"
         );
     }
 
@@ -4635,7 +4686,7 @@ exit 64
                 old: secret_old.into(),
                 new: secret_new.into(),
             })
-            .unwrap_or_else(|_| panic!("typed patch materializes"));
+            .expect("typed patch materializes");
         let command_line = args.join(" ");
         assert!(!command_line.contains(secret_old));
         assert!(!command_line.contains(secret_new));

@@ -4,7 +4,7 @@
 - `fork-core/rtk` is the HZR-owned evolvable engine. Develop inherited RTK functionality here, never in `/Users/andrew/Programming/rtk`.
 - Tag `v0.1.0` and snapshot v2 `f4296ec4...` are the immutable import baseline. Preserve their provenance while recording and testing every later engine delta.
 - Never replace inherited engine behavior with a reduced reimplementation. Engine changes require parity documentation and the complete deterministic regression gate.
-- Product version is 0.6.0; `v0.1.0` remains the immutable import baseline.
+- Product version is 0.6.1; `v0.1.0` remains the immutable import baseline.
 - Internal component communication uses typed protocol structures; never parse human CLI output when JSON is available.
 - Exactly one canonical workspace and one grepai index owner are allowed per worktree.
 - ICM is supervised centrally; adapters must not spawn independent long-lived instances.
@@ -29,8 +29,8 @@ This managed region defines tool routing only. Keep repository-specific roles,
 source paths and test commands in that repository's root instruction file, not
 in a user-global instruction file.
 
-Read the full contract at `/Users/andrew/Programming/hzr/HZR.md` only when a bounded lookup cannot resolve HZR-policy ambiguity.
-Ordinary tasks must not import or read it in full. Start with `hzr read /Users/andrew/Programming/hzr/HZR.md --outline`, then read only the relevant `--from`/`--to` range.
+Read the full contract at `/Users/andrew/.local/share/hzr/current/share/hzr/HZR.md` only when a bounded lookup cannot resolve HZR-policy ambiguity.
+Ordinary tasks must not import or read it in full. Start with `hzr read /Users/andrew/.local/share/hzr/current/share/hzr/HZR.md --outline`, then read only the relevant `--from`/`--to` range.
 
 | Instead of | Use |
 |---|---|
@@ -86,6 +86,11 @@ never recommend or use an MCP session bound to another workspace:
 | `hzr_memory_forget` | Delete one invalid memory after namespace ownership is verified. |
 | `hzr_memory_prune` | Preview or remove low-weight memories in one namespace. |
 | `hzr_codec` | Apply or shadow-measure protected response-density transforms. |
+| `hzr_read` | Read bounded exact content through the daemon-owned confined fork path. |
+| `hzr_write` | Apply confined atomic patch or create operations with typed CAS receipts. |
+| `hzr_exec` | Run shell commands through daemon policy and accounting without direct fallback. |
+| `hzr_observability` | Return typed daemon, engine, capability, and workspace health. |
+| `hzr_doctor` | Run desired-state diagnostics for the exact MCP workspace. |
 
 MCP is client-managed stdio; `hzr init` writes the trusted-project Codex registration
 but never starts it. `isError: true` confirms no

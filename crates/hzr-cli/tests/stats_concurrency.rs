@@ -10,8 +10,10 @@ use tempfile::tempdir;
 fn concurrent_stats_readers_and_writer_share_a_read_only_snapshot_without_lock_errors() {
     let directory = tempdir().expect("temp directory");
     let config_path = directory.path().join("config.toml");
-    let mut config = Config::default();
-    config.data_dir = directory.path().join("data");
+    let config = Config {
+        data_dir: directory.path().join("data"),
+        ..Default::default()
+    };
     config.ensure_layout().expect("data layout");
     config.write(&config_path).expect("config");
     let ledger_path = config.data_dir.join("ledger/hzr.sqlite");

@@ -70,18 +70,38 @@ pub fn estimate_body_tokens(body: &str) -> usize {
 
 /// Returns `filtered`, or `raw` when `filtered` would emit more tokens.
 pub fn never_worse<'a>(raw: &'a str, filtered: &'a str) -> &'a str {
+    let loses_machine_protocol =
+        exact_machine_protocol(raw) && raw != filtered && !preserves_machine_protocol(raw, filtered);
+    if loses_machine_protocol {
+        return raw;
+    }
+    never_worse_summary(raw, filtered)
+}
+
+/// Guard for a rendering the caller asked for on purpose, such as `rtk json`.
+///
+/// An explicit schema view is expected to drop values, so the machine-protocol
+/// fallback does not apply here. Emptiness, a lost failure signal and bloat still do.
+pub fn never_worse_summary<'a>(raw: &'a str, filtered: &'a str) -> &'a str {
     let loses_content = !raw.trim().is_empty() && filtered.trim().is_empty();
     let loses_failure = looks_failed(raw) && !looks_failed(filtered);
-    let loses_machine_protocol = exact_machine_protocol(raw) && raw != filtered;
-    if loses_content
-        || loses_failure
-        || loses_machine_protocol
-        || estimate_tokens(filtered) > estimate_tokens(raw)
-    {
+    if loses_content || loses_failure || estimate_tokens(filtered) > estimate_tokens(raw) {
         raw
     } else {
         filtered
     }
+}
+
+/// Whether `filtered` still carries the same machine payload as `raw`.
+///
+/// Re-rendering JSON is lossless, so the guard must allow it to compress. A prose
+/// summary such as `"1 record"` is not the protocol and always loses the contract.
+fn preserves_machine_protocol(raw: &str, filtered: &str) -> bool {
+    let Ok(raw_value) = serde_json::from_str::<serde_json::Value>(raw.trim()) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(filtered.trim())
+        .is_ok_and(|filtered_value| raw_value == filtered_value)
 }
 
 fn exact_machine_protocol(text: &str) -> bool {
@@ -89,7 +109,8 @@ fn exact_machine_protocol(text: &str) -> bool {
     text.as_bytes().contains(&0)
         || json_record_protocol(trimmed)
         || csv_record_protocol(trimmed)
-        || git_porcelain_protocol(trimmed)
+        // Porcelain encodes status in the first two columns, so it must not be left-trimmed.
+        || git_porcelain_protocol(text.trim_end())
         || trimmed.lines().any(|line| {
         let Some(separator_at) = line.find(char::is_whitespace) else {
             return false;

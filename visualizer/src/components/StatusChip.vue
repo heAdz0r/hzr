@@ -6,9 +6,14 @@ import { dashboardStateLabel, projectStateLabel } from "../utils";
 const props = defineProps<{
   state: DashboardState | ProjectState;
   compact?: boolean;
+  /** Overrides the state's default wording where the state alone is ambiguous. */
+  label?: string;
 }>();
 
-const label = computed(() => {
+const text = computed(() => {
+  if (props.label) {
+    return props.label;
+  }
   if (props.state === "warming" || props.state === "registered" || props.state === "unavailable") {
     return projectStateLabel[props.state];
   }
@@ -19,6 +24,6 @@ const label = computed(() => {
 <template>
   <span class="status-chip" :class="[`status-${state}`, { 'status-chip-compact': compact }]">
     <span class="status-dot" aria-hidden="true"></span>
-    {{ label }}
+    {{ text }}
   </span>
 </template>

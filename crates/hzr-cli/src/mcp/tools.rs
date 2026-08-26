@@ -1002,15 +1002,15 @@ fn validate_schema(schema: &Value, value: &Value, path: &str) -> Result<(), Stri
             return Err(format!("{path} matched no allowed schema branch"));
         }
     }
-    if let Some(expected) = schema.get("const")
-        && expected != value
-    {
-        return Err(format!("{path} must equal {expected}"));
+    if let Some(expected) = schema.get("const") {
+        if expected != value {
+            return Err(format!("{path} must equal {expected}"));
+        }
     }
-    if let Some(values) = schema.get("enum").and_then(Value::as_array)
-        && !values.contains(value)
-    {
-        return Err(format!("{path} is outside the advertised enum"));
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        if !values.contains(value) {
+            return Err(format!("{path} is outside the advertised enum"));
+        }
     }
     if let Some(kind) = schema.get("type") {
         let kinds = kind
@@ -1032,28 +1032,28 @@ fn validate_schema(schema: &Value, value: &Value, path: &str) -> Result<(), Stri
         }
     }
     if let Some(number) = value.as_f64() {
-        if let Some(minimum) = schema.get("minimum").and_then(Value::as_f64)
-            && number < minimum
-        {
-            return Err(format!("{path} is below the advertised minimum"));
+        if let Some(minimum) = schema.get("minimum").and_then(Value::as_f64) {
+            if number < minimum {
+                return Err(format!("{path} is below the advertised minimum"));
+            }
         }
-        if let Some(maximum) = schema.get("maximum").and_then(Value::as_f64)
-            && number > maximum
-        {
-            return Err(format!("{path} exceeds the advertised maximum"));
+        if let Some(maximum) = schema.get("maximum").and_then(Value::as_f64) {
+            if number > maximum {
+                return Err(format!("{path} exceeds the advertised maximum"));
+            }
         }
     }
     if let Some(text) = value.as_str() {
         let character_count = text.chars().count() as u64;
-        if let Some(minimum) = schema.get("minLength").and_then(Value::as_u64)
-            && character_count < minimum
-        {
-            return Err(format!("{path} is shorter than the advertised minimum"));
+        if let Some(minimum) = schema.get("minLength").and_then(Value::as_u64) {
+            if character_count < minimum {
+                return Err(format!("{path} is shorter than the advertised minimum"));
+            }
         }
-        if let Some(maximum) = schema.get("maxLength").and_then(Value::as_u64)
-            && character_count > maximum
-        {
-            return Err(format!("{path} exceeds the advertised maximum length"));
+        if let Some(maximum) = schema.get("maxLength").and_then(Value::as_u64) {
+            if character_count > maximum {
+                return Err(format!("{path} exceeds the advertised maximum length"));
+            }
         }
         if schema.get("pattern").and_then(Value::as_str) == Some("^[a-z0-9]+(?:-[a-z0-9]+)*$")
             && !is_kebab_case(text)
@@ -1062,10 +1062,10 @@ fn validate_schema(schema: &Value, value: &Value, path: &str) -> Result<(), Stri
         }
     }
     if let Some(items) = value.as_array() {
-        if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64)
-            && items.len() as u64 > maximum
-        {
-            return Err(format!("{path} contains too many items"));
+        if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64) {
+            if items.len() as u64 > maximum {
+                return Err(format!("{path} contains too many items"));
+            }
         }
         if let Some(item_schema) = schema.get("items") {
             for (index, item) in items.iter().enumerate() {
@@ -1095,18 +1095,18 @@ fn validate_schema(schema: &Value, value: &Value, path: &str) -> Result<(), Stri
             }
         }
     }
-    if let Some(negated) = schema.get("not")
-        && validate_schema(negated, value, path).is_ok()
-    {
-        return Err(format!("{path} matches a forbidden schema branch"));
+    if let Some(negated) = schema.get("not") {
+        if validate_schema(negated, value, path).is_ok() {
+            return Err(format!("{path} matches a forbidden schema branch"));
+        }
     }
     if let Some(parts) = schema.get("allOf").and_then(Value::as_array) {
         for part in parts {
             if let Some(condition) = part.get("if") {
-                if validate_schema(condition, value, path).is_ok()
-                    && let Some(consequence) = part.get("then")
-                {
-                    validate_schema(consequence, value, path)?;
+                if validate_schema(condition, value, path).is_ok() {
+                    if let Some(consequence) = part.get("then") {
+                        validate_schema(consequence, value, path)?;
+                    }
                 }
             } else {
                 validate_schema(part, value, path)?;
@@ -1175,8 +1175,11 @@ mod tests {
             let schema = &definition["inputSchema"];
             super::tool_contract(name).expect("tool handler contract");
             let mut sample = sample_input(name);
-            super::validate_tool_input(name, &sample)
-                .unwrap_or_else(|error| panic!("advertised sample for {name} failed: {error}"));
+            let advertised = super::validate_tool_input(name, &sample);
+            assert!(
+                advertised.is_ok(),
+                "advertised sample for {name} failed: {advertised:?}"
+            );
 
             sample
                 .as_object_mut()
@@ -1219,6 +1222,10 @@ mod tests {
         }
     }
 
+    #[expect(
+        clippy::panic,
+        reason = "fixture must fail loudly when an advertised tool has no sample"
+    )]
     fn sample_input(name: &str) -> serde_json::Value {
         match name {
             "hzr_memory_recall" => serde_json::json!({

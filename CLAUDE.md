@@ -11,8 +11,8 @@ This managed region defines tool routing only. Keep repository-specific roles,
 source paths and test commands in that repository's root instruction file, not
 in a user-global instruction file.
 
-Read the full contract at `/Users/andrew/Programming/hzr/HZR.md` only when a bounded lookup cannot resolve HZR-policy ambiguity.
-Ordinary tasks must not import or read it in full. Start with `hzr read /Users/andrew/Programming/hzr/HZR.md --outline`, then read only the relevant `--from`/`--to` range.
+Read the full contract at `/Users/andrew/.local/share/hzr/current/share/hzr/HZR.md` only when a bounded lookup cannot resolve HZR-policy ambiguity.
+Ordinary tasks must not import or read it in full. Start with `hzr read /Users/andrew/.local/share/hzr/current/share/hzr/HZR.md --outline`, then read only the relevant `--from`/`--to` range.
 
 | Instead of | Use |
 |---|---|
@@ -68,6 +68,11 @@ never recommend or use an MCP session bound to another workspace:
 | `hzr_memory_forget` | Delete one invalid memory after namespace ownership is verified. |
 | `hzr_memory_prune` | Preview or remove low-weight memories in one namespace. |
 | `hzr_codec` | Apply or shadow-measure protected response-density transforms. |
+| `hzr_read` | Read bounded exact content through the daemon-owned confined fork path. |
+| `hzr_write` | Apply confined atomic patch or create operations with typed CAS receipts. |
+| `hzr_exec` | Run shell commands through daemon policy and accounting without direct fallback. |
+| `hzr_observability` | Return typed daemon, engine, capability, and workspace health. |
+| `hzr_doctor` | Run desired-state diagnostics for the exact MCP workspace. |
 
 MCP is client-managed stdio; `hzr init` writes the trusted-project Codex registration
 but never starts it. `isError: true` confirms no

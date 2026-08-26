@@ -17,7 +17,7 @@ pub fn run(file: &Path, max_depth: usize, verbose: u8) -> Result<()> {
         .with_context(|| format!("Failed to read file: {}", file.display()))?;
 
     let schema = filter_json_string(&content, max_depth)?;
-    let shown = crate::guard::never_worse(&content, &schema);
+    let shown = crate::guard::never_worse_summary(&content, &schema);
     println!("{}", shown);
     timer.track(
         &format!("cat {}", file.display()),
@@ -43,7 +43,7 @@ pub fn run_stdin(max_depth: usize, verbose: u8) -> Result<()> {
         .context("Failed to read from stdin")?;
 
     let schema = filter_json_string(&content, max_depth)?;
-    let shown = crate::guard::never_worse(&content, &schema);
+    let shown = crate::guard::never_worse_summary(&content, &schema);
     println!("{}", shown);
     timer.track("cat - (stdin)", "rtk json -", &content, shown);
     Ok(())

@@ -354,7 +354,7 @@ async fn test_supervisor_restarts_owned_process_after_post_ready_exit() -> anyho
         supervisor.start().await?,
         StartOutcome::Started { .. }
     ));
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if matches!(
                 supervisor.status().await,
@@ -371,7 +371,7 @@ async fn test_supervisor_restarts_owned_process_after_post_ready_exit() -> anyho
         supervisor.start().await?,
         StartOutcome::Started { .. }
     ));
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if std::fs::read_to_string(&starts).is_ok_and(|count| count.trim() == "2") {
                 break;
@@ -656,7 +656,9 @@ fn fake_delayed_icm_script(
 
 #[cfg(unix)]
 async fn wait_for_path(path: &std::path::Path) -> anyhow::Result<()> {
-    tokio::time::timeout(Duration::from_secs(2), async {
+    // Liveness, not latency: the loop exits the moment the gate appears, so the cap only
+    // has to outlast process spawn on a machine saturated by the full parallel suite.
+    tokio::time::timeout(Duration::from_secs(10), async {
         while !path.exists() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }

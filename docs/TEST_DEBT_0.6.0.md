@@ -1,7 +1,12 @@
 # HZR 0.6.0 deferred verification debt
 
-Status: **open by explicit release decision**. The implementation was prioritized over repeated
-acceptance runs. These checks are mandatory before 0.6.0 can be described as fully verified.
+Status: **superseded by [`TEST_DEBT_0.6.1.md`](TEST_DEBT_0.6.1.md)**, which records what each of
+these checks reported when it was finally run and what remains owed. Kept as the historical
+statement of what 0.6.0 deferred.
+
+Original status: open by explicit release decision. The implementation was prioritized over
+repeated acceptance runs. These checks are mandatory before 0.6.0 can be described as fully
+verified.
 
 ## Rust and fork gates
 
