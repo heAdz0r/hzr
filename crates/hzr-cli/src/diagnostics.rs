@@ -1449,6 +1449,25 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                             health.hzr_version, health.protocol_version, health.state
                         ),
                     ));
+                    match client.semantic_readiness(workspace).await {
+                        Ok(readiness) if readiness.ready => checks.push(check(
+                            "semantic_runtime",
+                            CheckStatus::Pass,
+                            readiness.detail,
+                        )),
+                        Ok(readiness) => checks.push(check(
+                            "semantic_runtime",
+                            CheckStatus::Error,
+                            readiness.detail,
+                        )),
+                        Err(error) => checks.push(check(
+                            "semantic_runtime",
+                            CheckStatus::Error,
+                            format!(
+                                "semantic-search runtime probe failed: {error}; run `hzr doctor --fix` after updating HZR"
+                            ),
+                        )),
+                    }
                 }
                 Err(error) => checks.push(check("daemon", CheckStatus::Warning, error)),
             },

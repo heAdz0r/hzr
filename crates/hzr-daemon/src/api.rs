@@ -1352,6 +1352,22 @@ pub async fn search(
     outcome.map(Json).map_err(context_error)
 }
 
+pub async fn semantic_readiness(
+    State(state): State<AppState>,
+    Json(request): Json<hzr_protocol::SemanticReadinessApiRequest>,
+) -> Result<Json<hzr_protocol::SemanticReadinessApiResponse>, ApiError> {
+    let workspace = canonical_workspace(&request.workspace)?;
+    state
+        .context
+        .semantic_readiness(&workspace)
+        .await
+        .map_err(context_error)?;
+    Ok(Json(hzr_protocol::SemanticReadinessApiResponse {
+        ready: true,
+        detail: "managed fork configuration is compatible with semantic search".into(),
+    }))
+}
+
 pub async fn context_plan(
     State(state): State<AppState>,
     Json(request): Json<ContextPlanApiRequest>,

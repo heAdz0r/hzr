@@ -12,7 +12,7 @@ use hzr_protocol::{
     ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryForgetApiRequest,
     MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
     MemoryStoreApiRequest, MemoryUpdateApiRequest, OperationApiRequest, OperationApiResponse,
-    SearchApiRequest, SearchApiResponse,
+    SearchApiRequest, SearchApiResponse, SemanticReadinessApiRequest, SemanticReadinessApiResponse,
 };
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -73,6 +73,19 @@ impl DaemonClient {
         request: &SearchApiRequest,
     ) -> Result<SearchApiResponse, ClientError> {
         self.post("/v1/search", request).await
+    }
+
+    pub async fn semantic_readiness(
+        &self,
+        workspace: &Path,
+    ) -> Result<SemanticReadinessApiResponse, ClientError> {
+        self.post(
+            "/v1/search/readiness",
+            &SemanticReadinessApiRequest {
+                workspace: workspace.to_string_lossy().into_owned(),
+            },
+        )
+        .await
     }
 
     pub async fn context_plan(

@@ -27,8 +27,8 @@ pub use api::{
     MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector,
     MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope, OperationApiRequest,
     OperationApiResponse, PolicyDecision, SearchApiRequest, SearchApiResponse, SearchFallbackCode,
-    SearchHit, SearchLine, SearchMode, SearchSnippet, SearchStrategy, UsageApiRequest,
-    UsageApiResponse,
+    SearchHit, SearchLine, SearchMode, SearchSnippet, SearchStrategy, SemanticReadinessApiRequest,
+    SemanticReadinessApiResponse, UsageApiRequest, UsageApiResponse,
 };
 
 pub const PROTOCOL_VERSION: u16 = 1;

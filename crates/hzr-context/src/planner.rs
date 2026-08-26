@@ -168,6 +168,14 @@ impl ContextPlanner {
             .map_err(ContextError::Index)
     }
 
+    /// Exercise the managed fork configuration path used immediately before semantic search.
+    /// This is deliberately non-accounted: a health probe must not become claimed user savings.
+    pub async fn semantic_readiness(&self, start: &Path) -> Result<()> {
+        let workspace = self.indexes.workspace(start).await?;
+        self.ensure_managed_fork_search_config(&workspace, false)
+            .await
+    }
+
     pub async fn search_unaccounted(&self, request: SearchRequest) -> Result<SearchApiResponse> {
         self.search_with_accounting(request, false).await
     }

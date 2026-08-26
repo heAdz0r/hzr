@@ -97,6 +97,19 @@ pub struct SearchApiRequest {
     pub include_content: bool,
 }
 
+/// Authenticated, non-accounted probe used by `hzr doctor` to verify that the managed
+/// semantic-search runtime can consume the active fork configuration.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SemanticReadinessApiRequest {
+    pub workspace: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SemanticReadinessApiResponse {
+    pub ready: bool,
+    pub detail: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContextPlanApiRequest {
     pub workspace: String,

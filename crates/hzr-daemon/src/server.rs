@@ -27,6 +27,7 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         .route("/v1/health", get(api::health))
         .route("/v1/engines", get(api::engines))
         .route("/v1/search", post(api::search))
+        .route("/v1/search/readiness", post(api::semantic_readiness))
         .route("/v1/context/plan", post(api::context_plan))
         .route("/v1/memory/recall", post(api::memory_recall))
         .route("/v1/memory/store", post(api::memory_store))
