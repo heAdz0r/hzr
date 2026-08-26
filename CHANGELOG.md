@@ -54,8 +54,8 @@ should make its benefit obvious at the moment the work finishes.
 
 ## [0.6.1] - 2026-08-26
 
-0.6.1 is the verification hotfix for 0.6.0. The deferred acceptance runs listed in
-`docs/TEST_DEBT_0.6.0.md` were executed against the immutable 0.6.0 source, and every gate that
+0.6.1 is the verification hotfix for 0.6.0. The deferred acceptance runs from the 0.6.0 release
+were executed against the immutable 0.6.0 source, and every gate that
 failed is fixed here. Nothing was reclassified as passing: the defects below were found by
 running the gates, not by lowering them.
 
@@ -250,8 +250,8 @@ or missing economic evidence.
 The four native release bundles passed clean-install verification, including the daemon, managed
 engines, memory readiness, project search, stats, MCP, and atomic current-version switching. This
 is still not a provider-billed proof of economic savings: `economic_claim_ready` remains `false`,
-and the deferred full workspace, browser, fleet, and fault-injection gates are tracked explicitly
-in `docs/TEST_DEBT_0.6.0.md` rather than being presented as completed.
+and the deferred full workspace, browser, fleet, and fault-injection gates were not presented as
+completed.
 
 ## [0.5.1] - 2026-08-23
 
