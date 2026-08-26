@@ -165,17 +165,6 @@ pub async fn archive_duplicate_index(
         .join(&workspace.identity.worktree_id);
     let prepared_path = manifest_dir.join(format!("archive-{archive_id}.prepared.json"));
     let applied_path = manifest_dir.join(format!("archive-{archive_id}.json"));
-
-    if let Some(manifest) = read_manifest::<IndexArchiveManifest>(&applied_path)? {
-        validate_archive_manifest(&workspace, &source, &manifest)?;
-        validate_archive_backup(&source, &manifest)?;
-        return Ok(IndexArchiveOutcome::AlreadyApplied {
-            manifest_path: applied_path,
-            manifest,
-        });
-    }
-
-    let existing_prepared = read_manifest::<IndexArchiveManifest>(&prepared_path)?;
     let source_present = match fs::symlink_metadata(&source) {
         Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => true,
         Ok(_) => {
@@ -193,6 +182,23 @@ pub async fn archive_duplicate_index(
             });
         }
     };
+    if let Some(manifest) = read_manifest::<IndexArchiveManifest>(&applied_path)? {
+        validate_archive_manifest(&workspace, &source, &manifest)?;
+        validate_archive_backup(&source, &manifest)?;
+        if source_present {
+            return Err(conflict(format!(
+                "duplicate index source {} was recreated after archive {}; refusing to treat a live generation as already archived",
+                source.display(),
+                manifest.archive_id
+            )));
+        }
+        return Ok(IndexArchiveOutcome::AlreadyApplied {
+            manifest_path: applied_path,
+            manifest,
+        });
+    }
+
+    let existing_prepared = read_manifest::<IndexArchiveManifest>(&prepared_path)?;
     if !source_present {
         let mut manifest = existing_prepared.ok_or_else(|| {
             conflict(format!(

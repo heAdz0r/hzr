@@ -140,6 +140,25 @@ async fn test_archive_duplicate_index_is_explicit_hashed_and_idempotent() {
     .await
     .expect("archive replay");
     assert!(matches!(replay, IndexArchiveOutcome::AlreadyApplied { .. }));
+
+    fs::create_dir_all(&duplicate).expect("recreate duplicate generation");
+    fs::write(duplicate.join("config.yaml"), b"version: 2\n")
+        .expect("write recreated duplicate config");
+    let recreated = archive_duplicate_index(
+        fixture.project.path(),
+        &duplicate,
+        Path::new(MISSING_GIT),
+        fixture.data.path(),
+        Duration::from_secs(1),
+        true,
+    )
+    .await;
+    assert!(matches!(
+        recreated,
+        Err(IndexError::MigrationConflict { ref reason })
+            if reason.contains("recreated after archive")
+    ));
+    assert!(duplicate.is_dir());
 }
 
 #[tokio::test]

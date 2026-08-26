@@ -443,6 +443,81 @@ fn contract_is_portable(contract: &Path) -> bool {
     contract.ends_with("share/hzr/HZR.md") && contract.is_file()
 }
 
+fn confined_workspace_target(workspace: &Path, target: &Path) -> Result<(), String> {
+    let root_metadata = std::fs::symlink_metadata(workspace).map_err(|error| {
+        format!(
+            "cannot inspect registered root {}: {error}",
+            workspace.display()
+        )
+    })?;
+    if !root_metadata.file_type().is_dir() || root_metadata.file_type().is_symlink() {
+        return Err(format!(
+            "registered root is not a real directory: {}",
+            workspace.display()
+        ));
+    }
+    let canonical = workspace.canonicalize().map_err(|error| {
+        format!(
+            "cannot canonicalize registered root {}: {error}",
+            workspace.display()
+        )
+    })?;
+    if canonical != workspace {
+        return Err(format!(
+            "registered root {} resolves to {}; refresh the workspace registration before fleet reconciliation",
+            workspace.display(),
+            canonical.display()
+        ));
+    }
+    let relative = target.strip_prefix(workspace).map_err(|_| {
+        format!(
+            "fleet target {} escapes registered root {}",
+            target.display(),
+            workspace.display()
+        )
+    })?;
+    let components = relative.components().collect::<Vec<_>>();
+    let mut current = workspace.to_path_buf();
+    for (index, component) in components.iter().enumerate() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(format!(
+                "fleet target has an unsafe component: {}",
+                target.display()
+            ));
+        };
+        current.push(component);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "fleet target contains a symlink component: {}",
+                    current.display()
+                ));
+            }
+            Ok(metadata) if index + 1 < components.len() && !metadata.file_type().is_dir() => {
+                return Err(format!(
+                    "fleet target parent is not a directory: {}",
+                    current.display()
+                ));
+            }
+            Ok(metadata) if index + 1 == components.len() && !metadata.file_type().is_file() => {
+                return Err(format!(
+                    "fleet target is not a regular file: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect fleet target component {}: {error}",
+                    current.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Refresh the managed contract block in every registered workspace reporting a stale one.
 ///
 /// Doctor could name the stale set but not repair it, so the only remedy was visiting each
@@ -492,6 +567,35 @@ pub async fn reconcile_fleet_contracts(
             });
             continue;
         }
+        let verified = match Workspace::discover_managed_fast(
+            &registration.root,
+            Path::new("git"),
+            &config.data_dir,
+            Deadlines::default().version,
+        )
+        .await
+        {
+            Ok(verified) => verified,
+            Err(error) => {
+                report.workspace_errors.push(FleetWorkspaceError {
+                    workspace: registration.root,
+                    error: format!("cannot verify registered workspace identity: {error}"),
+                });
+                continue;
+            }
+        };
+        if verified.identity.root != registration.root
+            || verified.identity.repository_id != registration.repository_id
+            || verified.identity.worktree_id != registration.worktree_id
+            || verified.identity.git_common_dir.is_some() != registration.git_backed
+            || verified.identity.linked_worktree != registration.linked_worktree
+        {
+            report.workspace_errors.push(FleetWorkspaceError {
+                workspace: registration.root,
+                error: "registered workspace identity no longer matches canonical discovery; run `hzr init --if-needed` from the real workspace before fleet reconciliation".to_owned(),
+            });
+            continue;
+        }
         report.workspaces_scanned = report.workspaces_scanned.saturating_add(1);
         let exemptions = match fleet_exemption::load(&registration.root) {
             Ok(exemptions) => exemptions,
@@ -504,6 +608,15 @@ pub async fn reconcile_fleet_contracts(
             }
         };
         for (surface, path) in activation::local_instruction_paths(&registration.root) {
+            if let Err(error) = confined_workspace_target(&registration.root, &path) {
+                report.rewritten.push(FleetContractRewrite {
+                    path,
+                    surface: surface.as_str(),
+                    changed: false,
+                    error: Some(error),
+                });
+                continue;
+            }
             let audit = match instructions::audit(surface, &path) {
                 Ok(audit) => audit,
                 Err(error) => {
@@ -541,7 +654,13 @@ pub async fn reconcile_fleet_contracts(
                 }),
             }
         }
-        match client_config::install_project_codex(binary, &registration.root, dry_run, true) {
+        let project_codex_path = client_config::project_codex_path(&registration.root);
+        let project_codex = confined_workspace_target(&registration.root, &project_codex_path)
+            .map_err(anyhow::Error::msg)
+            .and_then(|()| {
+                client_config::install_project_codex(binary, &registration.root, dry_run, true)
+            });
+        match project_codex {
             Ok(mcp) => report.project_codex_mcp.push(FleetProjectMcpRewrite {
                 workspace: registration.root.clone(),
                 path: mcp.path,
@@ -550,7 +669,7 @@ pub async fn reconcile_fleet_contracts(
             }),
             Err(error) => report.project_codex_mcp.push(FleetProjectMcpRewrite {
                 workspace: registration.root.clone(),
-                path: client_config::project_codex_path(&registration.root),
+                path: project_codex_path,
                 changed: false,
                 error: Some(format!("{error:#}")),
             }),
@@ -2924,6 +3043,109 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         assert!(!unregistered.join("CLAUDE.md").exists());
         assert!(!unregistered.join("AGENTS.md").exists());
         assert!(!unregistered.join(".codex/config.toml").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fleet_reconcile_rejects_a_registered_root_that_now_resolves_elsewhere() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let workspace = fixture.path().join("workspace");
+        let moved = fixture.path().join("moved-workspace");
+        let outside = fixture.path().join("outside");
+        fs::create_dir_all(&workspace).expect("workspace root");
+        fs::create_dir_all(&outside).expect("outside root");
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Config::default()
+        };
+        let discovered = Workspace::discover_managed(
+            &workspace,
+            Path::new("git"),
+            &config.data_dir,
+            Deadlines::default().version,
+        )
+        .await
+        .expect("workspace discovery");
+        discovered.register().expect("workspace registration");
+        fs::rename(&workspace, &moved).expect("move registered root");
+        std::os::unix::fs::symlink(&outside, &workspace).expect("replace root with symlink");
+        let contract = fixture.path().join("current/share/hzr/HZR.md");
+        fs::create_dir_all(contract.parent().expect("contract parent")).expect("bundle layout");
+        fs::write(&contract, "contract").expect("contract fixture");
+        let binary = fixture.path().join("bin/hzr");
+        fs::create_dir_all(binary.parent().expect("binary parent")).expect("binary layout");
+        fs::write(&binary, "binary").expect("binary fixture");
+
+        let report = reconcile_fleet_contracts(&config, &contract, &binary, false, false).await;
+
+        assert_eq!(report.workspace_errors.len(), 1);
+        assert!(report.workspace_errors[0].error.contains("identity"));
+        assert!(!outside.join("CLAUDE.md").exists());
+        assert!(!outside.join("AGENTS.md").exists());
+        assert!(!outside.join(".codex/config.toml").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fleet_reconcile_refuses_symlinked_instruction_and_codex_targets() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let workspace = fixture.path().join("workspace");
+        let outside = fixture.path().join("outside");
+        fs::create_dir_all(&workspace).expect("workspace root");
+        fs::create_dir_all(&outside).expect("outside root");
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Config::default()
+        };
+        let discovered = Workspace::discover_managed(
+            &workspace,
+            Path::new("git"),
+            &config.data_dir,
+            Deadlines::default().version,
+        )
+        .await
+        .expect("workspace discovery");
+        discovered.register().expect("workspace registration");
+        let outside_agents = outside.join("AGENTS.md");
+        let outside_codex = outside.join("codex");
+        fs::create_dir_all(&outside_codex).expect("outside Codex directory");
+        fs::write(&outside_agents, "outside agents sentinel\n").expect("outside agents");
+        fs::write(outside_codex.join("config.toml"), "outside_codex = true\n")
+            .expect("outside Codex config");
+        std::os::unix::fs::symlink(&outside_agents, workspace.join("AGENTS.md"))
+            .expect("symlinked instruction target");
+        std::os::unix::fs::symlink(&outside_codex, workspace.join(".codex"))
+            .expect("symlinked Codex directory");
+        let contract = fixture.path().join("current/share/hzr/HZR.md");
+        fs::create_dir_all(contract.parent().expect("contract parent")).expect("bundle layout");
+        fs::write(&contract, "contract").expect("contract fixture");
+        let binary = fixture.path().join("bin/hzr");
+        fs::create_dir_all(binary.parent().expect("binary parent")).expect("binary layout");
+        fs::write(&binary, "binary").expect("binary fixture");
+
+        let report = reconcile_fleet_contracts(&config, &contract, &binary, false, false).await;
+
+        assert!(report.rewritten.iter().any(|entry| {
+            entry.path.ends_with("AGENTS.md")
+                && entry
+                    .error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("symlink"))
+        }));
+        assert!(report.project_codex_mcp.iter().any(|entry| {
+            entry
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("symlink"))
+        }));
+        assert_eq!(
+            fs::read_to_string(&outside_agents).expect("outside agents unchanged"),
+            "outside agents sentinel\n"
+        );
+        assert_eq!(
+            fs::read_to_string(outside_codex.join("config.toml")).expect("outside Codex unchanged"),
+            "outside_codex = true\n"
+        );
     }
 
     #[tokio::test]
