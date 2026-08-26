@@ -99,7 +99,9 @@ export function filterProjects(
     const matchesQuery =
       normalized.length === 0 ||
       project.name.toLocaleLowerCase().includes(normalized) ||
-      project.root.toLocaleLowerCase().includes(normalized);
+      project.root.toLocaleLowerCase().includes(normalized) ||
+      project.repository_id.toLocaleLowerCase().includes(normalized) ||
+      project.worktree_id.toLocaleLowerCase().includes(normalized);
     return matchesState && matchesQuery;
   });
 }

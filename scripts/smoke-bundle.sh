@@ -57,6 +57,7 @@ fi
 
 for HZR_RUNTIME_FILE in \
   bridge.mjs \
+  agent-capabilities.json \
   package.json \
   package-lock.json \
   verify-safe-extract.mjs \
@@ -77,6 +78,7 @@ fi
 
 for HZR_PROVENANCE_FILE in \
   BUNDLE_MANIFEST.sha256 \
+  agent-capabilities.json \
   HZR.md \
   install.sh \
   skills/hzr-tdd/SKILL.md \
@@ -131,13 +133,16 @@ verify_sha256() {
 }
 
 verify_sha256 \
-  "bda0d206fe9d9402d6d007254286c07b39a841f31279ebec806db10346817484" \
+  "e000365dc6c835cdeb82ba354f2efac049cf947cc4d853a55af6ecafd259490d" \
   "${HZR_CAVEMAN_ROOT}/bridge.mjs"
 verify_sha256 \
-  "8507ce5d4400968881ea0f5a41ff4b432b04eb9ca53ffc766ff9c9273054ff6d" \
+  "983b73647c6a2674fb4ad3e702644f37c8eb008bd9cec3af42a4f333bbe2ce5d" \
+  "${HZR_CAVEMAN_ROOT}/agent-capabilities.json"
+verify_sha256 \
+  "34dbaff52ff8e6779b3e55e3bd768c672433142fcffa1debee0b98183decbb52" \
   "${HZR_CAVEMAN_ROOT}/package.json"
 verify_sha256 \
-  "e10257cf3a610a00d4808c935c53fc075454c44594bf0e0faf7f5127b1bc6dc9" \
+  "f4e16e1ac5b2c6560115058379daa5e37a4a49e5a7d238f7a2183f661711d15d" \
   "${HZR_CAVEMAN_ROOT}/package-lock.json"
 verify_sha256 \
   "a59d764d9dc37eafb32f11d3dea0262a0711a59dfe469777025d858653954f28" \
@@ -205,7 +210,7 @@ verify_sha256 \
 PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ls \
   --omit=dev --all --prefix "${HZR_CAVEMAN_ROOT}" >/dev/null
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.5.1" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.6.0" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
@@ -351,7 +356,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-  if (report.protocol_version !== 1 || report.hzr_version !== "0.5.1") {
+  if (report.protocol_version !== 1 || report.hzr_version !== "0.6.0") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -391,7 +396,7 @@ fi
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
       const ids = new Set(report.services.map((service) => service.id));
-      if (response.status !== 200 || report.hzr_version !== "0.5.1" ||
+      if (response.status !== 200 || report.hzr_version !== "0.6.0" ||
           !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
         throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
       }

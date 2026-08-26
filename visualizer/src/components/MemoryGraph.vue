@@ -2,6 +2,7 @@
 import type { Core, ElementDefinition } from "cytoscape";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppIcon from "./AppIcon.vue";
+import { DetailRequestCoordinator, type DetailRequestTicket } from "../detail-request";
 import type {
   DashboardMemoryDetail,
   DashboardMemoryObservatory,
@@ -9,7 +10,10 @@ import type {
   MemoryTopic,
 } from "../types";
 
-const props = defineProps<{ observatory: DashboardMemoryObservatory }>();
+const props = defineProps<{
+  observatory: DashboardMemoryObservatory;
+  projectId: string | null;
+}>();
 const GRAPH_MEMORY_LIMIT = 28;
 const TOPICS_PER_RING = 12;
 
@@ -25,7 +29,8 @@ const detailError = ref<string | null>(null);
 const detailCache = ref(new Map<string, DashboardMemoryTopicDetails>());
 let graph: Core | null = null;
 let overviewSignature = "";
-let detailController: AbortController | null = null;
+const detailRequests = new DetailRequestCoordinator();
+detailRequests.switchProject(props.projectId);
 
 const normalizedQuery = computed(() => query.value.trim().toLocaleLowerCase());
 const filteredTopics = computed(() => {
@@ -212,7 +217,7 @@ function topicSignature(): string {
 }
 
 function topicDetailCacheKey(id: string): string {
-  return `${topicSignature()}::${id}`;
+  return `${props.projectId ?? "no-project"}::${topicSignature()}::${id}`;
 }
 
 function syncOverview(): void {
@@ -282,43 +287,58 @@ async function selectTopic(id: string): Promise<void> {
 }
 
 async function loadTopic(id: string, force = false): Promise<void> {
+  const projectId = props.projectId;
+  const ticket = detailRequests.begin(projectId);
   const cacheKey = topicDetailCacheKey(id);
   const cached = detailCache.value.get(cacheKey);
   if (cached && !force) {
+    if (!detailRequests.isCurrent(ticket, props.projectId)) return;
     expandedTopicId.value = id;
-    await renderTopicDetails(cached);
+    await renderTopicDetails(cached, ticket);
+    detailRequests.finish(ticket);
     return;
   }
-  detailController?.abort();
-  detailController = new AbortController();
   loadingTopicId.value = id;
   detailError.value = null;
   try {
-    const response = await fetch(`/v1/dashboard/memory/topics/${encodeURIComponent(id)}`, {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-      signal: detailController.signal,
-    });
+    if (!projectId) throw new Error("Select a project before loading memory details");
+    const response = await fetch(
+      `/v1/dashboard/memory/topics/${encodeURIComponent(id)}?project=${encodeURIComponent(projectId)}`,
+      {
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+        signal: ticket.signal,
+      },
+    );
     if (!response.ok) throw new Error(`Memory topic returned HTTP ${response.status}`);
     const details = (await response.json()) as DashboardMemoryTopicDetails;
-    const generationPrefix = `${topicSignature()}::`;
+    if (!detailRequests.isCurrent(ticket, props.projectId)) return;
+    const generationPrefix = `${projectId}::${topicSignature()}::`;
     const currentGeneration = new Map(
       [...detailCache.value].filter(([key]) => key.startsWith(generationPrefix)),
     );
     detailCache.value = currentGeneration.set(topicDetailCacheKey(id), details);
     expandedTopicId.value = id;
-    await renderTopicDetails(details);
+    await renderTopicDetails(details, ticket);
   } catch (cause) {
     if (cause instanceof DOMException && cause.name === "AbortError") return;
-    detailError.value = cause instanceof Error ? cause.message : "Memory topic could not be loaded";
+    if (detailRequests.isCurrent(ticket, props.projectId)) {
+      detailError.value = cause instanceof Error ? cause.message : "Memory topic could not be loaded";
+    }
   } finally {
-    if (loadingTopicId.value === id) loadingTopicId.value = null;
+    if (detailRequests.isCurrent(ticket, props.projectId) && loadingTopicId.value === id) {
+      loadingTopicId.value = null;
+    }
+    detailRequests.finish(ticket);
   }
 }
 
-async function renderTopicDetails(details: DashboardMemoryTopicDetails): Promise<void> {
+async function renderTopicDetails(
+  details: DashboardMemoryTopicDetails,
+  ticket: DetailRequestTicket,
+): Promise<void> {
   await nextTick();
-  if (!graph) return;
+  if (!graph || !detailRequests.isCurrent(ticket, props.projectId)) return;
   const topic = graph.getElementById(details.id);
   if (!topic.length) return;
   const origin = topic.position();
@@ -461,12 +481,28 @@ watch(
   () => syncOverview(),
   { deep: false },
 );
+watch(
+  () => props.projectId,
+  (projectId) => {
+    detailRequests.switchProject(projectId);
+    focusedTopicId.value = props.observatory.topics[0]?.id ?? null;
+    selectedTopicId.value = null;
+    expandedTopicId.value = null;
+    selectedMemoryId.value = null;
+    loadingTopicId.value = null;
+    detailError.value = null;
+    detailCache.value = new Map();
+    overviewSignature = "";
+    graph?.elements("[kind = 'memory'], [kind = 'memory-edge']").remove();
+    applySelection();
+  },
+);
 
 onMounted(() => {
   void createGraph();
 });
 onBeforeUnmount(() => {
-  detailController?.abort();
+  detailRequests.abort();
   graph?.destroy();
   graph = null;
 });
@@ -477,8 +513,8 @@ onBeforeUnmount(() => {
     <div class="memory-explorer-toolbar">
       <label class="memory-search">
         <AppIcon name="search" :size="16" />
-        <span class="sr-only">Find a memory topic</span>
-        <input v-model="query" type="search" placeholder="Find topic or decision" />
+        <span class="sr-only">Filter anonymous memory topics by ordinal label</span>
+        <input v-model="query" type="search" placeholder="Filter topic number" />
       </label>
       <div class="graph-actions" aria-label="Memory graph view controls">
         <button type="button" aria-label="Zoom out" title="Zoom out" @click="zoomBy(0.82)">−</button>
@@ -518,7 +554,7 @@ onBeforeUnmount(() => {
           ref="graphElement"
           class="memory-canvas"
           role="img"
-          :aria-label="`${observatory.memory_count} memories across ${observatory.topics.length} topics. Use the synchronized topic list to inspect.`"
+          :aria-label="`Anonymous topology of ${observatory.memory_count} memories across ${observatory.topics.length} ordinal topics. Use the synchronized topic list to inspect metadata.`"
         ></div>
         <div class="graph-legend" aria-hidden="true">
           <span><i class="legend-topic"></i> Topic</span>
@@ -535,7 +571,7 @@ onBeforeUnmount(() => {
           <button v-if="selectedTopicId" type="button" class="inspector-action" @click="loadTopic(selectedTopicId, true)">Try again</button>
         </template>
         <template v-else-if="loadingTopicId">
-          <span class="inspector-kicker">Reading canonical memory</span>
+          <span class="inspector-kicker">Loading anonymous topology</span>
           <h3>{{ selectedTopic?.label ?? "Topic" }}</h3>
           <div class="inspector-skeleton"></div>
           <div class="inspector-skeleton short"></div>
@@ -566,9 +602,9 @@ onBeforeUnmount(() => {
           </details>
         </template>
         <template v-else-if="expandedDetails">
-          <span class="inspector-kicker">Topic detail</span>
+          <span class="inspector-kicker">Topic topology</span>
           <h3>{{ expandedDetails.label }}</h3>
-          <p>{{ expandedDetails.visible_memory_count }} of {{ expandedDetails.memory_count }} records loaded from the repository-scoped ICM snapshot.</p>
+          <p>{{ expandedDetails.visible_memory_count }} of {{ expandedDetails.memory_count }} anonymous metadata records loaded. Memory content is available only through authenticated, project-scoped memory tools.</p>
           <div class="memory-record-list">
             <button
               v-for="memory in expandedDetails.memories"

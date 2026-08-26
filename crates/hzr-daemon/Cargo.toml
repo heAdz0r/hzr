@@ -21,6 +21,7 @@ libc = "0.2.174"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tempfile.workspace = true
 tokio.workspace = true
 toml.workspace = true
 tower-http.workspace = true
@@ -28,7 +29,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
+rusqlite.workspace = true
 tower.workspace = true
 
 [lints]

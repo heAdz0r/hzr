@@ -70,11 +70,81 @@ pub fn estimate_body_tokens(body: &str) -> usize {
 
 /// Returns `filtered`, or `raw` when `filtered` would emit more tokens.
 pub fn never_worse<'a>(raw: &'a str, filtered: &'a str) -> &'a str {
-    if estimate_tokens(filtered) > estimate_tokens(raw) {
+    let loses_content = !raw.trim().is_empty() && filtered.trim().is_empty();
+    let loses_failure = looks_failed(raw) && !looks_failed(filtered);
+    let loses_machine_protocol = exact_machine_protocol(raw) && raw != filtered;
+    if loses_content
+        || loses_failure
+        || loses_machine_protocol
+        || estimate_tokens(filtered) > estimate_tokens(raw)
+    {
         raw
     } else {
         filtered
     }
+}
+
+fn exact_machine_protocol(text: &str) -> bool {
+    let trimmed = text.trim();
+    text.as_bytes().contains(&0)
+        || json_record_protocol(trimmed)
+        || csv_record_protocol(trimmed)
+        || git_porcelain_protocol(trimmed)
+        || trimmed.lines().any(|line| {
+        let Some(separator_at) = line.find(char::is_whitespace) else {
+            return false;
+        };
+        let digest = &line[..separator_at];
+        let separator = &line[separator_at..];
+        matches!(digest.len(), 32 | 40 | 64 | 128)
+            && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && (separator.starts_with("  ") || separator.starts_with(" *"))
+        })
+}
+
+fn json_record_protocol(text: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    if serde_json::from_str::<serde_json::Value>(text).is_ok() {
+        return true;
+    }
+    let mut records = text.lines().filter(|line| !line.trim().is_empty());
+    let Some(first) = records.next() else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(first).is_ok()
+        && records.all(|line| serde_json::from_str::<serde_json::Value>(line).is_ok())
+}
+
+fn csv_record_protocol(text: &str) -> bool {
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let Some(header) = lines.next() else {
+        return false;
+    };
+    let fields = header.split(',').count();
+    fields > 1
+        && header
+            .split(',')
+            .all(|field| !field.trim().is_empty() && !field.contains(char::is_whitespace))
+        && lines.clone().next().is_some()
+        && lines.all(|line| line.split(',').count() == fields)
+}
+
+fn git_porcelain_protocol(text: &str) -> bool {
+    let mut lines = text.lines().filter(|line| !line.is_empty());
+    let Some(first) = lines.next() else {
+        return false;
+    };
+    porcelain_line(first) && lines.all(porcelain_line)
+}
+
+fn porcelain_line(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    bytes.len() >= 4
+        && bytes[2] == b' '
+        && matches!(bytes[0], b' ' | b'?' | b'!' | b'A' | b'C' | b'D' | b'M' | b'R' | b'T' | b'U')
+        && matches!(bytes[1], b' ' | b'?' | b'!' | b'A' | b'C' | b'D' | b'M' | b'R' | b'T' | b'U')
 }
 
 /// Fallback rendering for an unparsed non-zero exit: `"<tool>: failed (exit N)"`
@@ -94,22 +164,66 @@ pub fn failure_fallback(tool: &str, exit_code: i32, output: &str) -> String {
     result.push('\n');
 
     const MAX_FAILURE_LINES: usize = crate::truncate::CAP_ERRORS;
-    for (index, line) in lines.iter().take(MAX_FAILURE_LINES).enumerate() {
-        result.push_str(&format!(
-            "{}. {}\n",
-            index + 1,
-            crate::utils::truncate(line, 120)
-        ));
-    }
+    let head_lines = MAX_FAILURE_LINES.div_ceil(2);
+    let tail_lines = MAX_FAILURE_LINES / 2;
+    let omitted = lines.len().saturating_sub(MAX_FAILURE_LINES);
+    let head_end = lines.len().min(head_lines);
+    let tail_start = if omitted == 0 {
+        head_end
+    } else {
+        lines.len().saturating_sub(tail_lines)
+    };
 
-    if lines.len() > MAX_FAILURE_LINES {
-        result.push_str(&format!(
-            "\n… +{} more output lines\n",
-            lines.len() - MAX_FAILURE_LINES
-        ));
+    for (index, line) in lines.iter().take(head_end).enumerate() {
+        let terminal_line = index + 1 == lines.len();
+        let rendered = if terminal_line {
+            bounded_terminal_line(line)
+        } else {
+            crate::utils::truncate(line, 120)
+        };
+        result.push_str(&format!("{}. {rendered}\n", index + 1));
+    }
+    if omitted > 0 {
+        result.push_str(&format!("\n… {omitted} output lines omitted …\n\n"));
+    }
+    for (index, line) in lines.iter().enumerate().skip(tail_start) {
+        let terminal_line = index + 1 == lines.len();
+        let rendered = if terminal_line {
+            bounded_terminal_line(line)
+        } else {
+            crate::utils::truncate(line, 120)
+        };
+        result.push_str(&format!("{}. {rendered}\n", index + 1));
     }
 
     result.trim().to_string()
+}
+
+fn bounded_terminal_line(line: &str) -> String {
+    const MAX_TERMINAL_CHARS: usize = 512;
+    const TERMINAL_HEAD_CHARS: usize = MAX_TERMINAL_CHARS / 2;
+    const TERMINAL_TAIL_CHARS: usize = MAX_TERMINAL_CHARS - TERMINAL_HEAD_CHARS;
+
+    if line.chars().count() <= MAX_TERMINAL_CHARS {
+        return line.to_owned();
+    }
+    let head = line.chars().take(TERMINAL_HEAD_CHARS).collect::<String>();
+    let tail = line
+        .chars()
+        .rev()
+        .take(TERMINAL_TAIL_CHARS)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    let omitted_bytes = line
+        .len()
+        .saturating_sub(head.len())
+        .saturating_sub(tail.len());
+    format!(
+        "{head} … {omitted_bytes} terminal bytes omitted; recover with \
+         HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=complete_log hzr exec run '<command>' … {tail}"
+    )
 }
 
 /// True when `text` already communicates failure.
@@ -182,8 +296,36 @@ mod tests {
     }
 
     #[test]
-    fn empty_filtered_returns_filtered() {
-        assert_eq!(never_worse("data", ""), "");
+    fn nonempty_raw_never_becomes_empty() {
+        assert_eq!(never_worse("data", ""), "data");
+        assert_eq!(never_worse("data", "   \n"), "data");
+    }
+
+    #[test]
+    fn failure_signal_is_not_removed_by_a_smaller_rendering() {
+        assert_eq!(
+            never_worse("compile error: missing item", "short"),
+            "compile error: missing item"
+        );
+    }
+
+    #[test]
+    fn checksum_protocol_is_exact_even_when_a_summary_is_smaller() {
+        let raw = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef  artifact.bin";
+        assert_eq!(never_worse(raw, "ok"), raw);
+    }
+
+    #[test]
+    fn structured_record_protocols_fall_back_to_raw_on_omission() {
+        for raw in [
+            "{\"items\":[{\"id\":1},{\"id\":2}]}",
+            "{\"id\":1}\n{\"id\":2}",
+            "id,name\n1,alpha\n2,beta",
+            " M src/lib.rs\n?? new.txt",
+            "first\0second\0",
+        ] {
+            assert_eq!(never_worse(raw, "1 record"), raw, "{raw:?}");
+        }
     }
 
     #[test]
@@ -243,14 +385,44 @@ mod tests {
     }
 
     #[test]
-    fn failure_fallback_caps_the_raw_tail() {
+    fn failure_fallback_keeps_head_and_terminal_evidence() {
         let raw = (1..=100)
             .map(|n| format!("line {n}"))
             .collect::<Vec<_>>()
             .join("\n");
         let rendered = failure_fallback("tool", 137, &raw);
         assert!(rendered.starts_with("tool: failed (exit 137)"));
-        assert!(rendered.contains("+80 more output lines"));
+        assert!(rendered.contains("80 output lines omitted"));
+        assert!(rendered.contains("1. line 1"));
+        assert!(rendered.contains("100. line 100"));
+        assert!(!rendered.contains("11. line 11"));
+    }
+
+    #[test]
+    fn failure_fallback_preserves_a_long_terminal_cause() {
+        let terminal = format!("fatal: {} terminal-cause-sentinel", "x".repeat(200));
+        let raw = format!("setup\n{terminal}");
+        let rendered = failure_fallback("tool", 1, &raw);
+        assert!(rendered.contains(&terminal));
+        assert!(rendered.ends_with("terminal-cause-sentinel"));
+    }
+
+    #[test]
+    fn failure_fallback_bounds_adversarial_terminal_line_and_preserves_tail() {
+        let terminal = format!(
+            "fatal-json:{}:terminal-cause-sentinel",
+            "A".repeat(1_000_000)
+        );
+        let rendered = failure_fallback("tool", 1, &terminal);
+        assert!(
+            rendered.len() < 2_000,
+            "fallback grew to {} bytes",
+            rendered.len()
+        );
+        assert!(rendered.contains("fatal-json:"));
+        assert!(rendered.contains("terminal bytes omitted"));
+        assert!(rendered.contains("HZR_RAW_FIDELITY_REASON=complete_log"));
+        assert!(rendered.ends_with("terminal-cause-sentinel"));
     }
 
     #[test]

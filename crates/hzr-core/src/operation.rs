@@ -72,6 +72,25 @@ impl OperationRoute {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplacementCapability {
+    Available,
+    Unavailable,
+    #[default]
+    Unknown,
+}
+
+impl ReplacementCapability {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Unavailable => "unavailable",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationChannel {
@@ -211,8 +230,8 @@ pub fn classify_operation(command: &str) -> OperationClassification {
     let words = shell_words(command);
     let (route, payload) = strip_bypass_prefix(&words);
     let payload = match route {
-        OperationRoute::Bypassed => payload,
-        OperationRoute::Optimized => strip_wrappers(payload),
+        OperationRoute::Bypassed => strip_execution_wrappers(payload),
+        OperationRoute::Optimized => strip_execution_wrappers(strip_wrappers(payload)),
         OperationRoute::NativeUnaccounted => payload,
     };
     let head = payload.first().map(String::as_str).unwrap_or_default();
@@ -801,7 +820,43 @@ fn strip_wrappers(words: &[String]) -> &[String] {
     &words[index..]
 }
 
+fn strip_execution_wrappers(mut words: &[String]) -> &[String] {
+    words = strip_wrappers(words);
+    if words.first().map(String::as_str) == Some("exec")
+        && words.get(1).map(String::as_str) == Some("run")
+    {
+        words = &words[2..];
+    }
+    loop {
+        while words.first().is_some_and(|word| {
+            word.contains('=') && !word.starts_with('=') && !word.starts_with('-')
+        }) {
+            words = &words[1..];
+        }
+        match words.first().map(String::as_str) {
+            Some("env") => {
+                words = &words[1..];
+                while words
+                    .first()
+                    .is_some_and(|word| word.starts_with('-') || word.contains('='))
+                {
+                    words = &words[1..];
+                }
+            }
+            Some("command" | "nohup" | "sudo") => words = &words[1..],
+            Some("sh" | "bash" | "zsh") if words.get(1).map(String::as_str) == Some("-c") => {
+                words = &words[2..];
+            }
+            _ => return words,
+        }
+    }
+}
+
 fn operation_identity(head: &str) -> String {
+    let head = Path::new(head)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(head);
     let identity = head
         .chars()
         .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
@@ -892,6 +947,19 @@ mod tests {
     fn test_shell_tools_are_classified_without_a_second_rewrite_authority() {
         let classification = classify_operation("rtk proxy head README.md");
         assert_eq!(classification.replacement, None);
+    }
+
+    #[test]
+    fn managed_exec_taxonomy_preserves_actionable_leaf_families() {
+        for (command, expected) in [
+            ("hzr exec run 'cargo test'", "cargo"),
+            ("hzr exec run 'env CI=1 /usr/bin/git status'", "git"),
+            ("hzr exec run \"bash -c 'rg needle src'\"", "rg"),
+            ("rtk proxy env CI=1 /usr/local/bin/npm test", "npm"),
+            ("hzr exec run 'python3 -c script'", "python3"),
+        ] {
+            assert_eq!(classify_operation(command).operation, expected, "{command}");
+        }
     }
 
     #[test]

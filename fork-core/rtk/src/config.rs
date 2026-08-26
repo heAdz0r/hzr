@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -349,25 +350,63 @@ impl Config {
 }
 
 fn get_config_path() -> Result<PathBuf> {
-    let config_dir = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    let config_dir = match dirs::config_dir() {
+        Some(path) if path.is_absolute() => path,
+        Some(path) => std::env::current_dir()?.join(path),
+        None => std::env::current_dir()?.join(".config"),
+    };
     Ok(config_dir.join("rtk").join("config.toml"))
 }
 
-pub fn show_config() -> Result<()> {
-    let path = get_config_path()?;
-    println!("Config: {}", path.display());
-    println!();
+const CONFIG_OUTPUT_SCHEMA_VERSION: u32 = 2;
 
-    if path.exists() {
-        let config = Config::load()?;
-        println!("{}", toml::to_string_pretty(&config)?);
+#[derive(Serialize)]
+struct ConfigOutput<'a> {
+    schema_version: u32,
+    config_path: &'a std::path::Path,
+    config_exists: bool,
+    config_sha256: Option<String>,
+    config: &'a Config,
+}
+
+fn config_json(
+    path: &std::path::Path,
+    exists: bool,
+    config_sha256: Option<String>,
+    config: &Config,
+) -> Result<String> {
+    Ok(serde_json::to_string_pretty(&ConfigOutput {
+        schema_version: CONFIG_OUTPUT_SCHEMA_VERSION,
+        config_path: path,
+        config_exists: exists,
+        config_sha256,
+        config,
+    })?)
+}
+
+pub fn show_config(format: &str) -> Result<()> {
+    let path = get_config_path()?;
+    let exists = path.exists();
+    let (config, config_sha256) = if exists {
+        let bytes = std::fs::read(&path)?;
+        let config: Config = toml::from_str(std::str::from_utf8(&bytes)?)?;
+        (config, Some(format!("{:x}", Sha256::digest(&bytes))))
     } else {
-        println!("(default config, file not created)");
-        println!();
-        let config = Config::default();
-        println!("{}", toml::to_string_pretty(&config)?);
+        (Config::default(), None)
+    };
+
+    if format == "json" {
+        println!("{}", config_json(&path, exists, config_sha256, &config)?);
+        return Ok(());
     }
 
+    println!("Config: {}", path.display());
+    println!();
+    if !exists {
+        println!("(default config, file not created)");
+        println!();
+    }
+    println!("{}", toml::to_string_pretty(&config)?);
     Ok(())
 }
 
@@ -381,5 +420,24 @@ mod tests {
         assert!(cfg.grepai.enabled);
         assert!(cfg.grepai.auto_init);
         assert_eq!(cfg.grepai.binary_path, None);
+    }
+
+    #[test]
+    fn config_json_is_typed_versioned_and_machine_parseable() {
+        let config = Config::default();
+        let output = config_json(
+            std::path::Path::new("/tmp/rtk/config.toml"),
+            false,
+            None,
+            &config,
+        )
+        .expect("config JSON");
+        let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["config_path"], "/tmp/rtk/config.toml");
+        assert_eq!(value["config_exists"], false);
+        assert!(value["config_sha256"].is_null());
+        assert_eq!(value["config"]["grepai"]["enabled"], true);
+        assert_eq!(value["config"]["grepai"]["auto_init"], true);
     }
 }

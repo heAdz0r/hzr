@@ -6,9 +6,9 @@ use anyhow::Result;
 use hzr_core::{
     BypassSummary, CURRENT_ACCOUNTING_POLICY_VERSION, Config, EfficiencySummary, EvasionSummary,
     Ledger, LedgerSummary, OperationChannel, OperationFamilySummary, OperationModeSummary,
-    OperationRoute, ReadPipelineSummary, StatsQuery, classify_operation, privacy_identity_hash,
+    OperationRoute, ReadPipelineSummary, ReplacementCapability, StatsQuery, classify_operation,
+    privacy_identity_hash,
 };
-use hzr_exec::{ForkRuntimePaths, PinnedRtkAdapter, RtkAdapterConfig};
 use serde::Serialize;
 
 use crate::cli::{AccountingVersion, StatsDuration};
@@ -87,6 +87,8 @@ pub struct StatsReport {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct TrafficCoverage {
     pub observability_scope: &'static str,
+    pub completeness: &'static str,
+    pub complete: bool,
     pub accounted_operations: u64,
     pub total_observed_operations: u64,
     pub native_unaccounted_operations: u64,
@@ -117,6 +119,7 @@ pub struct BypassToolReport {
     pub example_command: String,
     /// The first-class HZR command that would have replaced the example, when one exists.
     pub replacement: Option<String>,
+    pub replacement_capability: ReplacementCapability,
     pub rationale: Option<String>,
 }
 
@@ -165,7 +168,7 @@ pub async fn collect(
     since: Option<&StatsDuration>,
     accounting_version: AccountingVersion,
 ) -> Result<StatsReport> {
-    let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?;
+    let ledger_path = config.data_dir.join("ledger/hzr.sqlite");
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let cutoff = since
         .map(|duration| now.saturating_sub(duration.seconds()))
@@ -175,28 +178,14 @@ pub async fn collect(
     let workspace_identity = workspace_text
         .as_deref()
         .map(|value| privacy_identity_hash("project", value));
-    let mut collection = ledger.stats_collection(StatsQuery {
-        project_path: workspace_text.as_deref(),
-        since_unix_seconds: cutoff,
-        include_legacy_versions: accounting_version == AccountingVersion::All,
-    })?;
-    let capability_commands = collection
-        .capability_commands()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if !capability_commands.is_empty() {
-        let supported = PinnedRtkAdapter::classify_capabilities_once(
-            RtkAdapterConfig {
-                binary: config.engines.binary("rtk"),
-                runtime_paths: Some(ForkRuntimePaths::from_data_root(&config.data_dir)),
-                ..RtkAdapterConfig::default()
-            },
-            &capability_commands,
-        )
-        .await
-        .unwrap_or_else(|_| vec![false; capability_commands.len()]);
-        collection.apply_capabilities(&supported);
-    }
+    let collection = Ledger::stats_collection_read_only(
+        &ledger_path,
+        StatsQuery {
+            project_path: workspace_text.as_deref(),
+            since_unix_seconds: cutoff,
+            include_legacy_versions: accounting_version == AccountingVersion::All,
+        },
+    )?;
     let snapshot = collection.snapshot;
     let scope = match (workspace_identity.as_deref(), since) {
         (Some(workspace_hash), Some(duration)) => {
@@ -287,8 +276,23 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
     } = options;
     let by_mode = gain.by_mode.clone();
     let reveal_command_details = false;
+    let traffic_complete = coverage.complete
+        && gain.total_observed_operations > 0
+        && gain.native_unaccounted_operations == 0
+        && gain.unmeasured_bypass_operations == 0;
+    let traffic_completeness = if gain.total_observed_operations == 0 {
+        "no_observed_operations"
+    } else if !coverage.complete {
+        "degraded_rewrite_gap"
+    } else if gain.native_unaccounted_operations > 0 || gain.unmeasured_bypass_operations > 0 {
+        "known_unmeasured_operations"
+    } else {
+        "observed_scope_complete"
+    };
     let traffic_coverage = TrafficCoverage {
         observability_scope: "observed_channels_only",
+        completeness: traffic_completeness,
+        complete: traffic_complete,
         // The reduction ratio is computed only from measured, non-native rows. An
         // explicitly unmeasured bypass is known to the control plane, but it is not
         // evidence that the ratio covered that operation.
@@ -297,7 +301,7 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         native_unaccounted_operations: gain.native_unaccounted_operations,
         unmeasured_bypass_operations: gain.unmeasured_bypass_operations,
         accounted_share_pct: if gain.total_observed_operations == 0 {
-            100.0
+            0.0
         } else {
             gain.operations as f64 * 100.0 / gain.total_observed_operations as f64
         },
@@ -418,7 +422,7 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         traffic_coverage,
         degraded_rewrites: coverage.unreconciled_rewrites,
         coverage,
-        runtime_accounting_complete: coverage.complete,
+        runtime_accounting_complete: traffic_complete,
         economic_claim_ready: false,
         notes: provider_usage_notes(observed_model_usage_scope),
     }
@@ -454,41 +458,37 @@ fn bypass_report(
     reveal_command_details: bool,
     recovery: String,
 ) -> BypassReport {
-    // The ledger groups by its own tool identity, but the report publishes the privacy-safe
-    // label, and that label is deliberately coarser: `rg`, `grep`, `rgai` and `search` all
-    // become "search". Mapping after grouping therefore emitted one row per pre-map identity,
-    // so a reader saw the same tool twice with its traffic split across the rows. Merge on the
-    // key that is actually displayed, and treat a family as replaceable when any of its merged
-    // identities has a first-class route.
-    let mut merged: BTreeMap<&'static str, (u64, u64, bool)> = BTreeMap::new();
+    let mut merged: BTreeMap<(String, ReplacementCapability), BypassToolReport> = BTreeMap::new();
     for tool in bypass.by_tool {
-        let label = privacy_safe_tool(&tool.tool);
-        let entry = merged.entry(label).or_default();
-        entry.0 = entry.0.saturating_add(tool.executions);
-        entry.1 = entry.1.saturating_add(tool.delivered_tokens_estimated);
-        // The per-row flag records whether a concrete replacement could be reconstructed from
-        // the recorded invocation, which is not the same question as whether the family has a
-        // route. HZR's own subsystems have one by construction, so a bypassed `search` must not
-        // be reported as having no first-class equivalent just because one example could not be
-        // rebuilt from a redacted command.
-        entry.2 |= tool.first_class_replacement_available || hzr_subsystem_label(label);
-    }
-    let mut by_tool = merged
-        .into_iter()
-        .map(
-            |(tool, (executions, delivered_tokens_estimated, replaceable))| BypassToolReport {
-                example_command: format!("hzr raw {tool} <arguments omitted>"),
-                replacement: replaceable.then(|| {
-                    "available; inspect the typed family and use its first-class HZR route"
-                        .to_owned()
-                }),
-                tool: tool.to_owned(),
-                executions,
-                delivered_tokens_estimated,
-                rationale: replaceable.then(|| "first-class HZR route available".to_owned()),
+        let label = privacy_safe_family_label(&tool.tool);
+        let replacement = tool.replacement.as_deref().and_then(safe_replacement_route);
+        let key = (label.clone(), tool.replacement_capability);
+        let entry = merged.entry(key).or_insert_with(|| BypassToolReport {
+            tool: label.clone(),
+            executions: 0,
+            delivered_tokens_estimated: 0,
+            example_command: format!("bypassed {label} <arguments omitted>"),
+            replacement: replacement.clone(),
+            replacement_capability: tool.replacement_capability,
+            rationale: match tool.replacement_capability {
+                ReplacementCapability::Available => {
+                    Some("execution-time registry route available".to_owned())
+                }
+                ReplacementCapability::Unavailable => {
+                    Some("execution-time registry found no HZR filter".to_owned())
+                }
+                ReplacementCapability::Unknown => None,
             },
-        )
-        .collect::<Vec<_>>();
+        });
+        entry.executions = entry.executions.saturating_add(tool.executions);
+        entry.delivered_tokens_estimated = entry
+            .delivered_tokens_estimated
+            .saturating_add(tool.delivered_tokens_estimated);
+        if entry.replacement.is_none() {
+            entry.replacement = replacement;
+        }
+    }
+    let mut by_tool = merged.into_values().collect::<Vec<_>>();
     // Merging reorders, and the report's contract is costliest leak first.
     by_tool.sort_by(|left, right| {
         right
@@ -516,6 +516,38 @@ fn bypass_report(
     }
 }
 
+fn privacy_safe_family_label(tool: &str) -> String {
+    let valid = !tool.is_empty()
+        && tool.len() <= 48
+        && tool
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'));
+    if valid {
+        tool.to_owned()
+    } else {
+        "other".to_owned()
+    }
+}
+
+fn safe_replacement_route(route: &str) -> Option<String> {
+    let generic_exec = route
+        .strip_prefix("hzr exec run '<")
+        .and_then(|route| route.strip_suffix(">'"))
+        .is_some_and(|route| {
+            !route.is_empty()
+                && route.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b' ' | b'_' | b'-' | b'.')
+                })
+        });
+    let static_route = route.starts_with("hzr ")
+        && !route.bytes().any(|byte| {
+            byte.is_ascii_control()
+                || matches!(byte, b'=' | b'/' | b'\\' | b'\'' | b'"' | b';' | b'$')
+        });
+    let valid = route.len() <= 160 && (generic_exec || static_route);
+    valid.then(|| route.to_owned())
+}
+
 /// Route one recorded command to its subsystem through the shared classifier.
 fn classify_command(command: &str) -> &'static str {
     classify_operation(command).subsystem.as_str()
@@ -534,14 +566,6 @@ fn command_label(command: &str, reveal_command_details: bool) -> String {
         "hzr {} <arguments omitted>",
         classification.subsystem.as_str()
     )
-}
-
-/// Labels that name an HZR subsystem rather than an external tool.
-///
-/// Reaching the shell as one of these is by definition avoidable: the managed route is the
-/// subsystem itself.
-fn hzr_subsystem_label(label: &str) -> bool {
-    matches!(label, "read" | "search" | "write" | "memory" | "codec")
 }
 
 fn privacy_safe_tool(tool: &str) -> &'static str {
@@ -596,7 +620,7 @@ mod tests {
     use crate::hook_runner::AccountingCoverage;
     use hzr_core::{
         BypassSummary, BypassTool, BypassWindow, EfficiencyCommandSummary, EfficiencySummary,
-        OperationModeSummary,
+        OperationModeSummary, ReplacementCapability,
     };
     use hzr_protocol::{AccountingOperationKind, AccountingOperationMode, AccountingStage};
 
@@ -604,6 +628,7 @@ mod tests {
     fn test_build_report_keeps_estimated_savings_separate_from_actual_usage() {
         let gain = EfficiencySummary {
             operations: 3,
+            total_observed_operations: 3,
             baseline_tokens_estimated: 1_000,
             delivered_tokens_estimated: 270,
             gross_avoided_tokens_estimated: 750,
@@ -761,7 +786,7 @@ mod tests {
                 delivered_tokens_estimated: 600,
                 example_command: "rtk proxy sed -n 1,80p src/lib.rs".into(),
                 replacement: Some("hzr rtk -- read src/lib.rs --from 1 --to 80".into()),
-                first_class_replacement_available: true,
+                replacement_capability: ReplacementCapability::Available,
                 rationale: Some("hzr read streams the requested span".into()),
             }],
         };
@@ -781,18 +806,18 @@ mod tests {
         assert_eq!(report.bypass.by_tool.len(), 1);
         assert_eq!(
             report.bypass.by_tool[0].replacement.as_deref(),
-            Some("available; inspect the typed family and use its first-class HZR route")
+            None,
+            "a route containing a concrete path is not retained in the privacy-safe report"
+        );
+        assert_eq!(
+            report.bypass.by_tool[0].replacement_capability,
+            ReplacementCapability::Available
         );
     }
 
-    /// A per-tool table must not list the same tool twice.
-    ///
-    /// `rg`, `grep`, `rgai` and `search` share one privacy-safe label, and mapping after
-    /// grouping split one family's traffic across several identically named rows. The advice
-    /// column has to survive the merge too: one replaceable identity makes the family
-    /// replaceable, otherwise the row tells the reader that search has no managed route.
+    /// Distinct privacy-safe command families and capability states must remain distinct.
     #[test]
-    fn acceptance_gate_bypass_rows_merge_on_the_label_they_display() {
+    fn acceptance_gate_bypass_rows_preserve_truthful_family_identity() {
         let bypass = BypassSummary {
             lifetime: BypassWindow {
                 operations: 78,
@@ -807,7 +832,7 @@ mod tests {
                     delivered_tokens_estimated: 300,
                     example_command: "rtk proxy rg -n TODO".into(),
                     replacement: None,
-                    first_class_replacement_available: false,
+                    replacement_capability: ReplacementCapability::Unknown,
                     rationale: None,
                 },
                 BypassTool {
@@ -816,7 +841,7 @@ mod tests {
                     delivered_tokens_estimated: 600,
                     example_command: "rtk proxy grep -rn TODO".into(),
                     replacement: Some("hzr search 'TODO' --mode exact".into()),
-                    first_class_replacement_available: true,
+                    replacement_capability: ReplacementCapability::Available,
                     rationale: Some("hzr search returns ranked matches".into()),
                 },
             ],
@@ -831,24 +856,29 @@ mod tests {
             "global lifetime".into(),
         );
 
-        assert_eq!(report.bypass.by_tool.len(), 1, "one family, one row");
-        let search = &report.bypass.by_tool[0];
-        assert_eq!(search.tool, "search");
-        assert_eq!(search.executions, 78);
-        assert_eq!(search.delivered_tokens_estimated, 900);
-        assert!(
-            search.replacement.is_some(),
-            "search has a first-class route; the merged row must not deny it"
+        assert_eq!(report.bypass.by_tool.len(), 2);
+        let grep = report
+            .bypass
+            .by_tool
+            .iter()
+            .find(|tool| tool.tool == "grep")
+            .expect("grep family");
+        assert_eq!(
+            grep.replacement_capability,
+            ReplacementCapability::Available
         );
+        let rg = report
+            .bypass
+            .by_tool
+            .iter()
+            .find(|tool| tool.tool == "rg")
+            .expect("rg family");
+        assert_eq!(rg.replacement_capability, ReplacementCapability::Unknown);
     }
 
-    /// An HZR subsystem that reached the shell is avoidable by construction.
-    ///
-    /// The per-row flag only records whether a replacement could be rebuilt from the recorded
-    /// invocation, so a redacted example used to make `hzr stats` tell the reader that search
-    /// has no managed route.
+    /// A redacted historical row must remain unknown instead of being guessed from its label.
     #[test]
-    fn acceptance_gate_a_bypassed_subsystem_is_never_reported_as_unreplaceable() {
+    fn acceptance_gate_a_redacted_bypass_remains_unknown() {
         let bypass = BypassSummary {
             lifetime: BypassWindow::default(),
             by_tool: vec![BypassTool {
@@ -857,7 +887,7 @@ mod tests {
                 delivered_tokens_estimated: 0,
                 example_command: "rtk proxy search <redacted>".into(),
                 replacement: None,
-                first_class_replacement_available: false,
+                replacement_capability: ReplacementCapability::Unknown,
                 rationale: None,
             }],
         };
@@ -872,10 +902,11 @@ mod tests {
         );
 
         assert_eq!(report.bypass.by_tool.len(), 1);
-        assert!(
-            report.bypass.by_tool[0].replacement.is_some(),
-            "a bypassed HZR subsystem always has a first-class route"
+        assert_eq!(
+            report.bypass.by_tool[0].replacement_capability,
+            ReplacementCapability::Unknown
         );
+        assert!(report.bypass.by_tool[0].replacement.is_none());
     }
 
     #[test]
@@ -907,7 +938,7 @@ mod tests {
                 delivered_tokens_estimated: 5,
                 example_command: format!("rtk proxy sed {sensitive_payload}"),
                 replacement: Some(format!("hzr rtk -- read {sensitive_payload}")),
-                first_class_replacement_available: true,
+                replacement_capability: ReplacementCapability::Available,
                 rationale: Some("bounded read".into()),
             }],
         };
@@ -927,7 +958,7 @@ mod tests {
         );
         assert_eq!(
             report.bypass.by_tool[0].example_command,
-            "hzr raw file <arguments omitted>"
+            "bypassed sed <arguments omitted>"
         );
         let encoded = serde_json::to_string(&report).expect("report JSON");
         assert!(!encoded.contains("secret=value"));
@@ -973,7 +1004,7 @@ mod tests {
                             delivered_tokens_estimated: 4,
                             example_command: sentinel.into(),
                             replacement: Some(sentinel.into()),
-                            first_class_replacement_available: true,
+                            replacement_capability: ReplacementCapability::Available,
                             rationale: Some(sentinel.into()),
                         }],
                     },
@@ -1133,7 +1164,7 @@ mod tests {
                     example_command: format!("rtk proxy {tool} secret=value"),
                     tool,
                     replacement: None,
-                    first_class_replacement_available: false,
+                    replacement_capability: ReplacementCapability::Unknown,
                     rationale: None,
                 })
                 .collect(),
@@ -1147,13 +1178,11 @@ mod tests {
             "global lifetime".into(),
         );
 
-        // The table is keyed by the label it prints, so the 59 unrecognized identities become a
-        // single "other" row and the total counts distinct labels rather than raw identities.
-        assert_eq!(report.bypass.by_tool_total, NAMED_TOOLS.len() + 1);
+        assert_eq!(report.bypass.by_tool_total, NAMED_TOOLS.len() + 59);
         assert_eq!(report.bypass.by_tool.len(), DEFAULT_BYPASS_TOOL_LIMIT);
         assert_eq!(
             report.bypass.by_tool_omitted,
-            NAMED_TOOLS.len() + 1 - DEFAULT_BYPASS_TOOL_LIMIT
+            NAMED_TOOLS.len() + 59 - DEFAULT_BYPASS_TOOL_LIMIT
         );
         let mut labels = report
             .bypass

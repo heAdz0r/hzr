@@ -18,14 +18,16 @@ pub use ledger::{
     FidelitySessionUsage, Ledger, LedgerError, LedgerRecord, LedgerSummary,
     LegacyEfficiencyMigration, LegacyEfficiencySource, OperationAttribution, OperationContext,
     OperationFamilySummary, OperationModeSummary, PolicyEvent, PolicyEventSummary, PriceTable,
-    ProjectActivitySummary, ProjectOperationRoute, ProjectOperationSummary, ReadPipelineSummary,
-    SessionEvasionSummary, StatsCollection, StatsQuery, StatsSnapshot, discover_legacy_rtk_history,
-    inspect_legacy_efficiency, privacy_identity_hash,
+    PrivacyPseudonymizer, PrivacySafeFidelityOperation, ProjectActivitySummary,
+    ProjectOperationRoute, ProjectOperationSummary, ReadPipelineSummary, SessionEvasionSummary,
+    StatsCollection, StatsQuery, StatsSnapshot, discover_legacy_rtk_history,
+    inspect_legacy_efficiency, privacy_identity_hash, privacy_keyed_identity_hash,
 };
 pub use operation::{
     FidelityBudget, FidelityPreflight, OperationChannel, OperationClassification,
     OperationMeasurement, OperationRoute, OperationSubsystem, RawFidelityReason,
-    RawFidelityRequest, RawReplacement, classify_operation, efficient_route_replacement,
-    explicit_raw_fidelity, fidelity_preflight, fidelity_preflight_required,
-    first_class_replacement, managed_raw_payload, raw_fidelity_request, raw_route_sql_predicate,
+    RawFidelityRequest, RawReplacement, ReplacementCapability, classify_operation,
+    efficient_route_replacement, explicit_raw_fidelity, fidelity_preflight,
+    fidelity_preflight_required, first_class_replacement, managed_raw_payload,
+    raw_fidelity_request, raw_route_sql_predicate,
 };

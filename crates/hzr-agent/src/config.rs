@@ -38,6 +38,24 @@ impl IntegrationLayout {
     }
 
     #[must_use]
+    pub fn bridge_package(&self) -> PathBuf {
+        self.root.join("package.json")
+    }
+
+    #[must_use]
+    pub fn agent_capabilities(&self) -> PathBuf {
+        let bundled = self.root.join("agent-capabilities.json");
+        if bundled.is_file() {
+            return bundled;
+        }
+        let source_tree = self.root.join("../../contracts/agent-capabilities.json");
+        if source_tree.is_file() {
+            return source_tree;
+        }
+        bundled
+    }
+
+    #[must_use]
     pub fn installed_package(&self) -> PathBuf {
         self.root
             .join("node_modules/@juliusbrussee/caveman-code/package.json")

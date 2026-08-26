@@ -1,4 +1,4 @@
-//! `hzr build` — one command that turns this source tree into the active global install.
+//! `hzr release` — one command that turns this source tree into the active global install.
 //!
 //! Before this existed, updating a development machine meant remembering an ordered
 //! sequence: build the bundle, install it into a version-scoped root, repoint `current`,
@@ -90,7 +90,7 @@ fn default_install_root() -> Result<PathBuf> {
     Ok(base.home_dir().join(".local/share/hzr"))
 }
 
-/// Locate the repository that owns this source tree, so `hzr build` works from any
+/// Locate the repository that owns this source tree, so `hzr release` works from any
 /// subdirectory the way `cargo` does.
 fn repository_root() -> Result<PathBuf> {
     let mut directory = std::env::current_dir().context("cannot resolve the current directory")?;
@@ -102,7 +102,7 @@ fn repository_root() -> Result<PathBuf> {
         }
         if !directory.pop() {
             bail!(
-                "`hzr build` must run inside the HZR source tree; \
+                "`hzr release` must run inside the HZR source tree; \
                  no scripts/build-bundle.sh found in any parent directory"
             );
         }

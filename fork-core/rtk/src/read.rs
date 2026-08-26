@@ -404,18 +404,20 @@ pub fn run(
     if let Some(key) = cache_key.as_deref() {
         read_cache::store_read_cache(key, &shown);
     }
-    print!("{shown}");
+    let mut delivered = shown;
     if let Some(notice) = bound_notice {
-        if !shown.ends_with('\n') {
-            println!();
+        if !delivered.ends_with('\n') {
+            delivered.push('\n');
         }
-        println!("{notice}");
+        delivered.push_str(&notice);
+        delivered.push('\n');
     }
+    print!("{delivered}");
     timer.track_attributed(
         "read <path omitted>",
         "rtk read",
         &content,
-        &shown,
+        &delivered,
         attribution,
     );
     Ok(())

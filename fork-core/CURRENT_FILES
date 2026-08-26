@@ -517,10 +517,13 @@ tasks/prd-rtk-memory-layer.md.rtk-lock
 tasks/prd-rtk-read-write-quality.md
 tasks/prd-upstream-pr-backports.md
 tasks/requirements-memory-llm-optimization.md
+tests/config_output.rs
 tests/fixtures/anti_evasion_policy.json
 tests/fixtures/anti_evasion_fixture.rs
 tests/git_cli_parity.rs
+tests/git_log_semantics.rs
 tests/internal_env.rs
+tests/read_accounting.rs
 tests/read_cli.rs
 tests/rgai_project_root.rs
 tests/runner_exit.rs

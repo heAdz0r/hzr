@@ -4,6 +4,7 @@ use std::fs::{self, OpenOptions};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 
 use fs2::FileExt;
@@ -442,6 +443,249 @@ async fn test_coordinator_reuses_one_watcher_for_repeated_prepare() {
 }
 
 #[tokio::test]
+async fn test_coordinator_evicts_lru_watcher_at_budget() {
+    let data = tempfile::tempdir().expect("managed data root");
+    let binaries = tempfile::tempdir().expect("fake binary root");
+    let grepai = fake_grepai(binaries.path(), "0.35.0");
+    let first = git_repo();
+    let second = git_repo();
+    for repo in [&first, &second] {
+        write_source(repo.path(), "pub fn coordinated() {}\n");
+        fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    }
+    let coordinator = IndexCoordinator::with_watcher_limits(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        grepai,
+        deadlines(),
+        true,
+        1,
+        Duration::from_secs(60),
+    );
+
+    let first_prepared = coordinator
+        .prepare(first.path())
+        .await
+        .expect("first prepare");
+    let second_prepared = coordinator
+        .prepare(second.path())
+        .await
+        .expect("second prepare");
+    let snapshot = coordinator
+        .registry_snapshot()
+        .await
+        .expect("registry snapshot");
+
+    assert_eq!(snapshot.active_watchers, 1);
+    assert_eq!(snapshot.watcher_limit, 1);
+    assert_eq!(
+        snapshot.watchers[0].worktree_id,
+        second_prepared.workspace.identity.worktree_id
+    );
+    assert_ne!(
+        snapshot.watchers[0].worktree_id,
+        first_prepared.workspace.identity.worktree_id
+    );
+    assert_eq!(snapshot.watchers[0].state, IndexWatcherState::Live);
+    coordinator.shutdown().await.expect("coordinator shutdown");
+}
+
+#[tokio::test]
+async fn test_coordinator_reaps_idle_watcher_after_ttl() {
+    let repo = git_repo();
+    let data = tempfile::tempdir().expect("managed data root");
+    write_source(repo.path(), "pub fn coordinated() {}\n");
+    fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    let coordinator = IndexCoordinator::with_watcher_limits(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        fake_grepai(repo.path(), "0.35.0"),
+        deadlines(),
+        true,
+        2,
+        Duration::from_millis(20),
+    );
+
+    coordinator.prepare(repo.path()).await.expect("prepare");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert_eq!(coordinator.reap_idle_watchers().await.expect("reap"), 1);
+    let snapshot = coordinator
+        .registry_snapshot()
+        .await
+        .expect("registry snapshot");
+    assert_eq!(snapshot.active_watchers, 0);
+    assert_eq!(snapshot.watcher_idle_ttl_ms, 20);
+    coordinator.shutdown().await.expect("coordinator shutdown");
+}
+
+#[tokio::test]
+async fn failed_watcher_status_polling_does_not_extend_its_tombstone_ttl() {
+    let repo = git_repo();
+    let data = tempfile::tempdir().expect("managed data root");
+    write_source(repo.path(), "pub fn coordinated() {}\n");
+    fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    let coordinator = IndexCoordinator::with_watcher_limits(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        fake_grepai(repo.path(), "0.35.0"),
+        deadlines(),
+        true,
+        2,
+        Duration::from_secs(1),
+    );
+
+    coordinator.prepare(repo.path()).await.expect("prepare");
+    let live = coordinator.status(repo.path()).await.expect("live status");
+    assert!(live.watcher.pid.is_some(), "live watcher pid");
+    fs::write(repo.path().join("fake-watch-die"), b"die").expect("watcher failure sentinel");
+
+    let mut failed = None;
+    for _ in 0..200 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let snapshot = coordinator
+            .status(repo.path())
+            .await
+            .expect("failed status");
+        if snapshot.watcher.state == IndexWatcherState::Failed {
+            failed = Some(snapshot);
+            break;
+        }
+    }
+    assert!(failed.is_some(), "watcher failure was not observed");
+
+    for _ in 0..2 {
+        assert_eq!(
+            coordinator
+                .status(repo.path())
+                .await
+                .expect("polled failed status")
+                .watcher
+                .state,
+            IndexWatcherState::Failed
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(1_200)).await;
+    assert_eq!(
+        coordinator
+            .status(repo.path())
+            .await
+            .expect("expired tombstone status")
+            .watcher
+            .state,
+        IndexWatcherState::Standby
+    );
+    coordinator.shutdown().await.expect("coordinator shutdown");
+}
+
+#[tokio::test]
+async fn test_concurrent_prepares_never_exceed_watcher_budget() {
+    let data = tempfile::tempdir().expect("managed data root");
+    let binaries = tempfile::tempdir().expect("fake binary root");
+    let grepai = fake_grepai(binaries.path(), "0.35.0");
+    let repos = (0..6)
+        .map(|_| {
+            let repo = git_repo();
+            write_source(repo.path(), "pub fn coordinated() {}\n");
+            fs::write(repo.path().join("fake-grepai-capable"), b"enabled")
+                .expect("capability marker");
+            repo
+        })
+        .collect::<Vec<_>>();
+    let coordinator = Arc::new(IndexCoordinator::with_watcher_limits(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        grepai,
+        deadlines(),
+        true,
+        2,
+        Duration::from_secs(60),
+    ));
+    let tasks = repos
+        .iter()
+        .map(|repo| {
+            let coordinator = Arc::clone(&coordinator);
+            let root = repo.path().to_path_buf();
+            tokio::spawn(async move { coordinator.prepare(&root).await })
+        })
+        .collect::<Vec<_>>();
+    for task in tasks {
+        task.await.expect("prepare task").expect("prepare succeeds");
+    }
+
+    let snapshot = coordinator
+        .registry_snapshot()
+        .await
+        .expect("registry snapshot");
+    assert_eq!(snapshot.active_watchers, 2);
+    assert!(
+        snapshot
+            .watchers
+            .iter()
+            .all(|watcher| watcher.state == IndexWatcherState::Live)
+    );
+    coordinator.shutdown().await.expect("coordinator shutdown");
+}
+
+#[tokio::test]
+async fn test_shutdown_attempts_every_watcher_after_first_stop_failure() {
+    let data = tempfile::tempdir().expect("managed data root");
+    let binaries = tempfile::tempdir().expect("fake binary root");
+    let grepai = fake_grepai(binaries.path(), "0.35.0");
+    let first = git_repo();
+    let second = git_repo();
+    for repo in [&first, &second] {
+        write_source(repo.path(), "pub fn coordinated() {}\n");
+        fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    }
+    let coordinator = IndexCoordinator::with_watcher_limits(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        grepai,
+        deadlines(),
+        true,
+        2,
+        Duration::from_secs(60),
+    );
+    let first_prepared = coordinator
+        .prepare(first.path())
+        .await
+        .expect("first prepare");
+    let second_prepared = coordinator
+        .prepare(second.path())
+        .await
+        .expect("second prepare");
+    let failing_root = if first_prepared.workspace.identity.worktree_id
+        < second_prepared.workspace.identity.worktree_id
+    {
+        first.path()
+    } else {
+        second.path()
+    };
+    fs::write(failing_root.join("fake-stop-fails"), b"enabled").expect("failure marker");
+    let pids = coordinator
+        .registry_snapshot()
+        .await
+        .expect("registry snapshot")
+        .watchers
+        .into_iter()
+        .filter_map(|watcher| watcher.pid)
+        .collect::<Vec<_>>();
+
+    assert!(coordinator.shutdown().await.is_err());
+    for pid in pids {
+        assert!(
+            !Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .status()
+                .expect("kill probe")
+                .success(),
+            "watcher {pid} survived aggregate shutdown"
+        );
+    }
+}
+
+#[tokio::test]
 async fn test_coordinator_status_proves_index_artifacts_and_live_watcher() {
     let repo = git_repo();
     let data = tempfile::tempdir().expect("managed data root");
@@ -651,6 +895,9 @@ case "$command_name" in
       shift
     done
     if [ "$stop" -eq 1 ]; then
+      if [ -f fake-stop-fails ]; then
+        exit 9
+      fi
       if [ -f "$log_dir/fake.pid" ]; then
         watcher_pid=$(cat "$log_dir/fake.pid")
         kill -TERM "$watcher_pid"
@@ -665,7 +912,9 @@ case "$command_name" in
     printf 'ready\n%s\n' "$$" > "$log_dir/fake.ready"
     cleanup() {{ rm -f "$log_dir/fake.pid" "$log_dir/fake.ready"; exit 0; }}
     trap cleanup INT TERM
-    while :; do sleep 1; done
+    while [ ! -f fake-watch-die ]; do sleep 1; done
+    rm -f "$log_dir/fake.pid" "$log_dir/fake.ready"
+    exit 17
     ;;
   *)
     printf 'unsupported fake command: %s\n' "$command_name" >&2

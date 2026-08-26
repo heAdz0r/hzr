@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -10,7 +11,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use hzr_memory::{
     IcmClient, IcmConfig, IcmLayout, IcmSupervisor, IcmTransport, Importance, MemoryTransport,
-    RecallRequest, StartOutcome, StopOutcome, StoreRequest, verify_installation,
+    RecallRequest, ServiceStatus, StartOutcome, StopOutcome, StoreRequest, verify_installation,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -177,6 +178,37 @@ async fn test_http_client_uses_authenticated_json_contracts() -> anyhow::Result<
 
 #[cfg(unix)]
 #[tokio::test]
+async fn test_http_transport_does_not_silently_invoke_cli_when_fallback_is_disabled()
+-> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let (executable, invocation_marker) = fake_cli_marker_script(&temp)?;
+    let (listener, address) = bind_loopback().await?;
+    drop(listener);
+    let mut config = config(
+        &temp,
+        executable
+            .to_str()
+            .context("non-UTF-8 fake executable path")?,
+        address,
+    );
+    config.cli_fallback = false;
+    let client = IcmClient::from_config(config)?;
+
+    assert!(
+        client
+            .recall(&RecallRequest::new("must stay HTTP"))
+            .await
+            .is_err()
+    );
+    assert!(
+        !invocation_marker.exists(),
+        "disabled fallback invoked the ICM CLI"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn test_cli_fallback_parses_json_recall_but_not_human_store_output() -> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let executable = fake_icm_script(&temp, "0.10.61")?;
@@ -299,6 +331,108 @@ async fn test_concurrent_supervisor_starts_create_exactly_one_owner() -> anyhow:
 
     assert_eq!(started, 1);
     assert_eq!(supervisor.stop().await?, StopOutcome::Stopped);
+    drop(server);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_supervisor_restarts_owned_process_after_post_ready_exit() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let (executable, starts) = fake_short_lived_icm_script(&temp)?;
+    let (listener, address) = bind_loopback().await?;
+    let supervisor = IcmSupervisor::new(config(
+        &temp,
+        executable
+            .to_str()
+            .context("non-UTF-8 fake executable path")?,
+        address,
+    ))?;
+    let server = spawn_fake_server(listener, read_token(temp.path())?);
+
+    assert!(matches!(
+        supervisor.start().await?,
+        StartOutcome::Started { .. }
+    ));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if matches!(
+                supervisor.status().await,
+                ServiceStatus::Exited { code: Some(0) }
+            ) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .context("short-lived ICM did not exit before the deadline")?;
+    assert!(matches!(
+        supervisor.start().await?,
+        StartOutcome::Started { .. }
+    ));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if std::fs::read_to_string(&starts).is_ok_and(|count| count.trim() == "2") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .context("replacement ICM process did not start")?;
+    assert_eq!(std::fs::read_to_string(starts)?.trim(), "2");
+
+    assert_eq!(supervisor.stop().await?, StopOutcome::Stopped);
+    drop(server);
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_cancelled_start_is_fenced_by_final_stop() -> anyhow::Result<()> {
+    let temp = TempDir::new()?;
+    let (executable, version_probe, release, starts) = fake_delayed_icm_script(&temp)?;
+    let (listener, address) = bind_loopback().await?;
+    let supervisor = Arc::new(IcmSupervisor::new(config(
+        &temp,
+        executable.to_str().context("fake executable path")?,
+        address,
+    ))?);
+    let server = spawn_fake_server(listener, read_token(temp.path())?);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let starting = {
+        let supervisor = Arc::clone(&supervisor);
+        let cancelled = Arc::clone(&cancelled);
+        tokio::spawn(async move { supervisor.start_unless_cancelled(&cancelled).await })
+    };
+    wait_for_path(&version_probe).await?;
+    cancelled.store(true, Ordering::Release);
+    let stopping = {
+        let supervisor = Arc::clone(&supervisor);
+        tokio::spawn(async move { supervisor.stop().await })
+    };
+    std::fs::write(release, b"continue")?;
+
+    assert!(matches!(
+        starting.await??,
+        Some(StartOutcome::Started { .. })
+    ));
+    assert_eq!(stopping.await??, StopOutcome::Stopped);
+    assert!(matches!(supervisor.status().await, ServiceStatus::Stopped));
+    assert!(
+        supervisor
+            .start_unless_cancelled(&cancelled)
+            .await?
+            .is_none()
+    );
+    let starts = std::fs::read_to_string(starts)
+        .map(|content| content.lines().count())
+        .unwrap_or_default();
+    assert!(
+        starts <= 1,
+        "cancelled supervision spawned {starts} processes"
+    );
     drop(server);
     Ok(())
 }
@@ -436,6 +570,100 @@ fn fake_icm_script(temp: &TempDir, version: &str) -> anyhow::Result<std::path::P
     permissions.set_mode(0o700);
     std::fs::set_permissions(&path, permissions)?;
     Ok(path)
+}
+
+#[cfg(unix)]
+fn fake_cli_marker_script(
+    temp: &TempDir,
+) -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf)> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = temp.path().join("fake-cli-marker");
+    let marker = temp.path().join("cli-invoked");
+    let script = format!("#!/bin/sh\ntouch '{}'\nexit 0\n", marker.display());
+    std::fs::write(&path, script)?;
+    let mut permissions = std::fs::metadata(&path)?.permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&path, permissions)?;
+    Ok((path, marker))
+}
+
+#[cfg(unix)]
+fn fake_short_lived_icm_script(
+    temp: &TempDir,
+) -> anyhow::Result<(std::path::PathBuf, std::path::PathBuf)> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = temp.path().join("fake-short-lived-icm");
+    let starts = temp.path().join("starts");
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = \"--version\" ]; then printf 'icm 0.10.61\\n'; exit 0; fi\n\
+         case \" $* \" in\n\
+           *\" serve \"*)\n\
+             count=0\n\
+             if [ -f '{starts}' ]; then count=$(sed -n '1p' '{starts}'); fi\n\
+             count=$((count + 1))\n\
+             printf '%s\\n' \"$count\" > '{starts}'\n\
+             sleep 0.15 ;;\n\
+           *) printf 'unexpected arguments\\n' >&2; exit 2 ;;\n\
+         esac\n",
+        starts = starts.display()
+    );
+    std::fs::write(&path, script)?;
+    let mut permissions = std::fs::metadata(&path)?.permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&path, permissions)?;
+    Ok((path, starts))
+}
+
+#[cfg(unix)]
+fn fake_delayed_icm_script(
+    temp: &TempDir,
+) -> anyhow::Result<(
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+)> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = temp.path().join("fake-delayed-icm");
+    let version_probe = temp.path().join("version-probe");
+    let release = temp.path().join("release-version");
+    let starts = temp.path().join("starts-delayed");
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = \"--version\" ]; then\n\
+           touch '{version_probe}'\n\
+           while [ ! -f '{release}' ]; do sleep 0.01; done\n\
+           printf 'icm 0.10.61\\n'; exit 0\n\
+         fi\n\
+         case \" $* \" in\n\
+           *\" serve \"*) printf 'x\\n' >> '{starts}'; sleep 60 ;;\n\
+           *) printf 'unexpected arguments\\n' >&2; exit 2 ;;\n\
+         esac\n",
+        version_probe = version_probe.display(),
+        release = release.display(),
+        starts = starts.display()
+    );
+    std::fs::write(&path, script)?;
+    let mut permissions = std::fs::metadata(&path)?.permissions();
+    permissions.set_mode(0o700);
+    std::fs::set_permissions(&path, permissions)?;
+    Ok((path, version_probe, release, starts))
+}
+
+#[cfg(unix)]
+async fn wait_for_path(path: &std::path::Path) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !path.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for fake ICM gate")?;
+    Ok(())
 }
 
 #[cfg(unix)]

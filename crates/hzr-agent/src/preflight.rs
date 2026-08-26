@@ -18,7 +18,7 @@ pub const CAVEMAN_CODE_NPM_INTEGRITY: &str = "sha512-rs7sOI7WCycpBq8qNQ3MQagxfiX
 // Recomputed for the 0.5.1 version bump; the dependency tree is unchanged, only
 // the package's own version field moved.
 pub const PACKAGE_LOCK_SHA256: &str =
-    "e10257cf3a610a00d4808c935c53fc075454c44594bf0e0faf7f5127b1bc6dc9";
+    "f4e16e1ac5b2c6560115058379daa5e37a4a49e5a7d238f7a2183f661711d15d";
 pub const NODE_MINIMUM_VERSION: NodeVersion = NodeVersion {
     major: 20,
     minor: 18,
@@ -31,6 +31,8 @@ pub const NODE_MAXIMUM_VERSION_EXCLUSIVE: NodeVersion = NodeVersion {
 };
 
 const BUNDLED_BRIDGE: &[u8] = include_bytes!("../../../integrations/caveman-code/bridge.mjs");
+const BUNDLED_AGENT_CAPABILITIES: &[u8] =
+    include_bytes!("../../../contracts/agent-capabilities.json");
 #[cfg(test)]
 const BUNDLED_PACKAGE_LOCK: &[u8] =
     include_bytes!("../../../integrations/caveman-code/package-lock.json");
@@ -48,6 +50,7 @@ pub struct RuntimeMetadata {
     pub integrity: String,
     pub package_lock_sha256: String,
     pub bridge_sha256: String,
+    pub agent_capabilities_sha256: String,
     pub installed_package: PathBuf,
 }
 
@@ -92,6 +95,8 @@ pub enum PreflightError {
     MissingLockEntry,
     #[error("Caveman package pin mismatch: expected {expected}, found {actual}")]
     PinMismatch { expected: String, actual: String },
+    #[error("HZR bridge version mismatch: expected {expected}, found {actual}")]
+    BridgeVersionMismatch { expected: String, actual: String },
 }
 
 #[derive(Deserialize)]
@@ -118,6 +123,17 @@ pub async fn preflight(
     let bridge = canonical_file(&integration.bridge())?;
     let bridge_bytes = read_file(&bridge)?;
     let bridge_sha256 = verify_embedded_artifact(&bridge, &bridge_bytes, BUNDLED_BRIDGE)?;
+    let agent_capabilities = canonical_file(&integration.agent_capabilities())?;
+    let agent_capabilities_bytes = read_file(&agent_capabilities)?;
+    let agent_capabilities_sha256 = verify_embedded_artifact(
+        &agent_capabilities,
+        &agent_capabilities_bytes,
+        BUNDLED_AGENT_CAPABILITIES,
+    )?;
+
+    let bridge_package = canonical_file(&integration.bridge_package())?;
+    let bridge_manifest = read_json::<PackageManifest>(&bridge_package)?;
+    verify_bridge_version(&bridge_manifest.version)?;
 
     let package_lock_path = canonical_file(&integration.package_lock())?;
     let package_lock_bytes = read_file(&package_lock_path)?;
@@ -155,6 +171,7 @@ pub async fn preflight(
             integrity: lock_integrity.into(),
             package_lock_sha256,
             bridge_sha256,
+            agent_capabilities_sha256,
             installed_package,
         },
     })
@@ -309,6 +326,17 @@ fn verify_pin(version: &str, integrity: &str) -> Result<(), PreflightError> {
     Ok(())
 }
 
+fn verify_bridge_version(actual: &str) -> Result<(), PreflightError> {
+    let expected = env!("CARGO_PKG_VERSION");
+    if actual != expected {
+        return Err(PreflightError::BridgeVersionMismatch {
+            expected: expected.into(),
+            actual: actual.into(),
+        });
+    }
+    Ok(())
+}
+
 impl std::fmt::Display for NodeVersion {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)
@@ -322,7 +350,7 @@ mod tests {
     use super::{
         BUNDLED_PACKAGE_LOCK, NODE_MAXIMUM_VERSION_EXCLUSIVE, NODE_MINIMUM_VERSION,
         PACKAGE_LOCK_SHA256, PreflightError, parse_node_version, sha256, validate_node_version,
-        verify_digest,
+        verify_bridge_version, verify_digest,
     };
 
     #[test]
@@ -369,6 +397,15 @@ mod tests {
                 PACKAGE_LOCK_SHA256
             ),
             Err(PreflightError::DigestMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn regression_bridge_package_version_must_match_hzr_binary() {
+        assert!(verify_bridge_version(env!("CARGO_PKG_VERSION")).is_ok());
+        assert!(matches!(
+            verify_bridge_version("0.4.6"),
+            Err(PreflightError::BridgeVersionMismatch { .. })
         ));
     }
 }

@@ -589,7 +589,6 @@ pub(crate) fn commit(
     let parent = path
         .parent()
         .with_context(|| format!("settings path has no parent: {}", path.display()))?;
-    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
     // Lock name derives from the target file so CLAUDE.md and settings.json never
     // contend on one lock while still serialising writers to the same file.
     let lock_path = parent.join(format!(
@@ -598,6 +597,25 @@ pub(crate) fn commit(
             .and_then(|name| name.to_str())
             .unwrap_or("settings.json")
     ));
+    commit_with_lock(path, before, after, backup, missing_default, &lock_path)
+}
+
+pub(crate) fn commit_with_lock(
+    path: &Path,
+    before: &[u8],
+    after: &[u8],
+    backup: &Path,
+    missing_default: &[u8],
+    lock_path: &Path,
+) -> Result<()> {
+    let parent = path
+        .parent()
+        .with_context(|| format!("settings path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    if let Some(lock_parent) = lock_path.parent() {
+        fs::create_dir_all(lock_parent)
+            .with_context(|| format!("failed to create {}", lock_parent.display()))?;
+    }
     let mut lock_options = OpenOptions::new();
     lock_options
         .create(true)
@@ -611,7 +629,7 @@ pub(crate) fn commit(
         lock_options.mode(0o600);
     }
     let lock = lock_options
-        .open(&lock_path)
+        .open(lock_path)
         .with_context(|| format!("failed to open {}", lock_path.display()))?;
     lock.lock_exclusive()
         .with_context(|| format!("failed to lock {}", lock_path.display()))?;

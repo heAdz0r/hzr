@@ -49,6 +49,10 @@ const RUNTIME_DIGEST_SURFACES: &[(&str, &str)] = &[
         "integrations/caveman-code/package-lock.json",
         "${HZR_CAVEMAN_ROOT}/package-lock.json",
     ),
+    (
+        "contracts/agent-capabilities.json",
+        "${HZR_CAVEMAN_ROOT}/agent-capabilities.json",
+    ),
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

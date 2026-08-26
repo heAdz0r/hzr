@@ -577,6 +577,9 @@ enum Commands {
         /// Create default config file
         #[arg(long)]
         create: bool,
+        /// Output format: text or json
+        #[arg(long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
     },
 
     /// Vitest commands with compact output
@@ -2812,12 +2815,12 @@ fn main() -> Result<()> {
             cc_economics::run(daily, weekly, monthly, all, &format, cli.verbose)?;
         }
 
-        Commands::Config { create } => {
+        Commands::Config { create, format } => {
             if create {
                 let path = config::Config::create_default()?;
                 println!("Created: {}", path.display());
             } else {
-                config::show_config()?;
+                config::show_config(&format)?;
             }
         }
 

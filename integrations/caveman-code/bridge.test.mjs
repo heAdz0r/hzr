@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import {
   persistUsageOutbox,
   prepareManagedRuntime,
   replayUsageOutbox,
+  stripManagedHzrContract,
 } from "./bridge.mjs";
 
 const MANAGED_TOOLS = [
@@ -26,6 +27,10 @@ const MANAGED_TOOLS = [
   "hzr_exec",
 ];
 
+const BRIDGE_MANIFEST = JSON.parse(
+  await readFile(new URL("./package.json", import.meta.url), "utf8"),
+);
+
 test("bridge import is side-effect free", () => {
   assert.equal(isDirectExecution(), false);
 });
@@ -36,7 +41,10 @@ test("production preparation owns tools and disables duplicate subsystems in ord
   const agentDir = join(root, "agent");
   await mkdir(workspace);
   await mkdir(agentDir);
-  await writeFile(join(workspace, "AGENTS.md"), "# Project rules\nPreserve exact errors.\n");
+  await writeFile(
+    join(workspace, "AGENTS.md"),
+    "# Project rules\nPreserve exact errors.\n\n<!-- hzr:begin managed agent contract — do not edit inside -->\n# HZR tool contract (managed)\nDuplicated harness contract.\n<!-- hzr:end managed agent contract -->\n",
+  );
   await writeFile(join(workspace, "CLAUDE.md"), "# Repository map\nUse HZR tools.\n");
 
   const environmentKeys = ["CAVE_OMIT_CLAUDE_MD", "CAVE_MEMORY_AUTO_RECORD", "CAVE_CHAT_MODE"];
@@ -60,7 +68,7 @@ test("production preparation owns tools and disables duplicate subsystems in ord
       assert.equal(method, "GET");
       return JSON.stringify({
         protocol_version: 1,
-        hzr_version: "0.4.6",
+        hzr_version: BRIDGE_MANIFEST.version,
         engines: [
           { name: "rtk", state: "ready" },
           { name: "grepai", state: "stopped" },
@@ -166,6 +174,10 @@ test("production preparation owns tools and disables duplicate subsystems in ord
   assert.equal(prepared.resourceLoader.getAppendSystemPrompt().length, 2);
   assert.match(prepared.resourceLoader.getAppendSystemPrompt()[0], /Project rules/);
   assert.match(prepared.resourceLoader.getAppendSystemPrompt()[0], /Repository map/);
+  assert.doesNotMatch(
+    prepared.resourceLoader.getAppendSystemPrompt()[0],
+    /HZR tool contract \(managed\)|Duplicated harness contract/,
+  );
   assert.match(prepared.prefetchedContext, /path="src\/lib\.rs"/);
   assert.match(prepared.prefetchedContext, /lines=10-20/);
   assert.match(prepared.prefetchedContext, /ref="sha256:owned-by-hzr"/);
@@ -189,6 +201,93 @@ test("context formatter rejects malformed planner responses", () => {
     () => formatPrefetchedContext("{\"pack\":{}}"),
     /selected candidates/,
   );
+});
+
+test("managed HZR contract parser rejects stray, nested, and unterminated markers", () => {
+  assert.throws(
+    () => stripManagedHzrContract(`rules\n${"<!-- hzr:end managed agent contract -->"}`, "AGENTS.md"),
+    /unexpected HZR contract end/,
+  );
+  assert.throws(
+    () => stripManagedHzrContract(
+      `${"<!-- hzr:begin managed agent contract — do not edit inside -->"}\n${"<!-- hzr:begin managed agent contract — do not edit inside -->"}\n${"<!-- hzr:end managed agent contract -->"}`,
+      "AGENTS.md",
+    ),
+    /nested HZR contract/,
+  );
+  assert.throws(
+    () => stripManagedHzrContract(
+      `${"<!-- hzr:begin managed agent contract — do not edit inside -->"}\nrules`,
+      "AGENTS.md",
+    ),
+    /unterminated HZR contract/,
+  );
+});
+
+test("context formatter enforces its byte budget for multibyte UTF-8 delivery", () => {
+  const formatted = formatPrefetchedContext(JSON.stringify({
+    pack: {
+      hard_limit: 1_024,
+      selected: [
+        { source: "context", content_ref: "first", tokens: 900 },
+        { source: "context", content_ref: "second", tokens: 900 },
+      ],
+    },
+    contents: {
+      first: "😀".repeat(950),
+      second: "界".repeat(2_000),
+    },
+    warnings: [],
+  }));
+
+  assert.ok(Buffer.byteLength(formatted) <= 4 * 1024);
+  assert.match(formatted, /selected candidates? omitted by managed delivery budget/);
+  assert.doesNotMatch(formatted, /�/u);
+});
+
+test("context formatter preserves provenance and truncates only at candidate boundaries", () => {
+  const first = `${"a".repeat(20_000)}END_FIRST`;
+  const second = `BEGIN_SECOND${"b".repeat(20_000)}`;
+  const formatted = formatPrefetchedContext(JSON.stringify({
+    pack: {
+      hard_limit: 6_000,
+      selected: [
+        {
+          source: "memory",
+          content_ref: "sha256:first",
+          relevance: 0.8,
+          tokens: 5_000,
+          freshness: "2026-08-25T00:00:00Z",
+          trust: "icm:user",
+          provenance: {
+            source: "icm",
+            generation: "memory-7",
+            canonical_ref: "project:architecture:ssot",
+          },
+        },
+        {
+          source: "context",
+          content_ref: "sha256:second",
+          relevance: 0.7,
+          tokens: 5_000,
+        },
+      ],
+    },
+    contents: {
+      "sha256:first": first,
+      "sha256:second": second,
+    },
+    warnings: [],
+  }));
+
+  assert.match(formatted, /freshness="2026-08-25T00:00:00Z"/);
+  assert.match(formatted, /trust="icm:user"/);
+  assert.match(formatted, /provenance_source="icm"/);
+  assert.match(formatted, /generation="memory-7"/);
+  assert.match(formatted, /canonical_ref="project:architecture:ssot"/);
+  assert.match(formatted, /END_FIRST/);
+  assert.doesNotMatch(formatted, /BEGIN_SECOND/);
+  assert.match(formatted, /1 selected candidate omitted by managed delivery budget/);
 });
 
 test("usage outbox survives a failed send and replays exactly once", async (t) => {

@@ -4,12 +4,13 @@ import CommandCard from "./components/CommandCard.vue";
 import AppIcon from "./components/AppIcon.vue";
 import MetricCard from "./components/MetricCard.vue";
 import MemoryGraph from "./components/MemoryGraph.vue";
+import ObservabilityTimeline from "./components/ObservabilityTimeline.vue";
 import IndexPipeline from "./components/IndexPipeline.vue";
 import LiveActivity from "./components/LiveActivity.vue";
 import ProjectCard from "./components/ProjectCard.vue";
 import ServiceNode from "./components/ServiceNode.vue";
 import StatusChip from "./components/StatusChip.vue";
-import type { DashboardResponse, ProjectState } from "./types";
+import type { DashboardProjectPage, DashboardResponse, ProjectState } from "./types";
 import {
   dashboardStateLabel,
   filterProjects,
@@ -23,21 +24,34 @@ import {
   refreshFailureAnnouncement,
   relativeTime,
 } from "./utils";
+import { mergeObservability, nextRefreshBackoff } from "./observability";
+import {
+  LatestProjectRequestCoordinator,
+  isCurrentProjectSnapshot,
+} from "./detail-request";
 
-const REFRESH_INTERVAL_MS = 5_000;
+const FULL_REFRESH_INTERVAL_MS = 30_000;
+const OBSERVABILITY_INTERVAL_MS = 2_000;
+const MAX_REFRESH_BACKOFF_MS = 120_000;
 
 const snapshot = ref<DashboardResponse | null>(null);
 const error = ref<string | null>(null);
 const manualRefreshing = ref(false);
+const loadingProjects = ref(false);
 const query = ref("");
 const projectFilter = ref<ProjectState | "all">("all");
 const toast = ref<string | null>(null);
 const liveMessage = ref("");
+const selectedProjectId = ref<string | null>(null);
 let refreshTimer: number | undefined;
+let observabilityTimer: number | undefined;
 let toastTimer: number | undefined;
 let refreshPromise: Promise<void> | null = null;
-let refreshController: AbortController | null = null;
+const refreshRequests = new LatestProjectRequestCoordinator();
+const observabilityRequests = new LatestProjectRequestCoordinator();
 let mounted = false;
+let fullRefreshBackoffMs = FULL_REFRESH_INTERVAL_MS;
+let observabilityBackoffMs = OBSERVABILITY_INTERVAL_MS;
 
 const projectFilters: Array<ProjectState | "all"> = [
   "all",
@@ -54,6 +68,12 @@ const projects = computed(() =>
 
 const readyProjectCount = computed(
   () => snapshot.value?.projects.filter((project) => project.state === "ready").length ?? 0,
+);
+
+const projectSnapshotCurrent = computed(
+  () =>
+    snapshot.value === null ||
+    snapshot.value.selected_worktree_id === selectedProjectId.value,
 );
 
 const totalProviderTokens = computed(() => {
@@ -75,19 +95,42 @@ async function refresh(manual = false): Promise<void> {
     }
     return;
   }
-  refreshController = new AbortController();
+  const requestedProject = selectedProjectId.value;
+  let ticket = refreshRequests.begin(requestedProject);
   if (manual) manualRefreshing.value = true;
   refreshPromise = (async () => {
     try {
-      const response = await fetch("/v1/dashboard", {
+      const dashboardUrl = requestedProject
+        ? `/v1/dashboard?project=${encodeURIComponent(requestedProject)}`
+        : "/v1/dashboard";
+      let response = await fetch(dashboardUrl, {
         cache: "no-store",
         headers: { Accept: "application/json" },
-        signal: refreshController?.signal,
+        signal: ticket.signal,
       });
+      if (
+        requestedProject &&
+        refreshRequests.isCurrent(ticket, selectedProjectId.value) &&
+        (response.status === 400 || response.status === 404)
+      ) {
+        selectedProjectId.value = null;
+        refreshRequests.switchProject(null);
+        observabilityRequests.switchProject(null);
+        window.localStorage.removeItem("hzr.dashboard.project");
+        ticket = refreshRequests.begin(null);
+        response = await fetch("/v1/dashboard", {
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+          signal: ticket.signal,
+        });
+        liveMessage.value = "Stored project selection was removed because it is no longer valid";
+      }
+      if (!refreshRequests.isCurrent(ticket, selectedProjectId.value)) return;
       if (!response.ok) {
         throw new Error(`Dashboard returned HTTP ${response.status}`);
       }
       const next = (await response.json()) as DashboardResponse;
+      if (!refreshRequests.isCurrent(ticket, selectedProjectId.value)) return;
       const previousState = snapshot.value?.overall_state;
       snapshot.value = next;
       error.value = null;
@@ -97,25 +140,142 @@ async function refresh(manual = false): Promise<void> {
       }
     } catch (cause) {
       if (cause instanceof DOMException && cause.name === "AbortError") return;
+      if (!refreshRequests.isCurrent(ticket, selectedProjectId.value)) return;
       error.value = cause instanceof Error ? cause.message : "Dashboard refresh failed";
       liveMessage.value = refreshFailureAnnouncement(snapshot.value !== null);
     } finally {
       manualRefreshing.value = false;
       refreshPromise = null;
+      refreshRequests.finish(ticket);
     }
   })();
   await refreshPromise;
 }
 
+async function selectProject(worktreeId: string): Promise<void> {
+  refreshRequests.switchProject(worktreeId);
+  observabilityRequests.switchProject(worktreeId);
+  selectedProjectId.value = worktreeId;
+  error.value = null;
+  window.localStorage.setItem("hzr.dashboard.project", worktreeId);
+  liveMessage.value = "Loading selected project observatory";
+  await refresh(true);
+}
+
+async function loadMoreProjects(): Promise<void> {
+  if (snapshot.value?.projects_next_offset === null || !snapshot.value || loadingProjects.value) return;
+  loadingProjects.value = true;
+  try {
+    const response = await fetch(
+      `/v1/dashboard/projects?offset=${snapshot.value.projects_next_offset}&limit=100`,
+      { cache: "no-store", headers: { Accept: "application/json" } },
+    );
+    if (!response.ok) throw new Error(`Project page returned HTTP ${response.status}`);
+    const page = (await response.json()) as DashboardProjectPage;
+    const known = new Set(snapshot.value.projects.map((project) => project.worktree_id));
+    snapshot.value.projects.push(...page.projects.filter((project) => !known.has(project.worktree_id)));
+    snapshot.value.projects_total = page.total;
+    snapshot.value.projects_next_offset = page.next_offset;
+    liveMessage.value = `${snapshot.value.projects.length} of ${page.total} projects loaded`;
+  } catch (cause) {
+    liveMessage.value = cause instanceof Error ? cause.message : "Project page failed";
+  } finally {
+    loadingProjects.value = false;
+  }
+}
+
 function scheduleRefresh(): void {
-  window.clearInterval(refreshTimer);
-  refreshTimer = window.setInterval(() => {
-    if (document.visibilityState === "visible") void refresh();
-  }, REFRESH_INTERVAL_MS);
+  window.clearTimeout(refreshTimer);
+  const jitter = Math.floor(Math.random() * 5_000);
+  refreshTimer = window.setTimeout(async () => {
+    if (document.visibilityState === "visible") {
+      await refresh();
+      fullRefreshBackoffMs = nextRefreshBackoff(
+        fullRefreshBackoffMs,
+        error.value !== null,
+        FULL_REFRESH_INTERVAL_MS,
+        MAX_REFRESH_BACKOFF_MS,
+      );
+    }
+    scheduleRefresh();
+  }, fullRefreshBackoffMs + jitter);
+}
+
+async function syncObservability(): Promise<void> {
+  if (!snapshot.value || !selectedProjectId.value) return;
+  const projectId = selectedProjectId.value;
+  const capturedSnapshot = snapshot.value;
+  const ticket = observabilityRequests.begin(projectId);
+  const after = capturedSnapshot.observability.next_cursor;
+  const parameters = new URLSearchParams({
+    project: projectId,
+    limit: "100",
+  });
+  if (after !== null) parameters.set("after", String(after));
+  try {
+    const response = await fetch(`/v1/dashboard/observability?${parameters}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: ticket.signal,
+    });
+    if (!response.ok) throw new Error(`Observability delta returned HTTP ${response.status}`);
+    const delta = (await response.json()) as DashboardResponse["observability"];
+    if (
+      !snapshot.value ||
+      !isCurrentProjectSnapshot(
+        observabilityRequests,
+        ticket,
+        selectedProjectId.value,
+        capturedSnapshot,
+        snapshot.value,
+      )
+    ) {
+      return;
+    }
+    if (delta.trace_spans.length || delta.lifecycle_events.length) {
+      snapshot.value.observability = mergeObservability(snapshot.value.observability, delta);
+      liveMessage.value = "New control-plane observability events received";
+    }
+    observabilityBackoffMs = OBSERVABILITY_INTERVAL_MS;
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "AbortError") return;
+    if (
+      !snapshot.value ||
+      !isCurrentProjectSnapshot(
+        observabilityRequests,
+        ticket,
+        selectedProjectId.value,
+        capturedSnapshot,
+        snapshot.value,
+      )
+    ) {
+      return;
+    }
+    observabilityBackoffMs = nextRefreshBackoff(
+      observabilityBackoffMs,
+      true,
+      OBSERVABILITY_INTERVAL_MS,
+      MAX_REFRESH_BACKOFF_MS,
+    );
+  } finally {
+    observabilityRequests.finish(ticket);
+  }
+}
+
+function scheduleObservability(): void {
+  window.clearTimeout(observabilityTimer);
+  const jitter = Math.floor(Math.random() * 500);
+  observabilityTimer = window.setTimeout(async () => {
+    if (document.visibilityState === "visible") await syncObservability();
+    scheduleObservability();
+  }, observabilityBackoffMs + jitter);
 }
 
 function handleVisibility(): void {
-  if (document.visibilityState === "visible") void refresh();
+  if (document.visibilityState === "visible") {
+    void refresh();
+    void syncObservability();
+  }
 }
 
 async function copyCommand(command: string): Promise<void> {
@@ -150,15 +310,21 @@ function filterCount(filter: ProjectState | "all"): number {
 
 onMounted(() => {
   mounted = true;
+  selectedProjectId.value = window.localStorage.getItem("hzr.dashboard.project");
+  refreshRequests.switchProject(selectedProjectId.value);
+  observabilityRequests.switchProject(selectedProjectId.value);
   void refresh();
   scheduleRefresh();
+  scheduleObservability();
   document.addEventListener("visibilitychange", handleVisibility);
 });
 
 onBeforeUnmount(() => {
   mounted = false;
-  refreshController?.abort();
-  window.clearInterval(refreshTimer);
+  refreshRequests.abort();
+  observabilityRequests.abort();
+  window.clearTimeout(refreshTimer);
+  window.clearTimeout(observabilityTimer);
   window.clearTimeout(toastTimer);
   document.removeEventListener("visibilitychange", handleVisibility);
 });
@@ -196,7 +362,7 @@ onBeforeUnmount(() => {
           </p>
         </div>
 
-        <div class="hero-status" v-if="snapshot">
+        <div class="hero-status" v-if="snapshot && projectSnapshotCurrent">
           <div class="hero-status-head">
             <span>System posture</span>
             <StatusChip :state="snapshot.overall_state" />
@@ -216,6 +382,14 @@ onBeforeUnmount(() => {
               <span>{{ manualRefreshing ? "Refreshing" : "Refresh" }}</span>
             </button>
           </div>
+        </div>
+        <div class="hero-status" v-else-if="snapshot" aria-live="polite" aria-busy="true">
+          <div class="hero-status-head">
+            <span>Project boundary</span>
+            <span class="spinner"></span>
+          </div>
+          <strong>Switching</strong>
+          <span>Scoped status is hidden until verified</span>
         </div>
       </div>
     </header>
@@ -249,7 +423,7 @@ onBeforeUnmount(() => {
       </section>
 
       <template v-else-if="snapshot">
-        <section class="section-block system-section" aria-labelledby="system-title">
+        <section v-if="projectSnapshotCurrent" class="section-block system-section" aria-labelledby="system-title">
           <div class="section-heading">
             <div>
               <span class="eyebrow">Live topology</span>
@@ -271,12 +445,12 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section id="memory-observatory" class="observatory-grid" aria-label="Project memory and index observatories">
+        <section v-if="projectSnapshotCurrent" id="memory-observatory" class="observatory-grid" aria-label="Project memory and index observatories">
           <article class="observatory-panel memory-panel">
             <div class="observatory-head">
               <div>
                 <span class="eyebrow">ICM memory observatory</span>
-                <h2>Project knowledge, alive.</h2>
+                <h2>Anonymous memory topology.</h2>
                 <p>{{ snapshot.memory_observatory.detail }}</p>
               </div>
               <StatusChip :state="snapshot.memory_observatory.state" />
@@ -290,11 +464,15 @@ onBeforeUnmount(() => {
               </span>
               <span class="capability-pill">{{ snapshot.memory_observatory.retrieval.toUpperCase() }}</span>
             </div>
-            <MemoryGraph :observatory="snapshot.memory_observatory" />
+            <MemoryGraph
+              :observatory="snapshot.memory_observatory"
+              :project-id="snapshot.selected_worktree_id"
+            />
             <div class="evidence-strip">
               <span><AppIcon name="check" :size="15" /> Positive repository filter</span>
               <span><AppIcon name="check" :size="15" /> Read-only snapshot</span>
-              <span><AppIcon name="check" :size="15" /> Details load on explicit topic selection</span>
+              <span><AppIcon name="check" :size="15" /> Public details stay content-redacted</span>
+              <span><AppIcon name="check" :size="15" /> Authenticated project tools expose bounded content</span>
               <span><AppIcon name="clock" :size="15" /> {{ snapshot.memory_observatory.latency_ms }}ms · {{ relativeTime(snapshot.memory_observatory.observed_at_ms) }}</span>
             </div>
           </article>
@@ -344,14 +522,22 @@ onBeforeUnmount(() => {
           </article>
         </section>
 
-        <section id="activity-observatory" class="metrics-section" aria-labelledby="metrics-title">
+        <section v-else class="loading-layout project-transition" aria-live="polite" aria-busy="true">
+          <div class="loading-panel">
+            <span class="spinner"></span>
+            <strong>Loading the selected project boundary</strong>
+            <p>Previous project memory, index, accounting, and traces are hidden until the scoped snapshot is verified.</p>
+          </div>
+        </section>
+
+        <section v-if="projectSnapshotCurrent" id="activity-observatory" class="metrics-section" aria-labelledby="metrics-title">
           <div class="section-heading metrics-heading">
             <div>
               <span class="eyebrow">Verifiable accounting</span>
               <h2 id="metrics-title">This project. This ledger.</h2>
             </div>
             <p>
-              Exact canonical-path records for <strong>{{ snapshot.local_activity.project ?? "the selected project" }}</strong>.
+            Privacy-scoped ledger records for <strong>{{ snapshot.local_activity.project ?? "the selected project" }}</strong>.
               Estimates remain named; provider receipts remain separate.
             </p>
           </div>
@@ -359,8 +545,8 @@ onBeforeUnmount(() => {
           <div class="metric-group local-group">
             <div class="metric-group-title">
               <span class="metric-group-mark local-mark"><AppIcon name="activity" :size="18" /></span>
-              <div><strong>Verified local activity</strong><span>{{ snapshot.local_activity.measurement }}</span></div>
-              <span class="metric-legend">Project-scoped</span>
+              <div><strong>Verified local activity</strong><span>{{ snapshot.local_activity.measurement }} · {{ snapshot.local_activity.accounting_policy_version }}</span></div>
+              <span class="metric-legend">Project-scoped · {{ formatCount(snapshot.local_activity.excluded_legacy_operations) }} legacy excluded</span>
             </div>
             <div class="metric-grid metric-grid-four">
               <MetricCard
@@ -404,13 +590,14 @@ onBeforeUnmount(() => {
               :unmeasured-count="snapshot.local_activity.unmeasured_bypass_operations"
               :measurement="snapshot.local_activity.measurement"
             />
+            <ObservabilityTimeline :observability="snapshot.observability" />
           </div>
 
           <div class="metric-group estimate-group">
             <div class="metric-group-title">
               <span class="metric-group-mark estimate-mark"><AppIcon name="cpu" :size="18" /></span>
-              <div><strong>All-workspace efficiency ledger</strong><span>Global operational context, separate from selected-project proof</span></div>
-              <span class="metric-legend">Global estimate</span>
+              <div><strong>All-workspace efficiency ledger</strong><span>Global operational context · {{ snapshot.estimated_efficiency.accounting_policy_version }}</span></div>
+              <span class="metric-legend">Global estimate · {{ formatCount(snapshot.estimated_efficiency.excluded_legacy_operations) }} legacy excluded</span>
             </div>
             <div class="metric-grid metric-grid-four">
               <MetricCard
@@ -504,7 +691,7 @@ onBeforeUnmount(() => {
                 id="project-search"
                 v-model="query"
                 type="search"
-                placeholder="Search name or exact path"
+                placeholder="Search project digest or stable ID"
                 autocomplete="off"
               />
               <span
@@ -537,14 +724,26 @@ onBeforeUnmount(() => {
               v-for="project in projects"
               :key="project.worktree_id"
               :project="project"
+              :selected="snapshot.selected_worktree_id === project.worktree_id"
               @copy="copyCommand"
+              @select="selectProject"
             />
           </div>
+          <button
+            v-if="snapshot.projects_next_offset !== null"
+            class="secondary-action project-load-more"
+            type="button"
+            :disabled="loadingProjects"
+            @click="loadMoreProjects"
+          >
+            <AppIcon name="refresh" :size="16" />
+            {{ loadingProjects ? "Loading projects" : `Load more · ${snapshot.projects.length}/${snapshot.projects_total}` }}
+          </button>
           <div v-else-if="snapshot.projects.length === 0" class="empty-state">
             <span class="empty-icon"><AppIcon name="folder" :size="24" /></span>
             <span class="eyebrow">No registered workspaces</span>
             <h3>Initialize HZR inside a project.</h3>
-            <p>The project will appear here on the next five-second refresh.</p>
+          <p>The project will appear here on the next automatic refresh.</p>
             <button class="secondary-action" type="button" @click="copyCommand('hzr init --if-needed')">
               <AppIcon name="copy" :size="16" /> Copy <code>hzr init --if-needed</code>
             </button>

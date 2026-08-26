@@ -1,6 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::ErrorKind;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use fs2::FileExt;
@@ -94,6 +95,17 @@ impl IcmSupervisor {
     pub async fn start(&self) -> Result<StartOutcome> {
         let _lifecycle = self.lifecycle.lock().await;
         self.start_locked().await
+    }
+
+    pub async fn start_unless_cancelled(
+        &self,
+        cancelled: &AtomicBool,
+    ) -> Result<Option<StartOutcome>> {
+        let _lifecycle = self.lifecycle.lock().await;
+        if cancelled.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        self.start_locked().await.map(Some)
     }
 
     async fn start_locked(&self) -> Result<StartOutcome> {

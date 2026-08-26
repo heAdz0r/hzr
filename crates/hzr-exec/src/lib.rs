@@ -18,10 +18,10 @@ pub use adapter::{
 pub use error::ExecError;
 pub use executor::{ExecutionHandle, ExecutionPipeline};
 pub use model::{
-    CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent, CapturedStream, Environment,
-    ExecutionEnvelope, ExecutionEvent, ExecutionOutcome, ExecutionResult, ExecutionStream,
-    NeverWorseChoice, NotStarted, RewriteDecision, RewriteSource, RtkRewriteRoute, StdinSpec,
-    Termination, TerminationCause,
+    AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent,
+    CapturedStream, Environment, ExecutionEnvelope, ExecutionEvent, ExecutionOutcome,
+    ExecutionResult, ExecutionStream, NeverWorseChoice, NotStarted, RewriteDecision, RewriteSource,
+    RtkRewriteRoute, StdinSpec, Termination, TerminationCause,
 };
 pub use shell::{ShellSafety, analyze_shell, parse_simple_shell};
 

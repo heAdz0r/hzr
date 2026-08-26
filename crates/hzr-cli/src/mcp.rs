@@ -28,15 +28,15 @@ use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 use directories::BaseDirs;
-use hzr_core::Config;
+use hzr_core::{Config, ConfigPaths};
 use hzr_index::IndexPlacement;
 use hzr_protocol::{
     AccountingAttribution, AccountingOperationKind, AccountingOperationMode,
     AccountingSearchStrategy, AccountingStage, CodecApiRequest, CodecProfile,
-    ContextPlanApiRequest, FidelityClass, MemoryForgetApiRequest, MemoryImportance,
-    MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest,
-    MemoryUpdateApiRequest, MemoryWriteScope, RiskClass, SearchApiRequest, SearchApiResponse,
-    SearchMode, SearchStrategy,
+    ContextPlanApiRequest, FidelityClass, ForkManagedWrite, ForkRunApiRequest, ForkRunApiResponse,
+    MemoryForgetApiRequest, MemoryImportance, MemoryPruneApiRequest, MemoryRecallApiRequest,
+    MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope,
+    RiskClass, SearchApiRequest, SearchApiResponse, SearchMode, SearchStrategy,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -47,9 +47,13 @@ use crate::client::DaemonClient;
 use arguments::{
     bounded_f32, bounded_usize, optional_bool, optional_enum, optional_string, parse_codec_profile,
     parse_fidelity, parse_importance, parse_mode, parse_recall_scope, parse_risk,
-    parse_write_scope, reject_unknown, required_string, string_array,
+    parse_write_scope, required_string, string_array,
 };
-use tools::tool_definitions;
+use tools::{
+    MCP_CREATE_CONTENT_MAX_BYTES, MCP_EXEC_TIMEOUT_MAX_MS, MCP_PATCH_BLOCK_MAX_BYTES,
+    MCP_PATH_MAX_BYTES, ToolKind, tool_contract, tool_definitions, validate_tool_input,
+    validate_tool_output,
+};
 
 /// Latest stable MCP revision implemented by the gateway. The 2026-07-28 revision is
 /// still a release candidate, so production clients negotiate against this stable line.
@@ -219,7 +223,11 @@ async fn apply_workspace_policy(config: &Config, binding: WorkspaceBinding) -> W
     }
 }
 
-pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
+pub async fn serve(
+    config: &Config,
+    config_path: &std::path::Path,
+    workspace: &std::path::Path,
+) -> Result<()> {
     // A terminal stdin means a human ran this by hand; an MCP server would then hang
     // forever looking like a wedged session. Fail fast and say what it is for.
     if std::io::stdin().is_terminal() {
@@ -290,6 +298,7 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
                             }
                             let task_config = config.clone();
                             let task_binding = binding.clone();
+                            let task_config_path = config_path.to_path_buf();
                             let sender = completed_tx.clone();
                             let progress_sender = progress_tx.clone();
                             let completed_key = key.clone();
@@ -301,7 +310,7 @@ pub async fn serve(config: &Config, workspace: &std::path::Path) -> Result<()> {
                                     .pointer("/params/name")
                                     .and_then(Value::as_str)
                                     .is_some_and(|name| matches!(name, "hzr_search" | "hzr_context_plan"));
-                                let call = call_tool(&task_config, &task_binding, id, &request);
+                                let call = call_tool(&task_config, &task_config_path, &task_binding, id, &request);
                                 tokio::pin!(call);
                                 let response = if progress_enabled && progress_token.is_some() {
                                     let mut ticks = tokio::time::interval_at(
@@ -438,7 +447,16 @@ async fn handle_line(
         "tools/list" if session.initialized => {
             Some(success(id, json!({"tools": tool_definitions()})))
         }
-        "tools/call" if session.initialized => Some(call_tool(config, binding, id, &request).await),
+        "tools/call" if session.initialized => Some(
+            call_tool(
+                config,
+                &ConfigPaths::discover().config_file,
+                binding,
+                id,
+                &request,
+            )
+            .await,
+        ),
         "tools/list" | "tools/call" => Some(error_response(
             id,
             INVALID_REQUEST,
@@ -508,6 +526,7 @@ fn initialize_result(request: &Value, binding: &WorkspaceBinding) -> Result<Valu
 
 async fn call_tool(
     config: &Config,
+    config_path: &std::path::Path,
     binding: &WorkspaceBinding,
     id: Value,
     request: &Value,
@@ -518,19 +537,9 @@ async fn call_tool(
     let Some(name) = params.get("name").and_then(Value::as_str) else {
         return error_response(id, INVALID_PARAMS, "tools/call requires a string name");
     };
-    if !matches!(
-        name,
-        "hzr_memory_recall"
-            | "hzr_memory_store"
-            | "hzr_memory_forget"
-            | "hzr_memory_update"
-            | "hzr_memory_prune"
-            | "hzr_search"
-            | "hzr_context_plan"
-            | "hzr_codec"
-    ) {
+    let Some(contract) = tool_contract(name) else {
         return error_response(id, INVALID_PARAMS, &format!("unknown tool: {name}"));
-    }
+    };
     let arguments = params
         .get("arguments")
         .cloned()
@@ -541,6 +550,18 @@ async fn call_tool(
             tool_error("Tool arguments must be an object. No operation was attempted."),
         );
     }
+
+    if let Err(error) = validate_tool_arguments(name, &arguments) {
+        return success(id, tool_error(&error.to_string()));
+    }
+
+    if name != "hzr_codec" {
+        if let Some(reason) = binding.refusal() {
+            return success(id, tool_error(reason));
+        }
+    }
+    let workspace = binding.as_request_value();
+    let workspace = workspace.as_str();
 
     let client = match DaemonClient::from_config(config) {
         Ok(client) => client,
@@ -557,36 +578,36 @@ async fn call_tool(
         }
     };
 
-    // Every tool except the codec is scoped to a project, so a refused binding must stop
-    // them here. Reporting the refusal per call rather than refusing to start keeps the
-    // workspace-independent tool usable and puts the remediation in front of the agent that
-    // can act on it.
-    if name != "hzr_codec" {
-        if let Some(reason) = binding.refusal() {
-            return success(id, tool_error(reason));
-        }
-    }
-    let workspace = binding.as_request_value();
-    let workspace = workspace.as_str();
-
-    let outcome = match name {
-        "hzr_memory_recall" => recall(&client, workspace, &arguments).await,
-        "hzr_memory_store" => store(&client, workspace, &arguments).await,
-        "hzr_memory_forget" => forget(&client, workspace, &arguments).await,
-        "hzr_memory_update" => update(&client, workspace, &arguments).await,
-        "hzr_memory_prune" => prune(&client, workspace, &arguments).await,
-        "hzr_search" => search(&client, workspace, &arguments).await,
-        "hzr_context_plan" => context_plan(&client, workspace, &arguments).await,
-        "hzr_codec" => codec(&client, &arguments).await,
-        _ => {
-            return error_response(id, INVALID_PARAMS, &format!("unknown tool: {name}"));
-        }
+    let outcome = match contract.kind {
+        ToolKind::MemoryRecall => recall(&client, workspace, &arguments).await,
+        ToolKind::MemoryStore => store(&client, workspace, &arguments).await,
+        ToolKind::MemoryForget => forget(&client, workspace, &arguments).await,
+        ToolKind::MemoryUpdate => update(&client, workspace, &arguments).await,
+        ToolKind::MemoryPrune => prune(&client, workspace, &arguments).await,
+        ToolKind::Search => search(&client, workspace, &arguments).await,
+        ToolKind::ContextPlan => context_plan(&client, workspace, &arguments).await,
+        ToolKind::Codec => codec(&client, workspace, &arguments).await,
+        ToolKind::Read => read(&client, workspace, &arguments).await,
+        ToolKind::Write => write(&client, workspace, &arguments).await,
+        ToolKind::Exec => exec(&client, workspace, &arguments).await,
+        ToolKind::Observability => observability(&client).await,
+        ToolKind::Doctor => doctor(config_path, config, workspace, &arguments).await,
     };
 
     match outcome {
         Ok(value) => {
-            if name != "hzr_codec" {
-                if let Ok(accounting) = mcp_operation_request(name, workspace, &arguments, &value) {
+            if let Err(error) = validate_tool_output(name, &value) {
+                return success(
+                    id,
+                    tool_error(&format!(
+                        "HZR internal output contract violation for {name}: {error}. No success was confirmed."
+                    )),
+                );
+            }
+            if !matches!(name, "hzr_codec" | "hzr_exec") {
+                if let Ok(accounting) =
+                    mcp_operation_request(contract.kind, name, workspace, &arguments, &value)
+                {
                     if client.record_operation(&accounting).await.is_err() {
                         let _ = crate::hook_runner::record_daemon_unavailable_operation(config);
                     }
@@ -620,7 +641,12 @@ async fn call_tool(
     }
 }
 
+fn validate_tool_arguments(name: &str, arguments: &Value) -> Result<()> {
+    validate_tool_input(name, arguments).map_err(anyhow::Error::msg)
+}
+
 fn mcp_operation_request(
+    kind: ToolKind,
     tool_name: &str,
     workspace: &str,
     arguments: &Value,
@@ -629,9 +655,58 @@ fn mcp_operation_request(
     let bytes = serde_json::to_vec(response)?.len();
     let delivered = u64::try_from(bytes / 4).unwrap_or(u64::MAX).max(1);
     let command = tool_name.replace('_', " ");
-    let attribution = (tool_name == "hzr_search")
-        .then(|| search_accounting_attribution(arguments, response))
-        .transpose()?;
+    let attribution = Some(match kind {
+        ToolKind::Search => search_accounting_attribution(arguments, response)?,
+        ToolKind::Read => read_accounting_attribution(arguments),
+        ToolKind::Write => simple_accounting_attribution(
+            AccountingOperationKind::Write,
+            AccountingOperationMode::Write,
+            AccountingStage::FinalDelivery,
+        ),
+        ToolKind::ContextPlan => simple_accounting_attribution(
+            AccountingOperationKind::Context,
+            AccountingOperationMode::ContextPlan,
+            AccountingStage::StandaloneDelivery,
+        ),
+        ToolKind::MemoryRecall => simple_accounting_attribution(
+            AccountingOperationKind::Memory,
+            AccountingOperationMode::MemoryRecall,
+            AccountingStage::StandaloneDelivery,
+        ),
+        ToolKind::MemoryStore => simple_accounting_attribution(
+            AccountingOperationKind::Memory,
+            AccountingOperationMode::MemoryStore,
+            AccountingStage::StandaloneDelivery,
+        ),
+        ToolKind::MemoryForget => simple_accounting_attribution(
+            AccountingOperationKind::Memory,
+            AccountingOperationMode::MemoryForget,
+            AccountingStage::StandaloneDelivery,
+        ),
+        ToolKind::MemoryUpdate => simple_accounting_attribution(
+            AccountingOperationKind::Memory,
+            AccountingOperationMode::MemoryUpdate,
+            AccountingStage::StandaloneDelivery,
+        ),
+        ToolKind::MemoryPrune => simple_accounting_attribution(
+            AccountingOperationKind::Memory,
+            AccountingOperationMode::MemoryPrune,
+            AccountingStage::StandaloneDelivery,
+        ),
+        ToolKind::Observability => simple_accounting_attribution(
+            AccountingOperationKind::Observability,
+            AccountingOperationMode::ObservabilitySnapshot,
+            AccountingStage::ControlPlane,
+        ),
+        ToolKind::Doctor => simple_accounting_attribution(
+            AccountingOperationKind::Doctor,
+            AccountingOperationMode::DoctorCheck,
+            AccountingStage::ControlPlane,
+        ),
+        ToolKind::Codec | ToolKind::Exec => {
+            anyhow::bail!("{tool_name} records accounting through its dedicated route")
+        }
+    });
     Ok(hzr_protocol::OperationApiRequest {
         original_command: command.clone(),
         recorded_command: command,
@@ -652,6 +727,56 @@ fn mcp_operation_request(
             }),
         attribution,
     })
+}
+
+fn simple_accounting_attribution(
+    operation: AccountingOperationKind,
+    mode: AccountingOperationMode,
+    stage: AccountingStage,
+) -> AccountingAttribution {
+    AccountingAttribution {
+        operation,
+        mode,
+        stage,
+        requested_mode: None,
+        effective_mode: Some(mode),
+        search_strategy: None,
+        search_fallback_code: None,
+        include_content: None,
+        limit: None,
+        path_scope_count: None,
+        filter_level: None,
+        from_line: None,
+        to_line: None,
+        source_bytes: None,
+        evasion: None,
+    }
+}
+
+fn read_accounting_attribution(arguments: &Value) -> AccountingAttribution {
+    let mode = if arguments
+        .get("outline")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        AccountingOperationMode::ReadOutline
+    } else if arguments.get("from").is_some() || arguments.get("to").is_some() {
+        AccountingOperationMode::ReadRange
+    } else if arguments.get("max_lines").is_some() {
+        AccountingOperationMode::ReadHead
+    } else {
+        AccountingOperationMode::ReadFiltered
+    };
+    let mut attribution = simple_accounting_attribution(
+        AccountingOperationKind::Read,
+        mode,
+        AccountingStage::FinalDelivery,
+    );
+    attribution.from_line = arguments.get("from").and_then(Value::as_u64);
+    attribution.to_line = arguments.get("to").and_then(Value::as_u64);
+    attribution.limit = arguments.get("max_lines").and_then(Value::as_u64);
+    attribution.path_scope_count = Some(1);
+    attribution
 }
 
 fn search_accounting_attribution(
@@ -715,12 +840,10 @@ const fn accounting_search_mode(mode: SearchMode) -> AccountingOperationMode {
 
 /// Compile a response-density contract through the daemon.
 ///
-/// Takes no workspace: the codec is a pure text transform over content the agent already
-/// holds, so binding it to a repository would imply an index lookup that never happens.
-async fn codec(client: &DaemonClient, arguments: &Value) -> Result<Value> {
-    reject_unknown(arguments, &["content", "fidelity", "risk", "profile"])?;
+async fn codec(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
     let request = CodecApiRequest {
         content: required_string(arguments, "content")?,
+        project_path: workspace.to_owned(),
         fidelity: optional_enum(
             arguments,
             "fidelity",
@@ -749,7 +872,6 @@ async fn codec(client: &DaemonClient, arguments: &Value) -> Result<Value> {
 }
 
 async fn recall(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
-    reject_unknown(arguments, &["query", "topic", "keyword", "limit", "scope"])?;
     let query = required_string(arguments, "query")?;
     let request = MemoryRecallApiRequest {
         workspace: workspace.to_owned(),
@@ -769,10 +891,6 @@ async fn recall(client: &DaemonClient, workspace: &str, arguments: &Value) -> Re
 }
 
 async fn store(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
-    reject_unknown(
-        arguments,
-        &["topic", "content", "importance", "keywords", "scope"],
-    )?;
     let request = MemoryStoreApiRequest {
         workspace: workspace.to_owned(),
         topic: required_string(arguments, "topic")?,
@@ -799,7 +917,6 @@ async fn store(client: &DaemonClient, workspace: &str, arguments: &Value) -> Res
 }
 
 async fn forget(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
-    reject_unknown(arguments, &["id", "scope"])?;
     let request = MemoryForgetApiRequest {
         workspace: workspace.to_owned(),
         id: required_string(arguments, "id")?,
@@ -815,10 +932,6 @@ async fn forget(client: &DaemonClient, workspace: &str, arguments: &Value) -> Re
 }
 
 async fn update(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
-    reject_unknown(
-        arguments,
-        &["id", "content", "importance", "keywords", "scope"],
-    )?;
     let keywords = if arguments.get("keywords").is_some() {
         Some(string_array(arguments, "keywords", 32)?)
     } else {
@@ -853,7 +966,6 @@ async fn update(client: &DaemonClient, workspace: &str, arguments: &Value) -> Re
 }
 
 async fn prune(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
-    reject_unknown(arguments, &["threshold", "dry_run", "scope"])?;
     let request = MemoryPruneApiRequest {
         workspace: workspace.to_owned(),
         threshold: bounded_f32(arguments, "threshold", 0.1)?,
@@ -870,10 +982,6 @@ async fn prune(client: &DaemonClient, workspace: &str, arguments: &Value) -> Res
 }
 
 async fn search(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
-    reject_unknown(
-        arguments,
-        &["query", "path", "mode", "limit", "include_content"],
-    )?;
     let request = SearchApiRequest {
         workspace: workspace.to_owned(),
         query: required_string(arguments, "query")?,
@@ -893,10 +1001,6 @@ async fn search(client: &DaemonClient, workspace: &str, arguments: &Value) -> Re
 }
 
 async fn context_plan(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
-    reject_unknown(
-        arguments,
-        &["intent", "path", "topic", "search_limit", "memory_limit"],
-    )?;
     let request = ContextPlanApiRequest {
         workspace: workspace.to_owned(),
         intent: required_string(arguments, "intent")?,
@@ -907,6 +1011,207 @@ async fn context_plan(client: &DaemonClient, workspace: &str, arguments: &Value)
     };
     let response = client.context_plan(&request).await?;
     Ok(serde_json::to_value(response)?)
+}
+
+async fn exec(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    let timeout_ms = match arguments.get("timeout_ms") {
+        None => None,
+        Some(value) => {
+            let value = value
+                .as_u64()
+                .context("argument `timeout_ms` must be a positive integer")?;
+            if !(1..=MCP_EXEC_TIMEOUT_MAX_MS).contains(&value) {
+                anyhow::bail!(
+                    "argument `timeout_ms` must be between 1 and {MCP_EXEC_TIMEOUT_MAX_MS}"
+                );
+            }
+            Some(value)
+        }
+    };
+    let request = hzr_protocol::ExecApiRequest {
+        cwd: workspace.to_owned(),
+        command: required_string(arguments, "command")?,
+        fidelity_requested: false,
+        fidelity_reason: None,
+        timeout_ms,
+        caller_path: None,
+        agent: Some("mcp".to_owned()),
+        session_id: ["CODEX_THREAD_ID", "CLAUDE_SESSION_ID"]
+            .into_iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            }),
+    };
+    Ok(serde_json::to_value(client.exec_run(&request).await?)?)
+}
+
+async fn read(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    let request = read_fork_request(workspace, arguments)?;
+    let response = client.fork_run(&request).await?;
+    fork_result(response, "content", false)
+}
+
+fn read_fork_request(workspace: &str, arguments: &Value) -> Result<ForkRunApiRequest> {
+    let mut args = vec![
+        "read".to_owned(),
+        bounded_required_string(arguments, "path", MCP_PATH_MAX_BYTES)?,
+    ];
+    if optional_bool(arguments, "outline", false)? {
+        args.push("--outline".to_owned());
+    }
+    for (key, flag) in [
+        ("from", "--from"),
+        ("to", "--to"),
+        ("max_lines", "--max-lines"),
+    ] {
+        if let Some(value) = optional_positive_u64(arguments, key, 100_000)? {
+            args.extend([flag.to_owned(), value.to_string()]);
+        }
+    }
+    if let (Some(from), Some(to)) = (
+        arguments.get("from").and_then(Value::as_u64),
+        arguments.get("to").and_then(Value::as_u64),
+    ) && from > to
+    {
+        anyhow::bail!("argument `from` must not exceed `to`");
+    }
+    Ok(ForkRunApiRequest {
+        cwd: workspace.to_owned(),
+        args,
+        stdin: None,
+        timeout_ms: None,
+        managed_write: None,
+    })
+}
+
+async fn write(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    let request = write_fork_request(workspace, arguments)?;
+    let response = client.fork_run(&request).await?;
+    fork_result(response, "receipt", true)
+}
+
+fn write_fork_request(workspace: &str, arguments: &Value) -> Result<ForkRunApiRequest> {
+    if !optional_bool(arguments, "cas", true)? {
+        anyhow::bail!("argument `cas` must be true; MCP writes cannot bypass CAS");
+    }
+    let operation = required_string(arguments, "operation")?;
+    let path = bounded_required_string(arguments, "path", MCP_PATH_MAX_BYTES)?;
+    let managed_write = match operation.as_str() {
+        "patch" => {
+            if arguments.get("content").is_some() {
+                anyhow::bail!("patch does not accept `content`; use `old` and `new`");
+            }
+            ForkManagedWrite::Patch {
+                path,
+                old: bounded_required_string(arguments, "old", MCP_PATCH_BLOCK_MAX_BYTES)?,
+                new: bounded_required_string(arguments, "new", MCP_PATCH_BLOCK_MAX_BYTES)?,
+            }
+        }
+        "create" => {
+            if arguments.get("old").is_some() || arguments.get("new").is_some() {
+                anyhow::bail!("create does not accept `old` or `new`; use `content`");
+            }
+            ForkManagedWrite::Create {
+                path,
+                content: bounded_required_string(
+                    arguments,
+                    "content",
+                    MCP_CREATE_CONTENT_MAX_BYTES,
+                )?,
+            }
+        }
+        _ => anyhow::bail!("argument `operation` must be one of: patch, create"),
+    };
+    Ok(ForkRunApiRequest {
+        cwd: workspace.to_owned(),
+        args: Vec::new(),
+        stdin: None,
+        timeout_ms: None,
+        managed_write: Some(managed_write),
+    })
+}
+
+fn bounded_required_string(arguments: &Value, key: &str, maximum_bytes: usize) -> Result<String> {
+    let value = required_string(arguments, key)?;
+    if value.len() > maximum_bytes {
+        anyhow::bail!("argument `{key}` must contain at most {maximum_bytes} UTF-8 bytes");
+    }
+    Ok(value)
+}
+
+fn optional_positive_u64(arguments: &Value, key: &str, maximum: u64) -> Result<Option<u64>> {
+    let Some(value) = arguments.get(key) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_u64()
+        .with_context(|| format!("argument `{key}` must be a positive integer"))?;
+    if !(1..=maximum).contains(&value) {
+        anyhow::bail!("argument `{key}` must be between 1 and {maximum}");
+    }
+    Ok(Some(value))
+}
+
+fn fork_result(response: ForkRunApiResponse, content_key: &str, parse_json: bool) -> Result<Value> {
+    if response.termination != hzr_protocol::CommandTermination::Exited
+        || response.exit_code != Some(0)
+    {
+        let stderr = bounded_error_text(&response.stderr, 4096);
+        anyhow::bail!(
+            "fork-core {:?} with exit code {:?}; stderr: {}",
+            response.termination,
+            response.exit_code,
+            stderr
+        );
+    }
+    let mut value = serde_json::to_value(&response)?;
+    let object = value
+        .as_object_mut()
+        .context("fork response must be an object")?;
+    let stdout = object
+        .remove("stdout")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .context("fork response must contain stdout")?;
+    let content = if parse_json {
+        let receipt: Value =
+            serde_json::from_str(stdout.trim()).context("fork write receipt is not valid JSON")?;
+        if receipt.get("ok") != Some(&Value::Bool(true)) {
+            anyhow::bail!("fork write receipt did not confirm success");
+        }
+        receipt
+    } else {
+        Value::String(stdout)
+    };
+    object.insert(content_key.to_owned(), content);
+    Ok(value)
+}
+
+fn bounded_error_text(value: &str, maximum_bytes: usize) -> String {
+    if value.len() <= maximum_bytes {
+        return value.to_owned();
+    }
+    let mut boundary = maximum_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    format!("{}…[truncated]", &value[..boundary])
+}
+
+async fn observability(client: &DaemonClient) -> Result<Value> {
+    Ok(serde_json::to_value(client.health().await?)?)
+}
+
+async fn doctor(
+    config_path: &std::path::Path,
+    config: &Config,
+    workspace: &str,
+    _arguments: &Value,
+) -> Result<Value> {
+    let report =
+        crate::diagnostics::doctor(config_path, config, std::path::Path::new(workspace)).await;
+    Ok(serde_json::to_value(report)?)
 }
 
 fn success(id: Value, result: Value) -> Value {

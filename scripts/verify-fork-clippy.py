@@ -17,12 +17,10 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 141
-# Recomputed for the 0.5.0 upstream-sync delta. The inherited warning set remains
-# 141 hits with no new lint codes: the sync touched stream.rs, guard.rs, git.rs,
-# registry.rs, lexer.rs, gh_cmd.rs, tee.rs, utils.rs, tracking.rs, config.rs and
-# added jsonpack.rs, so recorded line positions moved while the debt did not. The
-# ratchet still rejects later drift.
-EXPECTED_SHA256 = "0e38b22b4e82521379f5925b2d4b0e8ee2dfcb6027c170c7dc8b1a014c299d87"
+# Recomputed after execution-time replacement capability evidence was added to
+# tracking.rs. The inherited warning set remains 141 hits with no new lint codes;
+# only tracked source positions moved. The ratchet still rejects later drift.
+EXPECTED_SHA256 = "853bbd92a8fc25b4aa0a5f2aa88779f12637638e633049d3862ef29ae6041e7b"
 
 
 def main() -> int:

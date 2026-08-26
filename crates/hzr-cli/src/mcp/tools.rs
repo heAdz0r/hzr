@@ -1,5 +1,92 @@
 use serde_json::{Value, json};
 
+pub(super) const MCP_EXEC_TIMEOUT_MAX_MS: u64 = 29_500;
+pub(super) const MCP_PATH_MAX_BYTES: usize = 4096;
+pub(super) const MCP_PATCH_BLOCK_MAX_BYTES: usize = 65_536;
+pub(super) const MCP_CREATE_CONTENT_MAX_BYTES: usize = 192 * 1024;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ToolContract {
+    pub name: &'static str,
+    pub kind: ToolKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ToolKind {
+    MemoryRecall,
+    MemoryStore,
+    MemoryForget,
+    MemoryUpdate,
+    MemoryPrune,
+    Search,
+    ContextPlan,
+    Codec,
+    Read,
+    Write,
+    Exec,
+    Observability,
+    Doctor,
+}
+
+pub(super) const TOOL_CONTRACTS: &[ToolContract] = &[
+    ToolContract {
+        name: "hzr_memory_recall",
+        kind: ToolKind::MemoryRecall,
+    },
+    ToolContract {
+        name: "hzr_memory_store",
+        kind: ToolKind::MemoryStore,
+    },
+    ToolContract {
+        name: "hzr_memory_forget",
+        kind: ToolKind::MemoryForget,
+    },
+    ToolContract {
+        name: "hzr_memory_update",
+        kind: ToolKind::MemoryUpdate,
+    },
+    ToolContract {
+        name: "hzr_memory_prune",
+        kind: ToolKind::MemoryPrune,
+    },
+    ToolContract {
+        name: "hzr_search",
+        kind: ToolKind::Search,
+    },
+    ToolContract {
+        name: "hzr_context_plan",
+        kind: ToolKind::ContextPlan,
+    },
+    ToolContract {
+        name: "hzr_codec",
+        kind: ToolKind::Codec,
+    },
+    ToolContract {
+        name: "hzr_read",
+        kind: ToolKind::Read,
+    },
+    ToolContract {
+        name: "hzr_write",
+        kind: ToolKind::Write,
+    },
+    ToolContract {
+        name: "hzr_exec",
+        kind: ToolKind::Exec,
+    },
+    ToolContract {
+        name: "hzr_observability",
+        kind: ToolKind::Observability,
+    },
+    ToolContract {
+        name: "hzr_doctor",
+        kind: ToolKind::Doctor,
+    },
+];
+
+pub(super) fn tool_contract(name: &str) -> Option<&'static ToolContract> {
+    TOOL_CONTRACTS.iter().find(|contract| contract.name == name)
+}
+
 fn strict_object(properties: Value, required: &[&str]) -> Value {
     json!({
         "type": "object",
@@ -192,7 +279,105 @@ fn context_pack_schema() -> Value {
     )
 }
 
-pub(super) fn tool_definitions() -> Vec<Value> {
+fn fork_result_properties(content_key: &str, content_schema: Value) -> Value {
+    json!({
+        (content_key): content_schema,
+        "stderr": {"type": "string"},
+        "termination": {"type": "string", "enum": ["exited", "signaled", "timed_out", "cancelled"]},
+        "exit_code": {"type": ["integer", "null"]},
+        "signal": {"type": ["integer", "null"]},
+        "duration_ms": {"type": "integer", "minimum": 0},
+        "stdout_sha256": {"type": "string"},
+        "stderr_sha256": {"type": "string"},
+        "stdout_truncated": {"type": "boolean"},
+        "stderr_truncated": {"type": "boolean"}
+    })
+}
+
+fn fork_result_schema(content_key: &str, content_schema: Value) -> Value {
+    strict_object(
+        fork_result_properties(content_key, content_schema),
+        &[
+            content_key,
+            "stderr",
+            "termination",
+            "exit_code",
+            "signal",
+            "duration_ms",
+            "stdout_sha256",
+            "stderr_sha256",
+            "stdout_truncated",
+            "stderr_truncated",
+        ],
+    )
+}
+
+fn engine_health_schema() -> Value {
+    strict_object(
+        json!({
+            "name": {"type": "string"},
+            "version": nullable_string(),
+            "state": {"type": "string", "enum": ["ready", "degraded", "rebuilding", "stopped"]},
+            "detail": nullable_string()
+        }),
+        &["name", "version", "state", "detail"],
+    )
+}
+
+fn health_schema() -> Value {
+    strict_object(
+        json!({
+            "protocol_version": {"type": "integer", "minimum": 1},
+            "hzr_version": {"type": "string"},
+            "state": {"type": "string", "enum": ["ready", "degraded", "rebuilding", "stopped"]},
+            "workspace_root": nullable_string(),
+            "engines": {"type": "array", "items": engine_health_schema()},
+            "capabilities": {"type": "array", "items": {"type": "string"}}
+        }),
+        &[
+            "protocol_version",
+            "hzr_version",
+            "state",
+            "workspace_root",
+            "engines",
+            "capabilities",
+        ],
+    )
+}
+
+fn doctor_schema() -> Value {
+    strict_object(
+        json!({
+            "hzr_version": {"type": "string"},
+            "config_path": {"type": "string"},
+            "data_dir": {"type": "string"},
+            "workspace": {"type": "string"},
+            "healthy": {"type": "boolean"},
+            "checks": {
+                "type": "array",
+                "items": strict_object(
+                    json!({
+                        "name": {"type": "string"},
+                        "status": {"type": "string", "enum": ["pass", "warning", "error"]},
+                        "detail": {"type": "string"}
+                    }),
+                    &["name", "status", "detail"]
+                )
+            },
+            "repair": {"type": ["object", "null"]}
+        }),
+        &[
+            "hzr_version",
+            "config_path",
+            "data_dir",
+            "workspace",
+            "healthy",
+            "checks",
+        ],
+    )
+}
+
+fn raw_tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "hzr_memory_recall",
@@ -673,5 +858,436 @@ pub(super) fn tool_definitions() -> Vec<Value> {
                 "openWorldHint": false,
             },
         }),
+        json!({
+            "name": "hzr_read",
+            "title": "Read through HZR",
+            "description": "Read bounded exact content through the daemon-owned fork-core path. The response preserves termination, hashes and truncation so omitted bytes cannot look complete.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "path": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES},
+                    "outline": {"type": "boolean", "default": false},
+                    "from": {"type": "integer", "minimum": 1},
+                    "to": {"type": "integer", "minimum": 1},
+                    "max_lines": {"type": "integer", "minimum": 1}
+                },
+                "required": ["path"]
+            },
+            "outputSchema": fork_result_schema("content", json!({"type": "string"})),
+            "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
+        }),
+        json!({
+            "name": "hzr_write",
+            "title": "Write through HZR",
+            "description": "Apply an atomic patch or non-overwriting create through daemon-owned fork-core. Patch always uses CAS with two bounded retries and returns the typed write receipt.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "operation": {"type": "string", "enum": ["patch", "create"]},
+                    "path": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES},
+                    "old": {"type": "string", "maxLength": MCP_PATCH_BLOCK_MAX_BYTES},
+                    "new": {"type": "string", "maxLength": MCP_PATCH_BLOCK_MAX_BYTES},
+                    "content": {"type": "string", "maxLength": MCP_CREATE_CONTENT_MAX_BYTES},
+                    "cas": {"type": "boolean", "const": true, "default": true}
+                },
+                "required": ["operation", "path"],
+                "allOf": [
+                    {
+                        "if": {"properties": {"operation": {"const": "patch"}}},
+                        "then": {"required": ["old", "new"], "not": {"required": ["content"]}}
+                    },
+                    {
+                        "if": {"properties": {"operation": {"const": "create"}}},
+                        "then": {"required": ["content"], "not": {"anyOf": [{"required": ["old"]}, {"required": ["new"]}]}}
+                    }
+                ]
+            },
+            "outputSchema": fork_result_schema("receipt", json!({"type": "object"})),
+            "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false}
+        }),
+        json!({
+            "name": "hzr_exec",
+            "title": "Execute through HZR Policy",
+            "description": "Run one shell command through the daemon-owned policy, rewrite and accounting pipeline. Approval-required and denied decisions are returned as typed outcomes; MCP never falls back to a direct shell.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "command": {"type": "string", "minLength": 1},
+                    "timeout_ms": {"type": "integer", "minimum": 1, "maximum": MCP_EXEC_TIMEOUT_MAX_MS}
+                },
+                "required": ["command"]
+            },
+            "outputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "outcome": {"type": "string", "enum": ["completed", "executed_accounting_incomplete", "not_started"]},
+                    "result": {"type": "object"},
+                    "disposition": {"type": "object"}
+                },
+                "required": ["outcome"]
+            },
+            "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true}
+        }),
+        json!({
+            "name": "hzr_observability",
+            "title": "Observe HZR Health",
+            "description": "Return the daemon's typed health, engine state, capabilities and exact bound workspace without scraping CLI or UI text.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object", "additionalProperties": false, "properties": {}, "required": []
+            },
+            "outputSchema": health_schema(),
+            "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
+        }),
+        json!({
+            "name": "hzr_doctor",
+            "title": "Diagnose HZR Desired State",
+            "description": "Run the typed desired-state doctor for the exact MCP workspace, including ownership, binding, ledger and engine checks.",
+            "inputSchema": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object", "additionalProperties": false, "properties": {}, "required": []
+            },
+            "outputSchema": doctor_schema(),
+            "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
+        }),
     ]
+}
+
+pub(super) fn tool_definitions() -> Vec<Value> {
+    let definitions = raw_tool_definitions();
+    for definition in &definitions {
+        let name = definition["name"]
+            .as_str()
+            .expect("internal MCP definition has a name");
+        debug_assert!(
+            tool_contract(name).is_some(),
+            "internal MCP definition has no handler contract: {name}"
+        );
+    }
+    debug_assert_eq!(definitions.len(), TOOL_CONTRACTS.len());
+    definitions
+}
+
+pub(super) fn validate_tool_input(name: &str, value: &Value) -> Result<(), String> {
+    validate_tool_payload(name, "inputSchema", value)
+}
+
+pub(super) fn validate_tool_output(name: &str, value: &Value) -> Result<(), String> {
+    validate_tool_payload(name, "outputSchema", value)
+}
+
+fn validate_tool_payload(name: &str, schema_key: &str, value: &Value) -> Result<(), String> {
+    let definitions = raw_tool_definitions();
+    let definition = definitions
+        .iter()
+        .find(|definition| definition["name"] == name)
+        .ok_or_else(|| format!("unknown tool: {name}"))?;
+    validate_schema(&definition[schema_key], value, name)
+}
+
+fn validate_schema(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    if let Some(options) = schema.get("anyOf").and_then(Value::as_array) {
+        if !options
+            .iter()
+            .any(|option| validate_schema(option, value, path).is_ok())
+        {
+            return Err(format!("{path} matched no allowed schema branch"));
+        }
+    }
+    if let Some(expected) = schema.get("const")
+        && expected != value
+    {
+        return Err(format!("{path} must equal {expected}"));
+    }
+    if let Some(values) = schema.get("enum").and_then(Value::as_array)
+        && !values.contains(value)
+    {
+        return Err(format!("{path} is outside the advertised enum"));
+    }
+    if let Some(kind) = schema.get("type") {
+        let kinds = kind
+            .as_array()
+            .cloned()
+            .unwrap_or_else(|| vec![kind.clone()]);
+        let matches = kinds.iter().any(|kind| match kind.as_str() {
+            Some("object") => value.is_object(),
+            Some("array") => value.is_array(),
+            Some("string") => value.is_string(),
+            Some("integer") => value.as_i64().is_some() || value.as_u64().is_some(),
+            Some("number") => value.is_number(),
+            Some("boolean") => value.is_boolean(),
+            Some("null") => value.is_null(),
+            _ => false,
+        });
+        if !matches {
+            return Err(format!("{path} has the wrong JSON type"));
+        }
+    }
+    if let Some(number) = value.as_f64() {
+        if let Some(minimum) = schema.get("minimum").and_then(Value::as_f64)
+            && number < minimum
+        {
+            return Err(format!("{path} is below the advertised minimum"));
+        }
+        if let Some(maximum) = schema.get("maximum").and_then(Value::as_f64)
+            && number > maximum
+        {
+            return Err(format!("{path} exceeds the advertised maximum"));
+        }
+    }
+    if let Some(text) = value.as_str() {
+        let character_count = text.chars().count() as u64;
+        if let Some(minimum) = schema.get("minLength").and_then(Value::as_u64)
+            && character_count < minimum
+        {
+            return Err(format!("{path} is shorter than the advertised minimum"));
+        }
+        if let Some(maximum) = schema.get("maxLength").and_then(Value::as_u64)
+            && character_count > maximum
+        {
+            return Err(format!("{path} exceeds the advertised maximum length"));
+        }
+        if schema.get("pattern").and_then(Value::as_str) == Some("^[a-z0-9]+(?:-[a-z0-9]+)*$")
+            && !is_kebab_case(text)
+        {
+            return Err(format!("{path} does not match the advertised pattern"));
+        }
+    }
+    if let Some(items) = value.as_array() {
+        if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64)
+            && items.len() as u64 > maximum
+        {
+            return Err(format!("{path} contains too many items"));
+        }
+        if let Some(item_schema) = schema.get("items") {
+            for (index, item) in items.iter().enumerate() {
+                validate_schema(item_schema, item, &format!("{path}[{index}]"))?;
+            }
+        }
+    }
+    if let Some(object) = value.as_object() {
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            for key in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(key) {
+                    return Err(format!("{path} is missing required property `{key}`"));
+                }
+            }
+        }
+        let properties = schema.get("properties").and_then(Value::as_object);
+        for (key, child) in object {
+            if let Some(child_schema) = properties.and_then(|properties| properties.get(key)) {
+                validate_schema(child_schema, child, &format!("{path}.{key}"))?;
+            } else if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
+                return Err(format!("{path} contains unknown property `{key}`"));
+            } else if let Some(additional) = schema
+                .get("additionalProperties")
+                .filter(|additional| additional.is_object())
+            {
+                validate_schema(additional, child, &format!("{path}.{key}"))?;
+            }
+        }
+    }
+    if let Some(negated) = schema.get("not")
+        && validate_schema(negated, value, path).is_ok()
+    {
+        return Err(format!("{path} matches a forbidden schema branch"));
+    }
+    if let Some(parts) = schema.get("allOf").and_then(Value::as_array) {
+        for part in parts {
+            if let Some(condition) = part.get("if") {
+                if validate_schema(condition, value, path).is_ok()
+                    && let Some(consequence) = part.get("then")
+                {
+                    validate_schema(consequence, value, path)?;
+                }
+            } else {
+                validate_schema(part, value, path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_kebab_case(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct CapabilityContract {
+        mcp_tools: Vec<CapabilityTool>,
+    }
+
+    #[derive(Deserialize)]
+    struct CapabilityTool {
+        name: String,
+    }
+
+    #[test]
+    fn acceptance_gate_mcp_inventory_matches_agent_capability_ssot() {
+        let contract: CapabilityContract = serde_json::from_str(include_str!(
+            "../../../../contracts/agent-capabilities.json"
+        ))
+        .expect("capability contract");
+        let mut expected = contract
+            .mcp_tools
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        let mut actual = super::tool_definitions()
+            .into_iter()
+            .map(|tool| {
+                tool.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("MCP tool name")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        expected.sort();
+        actual.sort();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn acceptance_gate_advertised_input_schema_is_the_runtime_parser_contract() {
+        for definition in super::tool_definitions() {
+            let name = definition["name"].as_str().expect("tool name");
+            let schema = &definition["inputSchema"];
+            super::tool_contract(name).expect("tool handler contract");
+            let mut sample = sample_input(name);
+            super::validate_tool_input(name, &sample)
+                .unwrap_or_else(|error| panic!("advertised sample for {name} failed: {error}"));
+
+            sample
+                .as_object_mut()
+                .expect("sample object")
+                .insert("schema_drift".to_owned(), serde_json::json!(true));
+            assert!(
+                super::validate_tool_input(name, &sample).is_err(),
+                "{name} accepted an unadvertised field"
+            );
+
+            let properties = schema["properties"].as_object().expect("properties");
+            for key in properties.keys() {
+                let mut wrong_type = sample_input(name);
+                wrong_type
+                    .as_object_mut()
+                    .expect("sample object")
+                    .insert(key.clone(), serde_json::Value::Null);
+                assert!(
+                    super::validate_tool_input(name, &wrong_type).is_err(),
+                    "{name}.{key} accepted a type excluded by tools/list"
+                );
+            }
+            for required in schema["required"]
+                .as_array()
+                .expect("required")
+                .iter()
+                .map(|value| value.as_str().expect("required field"))
+            {
+                let mut missing = sample_input(name);
+                missing
+                    .as_object_mut()
+                    .expect("sample object")
+                    .remove(required);
+                assert!(
+                    super::validate_tool_input(name, &missing).is_err(),
+                    "{name} accepted missing required field {required}"
+                );
+            }
+            assert_eq!(schema["additionalProperties"], false);
+        }
+    }
+
+    fn sample_input(name: &str) -> serde_json::Value {
+        match name {
+            "hzr_memory_recall" => serde_json::json!({
+                "query":"decision", "topic":"architecture", "keyword":"ledger",
+                "limit":1, "scope":"project"
+            }),
+            "hzr_memory_store" => serde_json::json!({
+                "topic":"architecture", "content":"durable", "importance":"high",
+                "keywords":["ledger"], "scope":"project"
+            }),
+            "hzr_memory_forget" => serde_json::json!({"id":"memory-1", "scope":"project"}),
+            "hzr_memory_update" => serde_json::json!({
+                "id":"memory-1", "content":"replacement", "importance":"medium",
+                "keywords":["ledger"], "scope":"project"
+            }),
+            "hzr_memory_prune" => {
+                serde_json::json!({"threshold":0.2, "dry_run":true, "scope":"project"})
+            }
+            "hzr_search" => serde_json::json!({
+                "query":"Ledger", "path":"crates", "mode":"exact", "limit":1,
+                "include_content":true
+            }),
+            "hzr_context_plan" => serde_json::json!({
+                "intent":"trace ledger", "path":"crates", "topic":"architecture",
+                "search_limit":1, "memory_limit":1
+            }),
+            "hzr_codec" => serde_json::json!({
+                "content":"text", "fidelity":"exact", "risk":"low", "profile":"safe"
+            }),
+            "hzr_read" => serde_json::json!({
+                "path":"src/lib.rs", "outline":false, "from":1, "to":1, "max_lines":1
+            }),
+            "hzr_write" => serde_json::json!({
+                "operation":"patch", "path":"src/lib.rs", "old":"old", "new":"new",
+                "cas":true
+            }),
+            "hzr_exec" => serde_json::json!({"command":"pwd", "timeout_ms":1}),
+            "hzr_observability" | "hzr_doctor" => serde_json::json!({}),
+            other => panic!("missing sample for {other}"),
+        }
+    }
+
+    #[test]
+    fn acceptance_gate_mcp_descriptions_are_unique_and_schema_is_bounded() {
+        // The 13-tool typed inventory serializes to 23,776 bytes. Keep under 25 KiB so
+        // capability coverage cannot silently recreate the former 64 KiB prompt budget.
+        const MAX_TOOL_SCHEMA_BYTES: usize = 25 * 1024;
+
+        let definitions = super::tool_definitions();
+        let encoded = serde_json::to_vec(&serde_json::json!({"tools": &definitions}))
+            .expect("complete tools/list result serializes");
+        assert!(
+            encoded.len() <= MAX_TOOL_SCHEMA_BYTES,
+            "MCP tool schema is {} bytes; budget is {MAX_TOOL_SCHEMA_BYTES}",
+            encoded.len()
+        );
+        let descriptions = definitions
+            .iter()
+            .map(|definition| {
+                definition
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("every MCP tool has a description")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            descriptions.iter().copied().collect::<HashSet<_>>().len(),
+            descriptions.len(),
+            "MCP tools must not duplicate top-level descriptions"
+        );
+    }
 }

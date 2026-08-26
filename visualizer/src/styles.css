@@ -43,6 +43,141 @@
   --transition-base: 150ms ease;
 }
 
+.observability-timeline {
+  margin-top: 1.25rem;
+  padding: 1.25rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 1.25rem;
+  background: rgba(10, 11, 13, 0.66);
+}
+
+.observability-title-row,
+.trace-lifecycle-grid section > header,
+.trace-list summary,
+.lifecycle-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.observability-title-row h3 {
+  margin: 0.25rem 0 0;
+}
+
+.trace-lifecycle-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(18rem, 0.65fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.trace-lifecycle-grid > section {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.trace-list details,
+.lifecycle-list li {
+  border-top: 1px solid var(--surface-border);
+}
+
+.trace-list summary {
+  cursor: pointer;
+  padding: 0.75rem 0;
+}
+
+.trace-list summary code,
+.lifecycle-list code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-state {
+  width: 0.55rem;
+  height: 0.55rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--success);
+}
+
+.trace-state.failed,
+.trace-error {
+  color: var(--error);
+  background: var(--error);
+}
+
+.trace-list ol,
+.lifecycle-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-list li {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(5rem, 0.7fr) minmax(5rem, 1fr) auto auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.55rem 0.25rem;
+  font-style: normal;
+}
+
+.trace-list em {
+  font-style: normal;
+  text-transform: capitalize;
+}
+
+.trace-failed,
+.trace-denied {
+  color: var(--error);
+}
+
+.trace-approval_required {
+  color: var(--ember-500);
+}
+
+.lifecycle-list li {
+  justify-content: initial;
+  padding: 0.65rem 0;
+}
+
+.lifecycle-list li div {
+  display: flex;
+  flex-direction: column;
+  min-width: 5rem;
+}
+
+.lifecycle-list li time {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.observability-boundary {
+  margin: 1rem 0 0;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 900px) {
+  .trace-lifecycle-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .trace-list li {
+    grid-template-columns: 1.5rem 1fr auto;
+  }
+
+  .trace-list li code,
+  .trace-list li small {
+    grid-column: 2 / -1;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

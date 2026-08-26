@@ -106,12 +106,24 @@ fn test_stdio_mcp_negotiates_lists_typed_tools_and_exits_on_eof() -> anyhow::Res
     )
     .expect("parse tools/list response");
     let tools = list["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 8);
+    assert_eq!(tools.len(), 13);
     assert!(tools.iter().any(|tool| tool["name"] == "hzr_context_plan"));
     assert!(
         tools.iter().any(|tool| tool["name"] == "hzr_codec"),
         "the density codec must be reachable over the wire, not only in the tool table"
     );
+    for required in [
+        "hzr_read",
+        "hzr_write",
+        "hzr_exec",
+        "hzr_observability",
+        "hzr_doctor",
+    ] {
+        assert!(
+            tools.iter().any(|tool| tool["name"] == required),
+            "missing first-class MCP capability {required}"
+        );
+    }
     assert!(tools.iter().all(|tool| {
         tool["inputSchema"]["additionalProperties"] == false
             && tool["outputSchema"]["type"] == "object"

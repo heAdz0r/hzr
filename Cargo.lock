@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-agent"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "http",
  "nix",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-cli"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-codec"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "hzr-protocol",
  "regex",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-context"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "hex",
  "hzr-core",
@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-core"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "directories",
  "hex",
@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-daemon"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "axum",
  "fs2",
@@ -720,6 +720,7 @@ dependencies = [
  "hzr-memory",
  "hzr-protocol",
  "libc",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -734,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-exec"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "hzr-protocol",
@@ -751,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-index"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "fs2",
  "hex",
@@ -766,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-memory"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -788,7 +789,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-protocol"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",

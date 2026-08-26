@@ -4,7 +4,7 @@
 //! never reached the optimizer, because a bypassed row contributes equally to the
 //! baseline and to the delivered total. Only an explicit bypass query makes that visible.
 
-use hzr_core::Ledger;
+use hzr_core::{CURRENT_ACCOUNTING_POLICY_VERSION, Ledger};
 use rusqlite::Connection;
 use tempfile::tempdir;
 
@@ -19,7 +19,7 @@ fn seed(path: &std::path::Path, rows: &[(&str, &str, u64, u64, &str)]) {
                     saved_tokens, savings_pct, exec_time_ms, project_path,
                     producer_version, accounting_policy_version
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-                           'test', 'privacy_typed_v1')",
+                           'test', ?10)",
                 rusqlite::params![
                     timestamp,
                     command,
@@ -30,6 +30,7 @@ fn seed(path: &std::path::Path, rows: &[(&str, &str, u64, u64, &str)]) {
                     0.0_f64,
                     5_i64,
                     project,
+                    CURRENT_ACCOUNTING_POLICY_VERSION,
                 ],
             )
             .expect("seed row");

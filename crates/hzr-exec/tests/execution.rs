@@ -24,6 +24,9 @@ fn process_exists(pid: i32) -> bool {
 fn completed(outcome: ExecutionOutcome) -> Result<ExecutionResult> {
     match outcome {
         ExecutionOutcome::Completed { result } => Ok(*result),
+        ExecutionOutcome::ExecutedAccountingIncomplete { accounting, .. } => Err(
+            std::io::Error::other(format!("unexpected accounting failure: {accounting:?}")).into(),
+        ),
         ExecutionOutcome::NotStarted { disposition } => {
             bail!("execution did not start: {disposition:?}")
         }

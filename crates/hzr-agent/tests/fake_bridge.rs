@@ -15,6 +15,8 @@ use tempfile::TempDir;
 const BUNDLED_BRIDGE: &[u8] = include_bytes!("../../../integrations/caveman-code/bridge.mjs");
 const BUNDLED_PACKAGE_LOCK: &[u8] =
     include_bytes!("../../../integrations/caveman-code/package-lock.json");
+const BUNDLED_AGENT_CAPABILITIES: &[u8] =
+    include_bytes!("../../../contracts/agent-capabilities.json");
 
 fn process_fixture_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -152,7 +154,17 @@ fn prepare_integration(temp: &TempDir) -> (IntegrationLayout, PathBuf) {
     fs::create_dir_all(&package_dir).expect("package directory");
     fs::create_dir_all(&workspace).expect("workspace directory");
     fs::write(integration.join("bridge.mjs"), BUNDLED_BRIDGE).expect("bridge fixture");
+    fs::write(
+        integration.join("agent-capabilities.json"),
+        BUNDLED_AGENT_CAPABILITIES,
+    )
+    .expect("agent capability fixture");
     fs::write(integration.join("package-lock.json"), BUNDLED_PACKAGE_LOCK).expect("lock fixture");
+    fs::write(
+        integration.join("package.json"),
+        format!(r#"{{"version":"{}"}}"#, env!("CARGO_PKG_VERSION")),
+    )
+    .expect("bridge manifest fixture");
     fs::write(
         package_dir.join("package.json"),
         format!(r#"{{"version":"{CAVEMAN_CODE_NPM_VERSION}"}}"#),

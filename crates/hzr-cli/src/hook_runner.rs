@@ -170,6 +170,11 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     let request = ExecApiRequest {
         cwd: cwd.to_string_lossy().into_owned(),
         command: raw.to_owned(),
+        fidelity_requested: fidelity_evasion.is_some(),
+        fidelity_reason: fidelity_evasion
+            .as_ref()
+            .and_then(|evasion| evasion.fidelity_reason)
+            .map(|reason| reason.as_str().to_owned()),
         timeout_ms: Some(HOOK_TIMEOUT.as_millis() as u64),
         caller_path: std::env::var("PATH").ok(),
         agent: Some(agent_attribution(input)),
@@ -1209,21 +1214,46 @@ fn daemon_unavailable_log_path(config: &Config) -> std::path::PathBuf {
         .join("ledger/daemon-unavailable-operations.log")
 }
 
+fn daemon_unavailable_total_path(config: &Config) -> std::path::PathBuf {
+    config
+        .data_dir
+        .join("ledger/daemon-unavailable-operations.total")
+}
+
 pub(crate) fn record_daemon_unavailable_operation(config: &Config) -> Result<()> {
     let ledger = config.data_dir.join("ledger");
     fs::create_dir_all(&ledger)
         .with_context(|| format!("failed to create {}", ledger.display()))?;
-    let path = daemon_unavailable_log_path(config);
-    let mut file = OpenOptions::new()
+    let path = daemon_unavailable_total_path(config);
+    let lock_path = path.with_extension("lock");
+    let lock = OpenOptions::new()
         .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
-    writeln!(file, "1")?;
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open {}", lock_path.display()))?;
+    lock.lock_exclusive()?;
+    let current = daemon_unavailable_operations(config)?;
+    crate::adoption::atomic_write(&path, format!("{}\n", current.saturating_add(1)).as_bytes())?;
+    FileExt::unlock(&lock)?;
     Ok(())
 }
 
 fn daemon_unavailable_operations(config: &Config) -> Result<usize> {
+    let total_path = daemon_unavailable_total_path(config);
+    match fs::read_to_string(&total_path) {
+        Ok(content) => {
+            return content
+                .trim()
+                .parse::<usize>()
+                .with_context(|| format!("failed to parse {}", total_path.display()));
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", total_path.display()));
+        }
+    }
     let path = daemon_unavailable_log_path(config);
     match fs::read_to_string(&path) {
         Ok(content) => Ok(content.lines().filter(|line| line.trim() == "1").count()),
@@ -1341,9 +1371,26 @@ mod tests {
         attach_session_attribution, clear_reconciled_rewrites, context_brief,
         degraded_rewrite_coverage, fallback_decision, honor_host_permission_mode,
         hook_fidelity_preflight, native_observation_policy, native_replacement, observe_input,
-        read_session, record_degraded_rewrite_at, record_local_policy_decision,
-        record_native_correction, render_command, steer_to_first_class,
+        read_session, record_daemon_unavailable_operation, record_degraded_rewrite_at,
+        record_local_policy_decision, record_native_correction, render_command,
+        steer_to_first_class,
     };
+
+    #[test]
+    fn daemon_unavailable_telemetry_is_a_bounded_durable_counter() {
+        let directory = tempdir().expect("temporary directory");
+        let config = config(directory.path());
+        for _ in 0..100 {
+            record_daemon_unavailable_operation(&config).expect("record degraded operation");
+        }
+
+        let coverage = degraded_rewrite_coverage(&config).expect("coverage");
+        assert_eq!(coverage.daemon_unavailable_operations, 100);
+        let counter = config
+            .data_dir
+            .join("ledger/daemon-unavailable-operations.total");
+        assert!(fs::metadata(counter).expect("counter metadata").len() <= 32);
+    }
 
     #[test]
     fn test_native_observer_records_coverage_without_claiming_savings() {

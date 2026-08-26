@@ -4,6 +4,48 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-26
+
+### Added
+
+- A typed local observability plane now connects daemon lifecycle, RTK routing, grepai watcher
+  health, ICM supervision, MCP activity, memory topology, latency, and accounting exclusions to
+  one project-scoped dashboard and trace API.
+- The MCP surface grows to 13 schema-validated tools, including confined daemon-owned read/write,
+  managed execution, observability, and doctor. One canonical contract now drives discovery,
+  dispatch, validation, and accounting.
+- Fidelity operations now use a crash-safe durable state machine with pre-execution reservation,
+  explicit executing/unknown state, idempotent ledger replay, quarantine, bounded allowances, and
+  operator-visible remediation.
+- Project-local Codex MCP registration, transactional init/install journals, desired-state doctor
+  checks, and forward recovery make adoption reproducible across multiple workspaces.
+
+### Changed
+
+- Command bypass is treated as a policy failure instead of an invisible fast path. Managed
+  equivalents are enforced, RAW receives zero savings credit, and incomplete/native traffic is
+  first-class in statistics.
+- grepai and ICM now run under one bounded supervisor with singleton ownership, restart/backoff,
+  TTL/LRU cache limits, failed-state tombstones, and project-safe health reporting.
+- RTK fork configuration is typed and fingerprinted; consumers invalidate stale configuration
+  without duplicate loads. Structured-output fidelity now falls back to raw when completeness
+  cannot be established.
+- Public telemetry uses stable keyed pseudonyms and project aliases rather than commands, paths,
+  queries, session identifiers, or memory content.
+- The README and documentation set were rebuilt around the unified architecture; superseded
+  records are clearly archived and stale false-ready reports/screenshots were removed.
+
+### Fixed
+
+- Cross-project memory detail and UI request races can no longer leak stale A/B/C project state.
+- Failed grepai watchers remain observable until bounded expiry or explicit recovery instead of
+  being mistaken for standby, and status polling cannot keep the cache alive forever.
+- Post-spawn execution failures no longer refund fidelity allowance or invite unsafe retry; the
+  uncertain operation survives restart for reconciliation.
+- Sequential multi-workspace installation no longer keeps the first workspace as the global owner.
+- MCP rejects outside-workspace reads/writes and refuses success when its typed output contract or
+  accounting receipt is incomplete.
+
 ### Fixed
 
 - `hzr update` could not find its own installer when invoked through `~/.local/bin/hzr` — the
@@ -931,3 +973,4 @@ First public HZR release.
 [0.2.0]: https://github.com/heAdz0r/hzr/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/heAdz0r/hzr/releases/tag/v0.1.0
 [0.4.3]: https://github.com/heAdz0r/hzr/compare/v0.4.2...v0.4.3
+[0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0

@@ -262,6 +262,19 @@ pub fn print_execution(outcome: &ExecutionOutcome, json: bool) -> io::Result<Exi
                 result.termination.signal,
             ))
         }
+        ExecutionOutcome::ExecutedAccountingIncomplete { result, accounting } => {
+            if !json {
+                write_capture(&result.stdout, &mut io::stdout().lock())?;
+                write_capture(&result.stderr, &mut io::stderr().lock())?;
+                writeln!(
+                    io::stderr().lock(),
+                    "command executed, but fidelity accounting is incomplete (code={}, retryable=false, durable_incident={}); do not replay the command",
+                    accounting.code,
+                    accounting.incident_persisted
+                )?;
+            }
+            Ok(ExitCode::from(70))
+        }
         ExecutionOutcome::NotStarted { disposition } => {
             if !json {
                 let stderr = io::stderr();
@@ -335,6 +348,18 @@ fn write_doctor(output: &mut impl Write, report: &DoctorReport) -> io::Result<()
         report.hzr_version,
         if report.healthy { "healthy" } else { "failed" }
     )?;
+    if let Some(receipt) = &report.fidelity_reconcile {
+        writeln!(
+            output,
+            "fidelity reconcile: reservation={} resolution={:?} operation_recorded={} allowance_released={} cleanup_complete={} idempotent_replay={}",
+            receipt.reservation_id,
+            receipt.resolution,
+            receipt.operation_recorded,
+            receipt.allowance_released,
+            receipt.cleanup_complete,
+            receipt.idempotent_replay
+        )?;
+    }
 
     // Постоянные host limits (например global_codec) не смешиваем с actionable WARN/ERROR.
     let mut host_limits = Vec::new();

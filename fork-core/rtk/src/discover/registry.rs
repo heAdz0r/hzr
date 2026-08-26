@@ -215,13 +215,20 @@ pub fn classify_command(cmd: &str) -> Classification {
 /// Keep this boolean boundary next to [`classify_command`] so control-plane callers do not need
 /// access to the registry's private report types or a second list of command families.
 pub fn has_existing_route(cmd: &str) -> bool {
-    matches!(
-        classify_command(cmd),
+    existing_route(cmd).is_some()
+}
+
+/// Return the privacy-safe, static replacement identity for an existing optimized route.
+pub fn existing_route(cmd: &str) -> Option<(&'static str, &'static str)> {
+    match classify_command(cmd) {
         Classification::Supported {
+            rtk_equivalent,
+            category,
             status: super::report::RtkStatus::Existing,
             ..
+        } => Some((rtk_equivalent, category)),
+        _ => None,
         }
-    )
 }
 
 /// Extract the base command (first word, or first two if it looks like a subcommand pattern).

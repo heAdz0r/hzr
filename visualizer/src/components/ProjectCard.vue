@@ -6,20 +6,27 @@ import StatusChip from "./StatusChip.vue";
 
 defineProps<{
   project: DashboardProject;
+  selected: boolean;
 }>();
 
 defineEmits<{
   copy: [command: string];
+  select: [worktreeId: string];
 }>();
+
+function shortIdentity(value: string): string {
+  const digest = value.includes(":") ? value.split(":").at(-1) ?? value : value;
+  return digest.slice(0, 12);
+}
 </script>
 
 <template>
-  <details class="project-card">
+  <details class="project-card" :class="{ 'project-selected': selected }">
     <summary>
       <span class="project-mark"><AppIcon name="folder" :size="20" /></span>
       <span class="project-identity">
         <strong>{{ project.name }}</strong>
-        <span>{{ project.root }}</span>
+        <span>Identity {{ shortIdentity(project.root) }}</span>
       </span>
       <span class="project-meta">
         <span>{{ project.git_backed ? "Git" : "Path identity" }}</span>
@@ -45,12 +52,21 @@ defineEmits<{
         </div>
       </div>
       <dl class="project-ids">
-        <div><dt>Repository</dt><dd>{{ project.repository_id }}</dd></div>
-        <div><dt>Worktree</dt><dd>{{ project.worktree_id }}</dd></div>
+        <div><dt>Repository</dt><dd>{{ shortIdentity(project.repository_id) }}</dd></div>
+        <div><dt>Selection key</dt><dd>{{ shortIdentity(project.worktree_id) }}</dd></div>
       </dl>
       <button class="secondary-action" type="button" @click="$emit('copy', project.command)">
         <AppIcon name="copy" :size="16" />
         Copy index command
+      </button>
+      <button
+        class="secondary-action"
+        type="button"
+        :disabled="selected"
+        @click="$emit('select', project.worktree_id)"
+      >
+        <AppIcon name="activity" :size="16" />
+        {{ selected ? "Selected project" : "Open observatory" }}
       </button>
     </div>
   </details>

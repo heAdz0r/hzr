@@ -8,9 +8,11 @@ use hzr_exec::{ExecutionOutcome, RtkRewriteOutcome};
 use hzr_memory::{MemoryRecord, MemoryTransport};
 use hzr_protocol::{
     CodecApiRequest, ContextPlanApiRequest, ContextPlanApiResponse, ErrorResponse, ExecApiRequest,
-    ExecApprovalApiRequest, HealthResponse, MemoryForgetApiRequest, MemoryMutationApiResponse,
-    MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryStoreApiRequest, MemoryUpdateApiRequest,
-    OperationApiRequest, OperationApiResponse, SearchApiRequest, SearchApiResponse,
+    ExecApprovalApiRequest, FidelityReconcileApiRequest, FidelityReconcileReceipt,
+    ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryForgetApiRequest,
+    MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
+    MemoryStoreApiRequest, MemoryUpdateApiRequest, OperationApiRequest, OperationApiResponse,
+    SearchApiRequest, SearchApiResponse,
 };
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -129,11 +131,25 @@ impl DaemonClient {
         self.post("/v1/exec/run", request).await
     }
 
+    pub async fn fork_run(
+        &self,
+        request: &ForkRunApiRequest,
+    ) -> Result<ForkRunApiResponse, ClientError> {
+        self.post("/v1/fork/run", request).await
+    }
+
     pub async fn exec_approval(
         &self,
         request: &ExecApprovalApiRequest,
     ) -> Result<ExecutionOutcome, ClientError> {
         self.post("/v1/exec/approval", request).await
+    }
+
+    pub async fn fidelity_reconcile(
+        &self,
+        request: &FidelityReconcileApiRequest,
+    ) -> Result<FidelityReconcileReceipt, ClientError> {
+        self.post("/v1/fidelity/reconcile", request).await
     }
 
     pub async fn codec_compile(&self, request: &CodecApiRequest) -> Result<Transform, ClientError> {

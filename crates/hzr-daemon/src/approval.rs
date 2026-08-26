@@ -19,6 +19,9 @@ pub struct PendingApproval {
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
     pub caller_path: Option<String>,
+    pub agent: Option<String>,
+    pub session_id: Option<String>,
+    pub trace_hash: String,
 }
 
 struct StoredApproval {
@@ -84,6 +87,9 @@ mod tests {
             cwd: std::env::current_dir().expect("current directory"),
             timeout_ms: Some(1_000),
             caller_path: Some("/toolchain/bin:/usr/bin".into()),
+            agent: None,
+            session_id: Some("test-session".into()),
+            trace_hash: "hmac-sha256:test-trace".into(),
         };
         let decision_id = store.insert(pending).await;
 

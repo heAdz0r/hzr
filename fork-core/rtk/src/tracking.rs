@@ -659,6 +659,9 @@ impl Tracker {
             "producer_version TEXT",
             "accounting_policy_version TEXT",
             "operation_family TEXT",
+            "replacement_capability TEXT",
+            "replacement_route TEXT",
+            "replacement_reason TEXT",
             "command_hash TEXT",
             "project_hash TEXT",
             "project_scope_hashes TEXT",
@@ -801,6 +804,32 @@ impl Tracker {
         let project_path = current_project_path_string(); // added: record cwd
         let (agent, session_id) = current_agent_context();
         let evasion = current_evasion_attribution();
+        let registry_replacement = crate::discover::registry::existing_route(original_cmd);
+        let typed_replacement = accounting.attribution.map(|attribution| match attribution.operation {
+            OperationKind::Search => ("hzr search", "typed HZR search route"),
+            OperationKind::Read => ("hzr read", "typed HZR read route"),
+        });
+        let replacement_capability = if typed_replacement.is_some() || registry_replacement.is_some() {
+            "available"
+        } else {
+            "unavailable"
+        };
+        let replacement_route = typed_replacement
+            .map(|(route, _)| route.to_owned())
+            .or_else(|| {
+                registry_replacement.map(|(route, _)| {
+                    route.strip_prefix("rtk ").map_or_else(
+                        || route.to_owned(),
+                        |route| format!("hzr rtk -- {route}"),
+                    )
+                })
+            });
+        let replacement_reason = typed_replacement
+            .map(|(_, reason)| reason.to_owned())
+            .or_else(|| {
+                registry_replacement
+                    .map(|(_, category)| format!("canonical fork registry: {category}"))
+            });
 
         self.conn.execute(
             "INSERT INTO commands (
@@ -810,14 +839,14 @@ impl Tracker {
                 requested_mode, effective_mode, search_strategy, search_fallback_code,
                 search_include_content, result_limit, path_scope_count, filter_level, range_from,
                 range_to, source_bytes, producer_version, accounting_policy_version,
-                operation_family, evasion_class, wrapper_depth, interpreter_kind, path_form,
-                stage_count, hatch_marker, avoidable, enforcement_tier, fidelity_reason,
-                fidelity_validation
+                operation_family, replacement_capability, replacement_route, replacement_reason,
+                evasion_class, wrapper_depth, interpreter_kind, path_form, stage_count,
+                hatch_marker, avoidable, enforcement_tier, fidelity_reason, fidelity_validation
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
                 'hook_cli', ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
                 ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37,
-                ?38, ?39, ?40
+                ?38, ?39, ?40, ?41, ?42, ?43
              )",
             params![
                 Utc::now().to_rfc3339(),
@@ -864,6 +893,9 @@ impl Tracker {
                 concat!("rtk/", env!("CARGO_PKG_VERSION")),
                 "privacy_typed_v1",
                 accounting.attribution.map(|value| value.operation.as_str()),
+                replacement_capability,
+                replacement_route,
+                replacement_reason,
                 evasion.map(|value| value.class.as_str()),
                 evasion.map(|value| value.wrapper_depth),
                 evasion.and_then(|value| value.interpreter.as_deref()),
@@ -1999,12 +2031,15 @@ mod tests {
             String,
             u64,
             u64,
+            String,
+            String,
         ) = tracker
             .conn
             .query_row(
                 "SELECT original_cmd, operation_kind, operation_mode, accounting_stage,
                         requested_mode, effective_mode, search_strategy, search_fallback_code,
-                        result_limit, path_scope_count FROM commands",
+                        result_limit, path_scope_count, replacement_capability, replacement_route
+                   FROM commands",
                 [],
                 |row| {
                     Ok((
@@ -2018,6 +2053,8 @@ mod tests {
                         row.get(7)?,
                         row.get(8)?,
                         row.get(9)?,
+                        row.get(10)?,
+                        row.get(11)?,
                     ))
                 },
             )
@@ -2035,8 +2072,36 @@ mod tests {
                 "grepai_unavailable".into(),
                 7,
                 1,
+                "available".into(),
+                "hzr search".into(),
             )
         );
+    }
+
+    #[test]
+    fn acceptance_gate_registry_records_proven_unavailable_capability() {
+        let temp = tempfile::tempdir().expect("temporary database directory");
+        let tracker = Tracker::open(&temp.path().join("history.db")).expect("isolated tracker");
+        tracker
+            .record(
+                "unknown-hzr-test-tool execute",
+                "rtk raw unknown-hzr-test-tool",
+                10,
+                10,
+                1,
+            )
+            .expect("unfiltered operation");
+
+        let (capability, route): (String, Option<String>) = tracker
+            .conn
+            .query_row(
+                "SELECT replacement_capability, replacement_route FROM commands",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("capability evidence");
+        assert_eq!(capability, "unavailable");
+        assert_eq!(route, None);
     }
 
     // 6. TimedExecution::track_passthrough marks output as unmeasured instead of claiming zero

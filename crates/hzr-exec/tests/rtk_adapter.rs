@@ -107,6 +107,9 @@ exit 64
 fn completed(outcome: ExecutionOutcome) -> Result<hzr_exec::ExecutionResult> {
     match outcome {
         ExecutionOutcome::Completed { result } => Ok(*result),
+        ExecutionOutcome::ExecutedAccountingIncomplete { accounting, .. } => Err(
+            std::io::Error::other(format!("unexpected accounting failure: {accounting:?}")).into(),
+        ),
         ExecutionOutcome::NotStarted { disposition } => {
             bail!("execution did not start: {disposition:?}")
         }

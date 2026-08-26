@@ -267,6 +267,12 @@ pub struct MemoryMutationApiResponse {
 pub struct ExecApiRequest {
     pub cwd: String,
     pub command: String,
+    /// The public `HZR_RAW_FIDELITY=1 hzr exec run ...` marker, transported separately from
+    /// the command so the daemon never executes a recursive HZR wrapper.
+    #[serde(default)]
+    pub fidelity_requested: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fidelity_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -283,6 +289,30 @@ pub struct ExecApprovalApiRequest {
     pub approved: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FidelityUnknownResolution {
+    AcknowledgeExecuted,
+    ProveNotExecuted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FidelityReconcileApiRequest {
+    pub reservation_id: String,
+    pub resolution: FidelityUnknownResolution,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FidelityReconcileReceipt {
+    pub schema_version: u32,
+    pub reservation_id: String,
+    pub resolution: FidelityUnknownResolution,
+    pub operation_recorded: bool,
+    pub allowance_released: bool,
+    pub cleanup_complete: bool,
+    pub idempotent_replay: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ForkRunApiRequest {
     pub cwd: String,
@@ -291,6 +321,22 @@ pub struct ForkRunApiRequest {
     pub stdin: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_write: Option<ForkManagedWrite>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum ForkManagedWrite {
+    Patch {
+        path: String,
+        old: String,
+        new: String,
+    },
+    Create {
+        path: String,
+        content: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -370,6 +416,13 @@ pub enum AccountingRoute {
 pub enum AccountingOperationKind {
     Search,
     Read,
+    Write,
+    Context,
+    Memory,
+    Codec,
+    Exec,
+    Observability,
+    Doctor,
 }
 
 impl AccountingOperationKind {
@@ -378,6 +431,13 @@ impl AccountingOperationKind {
         match self {
             Self::Search => "search",
             Self::Read => "read",
+            Self::Write => "write",
+            Self::Context => "context",
+            Self::Memory => "memory",
+            Self::Codec => "codec",
+            Self::Exec => "exec",
+            Self::Observability => "observability",
+            Self::Doctor => "doctor",
         }
     }
 }
@@ -399,6 +459,17 @@ pub enum AccountingOperationMode {
     ReadSymbols,
     ReadChanged,
     ReadSince,
+    Write,
+    ContextPlan,
+    MemoryRecall,
+    MemoryStore,
+    MemoryForget,
+    MemoryUpdate,
+    MemoryPrune,
+    CodecCompile,
+    ExecRun,
+    ObservabilitySnapshot,
+    DoctorCheck,
 }
 
 impl AccountingOperationMode {
@@ -418,6 +489,17 @@ impl AccountingOperationMode {
             Self::ReadSymbols => "read_symbols",
             Self::ReadChanged => "read_changed",
             Self::ReadSince => "read_since",
+            Self::Write => "write",
+            Self::ContextPlan => "context_plan",
+            Self::MemoryRecall => "memory_recall",
+            Self::MemoryStore => "memory_store",
+            Self::MemoryForget => "memory_forget",
+            Self::MemoryUpdate => "memory_update",
+            Self::MemoryPrune => "memory_prune",
+            Self::CodecCompile => "codec_compile",
+            Self::ExecRun => "exec_run",
+            Self::ObservabilitySnapshot => "observability_snapshot",
+            Self::DoctorCheck => "doctor_check",
         }
     }
 
@@ -436,6 +518,17 @@ impl AccountingOperationMode {
             | Self::ReadSymbols
             | Self::ReadChanged
             | Self::ReadSince => AccountingOperationKind::Read,
+            Self::Write => AccountingOperationKind::Write,
+            Self::ContextPlan => AccountingOperationKind::Context,
+            Self::MemoryRecall
+            | Self::MemoryStore
+            | Self::MemoryForget
+            | Self::MemoryUpdate
+            | Self::MemoryPrune => AccountingOperationKind::Memory,
+            Self::CodecCompile => AccountingOperationKind::Codec,
+            Self::ExecRun => AccountingOperationKind::Exec,
+            Self::ObservabilitySnapshot => AccountingOperationKind::Observability,
+            Self::DoctorCheck => AccountingOperationKind::Doctor,
         }
     }
 }
@@ -445,6 +538,8 @@ impl AccountingOperationMode {
 pub enum AccountingStage {
     InternalTransport,
     FinalDelivery,
+    StandaloneDelivery,
+    ControlPlane,
 }
 
 impl AccountingStage {
@@ -453,6 +548,8 @@ impl AccountingStage {
         match self {
             Self::InternalTransport => "internal_transport",
             Self::FinalDelivery => "final_delivery",
+            Self::StandaloneDelivery => "standalone_delivery",
+            Self::ControlPlane => "control_plane",
         }
     }
 }
@@ -883,6 +980,15 @@ pub struct DashboardProject {
     pub command: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardProjectPage {
+    pub projects: Vec<DashboardProject>,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    pub next_offset: Option<usize>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DashboardObservedUsage {
     pub tasks: u64,
@@ -895,6 +1001,8 @@ pub struct DashboardObservedUsage {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DashboardEstimatedEfficiency {
+    pub accounting_policy_version: String,
+    pub excluded_legacy_operations: u64,
     pub operations: u64,
     pub baseline_tokens_estimated: u64,
     pub delivered_tokens_estimated: u64,
@@ -1028,6 +1136,8 @@ pub struct DashboardIndexObservatory {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DashboardLocalActivity {
     pub project: Option<String>,
+    pub accounting_policy_version: String,
+    pub excluded_legacy_operations: u64,
     pub operations: u64,
     pub optimized_operations: u64,
     pub raw_operations: u64,
@@ -1076,6 +1186,77 @@ pub struct DashboardLocalOperation {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum DashboardTraceStage {
+    Request,
+    Policy,
+    Engine,
+    Ledger,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardTraceState {
+    Completed,
+    ApprovalRequired,
+    Denied,
+    Failed,
+    Skipped,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardTraceSpan {
+    pub sequence: u64,
+    pub trace_hash: String,
+    pub linked_trace_hash: Option<String>,
+    pub span_id: u64,
+    pub parent_span_id: Option<u64>,
+    pub stage: DashboardTraceStage,
+    pub state: DashboardTraceState,
+    pub engine: String,
+    pub observed_at_ms: u64,
+    pub duration_ms: u64,
+    pub project_hash: Option<String>,
+    pub session_hash: Option<String>,
+    pub route: Option<String>,
+    pub error_code: Option<String>,
+    pub producer_version: String,
+    pub policy_version: String,
+    pub generation: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardLifecycleKind {
+    Starting,
+    Ready,
+    Degraded,
+    RestartScheduled,
+    Reaped,
+    Stopped,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardLifecycleEvent {
+    pub sequence: u64,
+    pub observed_at_ms: u64,
+    pub engine: String,
+    pub kind: DashboardLifecycleKind,
+    pub project_hash: Option<String>,
+    pub detail_code: String,
+    pub producer_version: String,
+    pub generation: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardObservability {
+    pub trace_spans: Vec<DashboardTraceSpan>,
+    pub lifecycle_events: Vec<DashboardLifecycleEvent>,
+    pub next_cursor: Option<u64>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DashboardProviderReceiptState {
     Available,
     NoReceipts,
@@ -1110,12 +1291,16 @@ pub struct DashboardResponse {
     pub overall_state: DashboardState,
     pub services: Vec<DashboardService>,
     pub projects: Vec<DashboardProject>,
+    pub projects_total: usize,
+    pub projects_next_offset: Option<usize>,
+    pub selected_worktree_id: Option<String>,
     pub registry_warnings: usize,
     pub observed_usage: DashboardObservedUsage,
     pub estimated_efficiency: DashboardEstimatedEfficiency,
     pub memory_observatory: DashboardMemoryObservatory,
     pub index_observatory: DashboardIndexObservatory,
     pub local_activity: DashboardLocalActivity,
+    pub observability: DashboardObservability,
     pub provider_receipts: DashboardProviderReceipts,
     pub help: Vec<DashboardHelpCommand>,
     pub notes: Vec<String>,
@@ -1124,6 +1309,8 @@ pub struct DashboardResponse {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CodecApiRequest {
     pub content: String,
+    #[serde(default)]
+    pub project_path: String,
     #[serde(default)]
     pub fidelity: FidelityClass,
     #[serde(default)]
@@ -1198,10 +1385,14 @@ mod tests {
             serde_json::from_str(r#"{"cwd":"/repo","command":"cargo test"}"#)
                 .expect("legacy exec request parses");
         assert!(legacy.caller_path.is_none());
+        assert!(!legacy.fidelity_requested);
+        assert!(legacy.fidelity_reason.is_none());
 
         let request = ExecApiRequest {
             cwd: "/repo".into(),
             command: "cargo test".into(),
+            fidelity_requested: true,
+            fidelity_reason: Some("checksum".into()),
             timeout_ms: Some(1_000),
             caller_path: Some("/toolchain/bin:/usr/bin".into()),
             agent: Some("cli".into()),
@@ -1209,6 +1400,8 @@ mod tests {
         };
         let value = serde_json::to_value(request).expect("exec request serializes");
         assert_eq!(value["caller_path"], "/toolchain/bin:/usr/bin");
+        assert_eq!(value["fidelity_requested"], true);
+        assert_eq!(value["fidelity_reason"], "checksum");
     }
 
     #[test]

@@ -6,13 +6,14 @@
 //! Every mutation reuses the migration discipline from PRD §11 — full-SHA backup,
 //! compare-and-swap under a filesystem lock, atomic replace, `--dry-run` preview.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use directories::BaseDirs;
-use serde::Serialize;
+use directories::{BaseDirs, ProjectDirs};
+use serde::{Deserialize, Serialize};
 
-use crate::adoption::{atomic_write, backup_path, commit, read_optional, sha256};
+use crate::adoption::{atomic_write, commit_with_lock, read_optional, sha256};
 
 /// Opening delimiter of the HZR-owned region. Kept stable forever: it is the only
 /// handle for idempotent reinstall and for clean removal.
@@ -20,6 +21,74 @@ const BEGIN: &str = "<!-- hzr:begin managed agent contract — do not edit insid
 const END: &str = "<!-- hzr:end managed agent contract -->";
 const LEGACY_RTK_BEGIN: &str = "<!-- rtk-instructions";
 const LEGACY_RTK_END: &str = "<!-- /rtk-instructions -->";
+const AGENT_CAPABILITIES_JSON: &str = include_str!("../../../contracts/agent-capabilities.json");
+
+#[derive(Debug, Deserialize)]
+struct AgentCapabilities {
+    schema_version: u32,
+    product: String,
+    control_plane: String,
+    internal_engines: Vec<String>,
+    routes: Vec<AgentRoute>,
+    mcp_tools: Vec<AgentTool>,
+    harnesses: AgentHarnesses,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentRoute {
+    instead_of: String,
+    command: String,
+    guidance: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentTool {
+    name: String,
+    purpose: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentHarnesses {
+    claude: AgentHarness,
+    codex: AgentHarness,
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentHarness {
+    instruction_file: Option<String>,
+    native_hook_routing: bool,
+}
+
+fn agent_capabilities() -> AgentCapabilities {
+    let contract: AgentCapabilities = serde_json::from_str(AGENT_CAPABILITIES_JSON)
+        .expect("embedded agent capability contract must be valid JSON");
+    assert_eq!(
+        contract.schema_version, 1,
+        "unsupported agent contract schema"
+    );
+    contract
+}
+
+fn route_table(contract: &AgentCapabilities) -> String {
+    let mut table = String::from("| Instead of | Use |\n|---|---|\n");
+    for route in &contract.routes {
+        table.push_str(&format!(
+            "| {} | `{}`; {} |\n",
+            route.instead_of.replace('|', "\\|"),
+            route.command.replace('|', "\\|"),
+            route.guidance.replace('|', "\\|")
+        ));
+    }
+    table
+}
+
+fn mcp_table(contract: &AgentCapabilities) -> String {
+    let mut table = String::from("| Tool | Use it for |\n|---|---|\n");
+    for tool in &contract.mcp_tools {
+        table.push_str(&format!("| `{}` | {} |\n", tool.name, tool.purpose));
+    }
+    table
+}
 
 /// Legacy references retired when the HZR block is installed. `@RTK.md` is the
 /// import directive; the prose lines are matched separately so a user who wrote
@@ -79,7 +148,49 @@ pub struct InstructionReport {
 
 /// The managed block. `contract_path` is the absolute `HZR.md` shipped with the
 /// installation, referenced rather than inlined so a single file stays canonical.
-fn managed_block(_surface: Surface, contract_path: &Path) -> String {
+fn managed_block(surface: Surface, contract_path: &Path) -> String {
+    let capabilities = agent_capabilities();
+    let harness = match surface {
+        Surface::Claude => &capabilities.harnesses.claude,
+        Surface::Codex => &capabilities.harnesses.codex,
+    };
+    let expected_instruction_file = match surface {
+        Surface::Claude => "CLAUDE.md",
+        Surface::Codex => "AGENTS.md",
+    };
+    assert_eq!(
+        harness.instruction_file.as_deref(),
+        Some(expected_instruction_file),
+        "agent contract harness file must match the installation surface"
+    );
+    let route_table = route_table(&capabilities);
+    let mcp_table = mcp_table(&capabilities);
+    let engines = capabilities
+        .internal_engines
+        .iter()
+        .map(|engine| format!("`{engine}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let harness_guidance = if harness.native_hook_routing {
+        concat!(
+            "The Claude Code `PreToolUse` hook routes Bash through the managed daemon and\n",
+            "falls back to the same pinned fork-core when the daemon is down. A degraded\n",
+            "rewrite keeps command policy but is absent from the usage ledger; `hzr doctor`\n",
+            "and `hzr stats` report that incomplete accounting rather than hiding it.\n\n",
+            "The failure-open `PreToolUse` hook sees native `Read`, `Grep`, `Glob`, `Edit` and\n",
+            "`Write`. In `steer` mode it prescribes `hzr read`/`hzr search`; `Glob` and native\n",
+            "edits remain allowed. `strict` additionally prescribes `hzr write`, while `observe`\n",
+            "retains measurement-only compatibility. The `PostToolUse` observer stores no tool\n",
+            "content and grants no savings credit. In `steer`/`strict`, policy-allowed native\n",
+            "calls are accounted as typed E10 bypasses, not hidden as `native_unaccounted`.\n"
+        )
+    } else {
+        concat!(
+            "Codex does not run HZR's Claude `PreToolUse` or `PostToolUse` hooks. Follow the\n",
+            "routes above explicitly, and prefer registered HZR MCP tools when they are available.\n",
+            "Native operations not routed through HZR are outside HZR accounting.\n"
+        )
+    };
     let contract_pointer = format!(
         concat!(
             "Read the full contract at `{0}` only when a bounded lookup cannot resolve ",
@@ -94,100 +205,48 @@ fn managed_block(_surface: Surface, contract_path: &Path) -> String {
     format!(
         "{BEGIN}\n\n\
          # HZR tool contract (managed)\n\n\
-         `hzr` — heAdz0r's Zero-Redundancy engine — is the only control plane. Do not\n\
-         invoke a separately installed `rtk`, `grepai` or `icm` binary: HZR owns those\n\
+         `{control_plane}` — {product}'s Zero-Redundancy control plane — is the only control plane. Do not\n\
+         invoke separately installed {engines} binaries: HZR owns those\n\
          engines internally, and a direct call creates the duplicate scan, duplicate\n\
          store and unaccounted usage this engine exists to remove.\n\n\
          This managed region defines tool routing only. Keep repository-specific roles,\n\
          source paths and test commands in that repository's root instruction file, not\n\
          in a user-global instruction file.\n\n\
          {contract_pointer}\
-         | Instead of | Use |\n\
-         |---|---|\n\
-         | `Read` | `hzr read <file>` uses the smart default; use `--outline` first for structure and ranges for exact evidence |\n\
-         | `Grep` | `hzr rgai \"<intent>\"` or `hzr search \"<intent>\" --mode auto`; use `--mode exact` only for a known literal |\n\
-         | `Edit`/`Write` | `hzr write patch\\|replace\\|set\\|create\\|batch ...` |\n\
-         | memory | `hzr memory recall\\|store` |\n\
-         | context | `hzr context plan \"<intent>\"` |\n\
-         | shell command | `hzr exec run '<shell command>'`; canonical policy selects the filtered route and preserves shell grammar |\n\
-         | explicit unfiltered recovery | `HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr rtk -- raw <command...>`; reason must be `binary`, `checksum`, `machine_protocol`, `complete_log`, `full_patch`, or `verbatim_source` |\n\
-         | optional TDD | `hzr tdd` only when user/repository policy or regression risk justifies test-first overhead |\n\
-         | build this project | `hzr build <args>` (not `hzr release`, which rebuilds HZR) |\n\n\
+         {route_table}\n\
+         ## Execution invariants\n\n\
          For agent-originated shell work, `hzr exec run` is the default. If\n\
          `hzr exec rewrite '<shell command>'` returns `allow_rewrite`, `raw` is forbidden.\n\
-         Do not choose `raw` merely because a command uses SSH, JSON, pipes, redirects or\n\
-         unfamiliar arguments. When no filter exists, `hzr exec run` performs the tracked\n\
-         fallback without requiring the agent to select `raw`. POSIX shell launchers, env prefixes,\n\
-         and simple Python file/JSON/subprocess wrappers do not bypass policy: HZR rewrites the\n\
-         proven leaf or returns `Ask`. Opaque computation/migration remains tracked with zero\n\
-         savings credit.\n\n\
-         For a plain argv command whose output intent is known, the existing\n\
+         When no filter exists, it performs a tracked fallback; policy ambiguity returns `Ask`.\n\
+         For plain argv commands with known output intent,\n\
          `hzr rtk -- test`, `err`, `summary` and `log` routes provide bounded\n\
-         generic filtering. Do not use them to reconstruct pipes, redirects or\n\
-         other shell grammar; keep those commands on `hzr exec run`.\n\n\
-        Unbounded `read --level none` defeats the smart default and is automatically reduced.\n\
+         filtering. Keep pipes, redirects and other shell grammar on `hzr exec run`.\n\n\
+         Unbounded `read --level none` defeats the smart default and is automatically reduced.\n\
          Prefer `--outline` for structure and `--from`/`--to` for exact evidence. Use\n\
          `HZR_EXACT_FIDELITY=1 hzr read <file> --level none` only when the whole file\n\
-         is authoritative input that cannot be bounded. Search defaults to `--mode auto` for\n\
-         discovery; `--mode exact` remains the escape hatch for a known symbol, error, key, or\n\
-         audit literal.\n\n\
+         is authoritative input that cannot be bounded. Multi-file reads use\n\
+         `hzr read --batch --max-tokens N <files...>`.\n\n\
          TDD is opt-in, not the default. When token or time efficiency matters, skip it\n\
          and use proportionate verification; repository-required quality gates still apply.\n\n\
-         `read -n` defaults to exact content and preserves source coordinates, including\n\
-         ranged and tail reads. `--max-lines N` is the exact head equivalent. `--outline`\n\
-         returns Markdown headings or heuristic symbols for Rust, Python, TypeScript,\n\
-         JavaScript, Go and Java. For several files, use\n\
-         `hzr read --batch --max-tokens N <files...>`; it preserves order and coordinates and\n\
-         emits exact recovery ranges for omitted content.\n\n\
-         Batch writes are atomic and idempotent per file; independent file groups can fail separately,\n\
-         so inspect every operation result. Batch is not an all-files transaction.\n\n\
          ## Memory scopes\n\n\
          One store, two namespaces. `--scope project` (the store default) is for facts about\n\
          *this repository*. `--scope global` is for facts about the **user** — a preference or\n\
-         a standing rule that should apply in every repository, so it does not have to be\n\
-         restated per project. Recall defaults to project + global; another repository's\n\
-         memory is never reachable from any scope.\n\n\
+         standing rule that applies in every repository. Recall may combine project and global;\n\
+         another repository's memory is never reachable.\n\n\
          ## MCP tools\n\n\
-         If the `hzr` MCP server is registered, prefer its tools over the CLI — same\n\
-         single store and index, and the calls are accounted:\n\n\
-         | Tool | Use it for |\n\
-         |---|---|\n\
-         | `hzr_context_plan` | Build bounded graph-first evidence for unfamiliar or cross-cutting work. |\n\
-         | `hzr_search` | Find code by intent (`mode: semantic`) or exactly (`mode: exact`). |\n\
-         | `hzr_memory_recall` | Recall decisions, resolved errors and prior context before re-reading files. |\n\
-        | `hzr_memory_store` | Persist a decision, resolved error or finished work. Not ephemeral state. |\n\
-         | `hzr_memory_update` | Replace one superseded memory after namespace ownership is verified. |\n\
-         | `hzr_memory_forget` | Delete one invalid memory after namespace ownership is verified. |\n\
-         | `hzr_memory_prune` | Preview or remove low-weight memories in one namespace; preview is the default. |\n\
-        | `hzr_codec` | Apply or shadow-measure protected response-density transforms. |\n\n\
-         MCP inputs are strictly validated and results include typed `structuredContent`.\n\
-         `isError: true` means no success was confirmed and no fallback engine or store\n\
-         was used. If a store transport fails after dispatch, recall before retrying because\n\
-         completion may be unknown.\n\
-         MCP is client-managed stdio: `hzr init` never starts it. Run `hzr install --force`\n\
-         once to register it, and `hzr mcp status` to audit native client launch state.\n\
-         `hzr mcp config --client codex\\|claude-desktop --workspace <dir> --apply` writes a pinned registration; omit `--apply` to print a paste snippet. Never\n\
-         register `icm`, `grepai` or `rtk` as your own MCP server: each direct launch adds\n\
-         another writer to the store HZR supervises and leaks orphans when the session dies.\n\n\
-         `hzr rtk -- raw <command> <args...>` directly spawns the first argument and receives\n\
-         zero savings credit. It is an explicit fidelity escape hatch, not the default shell\n\
-         wrapper; normal agent shell work goes through `hzr exec run '<shell command>'`. The\n\
-         fidelity marker without one of the closed reasons above returns `Ask`; even a valid\n\
-         reason cannot override a managed equivalent, deny, or ambiguous-policy decision. The\n\
-         per-session allowance is five operations or 100,000 estimated delivered tokens; an\n\
-         oversized local read or unmeasurable remote exact stream asks before execution.\n\n\
-         The installed `PreToolUse` hook routes Bash through the managed daemon and\n\
-         falls back to the same pinned fork-core when the daemon is down. A degraded\n\
-         rewrite keeps command policy but is absent from the usage ledger; `hzr doctor`\n\
-         and `hzr stats` report that incomplete accounting rather than hiding it.\n\n\
-        The failure-open `PreToolUse` hook sees native `Read`, `Grep`, `Glob`, `Edit` and\n\
-         `Write`. In `steer` mode it prescribes `hzr read`/`hzr search`; `Glob` and native\n\
-         edits remain allowed. `strict` additionally prescribes `hzr write`, while `observe`\n\
-         retains measurement-only compatibility for existing installations. The `PostToolUse`\n\
-         observer stores no tool content and grants no savings credit. In `steer`/`strict`,\n\
-         policy-allowed native calls are accounted as typed E10 bypasses, not hidden as\n\
-         `native_unaccounted`.\n\n\
-         {END}"
+         Use a registered `hzr` MCP server only after its initialize result reports\n\
+         `serverInfo.workspace.bound = true` and `serverInfo.workspace.project` exactly matches\n\
+         the canonical current worktree. Otherwise use the CLI routes and repair the project pin;\n\
+         never recommend or use an MCP session bound to another workspace:\n\n\
+         {mcp_table}\n\
+         MCP is client-managed stdio; `hzr init` writes the trusted-project Codex registration\n\
+         but never starts it. `isError: true` confirms no\n\
+         success and no fallback store. Recall before retrying an ambiguously completed write.\n\
+         Never register {engines} as separate MCP servers.\n\n\
+         {harness_guidance}\n\
+         {END}",
+        control_plane = capabilities.control_plane,
+        product = capabilities.product,
     )
 }
 
@@ -362,6 +421,173 @@ const LEGACY_MANDATES: [(&str, &str); 7] = [
     ("icm-store-mandate", "`icm_memory_store`"),
 ];
 
+fn conflicting_mandates(text: &str) -> Vec<String> {
+    let mut conflicts = BTreeSet::new();
+    let mut managed = false;
+    for (index, line) in text.lines().enumerate() {
+        if line.contains(BEGIN) {
+            managed = true;
+            continue;
+        }
+        if line.contains(END) {
+            managed = false;
+            continue;
+        }
+        if managed {
+            continue;
+        }
+        let lower = line.to_lowercase();
+        for (id, needle) in LEGACY_MANDATES {
+            if line.contains(needle) {
+                conflicts.insert(format_instruction_conflict(
+                    id,
+                    index + 1,
+                    line,
+                    "remove the obsolete directive; the managed HZR contract is authoritative",
+                ));
+            }
+        }
+        let direct = if contains_direct_engine_command(&lower, "grepai") {
+            Some((
+                "direct-grepai",
+                "replace it with `hzr search` or `hzr context plan`",
+            ))
+        } else if contains_direct_engine_command(&lower, "rtk") {
+            Some((
+                "direct-rtk",
+                "route it through `hzr exec run` or the matching first-class HZR command",
+            ))
+        } else if contains_unnegated(&lower, "icm_memory_")
+            || contains_direct_engine_command(&lower, "icm")
+        {
+            Some((
+                "direct-icm",
+                "replace it with the corresponding `hzr memory` command or HZR MCP tool",
+            ))
+        } else if imperative_native_rg(&lower) {
+            Some((
+                "native-rg-mandate",
+                "replace the mandate with `hzr search` and keep native `rg` only as an explicitly allowed repository fallback",
+            ))
+        } else if imperative_native_edit(&lower) {
+            Some((
+                "native-edit-mandate",
+                "route managed edits through `hzr write`; keep repository-specific fallback wording non-mandatory",
+            ))
+        } else {
+            None
+        };
+        if let Some((id, remediation)) = direct {
+            conflicts.insert(format_instruction_conflict(
+                id,
+                index + 1,
+                line,
+                remediation,
+            ));
+        }
+    }
+    conflicts.into_iter().collect()
+}
+
+fn contains_direct_engine_command(line: &str, engine: &str) -> bool {
+    if engine == "rtk" && line.contains("hzr rtk") {
+        return false;
+    }
+    let commands: &[&str] = match engine {
+        "grepai" => &[
+            "grepai search",
+            "grepai callers",
+            "grepai callees",
+            "grepai graph",
+            "grepai trace",
+        ],
+        "rtk" => &[
+            "rtk read",
+            "rtk rgai",
+            "rtk grep",
+            "rtk write",
+            "rtk cargo",
+            "rtk test",
+            "rtk git",
+            "rtk log",
+            "rtk summary",
+            "rtk err",
+            "rtk raw",
+            "rtk proxy",
+            "rtk --",
+        ],
+        "icm" => &["icm serve", "icm recall", "icm store", "icm search"],
+        _ => return false,
+    };
+    commands.iter().any(|command| {
+        line.match_indices(command).any(|(position, _)| {
+            !command_is_negated(line, position) && command_is_directive(line, position)
+        })
+    })
+}
+
+fn contains_unnegated(line: &str, needle: &str) -> bool {
+    line.match_indices(needle)
+        .any(|(position, _)| !command_is_negated(line, position))
+}
+
+fn command_is_negated(line: &str, position: usize) -> bool {
+    let prefix = &line[..position];
+    let clause = prefix
+        .rsplit_once([';', '.'])
+        .map_or(prefix, |(_, clause)| clause);
+    ["do not", "don't", "never", "не использ", "запрещ"]
+        .iter()
+        .any(|negative| clause.contains(negative))
+}
+
+fn command_is_directive(line: &str, position: usize) -> bool {
+    let trimmed = line.trim_start_matches(|character: char| {
+        character.is_whitespace() || matches!(character, '-' | '*' | '`' | '|' | '$' | '>')
+    });
+    position <= line.len().saturating_sub(trimmed.len()) + 2
+        || line.contains('`')
+        || [
+            "use ",
+            "run ",
+            "bash",
+            "must",
+            "always",
+            "используй",
+            "запусти",
+            "обязательно",
+            "should show",
+        ]
+        .iter()
+        .any(|imperative| line.contains(imperative))
+}
+
+fn imperative_native_rg(line: &str) -> bool {
+    (line.contains("must use")
+        || line.contains("always use")
+        || line.contains("используй")
+        || line.contains("обязательно"))
+        && (line.contains("`rg") || line.contains(" rg "))
+}
+
+fn imperative_native_edit(line: &str) -> bool {
+    (line.contains("must use")
+        || line.contains("always use")
+        || line.contains("используй")
+        || line.contains("обязательно"))
+        && (line.contains("`edit`") || line.contains(" edit tool"))
+}
+
+fn format_instruction_conflict(
+    id: &str,
+    line_number: usize,
+    line: &str,
+    remediation: &str,
+) -> String {
+    let excerpt = line.trim().chars().take(180).collect::<String>();
+    format!("{id} at line {line_number}: {excerpt:?}; remediation: {remediation}")
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct InstructionAudit {
     pub path: PathBuf,
@@ -416,13 +642,7 @@ pub fn audit(surface: Surface, path: &Path) -> Result<InstructionAudit> {
     let text = String::from_utf8_lossy(&bytes).to_string();
     let installed = text.contains(BEGIN);
 
-    // Split managed region from user content so HZR's own prose is never flagged.
-    let outside = strip_managed_block(&text);
-    let conflicting_mandates = LEGACY_MANDATES
-        .iter()
-        .filter(|(_, needle)| outside.contains(needle))
-        .map(|(id, _)| (*id).to_owned())
-        .collect();
+    let conflicting_mandates = conflicting_mandates(&text);
 
     let managed_region = if installed {
         text.find(BEGIN).and_then(|start| {
@@ -539,7 +759,10 @@ fn apply(
     action: &str,
 ) -> Result<InstructionReport> {
     let changed = before != after.as_bytes();
-    let backup = (changed && !before.is_empty()).then(|| backup_path(path, before));
+    let state = (changed && !before.is_empty())
+        .then(|| instruction_state_paths(path, before))
+        .transpose()?;
+    let backup = state.as_ref().map(|(backup, _)| backup.clone());
 
     if changed && !dry_run {
         if !confirmed {
@@ -550,7 +773,14 @@ fn apply(
         }
         match backup.as_ref() {
             // Instruction files have no default document, so "absent" is empty bytes.
-            Some(backup) => commit(path, before, after.as_bytes(), backup, b"")?,
+            Some(backup) => commit_with_lock(
+                path,
+                before,
+                after.as_bytes(),
+                backup,
+                b"",
+                &state.as_ref().context("instruction state")?.1,
+            )?,
             // No prior file: nothing to preserve, so a plain atomic create is correct.
             None => {
                 if let Some(parent) = path.parent() {
@@ -575,6 +805,22 @@ fn apply(
         after_sha256: sha256(after.as_bytes()),
         backup_path: backup,
     })
+}
+
+fn instruction_state_paths(path: &Path, before: &[u8]) -> Result<(PathBuf, PathBuf)> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let project = ProjectDirs::from("dev", "headz0r", "hzr")
+        .context("cannot determine HZR instruction state directory")?;
+    let identity = sha256(absolute.as_os_str().as_encoded_bytes());
+    let directory = project.data_dir().join("instruction-state").join(identity);
+    Ok((
+        directory.join(format!("backup-{}.md", sha256(before))),
+        directory.join("write.lock"),
+    ))
 }
 
 #[cfg(test)]
@@ -711,15 +957,78 @@ mod tests {
         assert!(out.contains("`hzr_memory_update`"));
         assert!(out.contains("`hzr_memory_forget`"));
         assert!(out.contains("`hzr_memory_prune`"));
-        assert!(out.contains("| optional TDD | `hzr tdd` only when"));
+        assert!(out.contains("| optional TDD | `hzr tdd`;"));
         assert!(out.contains("TDD is opt-in, not the default"));
         assert!(!out.contains("`hzr tdd` before production changes"));
-        assert!(
-            out.contains("--apply` writes a pinned registration"),
-            "managed block must document the apply path for pinned MCP registration"
-        );
-        assert!(out.contains("independent file groups can fail separately"));
+        assert!(out.contains("batch is not an all-files transaction"));
+        assert!(out.contains("MCP is client-managed stdio"));
+        assert!(out.contains("`serverInfo.workspace.bound = true`"));
+        assert!(out.contains("exactly matches\nthe canonical current worktree"));
+        assert!(out.contains("never recommend or use an MCP session bound to another workspace"));
         assert!(!out.contains("Register the server with `hzr mcp config"));
+    }
+
+    #[test]
+    fn acceptance_gate_managed_contract_routes_project_builds_through_exec_policy() {
+        let out = compose("", Surface::Codex, contract()).0;
+
+        assert!(out.contains("build this project | `hzr exec run '<project build command>'`"));
+        assert!(!out.contains("`hzr build <args>`"));
+    }
+
+    #[test]
+    fn acceptance_gate_all_instruction_surfaces_project_the_capability_ssot() {
+        let capabilities = super::agent_capabilities();
+        let canonical = include_str!("../../../HZR.md");
+        let readme = include_str!("../../../README.md");
+        let claude_awareness = include_str!("../../../integrations/claude-code/hzr-awareness.md");
+        let codex_awareness =
+            include_str!("../../../integrations/claude-code/hzr-awareness-codex.md");
+
+        for surface in [Surface::Claude, Surface::Codex] {
+            let rendered = compose("", surface, contract()).0;
+            for route in &capabilities.routes {
+                let markdown_command = route.command.replace('|', "\\|");
+                assert!(
+                    rendered.contains(&format!("`{markdown_command}`")),
+                    "{} projection is missing route {}",
+                    surface.as_str(),
+                    route.command
+                );
+            }
+        }
+        for tool in &capabilities.mcp_tools {
+            for (name, document) in [
+                ("HZR.md", canonical),
+                ("README.md", readme),
+                ("Claude awareness", claude_awareness),
+                ("Codex awareness", codex_awareness),
+            ] {
+                assert!(
+                    document.contains(&format!("`{}`", tool.name)),
+                    "{name} is missing SSOT MCP tool {}",
+                    tool.name
+                );
+            }
+        }
+        assert!(!canonical.contains("Project build -> hzr build <args>"));
+        assert!(!readme.contains("hzr build <args>"));
+    }
+
+    #[test]
+    fn acceptance_gate_managed_projection_stays_bounded_and_defers_mutable_detail() {
+        for surface in [Surface::Claude, Surface::Codex] {
+            let rendered = compose("", surface, contract()).0;
+            assert!(
+                rendered.len() < 8 * 1024,
+                "{} managed projection grew to {} bytes",
+                surface.as_str(),
+                rendered.len()
+            );
+            assert_eq!(rendered.matches(BEGIN).count(), 1);
+            assert!(!rendered.contains("100,000 estimated delivered tokens"));
+            assert!(rendered.contains("HZR.md --outline"));
+        }
     }
 
     #[test]
@@ -728,45 +1037,42 @@ mod tests {
 
         assert!(out.contains("shell command | `hzr exec run '<shell command>'`"));
         assert!(out.contains("returns `allow_rewrite`, `raw` is forbidden"));
-        assert!(out.contains("When no filter exists, `hzr exec run` performs the tracked"));
+        assert!(out.contains("When no filter exists, it performs a tracked fallback"));
         assert!(out.contains("`hzr rtk -- test`, `err`, `summary` and `log`"));
         assert!(out.contains("`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason>"));
-        assert!(out.contains("simple Python file/JSON/subprocess wrappers do not bypass policy"));
-        assert!(out.contains("fidelity marker without one of the closed reasons"));
+        assert!(out.contains("Allowed reasons: binary, checksum, machine_protocol"));
         assert!(!out.contains("| exact/raw output |"));
     }
 
     #[test]
     fn acceptance_gate_managed_contract_matches_native_observer_and_mcp_surface() {
+        let capabilities = super::agent_capabilities();
         for surface in [Surface::Claude, Surface::Codex] {
             let out = compose("", surface, contract()).0;
 
-            for tool in [
-                "hzr_context_plan",
-                "hzr_search",
-                "hzr_memory_recall",
-                "hzr_memory_store",
-                "hzr_memory_update",
-                "hzr_memory_forget",
-                "hzr_memory_prune",
-                "hzr_codec",
-            ] {
+            for tool in &capabilities.mcp_tools {
                 assert!(
-                    out.contains(&format!("`{tool}`")),
-                    "missing MCP tool {tool}"
+                    out.contains(&format!("`{}`", tool.name)),
+                    "missing MCP tool {}",
+                    tool.name
                 );
             }
-            assert!(out.contains("failure-open `PreToolUse` hook sees native"));
-            assert!(out.contains("`Glob` and native"));
-            assert!(out.contains("`strict` additionally prescribes `hzr write`"));
-            assert!(out.contains("`PostToolUse`"));
-            assert!(out.contains("stores no tool content"));
-            assert!(out.contains("grants no"));
-            assert!(out.contains("savings credit"));
-            assert!(out.contains("typed E10 bypasses"));
             assert!(!out.contains("nothing records them"));
             assert!(!out.contains("absent from `hzr stats` entirely"));
         }
+
+        let claude = compose("", Surface::Claude, contract()).0;
+        assert!(claude.contains("failure-open `PreToolUse` hook sees native"));
+        assert!(claude.contains("`Glob` and native"));
+        assert!(claude.contains("`strict` additionally prescribes `hzr write`"));
+        assert!(claude.contains("typed E10 bypasses"));
+
+        let codex = compose("", Surface::Codex, contract()).0;
+        assert!(codex.contains("Codex does not run HZR's Claude `PreToolUse`"));
+        assert!(!codex.contains("failure-open `PreToolUse` hook sees native"));
+        assert!(
+            codex.contains("Native operations not routed through HZR are outside HZR accounting")
+        );
     }
 
     #[test]
@@ -775,7 +1081,7 @@ mod tests {
             let out = compose("", surface, contract()).0;
 
             assert!(out.contains("`hzr search \"<intent>\" --mode auto`"));
-            assert!(out.contains("use `--mode exact` only for a known literal"));
+            assert!(out.contains("--mode exact only for a known literal"));
             assert!(out.contains("Prefer `--outline` for structure"));
             assert!(out.contains("`--from`/`--to` for exact evidence"));
             assert!(out.contains("`HZR_EXACT_FIDELITY=1 hzr read"));
@@ -827,5 +1133,92 @@ mod tests {
         let stripped = strip_managed_block(&text);
         assert!(stripped.contains("# Mine"));
         assert!(stripped.contains("half written"));
+    }
+
+    #[test]
+    fn acceptance_gate_audit_reports_direct_engine_and_native_mandates_with_lines() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let contract = directory.path().join("HZR.md");
+        let instructions = directory.path().join("AGENTS.md");
+        std::fs::write(&contract, "contract").expect("contract fixture");
+        let user = concat!(
+            "# Project\n",
+            "Use Bash to run grepai search and grepai callers.\n",
+            "Always use `rtk read src/lib.rs`.\n",
+            "Используй `icm serve` для памяти.\n",
+            "Always use `rg` for repository discovery.\n",
+            "You MUST use Edit tool for changes.\n",
+            "Do not run grepai graph directly.\n",
+        );
+        std::fs::write(&instructions, compose(user, Surface::Codex, &contract).0)
+            .expect("instruction fixture");
+
+        let report = super::audit(Surface::Codex, &instructions).expect("instruction audit");
+        assert!(!report.healthy());
+        assert_eq!(report.conflicting_mandates.len(), 5);
+        for expected in [
+            "direct-grepai at line 2",
+            "direct-rtk at line 3",
+            "direct-icm at line 4",
+            "native-rg-mandate at line 5",
+            "native-edit-mandate at line 6",
+        ] {
+            assert!(
+                report
+                    .conflicting_mandates
+                    .iter()
+                    .any(|finding| finding.contains(expected)),
+                "missing {expected}: {:?}",
+                report.conflicting_mandates
+            );
+        }
+        assert!(
+            report
+                .conflicting_mandates
+                .iter()
+                .all(|finding| finding.contains("remediation:"))
+        );
+        let rendered = std::fs::read_to_string(&instructions).expect("unchanged user text");
+        assert!(rendered.contains("grepai search and grepai callers"));
+    }
+
+    #[test]
+    fn acceptance_gate_direct_command_matrix_handles_negation_and_descriptive_prose() {
+        for command in [
+            "rtk cargo test",
+            "rtk test",
+            "rtk git status",
+            "rtk log build.log",
+            "rtk summary command",
+            "rtk err command",
+            "rtk raw command",
+            "rtk proxy command",
+            "grepai trace symbol",
+        ] {
+            assert!(
+                super::contains_direct_engine_command(
+                    command,
+                    if command.starts_with("rtk") {
+                        "rtk"
+                    } else {
+                        "grepai"
+                    }
+                ),
+                "direct command not detected: {command}"
+            );
+        }
+        assert!(!super::contains_direct_engine_command(
+            "The docs describe grepai search conceptually.",
+            "grepai"
+        ));
+        assert!(!super::contains_direct_engine_command(
+            "do not run grepai trace directly.",
+            "grepai"
+        ));
+        let mixed = super::conflicting_mandates(
+            "Do not run grepai trace; run rtk cargo test through the old wrapper.\n",
+        );
+        assert_eq!(mixed.len(), 1);
+        assert!(mixed[0].contains("direct-rtk at line 1"));
     }
 }

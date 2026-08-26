@@ -25,16 +25,19 @@ mod stats_output;
 mod tdd;
 mod update;
 
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use fs2::FileExt;
 use hzr_agent::{BearerToken, HzrApi, ManagedAgent, ManagedAgentConfig};
 use hzr_core::{
-    Config, ConfigPaths, Ledger, discover_legacy_rtk_history, inspect_legacy_efficiency,
+    Config, ConfigPaths, Ledger, PolicyEvent, discover_legacy_rtk_history,
+    inspect_legacy_efficiency,
 };
 use hzr_index::{
     Deadlines, GrepAi, IndexPlacement, InitOptions, InitOutcome, Workspace, WorkspaceRegistration,
@@ -43,11 +46,16 @@ use hzr_index::{
 use hzr_protocol::{
     AccountingAttribution, AccountingChannel, AccountingMeasurement, AccountingOperationKind,
     AccountingOperationMode, AccountingRoute, AccountingSearchStrategy, AccountingStage,
-    CodecApiRequest, ContextPlanApiRequest, ExecApiRequest, ExecApprovalApiRequest,
+    CodecApiRequest, ContextPlanApiRequest, EnforcementTier, EvasionAttribution, EvasionClass,
+    EvasionPathForm, ExecApiRequest, ExecApprovalApiRequest, FidelityReason,
+    FidelityReconcileApiRequest, FidelityUnknownResolution, FidelityValidation,
     MemoryForgetApiRequest, MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryStoreApiRequest,
-    MemoryUpdateApiRequest, OperationApiRequest, PROTOCOL_VERSION, SearchApiRequest,
-    SearchApiResponse, SearchMode, SearchStrategy, SessionId,
+    MemoryUpdateApiRequest, OperationApiRequest, PROTOCOL_VERSION, PolicyDecision,
+    SearchApiRequest, SearchApiResponse, SearchMode, SearchStrategy, SessionId,
 };
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use toml_edit::{DocumentMut, value};
 
 use crate::cli::{
     ActivationCommand, AgentCommand, Cli, CodecCommand, Command, ContextCommand, ContextPlanArgs,
@@ -236,6 +244,8 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     }
     if let Command::Init {
         force,
+        reset,
+        dry_run,
         data_dir,
         if_needed,
         if_enabled,
@@ -270,6 +280,8 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         return initialize(
             &config_path,
             *force,
+            *reset,
+            *dry_run,
             data_dir.as_deref(),
             *skip_service,
             cli.json,
@@ -333,15 +345,42 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             hook_runner::feedback(&config).await;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Doctor { workspace, fix } => {
+        Command::Doctor {
+            workspace,
+            fix,
+            resolve_fidelity,
+            acknowledge_executed,
+            prove_not_executed,
+        } => {
             let workspace = canonical_directory(workspace.as_deref())?;
             let repair = if fix {
                 repair_legacy_index(&config, &workspace).await?
             } else {
                 None
             };
+            let fidelity_reconcile = match resolve_fidelity {
+                Some(reservation_id) => {
+                    let resolution = match (acknowledge_executed, prove_not_executed) {
+                        (true, false) => FidelityUnknownResolution::AcknowledgeExecuted,
+                        (false, true) => FidelityUnknownResolution::ProveNotExecuted,
+                        _ => anyhow::bail!(
+                            "--resolve-fidelity requires exactly one of --acknowledge-executed or --prove-not-executed"
+                        ),
+                    };
+                    Some(
+                        DaemonClient::from_config(&config)?
+                            .fidelity_reconcile(&FidelityReconcileApiRequest {
+                                reservation_id: reservation_id.clone(),
+                                resolution,
+                            })
+                            .await?,
+                    )
+                }
+                None => None,
+            };
             let mut report = doctor(&config_path, &config, &workspace).await;
             report.repair = repair;
+            report.fidelity_reconcile = fidelity_reconcile;
             if cli.json {
                 print_json(&report)?;
             } else {
@@ -413,7 +452,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Mcp { command } => match command {
             McpCommand::Serve { workspace } => {
                 let workspace = canonical_directory(workspace.as_deref())?;
-                mcp::serve(&config, &workspace).await?;
+                mcp::serve(&config, &config_path, &workspace).await?;
                 Ok(ExitCode::SUCCESS)
             }
             McpCommand::Config {
@@ -481,8 +520,8 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             }
         },
         Command::Build(arguments) => {
-            // One inherited subcommand, forwarded verbatim: `hzr build --release` must
-            // reach the fork exactly as `rtk build --release` did.
+            // Compatibility surface only: this is the inherited fork-core self-build
+            // pipeline, not a generic project build wrapper. Project builds use exec policy.
             let args = forwarded_fork_args("build", &arguments.args);
             fork::passthrough(&config, &args).await
         }
@@ -723,10 +762,85 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             }
         },
         Command::Rtk(arguments) => {
+            reject_direct_fork_bypass(&config, &arguments.args)?;
             let args = bounded_read_arguments(&arguments.args, exact_read_fidelity_requested());
             fork::passthrough(&config, &args).await
         }
     }
+}
+
+fn reject_direct_fork_bypass(config: &Config, args: &[std::ffi::OsString]) -> Result<()> {
+    let Some(bypass) = args.first().and_then(|arg| arg.to_str()) else {
+        return Ok(());
+    };
+    if !matches!(bypass, "raw" | "proxy") {
+        return Ok(());
+    }
+
+    let project_path = std::env::current_dir()
+        .context("resolve direct bypass working directory")?
+        .to_string_lossy()
+        .into_owned();
+    let agent = std::env::var("HZR_CLIENT").ok();
+    let session_id = std::env::var("HZR_SESSION_ID")
+        .ok()
+        .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
+        .or_else(|| std::env::var("CLAUDE_SESSION_ID").ok());
+    let hatch_marker =
+        std::env::var_os("HZR_RAW_FIDELITY").as_deref() == Some(std::ffi::OsStr::new("1"));
+    let (fidelity_reason, fidelity_validation) = if bypass != "raw" || !hatch_marker {
+        (None, FidelityValidation::NotRequested)
+    } else {
+        match std::env::var("HZR_RAW_FIDELITY_REASON").ok().as_deref() {
+            Some("binary") => (Some(FidelityReason::Binary), FidelityValidation::Valid),
+            Some("checksum") => (Some(FidelityReason::Checksum), FidelityValidation::Valid),
+            Some("machine_protocol") => (
+                Some(FidelityReason::MachineProtocol),
+                FidelityValidation::Valid,
+            ),
+            Some("complete_log") => (Some(FidelityReason::CompleteLog), FidelityValidation::Valid),
+            Some("full_patch") => (Some(FidelityReason::FullPatch), FidelityValidation::Valid),
+            Some("verbatim_source") => (
+                Some(FidelityReason::VerbatimSource),
+                FidelityValidation::Valid,
+            ),
+            Some(_) => (None, FidelityValidation::InvalidReason),
+            None => (None, FidelityValidation::MissingReason),
+        }
+    };
+    let accounting = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite")).and_then(|ledger| {
+        ledger.record_policy_event(PolicyEvent {
+            project_path: &project_path,
+            agent: agent.as_deref(),
+            session_id: session_id.as_deref(),
+            evasion: EvasionAttribution {
+                class: if bypass == "raw" {
+                    EvasionClass::E7FidelityHatch
+                } else {
+                    EvasionClass::E9DiagnosticBypass
+                },
+                wrapper_depth: 0,
+                interpreter: None,
+                path_form: EvasionPathForm::Bare,
+                stage_count: 1,
+                hatch_marker,
+                avoidable: true,
+                tier: EnforcementTier::T2DenyWithPrescription,
+                fidelity_reason,
+                fidelity_validation,
+            },
+            decision: PolicyDecision::Deny,
+            replacement_family: Some("hzr-exec"),
+        })
+    });
+    if let Err(error) = accounting {
+        bail!(
+            "direct managed raw execution is disabled; use `hzr exec run <command>` so fidelity policy, session budget, and E7 accounting are enforced; denial accounting failed: {error}"
+        );
+    }
+    bail!(
+        "direct managed raw execution is disabled; use `hzr exec run <command>` so fidelity policy, session budget, and E7 accounting are enforced"
+    )
 }
 
 fn exact_read_fidelity_requested() -> bool {
@@ -830,6 +944,226 @@ struct InstallOptions {
     workspace: Option<PathBuf>,
 }
 
+pub(crate) const INSTALL_JOURNAL_SCHEMA_VERSION: u16 = 2;
+pub(crate) const INSTALL_STAGES: [&str; 8] = [
+    "config",
+    "workspace",
+    "prefix",
+    "hooks",
+    "instructions",
+    "client_configs",
+    "project_mcp",
+    "service",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum InstallJournalState {
+    Applying,
+    Recovering,
+    Complete,
+}
+
+#[derive(Clone, Debug, Serialize, serde::Deserialize)]
+struct InstallJournal {
+    schema_version: u16,
+    state: InstallJournalState,
+    config_path: PathBuf,
+    workspace: PathBuf,
+    plan_sha256: String,
+    planned_stages: Vec<String>,
+    completed_stages: Vec<String>,
+    attempt: u32,
+}
+
+impl InstallJournal {
+    fn begin(path: &Path, config_path: &Path, workspace: &Path, plan_sha256: &str) -> Result<Self> {
+        let journal = if path.is_file() {
+            let existing: Self = serde_json::from_slice(&std::fs::read(path)?)
+                .with_context(|| format!("parse install recovery journal {}", path.display()))?;
+            existing.validate(path)?;
+            if existing.state != InstallJournalState::Complete
+                && (existing.config_path != config_path || existing.workspace != workspace)
+            {
+                bail!(
+                    "incomplete install journal {} belongs to config {} workspace {}; recover that install before starting another",
+                    path.display(),
+                    existing.config_path.display(),
+                    existing.workspace.display()
+                );
+            }
+            if existing.state != InstallJournalState::Complete
+                && existing.plan_sha256 != plan_sha256
+            {
+                bail!(
+                    "incomplete install journal {} has plan {}; rerun the same install options before changing desired state",
+                    path.display(),
+                    existing.plan_sha256
+                );
+            }
+            let completed = existing.state == InstallJournalState::Complete;
+            Self {
+                state: InstallJournalState::Recovering,
+                config_path: if completed {
+                    config_path.to_path_buf()
+                } else {
+                    existing.config_path.clone()
+                },
+                workspace: if completed {
+                    workspace.to_path_buf()
+                } else {
+                    existing.workspace.clone()
+                },
+                completed_stages: if completed {
+                    Vec::new()
+                } else {
+                    existing.completed_stages
+                },
+                plan_sha256: plan_sha256.to_owned(),
+                attempt: existing.attempt.saturating_add(1),
+                ..existing
+            }
+        } else {
+            Self {
+                schema_version: INSTALL_JOURNAL_SCHEMA_VERSION,
+                state: InstallJournalState::Applying,
+                config_path: config_path.to_path_buf(),
+                workspace: workspace.to_path_buf(),
+                plan_sha256: plan_sha256.to_owned(),
+                planned_stages: INSTALL_STAGES.iter().map(ToString::to_string).collect(),
+                completed_stages: Vec::new(),
+                attempt: 1,
+            }
+        };
+        journal.persist(path)?;
+        Ok(journal)
+    }
+
+    fn stage(&mut self, path: &Path, stage: &str) -> Result<()> {
+        if !self
+            .completed_stages
+            .iter()
+            .any(|completed| completed == stage)
+        {
+            self.completed_stages.push(stage.to_owned());
+        }
+        self.persist(path)
+    }
+
+    fn complete(&mut self, path: &Path) -> Result<()> {
+        self.state = InstallJournalState::Complete;
+        self.persist(path)
+    }
+
+    fn validate(&self, path: &Path) -> Result<()> {
+        if self.schema_version != INSTALL_JOURNAL_SCHEMA_VERSION {
+            bail!(
+                "unsupported install journal schema {} in {}",
+                self.schema_version,
+                path.display()
+            );
+        }
+        let expected = INSTALL_STAGES
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>();
+        let planned = self
+            .planned_stages
+            .iter()
+            .map(String::as_str)
+            .collect::<std::collections::HashSet<_>>();
+        if planned != expected || self.planned_stages.len() != INSTALL_STAGES.len() {
+            bail!(
+                "install journal {} has an invalid stage plan",
+                path.display()
+            );
+        }
+        if self
+            .completed_stages
+            .iter()
+            .any(|stage| !expected.contains(stage.as_str()))
+        {
+            bail!(
+                "install journal {} has an unknown completed stage",
+                path.display()
+            );
+        }
+        if self
+            .completed_stages
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != self.completed_stages.len()
+            || self.plan_sha256.len() != 64
+            || !self
+                .plan_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || self.attempt == 0
+            || !self.config_path.is_absolute()
+            || !self.workspace.is_absolute()
+        {
+            bail!(
+                "install journal {} failed integrity validation",
+                path.display()
+            );
+        }
+        Ok(())
+    }
+
+    fn persist(&self, path: &Path) -> Result<()> {
+        let mut bytes = serde_json::to_vec_pretty(self)?;
+        bytes.push(b'\n');
+        adoption::atomic_write(path, &bytes)
+    }
+}
+
+fn install_plan_sha256(
+    options: &InstallOptions,
+    config_path: &Path,
+    workspace: &Path,
+) -> Result<String> {
+    let value = serde_json::json!({
+        "schema_version": INSTALL_JOURNAL_SCHEMA_VERSION,
+        "config_path": config_path,
+        "workspace": workspace,
+        "stages": INSTALL_STAGES,
+        "prefix": options.prefix,
+        "binary": options.binary,
+        "allow_dev_path": options.allow_dev_path,
+        "adopt_icm": options.adopt_icm,
+        "wire_instructions": options.wire_instructions,
+        "start_service": options.start_service,
+        "project_only": options.project_only,
+        "native_tool_mode": options.native_tool_mode,
+    });
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(&value)?)))
+}
+
+fn acquire_install_lock() -> Result<File> {
+    let settings = adoption::default_settings_path()?;
+    let identity = hex::encode(Sha256::digest(settings.as_os_str().as_encoded_bytes()));
+    let path = std::env::temp_dir().join(format!("hzr-install-{}.lock", &identity[..24]));
+    let lock = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("open install transaction lock {}", path.display()))?;
+    lock.lock_exclusive()
+        .with_context(|| format!("lock install transaction {}", path.display()))?;
+    Ok(lock)
+}
+
+fn inject_install_failure(_point: &str) -> Result<()> {
+    #[cfg(debug_assertions)]
+    if std::env::var("HZR_TEST_INSTALL_FAIL_AFTER").as_deref() == Ok(_point) {
+        bail!("injected install failure after {_point}; rerun `hzr install --force` to recover");
+    }
+    Ok(())
+}
+
 /// Full adoption in one confirmed operation: durable binaries on PATH, one hook
 /// dispatcher, and agent instructions. Ordering matters — binaries are placed first
 /// so the hook command and the `CLAUDE.md` contract both name a path that already
@@ -840,9 +1174,17 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             "installation changes user configuration; inspect `hzr install --dry-run`, then rerun with `--force` to confirm"
         );
     }
+    let _install_lock = acquire_install_lock()?;
+    let workspace_root = canonical_directory(options.workspace.as_deref())?;
+    let config_path = if config_path.is_absolute() {
+        config_path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(config_path)
+    };
+    let config_before = std::fs::read(&config_path).ok();
     let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
     let source_dir = executable_source_directory(&executable)?;
-    let mut config = Config::load_or_default(config_path)?;
+    let mut config = Config::load_or_default(&config_path)?;
     let previously_enabled_roots = config
         .activation
         .enabled_workspaces
@@ -853,13 +1195,7 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
         config.ensure_layout()?;
     }
     // Пин MCP и корень активации: явный `--workspace`, иначе cwd, откуда запущен install.
-    let workspace_root = canonical_directory(options.workspace.as_deref())?;
-    let workspace = if options.project_only && !options.dry_run {
-        let (workspace, _, _, _, _) = initialize_workspace_at(&config, &workspace_root).await?;
-        Some(workspace)
-    } else {
-        Some(activation::discover(&config, &workspace_root).await?)
-    };
+    let workspace = Some(activation::discover(&config, &workspace_root).await?);
     if options.project_only {
         config.activation.mode = hzr_core::ActivationMode::Selected;
         config
@@ -869,8 +1205,39 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
         config.activation.mode = hzr_core::ActivationMode::All;
         config.activation.enabled_workspaces.clear();
     }
+    let journal_path = config.data_dir.join("runtime/install-transaction.json");
+    let plan_sha256 = install_plan_sha256(&options, &config_path, &workspace_root)?;
+    let mut journal = if options.dry_run {
+        None
+    } else {
+        Some(InstallJournal::begin(
+            &journal_path,
+            &config_path,
+            &workspace_root,
+            &plan_sha256,
+        )?)
+    };
     if !options.dry_run {
-        config.write(config_path)?;
+        if std::fs::read(&config_path).ok() != config_before {
+            bail!(
+                "configuration {} changed after install planning; no config write was attempted",
+                config_path.display()
+            );
+        }
+        config.write(&config_path)?;
+        journal
+            .as_mut()
+            .context("install journal")?
+            .stage(&journal_path, "config")?;
+        inject_install_failure("config")?;
+        if options.project_only {
+            initialize_workspace_at(&config, &workspace_root).await?;
+        }
+        journal
+            .as_mut()
+            .context("install journal")?
+            .stage(&journal_path, "workspace")?;
+        inject_install_failure("workspace")?;
     }
 
     let prefix_dir = match options.prefix.clone() {
@@ -878,6 +1245,10 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
         None => prefix::default_prefix()?,
     };
     let prefix_report = prefix::install(&prefix_dir, &source_dir, options.dry_run, options.force)?;
+    if let Some(journal) = journal.as_mut() {
+        journal.stage(&journal_path, "prefix")?;
+        inject_install_failure("prefix")?;
+    }
 
     // Hooks always name the durable copy in the prefix — never the binary that happens
     // to be running, which may live in `target/debug` or a temporary bundle. During
@@ -907,6 +1278,10 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             confirmed: options.force,
         },
     )?;
+    if let Some(journal) = journal.as_mut() {
+        journal.stage(&journal_path, "hooks")?;
+        inject_install_failure("hooks")?;
+    }
 
     let mut instruction_reports = Vec::new();
     if options.project_only {
@@ -960,8 +1335,12 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             }
         }
     }
+    if let Some(journal) = journal.as_mut() {
+        journal.stage(&journal_path, "instructions")?;
+        inject_install_failure("instructions")?;
+    }
 
-    let client_reports = if options.project_only {
+    let mut client_reports = if options.project_only {
         client_config::uninstall_all(options.dry_run, options.force)?
     } else {
         client_config::install_all(
@@ -971,6 +1350,22 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             options.force,
         )?
     };
+    if let Some(journal) = journal.as_mut() {
+        journal.stage(&journal_path, "client_configs")?;
+        inject_install_failure("client_configs")?;
+    }
+
+    let project_mcp = client_config::install_project_codex(
+        &hook_binary,
+        &workspace_root,
+        options.dry_run,
+        options.force,
+    )?;
+    client_reports.push(project_mcp);
+    if let Some(journal) = journal.as_mut() {
+        journal.stage(&journal_path, "project_mcp")?;
+        inject_install_failure("project_mcp")?;
+    }
 
     let foreign_report = foreign::scan(&ConfigPaths::discover().data_dir).ok();
     let service_report = if options.start_service && !options.dry_run {
@@ -978,6 +1373,11 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     } else {
         None
     };
+    if let Some(journal) = journal.as_mut() {
+        journal.stage(&journal_path, "service")?;
+        inject_install_failure("service")?;
+        journal.complete(&journal_path)?;
+    }
 
     print_adoption_bundle(
         &hooks,
@@ -997,6 +1397,28 @@ fn reconcile_agent_instructions(
     config: &Config,
     workspace_root: &Path,
 ) -> Result<Vec<instructions::InstructionReport>> {
+    let (contract, targets) = agent_instruction_targets(config, workspace_root)?;
+    targets
+        .into_iter()
+        .map(|(surface, path)| instructions::install(surface, &path, &contract, false, true))
+        .collect()
+}
+
+fn plan_agent_instructions(
+    config: &Config,
+    workspace_root: &Path,
+) -> Result<Vec<instructions::InstructionReport>> {
+    let (contract, targets) = agent_instruction_targets(config, workspace_root)?;
+    targets
+        .into_iter()
+        .map(|(surface, path)| instructions::install(surface, &path, &contract, true, true))
+        .collect()
+}
+
+fn agent_instruction_targets(
+    config: &Config,
+    workspace_root: &Path,
+) -> Result<(PathBuf, Vec<(instructions::Surface, PathBuf)>)> {
     let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
     let contract = contract_asset_path(&executable_source_directory(&executable)?);
     let targets = match config.activation.mode {
@@ -1014,11 +1436,7 @@ fn reconcile_agent_instructions(
             activation::local_instruction_paths(workspace_root).to_vec()
         }
     };
-
-    targets
-        .into_iter()
-        .map(|(surface, path)| instructions::install(surface, &path, &contract, false, true))
-        .collect()
+    Ok((contract, targets))
 }
 
 /// Locate `HZR.md`. An assembled bundle ships it under `share/hzr/`; a development
@@ -1246,36 +1664,240 @@ async fn execute_index(config: &Config, command: IndexCommand, json: bool) -> Re
 async fn initialize(
     path: &Path,
     force: bool,
+    reset: bool,
+    dry_run: bool,
     data_dir: Option<&Path>,
     skip_service: bool,
     json: bool,
 ) -> Result<ExitCode> {
-    if path.exists() && !force {
+    let existed = path.exists();
+    if existed && !force && !dry_run {
         bail!(
-            "configuration {} already exists; pass --force to replace it",
+            "configuration {} already exists; pass --force to reconcile it without replacing user settings, or --force --reset for an explicit reset",
             path.display()
         );
     }
-    let mut config = Config::default();
+    let mut config = if existed && !reset {
+        Config::load(path).with_context(|| format!("failed to preserve {}", path.display()))?
+    } else {
+        Config::default()
+    };
+    let original_data_dir = config.data_dir.clone();
     if let Some(data_dir) = data_dir {
         config.data_dir = data_dir.to_path_buf();
     }
-    config.ensure_layout()?;
-    config.write(path)?;
+    let data_dir_changed = existed && !reset && config.data_dir != original_data_dir;
     let workspace_root = canonical_directory(None)?;
-    let instruction_reports = reconcile_agent_instructions(&config, &workspace_root)?;
-    let (workspace, outcome, changed, git_backed, registration) =
-        initialize_workspace_at(&config, &workspace_root).await?;
-    let dashboard = format!("http://{}", config.daemon.bind);
+    let instruction_plan = plan_agent_instructions(&config, &workspace_root)?;
+    let planned_workspace = Workspace::discover_managed(
+        &workspace_root,
+        Path::new("git"),
+        &config.data_dir,
+        Deadlines::default().version,
+    )
+    .await?;
+    let registration_path = config
+        .data_dir
+        .join("workspaces")
+        .join(&planned_workspace.identity.repository_id)
+        .join(&planned_workspace.identity.worktree_id)
+        .join("workspace.json");
+    let project_mcp_binary = project_mcp_binary()?;
+    let project_mcp_plan =
+        client_config::install_project_codex(&project_mcp_binary, &workspace_root, true, true)?;
+    if dry_run {
+        let mut mutations = Vec::new();
+        if !existed {
+            mutations.push(init_mutation("create_config", path, None));
+        } else if reset {
+            mutations.push(init_mutation("backup_config", path, Some("before reset")));
+            mutations.push(init_mutation("reset_config", path, None));
+        } else if data_dir_changed {
+            mutations.push(init_mutation(
+                "backup_config",
+                path,
+                Some("before data_dir update"),
+            ));
+            mutations.push(init_mutation("update_data_dir_preserving_toml", path, None));
+        }
+        for directory in init_layout_directories(&config) {
+            if !directory.exists() {
+                mutations.push(init_mutation("create_directory", &directory, None));
+            }
+        }
+        for report in instruction_plan.iter().filter(|report| report.changed) {
+            mutations.push(serde_json::json!({
+                "action": "reconcile_instruction",
+                "path": report.path,
+                "surface": report.surface,
+                "before_sha256": report.before_sha256,
+                "after_sha256": report.after_sha256,
+                "backup": report.backup_path,
+            }));
+        }
+        if project_mcp_plan.changed {
+            mutations.push(serde_json::json!({
+                "action": "reconcile_project_codex_mcp",
+                "path": project_mcp_plan.path,
+                "before_sha256": project_mcp_plan.before_sha256,
+                "after_sha256": project_mcp_plan.after_sha256,
+                "backup": project_mcp_plan.backup_path,
+            }));
+        }
+        if matches!(
+            planned_workspace.placement()?,
+            IndexPlacement::Missing { .. }
+        ) {
+            mutations.push(init_mutation(
+                "create_managed_index_placement",
+                &planned_workspace.index.project_entry,
+                Some("canonical workspace index owner"),
+            ));
+        }
+        mutations.push(init_mutation(
+            if registration_path.exists() {
+                "update_workspace_registration"
+            } else {
+                "create_workspace_registration"
+            },
+            &registration_path,
+            None,
+        ));
+        if !skip_service {
+            mutations.push(init_mutation(
+                "ensure_daemon_service",
+                &config.data_dir.join("runtime"),
+                Some("only when an installed service definition exists"),
+            ));
+        }
+        let payload = serde_json::json!({
+            "dry_run": true,
+            "config": path,
+            "config_exists": existed,
+            "config_action": if reset { "reset_with_backup" } else if existed { "preserve" } else { "create" },
+            "data_dir": config.data_dir,
+            "workspace": workspace_root,
+            "skip_service": skip_service,
+            "mutations": mutations,
+            "instructions": instruction_plan,
+            "project_codex_mcp": project_mcp_plan,
+            "index_placement": planned_workspace.placement()?,
+        });
+        if json {
+            print_json(&payload)?;
+        } else {
+            println!("dry-run: {}", serde_json::to_string(&payload)?);
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let mut transaction = InitTransaction::acquire(path, &workspace_root, &config.data_dir)?;
+    transaction.capture(path)?;
+    for directory in init_transaction_directories(&config, &planned_workspace) {
+        transaction.capture(&directory)?;
+    }
+    for report in &instruction_plan {
+        if let Some(parent) = report.path.parent() {
+            transaction.capture(parent)?;
+        }
+        transaction.capture(&report.path)?;
+        if let Some(backup) = &report.backup_path {
+            transaction.capture(backup)?;
+        }
+    }
+    if let Some(parent) = project_mcp_plan.path.parent() {
+        transaction.capture(parent)?;
+    }
+    transaction.capture(&project_mcp_plan.path)?;
+    if let Some(backup) = &project_mcp_plan.backup_path {
+        transaction.capture(backup)?;
+    }
+    transaction.capture(&planned_workspace.index.project_entry)?;
+    transaction.capture(&planned_workspace.index.directory)?;
+    transaction.capture(&registration_path)?;
+
+    let applied = async {
+        let backup = if existed && (reset || data_dir_changed) {
+            let backup = backup_config(path)?;
+            transaction.remove_on_rollback(&backup.path);
+            Some(backup)
+        } else {
+            None
+        };
+        config.ensure_layout()?;
+        for directory in init_layout_directories(&config) {
+            transaction.mark_written(&directory)?;
+        }
+        transaction.mark_written(&config.data_dir.join("memory"))?;
+        if !existed || reset {
+            config.write(path)?;
+            transaction.mark_written(path)?;
+        } else if data_dir_changed {
+            write_data_dir_preserving_toml(path, &config.data_dir)?;
+            transaction.mark_written(path)?;
+        }
+        let instruction_reports = reconcile_agent_instructions(&config, &workspace_root)?;
+        for report in instruction_reports.iter().filter(|report| report.changed) {
+            transaction.mark_written(&report.path)?;
+            if let Some(backup) = &report.backup_path {
+                transaction.mark_written(backup)?;
+            }
+        }
+        let project_mcp = client_config::install_project_codex(
+            &project_mcp_binary,
+            &workspace_root,
+            false,
+            true,
+        )?;
+        if project_mcp.changed {
+            transaction.mark_written(&project_mcp.path)?;
+            if let Some(backup) = &project_mcp.backup_path {
+                transaction.mark_written(backup)?;
+            }
+        }
+        inject_init_failure("after_instructions")?;
+        let initialized = initialize_workspace_at_inner(&config, &workspace_root, false).await?;
+        for directory in init_transaction_directories(&config, &planned_workspace) {
+            transaction.mark_written(&directory)?;
+        }
+        transaction.mark_written(&planned_workspace.index.project_entry)?;
+        transaction.mark_written(&registration_path)?;
+        inject_init_failure("after_workspace")?;
+        Ok::<_, anyhow::Error>((backup, instruction_reports, project_mcp, initialized))
+    }
+    .await;
+    let (backup, instruction_reports, project_mcp, initialized) = match applied {
+        Ok(applied) => {
+            transaction.commit();
+            applied
+        }
+        Err(error) => {
+            transaction
+                .rollback()
+                .context("init failed and rollback did not fully restore filesystem state")?;
+            return Err(error);
+        }
+    };
+    let (workspace, mut outcome, mut changed, git_backed, registration) = initialized;
+    if let Some(warm_outcome) = warm_workspace_index(&config, &workspace)
+        .await
+        .context("core init committed, but grepai index warm-up failed")?
+    {
+        outcome = warm_outcome;
+        changed = true;
+    }
     let service_report = if skip_service {
         None
     } else {
-        service::ensure_running_if_installed()?
+        service::ensure_running_if_installed()
+            .context("core init committed, but daemon service reconciliation failed")?
     };
+    let dashboard = format!("http://{}", config.daemon.bind);
     if json {
         print_json(&serde_json::json!({
             "version": env!("CARGO_PKG_VERSION"),
             "config": path,
+            "config_backup": backup,
             "data_dir": config.data_dir,
             "outcome": outcome,
             "changed": changed,
@@ -1286,6 +1908,7 @@ async fn initialize(
             "index": workspace.index.directory,
             "registration": registration,
             "instructions": instruction_reports,
+            "project_codex_mcp": project_mcp,
             "dashboard": dashboard,
             "daemon_service": service_report,
             "mcp": mcp::lifecycle_metadata(),
@@ -1294,6 +1917,9 @@ async fn initialize(
         let stdout = io::stdout();
         let mut output = stdout.lock();
         writeln!(output, "initialized {}", path.display())?;
+        if let Some(backup) = &backup {
+            writeln!(output, "config backup {}", backup.path.display())?;
+        }
         writeln!(output, "data root {}", config.data_dir.display())?;
         writeln!(output, "{outcome} {}", workspace.identity.root.display())?;
         for report in instruction_reports.iter().filter(|report| report.changed) {
@@ -1302,6 +1928,13 @@ async fn initialize(
                 "updated {} instructions {}",
                 report.surface.as_str(),
                 report.path.display()
+            )?;
+        }
+        if project_mcp.changed {
+            writeln!(
+                output,
+                "updated project Codex MCP {}",
+                project_mcp.path.display()
             )?;
         }
         writeln!(output, "visualizer {dashboard} (served by hzrd)")?;
@@ -1323,6 +1956,426 @@ async fn initialize(
         )?;
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ConfigBackup {
+    path: PathBuf,
+    created_at_ms: u128,
+    sha256: String,
+}
+
+fn backup_config(path: &Path) -> Result<ConfigBackup> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("configuration path has no UTF-8 file name")?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let content = std::fs::read(path)
+        .with_context(|| format!("read config backup source {}", path.display()))?;
+    let created_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_millis();
+    let sha256 = hex::encode(Sha256::digest(&content));
+    for suffix in 0_u32..10_000 {
+        let candidate = parent.join(if suffix == 0 {
+            format!("{file_name}.hzr-backup-{created_at_ms}-{}", &sha256[..12])
+        } else {
+            format!(
+                "{file_name}.hzr-backup-{created_at_ms}-{}-{suffix}",
+                &sha256[..12]
+            )
+        });
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&candidate) {
+            Ok(mut output) => {
+                let result = output
+                    .write_all(&content)
+                    .and_then(|()| output.sync_all())
+                    .with_context(|| format!("write config backup {}", candidate.display()));
+                if let Err(error) = result {
+                    let _ = std::fs::remove_file(&candidate);
+                    return Err(error);
+                }
+                return Ok(ConfigBackup {
+                    path: candidate,
+                    created_at_ms,
+                    sha256,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("create config backup {}", candidate.display()));
+            }
+        }
+    }
+    bail!(
+        "could not allocate a unique backup path for {}",
+        path.display()
+    )
+}
+
+fn init_layout_directories(config: &Config) -> [PathBuf; 6] {
+    [
+        config.data_dir.clone(),
+        config.data_dir.join("runtime"),
+        config.data_dir.join("workspaces"),
+        config.data_dir.join("memory/icm"),
+        config.data_dir.join("ledger"),
+        config.data_dir.join("engines"),
+    ]
+}
+
+fn init_transaction_directories(config: &Config, workspace: &Workspace) -> Vec<PathBuf> {
+    let repository = config
+        .data_dir
+        .join("workspaces")
+        .join(&workspace.identity.repository_id);
+    let worktree = repository.join(&workspace.identity.worktree_id);
+    let mut directories = vec![
+        config.data_dir.clone(),
+        config.data_dir.join("runtime"),
+        config.data_dir.join("workspaces"),
+        repository,
+        worktree.clone(),
+        worktree.join("index"),
+        workspace.index.directory.clone(),
+        config.data_dir.join("memory"),
+        config.data_dir.join("memory/icm"),
+        config.data_dir.join("ledger"),
+        config.data_dir.join("engines"),
+    ];
+    directories.sort_by_key(|path| path.components().count());
+    directories.dedup();
+    directories
+}
+
+fn init_mutation(action: &str, path: &Path, detail: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "action": action,
+        "path": path,
+        "detail": detail,
+    })
+}
+
+fn project_mcp_binary() -> Result<PathBuf> {
+    let durable = prefix::default_prefix()?.join("hzr");
+    if durable.is_file() {
+        Ok(durable)
+    } else {
+        std::env::current_exe().context("cannot resolve HZR binary for project Codex MCP")
+    }
+}
+
+fn write_data_dir_preserving_toml(path: &Path, data_dir: &Path) -> Result<()> {
+    let existing = std::fs::read_to_string(path)
+        .with_context(|| format!("read configuration {}", path.display()))?;
+    let mut document = existing
+        .parse::<DocumentMut>()
+        .with_context(|| format!("parse configuration {}", path.display()))?;
+    document["data_dir"] = value(data_dir.to_string_lossy().into_owned());
+    let rendered = document.to_string();
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut staged = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("stage configuration in {}", parent.display()))?;
+    staged
+        .write_all(rendered.as_bytes())
+        .with_context(|| format!("stage configuration {}", path.display()))?;
+    staged.as_file().sync_all()?;
+    Config::load(staged.path()).context("validate staged configuration")?;
+    staged
+        .persist(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("replace configuration {}", path.display()))?;
+    Ok(())
+}
+
+#[derive(Debug)]
+enum InitPathState {
+    Missing,
+    File(Vec<u8>),
+    Directory,
+    Symlink(PathBuf),
+}
+
+#[derive(Debug)]
+struct InitPathSnapshot {
+    path: PathBuf,
+    state: InitPathState,
+    written_fingerprint: Option<InitPathFingerprint>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum InitPathFingerprint {
+    Missing,
+    File(String),
+    Directory,
+    Symlink(PathBuf),
+}
+
+#[derive(Debug)]
+struct InitTransaction {
+    snapshots: Vec<InitPathSnapshot>,
+    finished: bool,
+    _locks: Vec<File>,
+}
+
+impl InitTransaction {
+    fn acquire(config_path: &Path, workspace_root: &Path, data_dir: &Path) -> Result<Self> {
+        let absolute_config = if config_path.is_absolute() {
+            config_path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(config_path)
+        };
+        let identities = [
+            absolute_config.as_os_str().as_encoded_bytes().to_vec(),
+            [
+                workspace_root.as_os_str().as_encoded_bytes(),
+                b"\0",
+                data_dir.as_os_str().as_encoded_bytes(),
+            ]
+            .concat(),
+        ];
+        let mut lock_paths = identities
+            .into_iter()
+            .map(|identity| {
+                let key = hex::encode(Sha256::digest(identity));
+                std::env::temp_dir().join(format!("hzr-init-{}.lock", &key[..24]))
+            })
+            .collect::<Vec<_>>();
+        lock_paths.sort();
+        lock_paths.dedup();
+        let mut locks = Vec::with_capacity(lock_paths.len());
+        for lock_path in lock_paths {
+            let lock = OpenOptions::new()
+                .create(true)
+                .read(true)
+                .write(true)
+                .truncate(false)
+                .open(&lock_path)
+                .with_context(|| format!("open init transaction lock {}", lock_path.display()))?;
+            lock.lock_exclusive()
+                .with_context(|| format!("lock init transaction {}", lock_path.display()))?;
+            locks.push(lock);
+        }
+        Ok(Self {
+            snapshots: Vec::new(),
+            finished: false,
+            _locks: locks,
+        })
+    }
+
+    fn capture(&mut self, path: &Path) -> Result<()> {
+        if self.snapshots.iter().any(|snapshot| snapshot.path == path) {
+            return Ok(());
+        }
+        let state = match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => InitPathState::Symlink(
+                std::fs::read_link(path)
+                    .with_context(|| format!("read init symlink {}", path.display()))?,
+            ),
+            Ok(metadata) if metadata.is_file() => InitPathState::File(
+                std::fs::read(path)
+                    .with_context(|| format!("snapshot init file {}", path.display()))?,
+            ),
+            Ok(metadata) if metadata.is_dir() => InitPathState::Directory,
+            Ok(_) => bail!(
+                "init target is not a regular file, directory, or symlink: {}",
+                path.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => InitPathState::Missing,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("inspect init target {}", path.display()));
+            }
+        };
+        self.snapshots.push(InitPathSnapshot {
+            path: path.to_path_buf(),
+            state,
+            written_fingerprint: None,
+        });
+        Ok(())
+    }
+
+    fn remove_on_rollback(&mut self, path: &Path) {
+        self.snapshots.push(InitPathSnapshot {
+            path: path.to_path_buf(),
+            state: InitPathState::Missing,
+            written_fingerprint: fingerprint_init_path(path).ok(),
+        });
+    }
+
+    fn mark_written(&mut self, path: &Path) -> Result<()> {
+        let fingerprint = fingerprint_init_path(path)?;
+        let snapshot = self
+            .snapshots
+            .iter_mut()
+            .rev()
+            .find(|snapshot| snapshot.path == path)
+            .with_context(|| format!("init transaction did not snapshot {}", path.display()))?;
+        snapshot.written_fingerprint = Some(fingerprint);
+        Ok(())
+    }
+
+    fn commit(&mut self) {
+        self.finished = true;
+    }
+
+    fn rollback(&mut self) -> Result<()> {
+        let result = self.rollback_inner();
+        self.finished = true;
+        result
+    }
+
+    fn rollback_inner(&mut self) -> Result<()> {
+        let mut first_error = None;
+        for snapshot in self.snapshots.iter().rev() {
+            if let Err(error) = restore_init_path(snapshot) {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        Ok(())
+    }
+}
+
+impl Drop for InitTransaction {
+    fn drop(&mut self) {
+        if !self.finished {
+            let _ = self.rollback_inner();
+        }
+    }
+}
+
+fn restore_init_path(snapshot: &InitPathSnapshot) -> Result<()> {
+    if let Some(expected) = &snapshot.written_fingerprint {
+        let current = fingerprint_init_path(&snapshot.path)?;
+        if &current != expected {
+            bail!(
+                "refusing to roll back concurrently modified init target {}",
+                snapshot.path.display()
+            );
+        }
+    }
+    match &snapshot.state {
+        InitPathState::Missing => remove_init_path(&snapshot.path),
+        InitPathState::Directory => {
+            if !snapshot.path.is_dir() {
+                bail!(
+                    "refusing to recreate concurrently replaced init directory {}",
+                    snapshot.path.display()
+                );
+            }
+            Ok(())
+        }
+        InitPathState::File(content) => {
+            remove_init_path(&snapshot.path)?;
+            if let Some(parent) = snapshot.path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&snapshot.path, content)
+                .with_context(|| format!("restore init file {}", snapshot.path.display()))
+        }
+        InitPathState::Symlink(target) => {
+            remove_init_path(&snapshot.path)?;
+            if let Some(parent) = snapshot.path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            create_init_symlink(target, &snapshot.path)
+        }
+    }
+}
+
+fn remove_init_path(path: &Path) -> Result<()> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("inspect rollback target {}", path.display()));
+        }
+    };
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        std::fs::remove_dir(path).with_context(|| {
+            format!(
+                "remove empty rollback directory {}; refusing recursive deletion",
+                path.display()
+            )
+        })
+    } else {
+        std::fs::remove_file(path)
+            .with_context(|| format!("remove rollback file {}", path.display()))
+    }
+}
+
+fn fingerprint_init_path(path: &Path) -> Result<InitPathFingerprint> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(InitPathFingerprint::Missing);
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("fingerprint init target {}", path.display()));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok(InitPathFingerprint::Symlink(std::fs::read_link(path)?));
+    }
+    if metadata.is_file() {
+        return Ok(InitPathFingerprint::File(hex::encode(Sha256::digest(
+            std::fs::read(path)?,
+        ))));
+    }
+    if metadata.is_dir() {
+        return Ok(InitPathFingerprint::Directory);
+    }
+    bail!("unsupported init target type: {}", path.display())
+}
+
+#[cfg(unix)]
+fn create_init_symlink(target: &Path, link: &Path) -> Result<()> {
+    std::os::unix::fs::symlink(target, link)
+        .with_context(|| format!("restore init symlink {}", link.display()))
+}
+
+#[cfg(windows)]
+fn create_init_symlink(target: &Path, link: &Path) -> Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
+        .with_context(|| format!("restore init symlink {}", link.display()))
+}
+
+fn inject_init_failure(_point: &str) -> Result<()> {
+    #[cfg(debug_assertions)]
+    if std::env::var("HZR_TEST_INIT_FAIL_AFTER").as_deref() == Ok(_point) {
+        if let Some(path) = std::env::var_os("HZR_TEST_INIT_CONCURRENT_FILE") {
+            let path = PathBuf::from(path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&path, b"concurrent-user-file\n")?;
+        }
+        if let Some(path) = std::env::var_os("HZR_TEST_INIT_CONCURRENT_EDIT") {
+            let path = PathBuf::from(path);
+            let mut file = OpenOptions::new().append(true).open(&path)?;
+            file.write_all(b"\n# concurrent-user-edit\n")?;
+            file.sync_all()?;
+        }
+        bail!("injected init failure after {_point}");
+    }
+    Ok(())
 }
 
 async fn initialize_if_needed(
@@ -1373,9 +2426,11 @@ async fn initialize_if_needed(
         return Ok(ExitCode::SUCCESS);
     }
 
-    // Instruction repair is independent from index health. A conflicting local RTK block must
-    // not survive merely because duplicate or legacy index state correctly blocks registration.
-    let instruction_reports = reconcile_agent_instructions(&config, &workspace_root)?;
+    // SessionStart owns both repository instruction surfaces and the project-scoped Codex MCP
+    // pin. Apply them as one exact-file transaction so a stale contract cannot be refreshed
+    // while Codex remains globally or cross-workspace bound.
+    let (instruction_reports, project_mcp) =
+        reconcile_session_surfaces(config_path, &config, &workspace_root)?;
     let (workspace, outcome, changed, git_backed, registration) =
         initialize_workspace_at(&config, &workspace_root).await?;
     let dashboard = format!("http://{}", config.daemon.bind);
@@ -1397,6 +2452,7 @@ async fn initialize_if_needed(
             "index": workspace.index.directory,
             "registration": registration,
             "instructions": instruction_reports,
+            "project_codex_mcp": project_mcp,
             "dashboard": dashboard,
             "daemon_service": service_report,
             "mcp": mcp::lifecycle_metadata(),
@@ -1411,6 +2467,13 @@ async fn initialize_if_needed(
                 "updated {} instructions {}",
                 report.surface.as_str(),
                 report.path.display()
+            )?;
+        }
+        if project_mcp.changed {
+            writeln!(
+                output,
+                "updated project Codex MCP {}",
+                project_mcp.path.display()
             )?;
         }
         writeln!(output, "visualizer {dashboard} (served by hzrd)")?;
@@ -1448,6 +2511,68 @@ async fn initialize_if_needed(
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn reconcile_session_surfaces(
+    config_path: &Path,
+    config: &Config,
+    workspace_root: &Path,
+) -> Result<(
+    Vec<instructions::InstructionReport>,
+    client_config::ClientConfigReport,
+)> {
+    let instruction_plan = plan_agent_instructions(config, workspace_root)?;
+    let binary = project_mcp_binary()?;
+    let mcp_plan = client_config::install_project_codex(&binary, workspace_root, true, true)?;
+    let mut transaction = InitTransaction::acquire(config_path, workspace_root, &config.data_dir)?;
+    for report in &instruction_plan {
+        if let Some(parent) = report.path.parent() {
+            transaction.capture(parent)?;
+        }
+        transaction.capture(&report.path)?;
+        if let Some(backup) = &report.backup_path {
+            transaction.capture(backup)?;
+        }
+    }
+    if let Some(parent) = mcp_plan.path.parent() {
+        transaction.capture(parent)?;
+    }
+    transaction.capture(&mcp_plan.path)?;
+    if let Some(backup) = &mcp_plan.backup_path {
+        transaction.capture(backup)?;
+    }
+
+    let applied = (|| {
+        let instructions = reconcile_agent_instructions(config, workspace_root)?;
+        for report in instructions.iter().filter(|report| report.changed) {
+            transaction.mark_written(&report.path)?;
+            if let Some(backup) = &report.backup_path {
+                transaction.mark_written(backup)?;
+            }
+        }
+        inject_init_failure("after_session_instructions")?;
+        let mcp = client_config::install_project_codex(&binary, workspace_root, false, true)?;
+        if mcp.changed {
+            transaction.mark_written(&mcp.path)?;
+            if let Some(backup) = &mcp.backup_path {
+                transaction.mark_written(backup)?;
+            }
+        }
+        inject_init_failure("after_session_mcp")?;
+        Ok::<_, anyhow::Error>((instructions, mcp))
+    })();
+    match applied {
+        Ok(applied) => {
+            transaction.commit();
+            Ok(applied)
+        }
+        Err(error) => {
+            transaction.rollback().context(
+                "SessionStart surface reconciliation failed and rollback was incomplete",
+            )?;
+            Err(error)
+        }
+    }
 }
 
 async fn initialize_if_enabled(
@@ -1570,6 +2695,16 @@ async fn set_workspace_activation(
             instructions::uninstall(surface, &target, false, true)?;
         }
     }
+    let project_mcp = if enabled {
+        client_config::install_project_codex(
+            &project_mcp_binary()?,
+            &workspace.identity.root,
+            false,
+            true,
+        )?
+    } else {
+        client_config::uninstall_project_codex(&workspace.identity.root, false, true)?
+    };
 
     if json {
         print_json(&serde_json::json!({
@@ -1579,6 +2714,7 @@ async fn set_workspace_activation(
             "workspace": workspace.identity.root,
             "repository_id": workspace.identity.repository_id,
             "worktree_id": workspace.identity.worktree_id,
+            "project_codex_mcp": project_mcp,
         }))?;
     } else {
         println!(
@@ -1593,6 +2729,20 @@ async fn set_workspace_activation(
 async fn initialize_workspace_at(
     config: &Config,
     workspace_path: &Path,
+) -> Result<(
+    Workspace,
+    &'static str,
+    bool,
+    bool,
+    Option<WorkspaceRegistration>,
+)> {
+    initialize_workspace_at_inner(config, workspace_path, true).await
+}
+
+async fn initialize_workspace_at_inner(
+    config: &Config,
+    workspace_path: &Path,
+    warm_index: bool,
 ) -> Result<(
     Workspace,
     &'static str,
@@ -1629,7 +2779,7 @@ async fn initialize_workspace_at(
         IndexPlacement::LegacyProject { .. } => ("migration_required", false),
         placement => bail!("unsupported grepai placement: {placement:?}"),
     };
-    if !legacy {
+    if !legacy && warm_index {
         // The workspace registration above is the part `init` owns; warming the index needs the
         // pinned engine. A bundle always ships one, but a source checkout or a partially
         // installed host may not have it yet, and `init --if-needed` also runs from the
@@ -1668,6 +2818,30 @@ async fn initialize_workspace_at(
         Some(workspace.register()?)
     };
     Ok((workspace, outcome, changed, git_backed, registration))
+}
+
+async fn warm_workspace_index(
+    config: &Config,
+    workspace: &Workspace,
+) -> Result<Option<&'static str>> {
+    if matches!(workspace.placement()?, IndexPlacement::LegacyProject { .. }) {
+        return Ok(None);
+    }
+    match GrepAi::connect(
+        config.engines.binary("grepai"),
+        workspace.clone(),
+        Deadlines::default(),
+    )
+    .await
+    {
+        Ok(grepai) => match grepai.initialize(&InitOptions::default()).await? {
+            InitOutcome::Initialized => Ok(Some("index_initialized")),
+            InitOutcome::RepositoryGraphEnabled => Ok(Some("repository_graph_enabled")),
+            InitOutcome::AlreadyInitialized => Ok(None),
+        },
+        Err(error) if index_engine_is_absent(&error) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Whether an index error means the pinned engine binary is simply not installed.
@@ -1871,8 +3045,9 @@ async fn execute_context_plan(
     json: bool,
 ) -> Result<ExitCode> {
     let workspace = canonical_directory(arguments.workspace.as_deref())?;
+    let workspace_text = path_text(&workspace, "workspace")?;
     let request = ContextPlanApiRequest {
-        workspace: path_text(&workspace, "workspace")?,
+        workspace: workspace_text.clone(),
         intent: arguments.intent,
         path: arguments
             .path
@@ -1883,15 +3058,79 @@ async fn execute_context_plan(
         search_limit: arguments.search_limit,
         memory_limit: arguments.memory_limit,
     };
-    let response = DaemonClient::from_config(config)?
-        .context_plan(&request)
-        .await?;
+    let client = DaemonClient::from_config(config)?;
+    let response = client.context_plan(&request).await?;
     if json {
         print_json(&response)?;
     } else {
         print_context(&response)?;
     }
+    record_cli_standalone_delivery(
+        config,
+        &client,
+        &workspace_text,
+        "hzr context plan",
+        AccountingOperationKind::Context,
+        AccountingOperationMode::ContextPlan,
+        &response,
+    )
+    .await;
     Ok(ExitCode::SUCCESS)
+}
+
+async fn record_cli_standalone_delivery(
+    config: &Config,
+    client: &DaemonClient,
+    workspace: &str,
+    command: &str,
+    operation: AccountingOperationKind,
+    mode: AccountingOperationMode,
+    response: &impl Serialize,
+) {
+    let delivered = serde_json::to_vec(response)
+        .ok()
+        .and_then(|bytes| u64::try_from(bytes.len() / 4).ok())
+        .unwrap_or(1)
+        .max(1);
+    let request = OperationApiRequest {
+        original_command: command.to_owned(),
+        recorded_command: command.to_owned(),
+        baseline_tokens_estimated: delivered,
+        delivered_tokens_estimated: delivered,
+        execution_ms: 0,
+        project_path: workspace.to_owned(),
+        channel: AccountingChannel::HookCli,
+        measurement: AccountingMeasurement::Estimated,
+        route: AccountingRoute::Optimized,
+        agent: Some("cli".to_owned()),
+        session_id: ["CODEX_THREAD_ID", "CLAUDE_SESSION_ID"]
+            .into_iter()
+            .find_map(|name| {
+                std::env::var(name)
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+            }),
+        attribution: Some(AccountingAttribution {
+            operation,
+            mode,
+            stage: AccountingStage::StandaloneDelivery,
+            requested_mode: None,
+            effective_mode: Some(mode),
+            search_strategy: None,
+            search_fallback_code: None,
+            include_content: None,
+            limit: None,
+            path_scope_count: None,
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: None,
+            evasion: None,
+        }),
+    };
+    if client.record_operation(&request).await.is_err() {
+        let _ = hook_runner::record_daemon_unavailable_operation(config);
+    }
 }
 
 async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> Result<ExitCode> {
@@ -1906,9 +3145,10 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             scope,
         } => {
             let workspace = canonical_directory(workspace.as_deref())?;
+            let workspace_text = path_text(&workspace, "memory workspace")?;
             let response = client
                 .memory_recall(&MemoryRecallApiRequest {
-                    workspace: path_text(&workspace, "memory workspace")?,
+                    workspace: workspace_text.clone(),
                     query,
                     topic,
                     limit,
@@ -1929,6 +3169,16 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
                     );
                 }
             }
+            record_cli_standalone_delivery(
+                config,
+                &client,
+                &workspace_text,
+                "hzr memory recall",
+                AccountingOperationKind::Memory,
+                AccountingOperationMode::MemoryRecall,
+                &response,
+            )
+            .await;
         }
         MemoryCommand::Store {
             topic,
@@ -1941,6 +3191,7 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             scope,
         } => {
             let workspace = canonical_directory(workspace.as_deref())?;
+            let workspace_text = path_text(&workspace, "memory workspace")?;
             let content = read_text(
                 content,
                 file.as_deref(),
@@ -1948,7 +3199,7 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             )?;
             let response = client
                 .memory_store(&MemoryStoreApiRequest {
-                    workspace: path_text(&workspace, "memory workspace")?,
+                    workspace: workspace_text.clone(),
                     topic,
                     content,
                     importance: importance.into(),
@@ -1958,6 +3209,16 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
                 })
                 .await?;
             print_json(&response)?;
+            record_cli_standalone_delivery(
+                config,
+                &client,
+                &workspace_text,
+                "hzr memory store",
+                AccountingOperationKind::Memory,
+                AccountingOperationMode::MemoryStore,
+                &response,
+            )
+            .await;
         }
         MemoryCommand::Forget {
             id,
@@ -1965,14 +3226,25 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             scope,
         } => {
             let workspace = canonical_directory(workspace.as_deref())?;
+            let workspace_text = path_text(&workspace, "memory workspace")?;
             let response = client
                 .memory_forget(&MemoryForgetApiRequest {
-                    workspace: path_text(&workspace, "memory workspace")?,
+                    workspace: workspace_text.clone(),
                     id,
                     scope: scope.into(),
                 })
                 .await?;
             print_json(&response)?;
+            record_cli_standalone_delivery(
+                config,
+                &client,
+                &workspace_text,
+                "hzr memory forget",
+                AccountingOperationKind::Memory,
+                AccountingOperationMode::MemoryForget,
+                &response,
+            )
+            .await;
         }
         MemoryCommand::Update {
             id,
@@ -1984,6 +3256,7 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             scope,
         } => {
             let workspace = canonical_directory(workspace.as_deref())?;
+            let workspace_text = path_text(&workspace, "memory workspace")?;
             let content = read_text(
                 content,
                 file.as_deref(),
@@ -1991,7 +3264,7 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             )?;
             let response = client
                 .memory_update(&MemoryUpdateApiRequest {
-                    workspace: path_text(&workspace, "memory workspace")?,
+                    workspace: workspace_text.clone(),
                     id,
                     content,
                     scope: scope.into(),
@@ -2000,6 +3273,16 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
                 })
                 .await?;
             print_json(&response)?;
+            record_cli_standalone_delivery(
+                config,
+                &client,
+                &workspace_text,
+                "hzr memory update",
+                AccountingOperationKind::Memory,
+                AccountingOperationMode::MemoryUpdate,
+                &response,
+            )
+            .await;
         }
         MemoryCommand::Prune {
             workspace,
@@ -2008,15 +3291,26 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             scope,
         } => {
             let workspace = canonical_directory(workspace.as_deref())?;
+            let workspace_text = path_text(&workspace, "memory workspace")?;
             let response = client
                 .memory_prune(&MemoryPruneApiRequest {
-                    workspace: path_text(&workspace, "memory workspace")?,
+                    workspace: workspace_text.clone(),
                     threshold,
                     dry_run: !apply,
                     scope: scope.into(),
                 })
                 .await?;
             print_json(&response)?;
+            record_cli_standalone_delivery(
+                config,
+                &client,
+                &workspace_text,
+                "hzr memory prune",
+                AccountingOperationKind::Memory,
+                AccountingOperationMode::MemoryPrune,
+                &response,
+            )
+            .await;
         }
         MemoryCommand::Status => {
             let health = client.health().await?;
@@ -2077,9 +3371,15 @@ async fn execute_command(config: &Config, command: ExecCommand, json: bool) -> R
 
 fn exec_request(arguments: ExecArgs) -> Result<ExecApiRequest> {
     let cwd = canonical_directory(arguments.cwd.as_deref())?;
+    let fidelity_requested =
+        std::env::var_os("HZR_RAW_FIDELITY").as_deref() == Some(std::ffi::OsStr::new("1"));
     Ok(ExecApiRequest {
         cwd: cwd.to_string_lossy().into_owned(),
         command: arguments.command,
+        fidelity_requested,
+        fidelity_reason: fidelity_requested
+            .then(|| std::env::var("HZR_RAW_FIDELITY_REASON").ok())
+            .flatten(),
         timeout_ms: arguments.timeout_ms,
         caller_path: std::env::var("PATH").ok(),
         agent: Some("cli".into()),
@@ -2109,6 +3409,7 @@ async fn execute_codec(config: &Config, command: CodecCommand, json: bool) -> Re
     let transform = DaemonClient::from_config(config)?
         .codec_compile(&CodecApiRequest {
             content,
+            project_path: std::env::current_dir()?.to_string_lossy().into_owned(),
             fidelity: fidelity.into(),
             risk: risk.into(),
             profile: profile.map_or(config.policy.codec_profile, Into::into),
@@ -2246,11 +3547,12 @@ fn forwarded_fork_args(
 mod tests {
     use std::path::Path;
 
+    use hzr_core::Config;
     use tempfile::tempdir;
 
     use super::{
         bounded_read_arguments, canonical_directory, contract_asset_path,
-        executable_source_directory, forwarded_fork_args, payload_limit,
+        executable_source_directory, forwarded_fork_args, payload_limit, reject_direct_fork_bypass,
     };
 
     #[test]
@@ -2306,6 +3608,27 @@ mod tests {
                 preserved
             );
         }
+    }
+
+    #[test]
+    fn acceptance_gate_direct_managed_raw_and_proxy_are_refused() {
+        let directory = tempdir().expect("temporary directory");
+        let config = Config {
+            data_dir: directory.path().join("data"),
+            ..Config::default()
+        };
+        for bypass in ["raw", "proxy"] {
+            let args = [bypass, "git", "status"]
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect::<Vec<_>>();
+            let error = reject_direct_fork_bypass(&config, &args)
+                .expect_err("direct managed bypass must be refused")
+                .to_string();
+            assert!(error.contains("hzr exec run"));
+            assert!(error.contains("session budget"));
+        }
+        assert!(reject_direct_fork_bypass(&config, &[std::ffi::OsString::from("git")]).is_ok());
     }
 
     #[test]

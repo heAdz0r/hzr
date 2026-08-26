@@ -22,7 +22,8 @@ use hzr_protocol::{
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use tokio::sync::OnceCell;
+use sha2::{Digest, Sha256};
+use tokio::sync::{Mutex, Semaphore};
 
 use crate::candidate::{
     ForkPlanCandidate, ForkSymbolIndex, NormalizedSource, RetrievedCandidate, normalize_memory,
@@ -92,6 +93,16 @@ impl PlanRequest {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ForkConfigFingerprint(Option<[u8; 32]>);
+
+#[derive(Clone, Debug)]
+struct ForkSearchConfigCache {
+    path: PathBuf,
+    fingerprint: ForkConfigFingerprint,
+    validation: std::result::Result<(), String>,
+}
+
 pub struct ContextPlanner {
     indexes: IndexCoordinator,
     fork: Option<ForkCoreRunner>,
@@ -99,7 +110,8 @@ pub struct ContextPlanner {
     memory: IcmClient,
     hard_token_limit: u64,
     fork_timeout_ms: u64,
-    fork_search_config: OnceCell<std::result::Result<(), String>>,
+    fork_search_config: Mutex<Option<ForkSearchConfigCache>>,
+    fork_search_config_refresh: Semaphore,
 }
 
 impl ContextPlanner {
@@ -113,12 +125,14 @@ impl ContextPlanner {
             Err(error) => (None, Some(error.to_string())),
         };
         Self {
-            indexes: IndexCoordinator::new(
+            indexes: IndexCoordinator::with_watcher_limits(
                 config.data_dir.clone(),
                 config.engines.binary("git"),
                 config.engines.binary("grepai"),
                 Deadlines::default(),
                 config.engines.auto_index,
+                config.engines.grepai_watcher_limit,
+                Duration::from_secs(config.engines.grepai_watcher_idle_ttl_seconds),
             ),
             fork,
             fork_unavailable,
@@ -129,12 +143,29 @@ impl ContextPlanner {
                 .request_timeout_ms
                 .saturating_sub(FORK_TIMEOUT_MARGIN_MS)
                 .max(1),
-            fork_search_config: OnceCell::new(),
+            fork_search_config: Mutex::new(None),
+            fork_search_config_refresh: Semaphore::new(1),
         }
     }
 
     pub async fn search(&self, request: SearchRequest) -> Result<SearchApiResponse> {
         self.search_with_accounting(request, true).await
+    }
+
+    pub async fn index_registry_snapshot(
+        &self,
+    ) -> Result<hzr_index::IndexCoordinatorRegistrySnapshot> {
+        self.indexes
+            .registry_snapshot()
+            .await
+            .map_err(ContextError::Index)
+    }
+
+    pub async fn reap_idle_indexes(&self) -> Result<usize> {
+        self.indexes
+            .reap_idle_watchers()
+            .await
+            .map_err(ContextError::Index)
     }
 
     pub async fn search_unaccounted(&self, request: SearchRequest) -> Result<SearchApiResponse> {
@@ -240,7 +271,7 @@ impl ContextPlanner {
             tokio::join!(code_plan, self.memory.recall(&recall_request));
 
         let mut warnings = Vec::new();
-        let mut sources = Vec::with_capacity(2);
+        let mut sources = Vec::with_capacity(3);
         let mut planner = None;
         match code_result {
             Ok(result) => {
@@ -249,7 +280,7 @@ impl ContextPlanner {
                     .warnings
                     .into_iter()
                     .for_each(|warning| push_warning(&mut warnings, warning));
-                if let Some(source) = result.source {
+                for source in result.sources {
                     add_source(&mut sources, &mut warnings, PLAN_WEIGHT, source);
                 }
             }
@@ -384,6 +415,7 @@ impl ContextPlanner {
                     },
                 );
             }
+            let mut exact_source = None;
             if let Some(identifier) = exact_identifier(&request.intent) {
                 let exact_request = SearchRequest {
                     workspace: workspace.identity.root.clone(),
@@ -414,11 +446,7 @@ impl ContextPlanner {
                                 },
                             );
                         }
-                        source.candidates.extend(exact.candidates);
-                        exact
-                            .warnings
-                            .into_iter()
-                            .for_each(|warning| push_warning(&mut source.warnings, warning));
+                        exact_source = Some(exact);
                     }
                     Err(error) => push_warning(
                         &mut warnings,
@@ -432,7 +460,7 @@ impl ContextPlanner {
                 }
             }
             return Ok(CodePlanResult {
-                source: Some(source),
+                sources: separate_code_sources(source, exact_source),
                 warnings,
                 planner,
             });
@@ -491,7 +519,7 @@ impl ContextPlanner {
             }
         };
         Ok(CodePlanResult {
-            source,
+            sources: source.into_iter().collect(),
             warnings,
             planner,
         })
@@ -744,6 +772,15 @@ impl ContextPlanner {
         let outcome = runner.execute(invocation).await?;
         let result = match outcome {
             ExecutionOutcome::Completed { result } => result,
+            ExecutionOutcome::ExecutedAccountingIncomplete { accounting, .. } => {
+                return Err(ContextError::InvalidForkOutput {
+                    operation,
+                    detail: format!(
+                        "managed invocation executed but accounting is incomplete (code={}, retryable={})",
+                        accounting.code, accounting.retryable
+                    ),
+                });
+            }
             ExecutionOutcome::NotStarted { disposition } => {
                 return Err(ContextError::InvalidForkOutput {
                     operation,
@@ -770,32 +807,87 @@ impl ContextPlanner {
         workspace: &Workspace,
         account_usage: bool,
     ) -> Result<()> {
-        let validation = self
-            .fork_search_config
-            .get_or_init(|| async {
-                let output = self
-                    .run_fork_output(
-                        vec!["config".into()],
-                        &workspace.identity.root,
-                        256 * 1024,
-                        "config inspection",
-                        account_usage,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let output = std::str::from_utf8(&output)
-                    .map_err(|error| format!("fork config output is not UTF-8: {error}"))?;
-                validate_fork_search_config(output, self.indexes.grepai_binary())
-            })
-            .await;
-        validation.clone().map_err(ContextError::ForkUnavailable)
+        if let Some(validation) = self.cached_fork_search_validation().await? {
+            return validation.map_err(ContextError::ForkUnavailable);
+        }
+
+        let _refresh = self
+            .fork_search_config_refresh
+            .acquire()
+            .await
+            .map_err(|_| ContextError::ForkUnavailable("fork config refresh closed".into()))?;
+        if let Some(validation) = self.cached_fork_search_validation().await? {
+            return validation.map_err(ContextError::ForkUnavailable);
+        }
+        let mut stable_snapshot = None;
+        for _ in 0..2 {
+            let output = self
+                .run_fork_output(
+                    vec!["config".into(), "--format".into(), "json".into()],
+                    &workspace.identity.root,
+                    256 * 1024,
+                    "config inspection",
+                    account_usage,
+                )
+                .await?;
+            let output = std::str::from_utf8(&output).map_err(|error| {
+                ContextError::ForkUnavailable(format!("fork config output is not UTF-8: {error}"))
+            })?;
+            let snapshot = parse_fork_search_config(output, self.indexes.grepai_binary())
+                .map_err(ContextError::ForkUnavailable)?;
+            let observed =
+                fork_config_fingerprint(&snapshot.path).map_err(ContextError::ForkUnavailable)?;
+            if observed == snapshot.fingerprint {
+                stable_snapshot = Some(snapshot);
+                break;
+            }
+        }
+        let snapshot = stable_snapshot.ok_or_else(|| {
+            ContextError::ForkUnavailable(
+                "fork config changed during two consecutive typed inspections".into(),
+            )
+        })?;
+        let validation = snapshot.validation;
+        let mut cache = self.fork_search_config.lock().await;
+        *cache = Some(ForkSearchConfigCache {
+            path: snapshot.path,
+            fingerprint: snapshot.fingerprint,
+            validation: validation.clone(),
+        });
+        validation.map_err(ContextError::ForkUnavailable)
+    }
+
+    async fn cached_fork_search_validation(
+        &self,
+    ) -> Result<Option<std::result::Result<(), String>>> {
+        let cache = self.fork_search_config.lock().await;
+        let Some(cached) = cache.as_ref() else {
+            return Ok(None);
+        };
+        let fingerprint =
+            fork_config_fingerprint(&cached.path).map_err(ContextError::ForkUnavailable)?;
+        Ok((fingerprint == cached.fingerprint).then(|| cached.validation.clone()))
     }
 }
 
 struct CodePlanResult {
-    source: Option<NormalizedSource>,
+    sources: Vec<NormalizedSource>,
     warnings: Vec<ContextWarning>,
     planner: Option<ForkPlannerMetadata>,
+}
+
+/// Keep retrieval families in separate calibration domains. Fork memory-plan scores and
+/// exact-search scores are not numerically comparable; `BudgetPlanner` normalizes each input
+/// source before applying cross-source utility, so merging them here would let a high BM25-like
+/// exact score suppress otherwise relevant graph evidence.
+fn separate_code_sources(
+    plan: NormalizedSource,
+    exact: Option<NormalizedSource>,
+) -> Vec<NormalizedSource> {
+    let mut sources = Vec::with_capacity(1 + usize::from(exact.is_some()));
+    sources.push(plan);
+    sources.extend(exact);
+    sources
 }
 
 #[derive(Deserialize)]
@@ -1050,34 +1142,84 @@ fn captured_text(stream: &hzr_exec::CapturedStream, operation: &'static str) -> 
     Ok(String::from_utf8_lossy(captured_bytes(stream, operation)?).into_owned())
 }
 
-fn validate_fork_search_config(
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForkConfigOutput {
+    schema_version: u32,
+    config_path: PathBuf,
+    config_exists: bool,
+    config_sha256: Option<String>,
+    config: ForkRuntimeConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForkRuntimeConfig {
+    grepai: ForkGrepaiConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForkGrepaiConfig {
+    enabled: bool,
+    #[serde(rename = "auto_init")]
+    _auto_init: bool,
+    binary_path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct ForkSearchConfigSnapshot {
+    path: PathBuf,
+    fingerprint: ForkConfigFingerprint,
+    validation: std::result::Result<(), String>,
+}
+
+fn parse_fork_search_config(
     output: &str,
     managed_grepai: &Path,
-) -> std::result::Result<(), String> {
-    let config = output
-        .lines()
-        .skip_while(|line| !line.trim_start().starts_with('['))
-        .collect::<Vec<_>>()
-        .join("\n");
-    if config.is_empty() {
-        return Err("fork config output did not contain TOML".into());
+) -> std::result::Result<ForkSearchConfigSnapshot, String> {
+    let config: ForkConfigOutput = serde_json::from_str(output)
+        .map_err(|error| format!("fork config output contains invalid JSON: {error}"))?;
+    if config.schema_version != 2 {
+        return Err(format!(
+            "unsupported fork config schema version {}",
+            config.schema_version
+        ));
     }
-    let config: toml::Value = toml::from_str(&config)
-        .map_err(|error| format!("fork config output contains invalid TOML: {error}"))?;
-    let Some(grepai) = config.get("grepai") else {
-        return Ok(());
+    if !config.config_path.is_absolute() {
+        return Err("fork config path must be absolute".into());
+    }
+    let fingerprint = match (config.config_exists, config.config_sha256) {
+        (false, None) => ForkConfigFingerprint(None),
+        (true, Some(digest)) => {
+            let bytes = hex::decode(&digest)
+                .map_err(|error| format!("fork config SHA-256 is invalid: {error}"))?;
+            let digest: [u8; 32] = bytes
+                .try_into()
+                .map_err(|_| "fork config SHA-256 must contain exactly 32 bytes".to_owned())?;
+            ForkConfigFingerprint(Some(digest))
+        }
+        _ => return Err("fork config existence and SHA-256 state are inconsistent".into()),
     };
-    if grepai
-        .get("enabled")
-        .and_then(toml::Value::as_bool)
-        .is_some_and(|enabled| !enabled)
-    {
+    let validation = validate_fork_grepai_config(&config.config.grepai, managed_grepai);
+    Ok(ForkSearchConfigSnapshot {
+        path: config.config_path,
+        fingerprint,
+        validation,
+    })
+}
+
+fn validate_fork_grepai_config(
+    grepai: &ForkGrepaiConfig,
+    managed_grepai: &Path,
+) -> std::result::Result<(), String> {
+    if !grepai.enabled {
         return Err("fork grepai delegation is disabled by the user RTK config".into());
     }
-    let Some(custom) = grepai.get("binary_path").and_then(toml::Value::as_str) else {
+    let Some(custom) = grepai.binary_path.as_deref() else {
         return Ok(());
     };
-    let custom = canonical_executable(Path::new(custom))?;
+    let custom = canonical_executable(custom)?;
     let managed = canonical_executable(managed_grepai)?;
     if custom != managed {
         return Err(format!(
@@ -1087,6 +1229,19 @@ fn validate_fork_search_config(
         ));
     }
     Ok(())
+}
+
+fn fork_config_fingerprint(path: &Path) -> std::result::Result<ForkConfigFingerprint, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(ForkConfigFingerprint(Some(Sha256::digest(bytes).into()))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(ForkConfigFingerprint(None))
+        }
+        Err(error) => Err(format!(
+            "cannot fingerprint fork config {}: {error}",
+            path.display()
+        )),
+    }
 }
 
 fn canonical_executable(path: &Path) -> std::result::Result<PathBuf, String> {
@@ -1298,19 +1453,262 @@ fn bounded_message(message: String) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::sync::Arc;
+    #[cfg(unix)]
+    use std::time::Duration;
 
+    #[cfg(unix)]
+    use hzr_core::Config;
+    #[cfg(unix)]
+    use hzr_exec::{ForkCoreConfig, ForkRuntimePaths, PinnedRtkAdapter};
+    #[cfg(unix)]
+    use hzr_memory::{IcmClient, IcmConfig, IcmTransport};
     use hzr_protocol::{
         CandidateSource, ContextCandidate, ContextWarning, ContextWarningCode, Provenance,
         SearchFallbackCode, SearchMode, SearchStrategy, TokenCount, TokenCountSource,
     };
+    #[cfg(unix)]
+    use sha2::{Digest, Sha256};
 
     use super::{
-        ForkSearchOutput, MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest, exact_identifier,
-        fork_backend_fallback_code, fork_search_args, fuse, hit_relative_path, push_warning,
-        repair_snippet_line, validate_fork_search_config,
+        ContextPlanner, ForkSearchOutput, MAX_WARNING_BYTES, MAX_WARNINGS, PlanRequest,
+        exact_identifier, fork_backend_fallback_code, fork_config_fingerprint, fork_search_args,
+        fuse, hit_relative_path, parse_fork_search_config, push_warning, repair_snippet_line,
+        separate_code_sources,
     };
     use crate::candidate::RetrievedCandidate;
+
+    #[test]
+    fn typed_fork_config_rejects_unknown_schema_and_accepts_version_two() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let managed = directory.path().join("grepai");
+        fs::write(&managed, "stub").expect("managed executable");
+        let config_path = directory.path().join("config.toml");
+        let output = serde_json::json!({
+            "schema_version": 2,
+            "config_path": config_path,
+            "config_exists": false,
+            "config_sha256": null,
+            "config": {"grepai": {"enabled": true, "auto_init": true, "binary_path": null}}
+        });
+        let parsed = parse_fork_search_config(&output.to_string(), &managed).expect("typed config");
+        assert_eq!(parsed.path, directory.path().join("config.toml"));
+        assert_eq!(parsed.validation, Ok(()));
+
+        let mut missing_enabled = output.clone();
+        missing_enabled["config"]["grepai"]
+            .as_object_mut()
+            .expect("grepai object")
+            .remove("enabled");
+        assert!(
+            parse_fork_search_config(&missing_enabled.to_string(), &managed)
+                .expect_err("missing enabled must fail")
+                .contains("missing field `enabled`")
+        );
+
+        let mut unknown_field = output.clone();
+        unknown_field["unexpected"] = serde_json::json!(true);
+        assert!(
+            parse_fork_search_config(&unknown_field.to_string(), &managed)
+                .expect_err("unknown envelope field must fail")
+                .contains("unknown field `unexpected`")
+        );
+
+        let mut unsupported = output;
+        unsupported["schema_version"] = serde_json::json!(3);
+        assert!(
+            parse_fork_search_config(&unsupported.to_string(), &managed)
+                .expect_err("unknown schema must fail")
+                .contains("unsupported fork config schema version 3")
+        );
+    }
+
+    #[test]
+    fn fork_config_fingerprint_changes_on_same_size_rewrite_and_creation() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("config.toml");
+        assert_eq!(
+            fork_config_fingerprint(&path).expect("missing fingerprint"),
+            super::ForkConfigFingerprint(None)
+        );
+        fs::write(&path, "aa").expect("first config");
+        let first = fork_config_fingerprint(&path).expect("first fingerprint");
+        fs::write(&path, "bb").expect("second config");
+        let second = fork_config_fingerprint(&path).expect("second fingerprint");
+        assert_ne!(first, second);
+        fs::remove_file(&path).expect("remove config");
+        assert_eq!(
+            fork_config_fingerprint(&path).expect("removed fingerprint"),
+            super::ForkConfigFingerprint(None)
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn planner_config_refresh_is_live_and_singleflight() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace_root = directory.path().join("workspace");
+        fs::create_dir(&workspace_root).expect("workspace");
+        let config_path = directory.path().join("rtk-config.toml");
+        let counter_path = directory.path().join("config-invocations");
+        let binary = directory.path().join("rtk");
+        write_config_probe(&binary, &config_path, &counter_path);
+
+        let mut config = Config {
+            data_dir: directory.path().join("data"),
+            ..Config::default()
+        };
+        config.engines.directory = Some(directory.path().to_path_buf());
+        config.ensure_layout().expect("HZR data layout");
+        let adapter = PinnedRtkAdapter::detect(ForkCoreConfig {
+            binary,
+            runtime_paths: Some(ForkRuntimePaths::from_data_root(&config.data_dir)),
+            probe_timeout_ms: 20_000,
+            ..ForkCoreConfig::default()
+        })
+        .await;
+        let planner = Arc::new(ContextPlanner::from_config(
+            &config,
+            unavailable_memory(directory.path()),
+            adapter.runner(),
+        ));
+        let workspace = hzr_index::Workspace::discover_managed(
+            &workspace_root,
+            Path::new("git"),
+            &config.data_dir,
+            Duration::from_secs(3),
+        )
+        .await
+        .expect("managed workspace");
+
+        planner
+            .ensure_managed_fork_search_config(&workspace, false)
+            .await
+            .expect("missing config");
+        assert_eq!(config_invocations(&counter_path), 1);
+        planner
+            .ensure_managed_fork_search_config(&workspace, false)
+            .await
+            .expect("unchanged config");
+        assert_eq!(config_invocations(&counter_path), 1);
+
+        fs::write(&config_path, b"alpha").expect("create config");
+        let created = planner
+            .ensure_managed_fork_search_config(&workspace, false)
+            .await;
+        assert!(created.is_ok(), "created config: {created:?}");
+        assert_eq!(config_invocations(&counter_path), 2);
+        fs::write(&config_path, b"bravo").expect("same-size config change");
+        planner
+            .ensure_managed_fork_search_config(&workspace, false)
+            .await
+            .expect("same-size changed config");
+        assert_eq!(config_invocations(&counter_path), 3);
+        fs::remove_file(&config_path).expect("remove config");
+        planner
+            .ensure_managed_fork_search_config(&workspace, false)
+            .await
+            .expect("removed config");
+        assert_eq!(config_invocations(&counter_path), 4);
+
+        fs::write(&config_path, b"charlie").expect("concurrent config change");
+        let mut tasks = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            let planner = Arc::clone(&planner);
+            let workspace = workspace.clone();
+            tasks.spawn(async move {
+                planner
+                    .ensure_managed_fork_search_config(&workspace, false)
+                    .await
+            });
+        }
+        while let Some(result) = tasks.join_next().await {
+            result.expect("config task").expect("concurrent config");
+        }
+        assert_eq!(
+            config_invocations(&counter_path),
+            5,
+            "one subprocess must refresh all concurrent callers"
+        );
+        planner.shutdown().await.expect("index shutdown");
+    }
+
+    #[cfg(unix)]
+    fn unavailable_memory(root: &Path) -> IcmClient {
+        let mut config = IcmConfig::from_data_root(root.join("missing-icm"), root.join("icm"));
+        config.bind_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 65_534);
+        config.request_timeout = Duration::from_millis(50);
+        config.cli_fallback = false;
+        config.transport = IcmTransport::Http;
+        IcmClient::from_config(config).expect("ICM client fixture")
+    }
+
+    #[cfg(unix)]
+    fn config_invocations(path: &Path) -> u64 {
+        fs::read_to_string(path)
+            .expect("config invocation counter")
+            .parse()
+            .expect("numeric config invocation counter")
+    }
+
+    #[cfg(unix)]
+    fn write_config_probe(path: &Path, config_path: &Path, counter_path: &Path) {
+        let digest = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+        let config_json = serde_json::to_string(config_path).expect("JSON config path");
+        let config_shell = config_path.to_string_lossy();
+        let counter_shell = counter_path.to_string_lossy();
+        assert!(!config_shell.contains('\''));
+        assert!(!counter_shell.contains('\''));
+        let script = r#"#!/bin/sh
+case "$1" in
+  --version)
+    printf '%s\n' 'rtk 0.44.1-fork.1'
+    ;;
+  rewrite)
+    [ "$2" = "--help" ] && printf '%s\n' 'rtk rewrite - Raw command to rewrite' || exit 64
+    ;;
+  proxy)
+    [ "$2" = "--help" ] && printf '%s\n' 'rtk proxy - execute without filtering' || exit 64
+    ;;
+  config)
+    [ "$2" = "--format" ] && [ "$3" = "json" ] || exit 69
+    count=0
+    [ -f '__COUNTER_SHELL__' ] && count=$(cat '__COUNTER_SHELL__')
+    count=$((count + 1))
+    printf '%s' "$count" > '__COUNTER_SHELL__'
+    if [ ! -f '__CONFIG_SHELL__' ]; then
+      printf '%s\n' '{"schema_version":2,"config_path":__CONFIG_JSON__,"config_exists":false,"config_sha256":null,"config":{"grepai":{"enabled":true,"auto_init":true,"binary_path":null}}}'
+      exit 0
+    fi
+    content=$(cat '__CONFIG_SHELL__')
+    case "$content" in
+      alpha) digest='__ALPHA_DIGEST__' ;;
+      bravo) digest='__BRAVO_DIGEST__' ;;
+      charlie) digest='__CHARLIE_DIGEST__' ;;
+      *) exit 70 ;;
+    esac
+    printf '{"schema_version":2,"config_path":%s,"config_exists":true,"config_sha256":"%s","config":{"grepai":{"enabled":true,"auto_init":true,"binary_path":null}}}\n' '__CONFIG_JSON__' "$digest"
+    ;;
+  *)
+    exit 67
+    ;;
+esac
+"#
+        .replace("__CONFIG_JSON__", &config_json)
+        .replace("__CONFIG_SHELL__", &config_shell)
+        .replace("__COUNTER_SHELL__", &counter_shell)
+        .replace("__ALPHA_DIGEST__", &digest(b"alpha"))
+        .replace("__BRAVO_DIGEST__", &digest(b"bravo"))
+        .replace("__CHARLIE_DIGEST__", &digest(b"charlie"));
+        fs::write(path, script).expect("fake rtk script");
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("fake rtk permissions");
+    }
 
     #[test]
     fn test_exact_identifier_routes_symbol_shaped_intent() {
@@ -1550,6 +1948,56 @@ mod tests {
     }
 
     #[test]
+    fn regression_exact_and_graph_scores_keep_independent_calibration_domains() {
+        let plan = crate::candidate::NormalizedSource {
+            candidates: vec![retrieved(
+                "graph",
+                CandidateSource::Context,
+                "graph evidence",
+                20,
+            )],
+            warnings: Vec::new(),
+        };
+        let exact = crate::candidate::NormalizedSource {
+            candidates: vec![retrieved(
+                "exact",
+                CandidateSource::Exact,
+                "exact evidence",
+                20,
+            )],
+            warnings: Vec::new(),
+        };
+        let sources = separate_code_sources(plan, Some(exact));
+        let response = fuse(
+            100,
+            sources
+                .into_iter()
+                .map(|source| (1.0, source.candidates))
+                .collect(),
+            Vec::new(),
+            None,
+        )
+        .expect("fusion succeeds");
+
+        assert!(
+            response
+                .pack
+                .selected
+                .iter()
+                .any(|candidate| candidate.source == CandidateSource::Context),
+            "graph evidence must not be suppressed by exact-search score scale"
+        );
+        assert!(
+            response
+                .pack
+                .selected
+                .iter()
+                .any(|candidate| candidate.source == CandidateSource::Exact),
+            "exact evidence remains independently calibrated"
+        );
+    }
+
+    #[test]
     fn test_warning_payload_is_bounded_and_reports_truncation() {
         let mut warnings = Vec::new();
         for index in 0..=MAX_WARNINGS {
@@ -1604,11 +2052,17 @@ mod tests {
 
     #[test]
     fn test_fork_search_config_rejects_disabled_delegation() {
-        let result = validate_fork_search_config(
-            "Config: /tmp/config.toml\n\n[grepai]\nenabled = false\n",
-            PathBuf::from("grepai").as_path(),
-        );
-        assert!(result.is_err());
+        let output = serde_json::json!({
+            "schema_version": 2,
+            "config_path": "/tmp/config.toml",
+            "config_exists": true,
+            "config_sha256": "00".repeat(32),
+            "config": {"grepai": {"enabled": false, "auto_init": true, "binary_path": null}}
+        });
+        let parsed =
+            parse_fork_search_config(&output.to_string(), PathBuf::from("grepai").as_path())
+                .expect("typed config");
+        assert!(parsed.validation.is_err());
     }
 
     #[test]
@@ -1618,11 +2072,16 @@ mod tests {
         let foreign = directory.path().join("foreign-grepai");
         fs::write(&managed, b"managed").expect("managed fixture");
         fs::write(&foreign, b"foreign").expect("foreign fixture");
-        let output = format!(
-            "Config: /tmp/config.toml\n\n[grepai]\nenabled = true\nbinary_path = {:?}\n",
-            foreign.to_string_lossy()
-        );
-        let result = validate_fork_search_config(&output, &managed);
-        assert!(result.is_err());
+        let output = serde_json::json!({
+            "schema_version": 2,
+            "config_path": "/tmp/config.toml",
+            "config_exists": true,
+            "config_sha256": "00".repeat(32),
+            "config": {
+                "grepai": {"enabled": true, "auto_init": true, "binary_path": foreign}
+            }
+        });
+        let parsed = parse_fork_search_config(&output.to_string(), &managed).expect("typed config");
+        assert!(parsed.validation.is_err());
     }
 }

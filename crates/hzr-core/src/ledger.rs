@@ -10,8 +10,8 @@ use hzr_protocol::{
 };
 
 use crate::operation::{
-    OperationChannel, OperationMeasurement, OperationRoute, classify_operation,
-    efficient_route_replacement, first_class_replacement, managed_raw_payload,
+    OperationChannel, OperationMeasurement, OperationRoute, ReplacementCapability,
+    classify_operation, efficient_route_replacement, first_class_replacement,
     raw_route_sql_predicate,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
@@ -19,7 +19,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-pub const CURRENT_ACCOUNTING_POLICY_VERSION: &str = "privacy_typed_v1";
+pub const CURRENT_ACCOUNTING_POLICY_VERSION: &str = "privacy_typed_v2";
+const LEGACY_ACCOUNTING_POLICY_VERSION_V1: &str = "privacy_typed_v1";
+const IDENTITY_HMAC_UUID_V1: &str = "hmac_sha256_uuid_v1";
+const IDENTITY_HMAC_KEY256_V2: &str = "hmac_sha256_key256_v2";
 pub const CURRENT_PRODUCER_VERSION: &str = concat!("hzr-core/", env!("CARGO_PKG_VERSION"));
 
 pub struct Ledger {
@@ -103,7 +106,7 @@ pub struct OperationFamilySummary {
     pub route: OperationRoute,
     pub operations: u64,
     pub delivered_tokens_estimated: u64,
-    pub first_class_replacement_available: bool,
+    pub replacement_capability: ReplacementCapability,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -208,58 +211,9 @@ pub struct PolicyEvent<'a> {
     pub replacement_family: Option<&'a str>,
 }
 
-/// A stats snapshot plus transient capability probes that must never be serialized.
 #[derive(Clone, Debug)]
 pub struct StatsCollection {
     pub snapshot: StatsSnapshot,
-    capability_inputs: Vec<OperationCapabilityInput>,
-}
-
-#[derive(Clone, Debug)]
-struct OperationCapabilityInput {
-    command: String,
-    targets: Vec<(String, OperationRoute)>,
-}
-
-impl StatsCollection {
-    pub fn capability_commands(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.capability_inputs
-            .iter()
-            .map(|input| input.command.as_str())
-    }
-
-    /// Merge a cardinality-preserving fork-core response into the privacy-safe summary.
-    /// A malformed response is ignored so capability reporting fails closed.
-    pub fn apply_capabilities(&mut self, supported: &[bool]) -> bool {
-        if supported.len() != self.capability_inputs.len() {
-            return false;
-        }
-        for (input, supported) in self.capability_inputs.iter().zip(supported) {
-            if !supported {
-                continue;
-            }
-            for (family, route) in &input.targets {
-                if let Some(summary) = self
-                    .snapshot
-                    .by_family
-                    .iter_mut()
-                    .find(|summary| summary.family == *family && summary.route == *route)
-                {
-                    summary.first_class_replacement_available = true;
-                }
-                if let Some(tool) = self
-                    .snapshot
-                    .bypass
-                    .by_tool
-                    .iter_mut()
-                    .find(|tool| tool.tool == *family)
-                {
-                    tool.first_class_replacement_available = true;
-                }
-            }
-        }
-        true
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -290,6 +244,7 @@ pub struct ProjectActivitySummary {
     pub first_record_at: Option<String>,
     pub last_record_at: Option<String>,
     pub unscoped_operations: u64,
+    pub excluded_legacy_operations: u64,
     pub recent_operations: Vec<ProjectOperationSummary>,
 }
 
@@ -345,6 +300,21 @@ pub struct DetailedOperationAttribution<'a> {
     pub evasion: Option<&'a EvasionAttribution>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PrivacySafeFidelityOperation {
+    pub reservation_id: String,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub execution_ms: u64,
+    pub measurement: OperationMeasurement,
+    pub project_hash: String,
+    pub project_scope_hashes: String,
+    pub session_hash: Option<String>,
+    pub agent: Option<String>,
+    pub agent_hash: Option<String>,
+    pub evasion: EvasionAttribution,
+}
+
 /// Operations that never reached the optimizer, split out of the reduction ratio they
 /// would otherwise silently dilute.
 ///
@@ -390,6 +360,13 @@ fn parse_operation_kind(value: &str) -> Option<AccountingOperationKind> {
     match value {
         "search" => Some(AccountingOperationKind::Search),
         "read" => Some(AccountingOperationKind::Read),
+        "write" => Some(AccountingOperationKind::Write),
+        "context" => Some(AccountingOperationKind::Context),
+        "memory" => Some(AccountingOperationKind::Memory),
+        "codec" => Some(AccountingOperationKind::Codec),
+        "exec" => Some(AccountingOperationKind::Exec),
+        "observability" => Some(AccountingOperationKind::Observability),
+        "doctor" => Some(AccountingOperationKind::Doctor),
         _ => None,
     }
 }
@@ -409,6 +386,17 @@ fn parse_operation_mode(value: &str) -> Option<AccountingOperationMode> {
         "read_symbols" => Some(AccountingOperationMode::ReadSymbols),
         "read_changed" => Some(AccountingOperationMode::ReadChanged),
         "read_since" => Some(AccountingOperationMode::ReadSince),
+        "write" => Some(AccountingOperationMode::Write),
+        "context_plan" => Some(AccountingOperationMode::ContextPlan),
+        "memory_recall" => Some(AccountingOperationMode::MemoryRecall),
+        "memory_store" => Some(AccountingOperationMode::MemoryStore),
+        "memory_forget" => Some(AccountingOperationMode::MemoryForget),
+        "memory_update" => Some(AccountingOperationMode::MemoryUpdate),
+        "memory_prune" => Some(AccountingOperationMode::MemoryPrune),
+        "codec_compile" => Some(AccountingOperationMode::CodecCompile),
+        "exec_run" => Some(AccountingOperationMode::ExecRun),
+        "observability_snapshot" => Some(AccountingOperationMode::ObservabilitySnapshot),
+        "doctor_check" => Some(AccountingOperationMode::DoctorCheck),
         _ => None,
     }
 }
@@ -417,7 +405,17 @@ fn parse_accounting_stage(value: &str) -> Option<AccountingStage> {
     match value {
         "internal_transport" => Some(AccountingStage::InternalTransport),
         "final_delivery" => Some(AccountingStage::FinalDelivery),
+        "standalone_delivery" => Some(AccountingStage::StandaloneDelivery),
+        "control_plane" => Some(AccountingStage::ControlPlane),
         _ => None,
+    }
+}
+
+fn parse_replacement_capability(value: Option<&str>) -> ReplacementCapability {
+    match value {
+        Some("available") => ReplacementCapability::Available,
+        Some("unavailable") => ReplacementCapability::Unavailable,
+        _ => ReplacementCapability::Unknown,
     }
 }
 
@@ -496,8 +494,7 @@ pub struct BypassTool {
     pub example_command: String,
     /// The first-class HZR command that would have replaced it, when one exists.
     pub replacement: Option<String>,
-    /// Derived from the same canonical capability batch as the family view.
-    pub first_class_replacement_available: bool,
+    pub replacement_capability: ReplacementCapability,
     pub rationale: Option<String>,
 }
 
@@ -581,7 +578,37 @@ fn keyed_identity_hash(key: &[u8], domain: &str, value: &str) -> String {
     format!("hmac-sha256:{}", hex::encode(outer.finalize()))
 }
 
-fn agent_identity_hash(connection: &Connection, value: &str) -> Result<String, LedgerError> {
+/// Build a public pseudonym with caller-owned key material.
+///
+/// The key must remain process- or store-private. This is exposed for sibling HZR
+/// components that publish bounded observability identities without exposing raw IDs.
+pub fn privacy_keyed_identity_hash(key: &[u8], domain: &str, value: &str) -> String {
+    keyed_identity_hash(key, domain, value)
+}
+
+/// Store-private, restart-stable identity mapper shared by public telemetry surfaces.
+///
+/// The key is deliberately not exposed. Callers can join bounded identities produced by
+/// independent HZR components without publishing raw workspace or session identifiers.
+#[derive(Clone)]
+pub struct PrivacyPseudonymizer {
+    key: String,
+}
+
+impl PrivacyPseudonymizer {
+    /// Construct a mapper from caller-owned private key material.
+    pub fn from_key(key: impl Into<String>) -> Result<Self, LedgerError> {
+        let key = key.into();
+        validate_identity_hmac_key(&key, IDENTITY_HMAC_KEY256_V2)?;
+        Ok(Self { key })
+    }
+
+    pub fn hash(&self, domain: &str, value: &str) -> String {
+        keyed_identity_hash(self.key.as_bytes(), domain, value)
+    }
+}
+
+fn ledger_identity_key(connection: &Connection) -> Result<String, LedgerError> {
     let key = connection
         .query_row(
             "SELECT value FROM ledger_privacy_meta WHERE key = 'identity_hmac_key'",
@@ -589,7 +616,114 @@ fn agent_identity_hash(connection: &Connection, value: &str) -> Result<String, L
             |row| row.get::<_, String>(0),
         )
         .map_err(LedgerError::Database)?;
+    let version = connection
+        .query_row(
+            "SELECT value FROM ledger_privacy_meta WHERE key = 'identity_hmac_version'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(LedgerError::Database)?;
+    validate_identity_hmac_key(&key, &version)?;
+    Ok(key)
+}
+
+fn validate_identity_hmac_key(key: &str, version: &str) -> Result<(), LedgerError> {
+    let valid = match version {
+        IDENTITY_HMAC_KEY256_V2 => {
+            key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }
+        IDENTITY_HMAC_UUID_V1 | "hmac_sha256_v1" => {
+            key.len() == 36
+                && key.bytes().enumerate().all(|(index, byte)| match index {
+                    8 | 13 | 18 | 23 => byte == b'-',
+                    _ => byte.is_ascii_hexdigit(),
+                })
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(LedgerError::InvalidPrivacyIdentity(format!(
+            "identity_hmac_key does not match declared version {version}"
+        )))
+    }
+}
+
+fn new_identity_hmac_key() -> String {
+    let first = TraceId::new();
+    let second = TraceId::new();
+    let seed = format!("{}\0{}", first.as_str(), second.as_str());
+    hex::encode(Sha256::digest(seed.as_bytes()))
+}
+
+fn initialize_identity_hmac(connection: &Connection) -> Result<(), LedgerError> {
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO ledger_privacy_meta (key, value)
+             VALUES ('identity_hmac_key', ?1)",
+            [new_identity_hmac_key()],
+        )
+        .map_err(LedgerError::Database)?;
+    let key: String = connection
+        .query_row(
+            "SELECT value FROM ledger_privacy_meta WHERE key = 'identity_hmac_key'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(LedgerError::Database)?;
+    let existing_version = connection
+        .query_row(
+            "SELECT value FROM ledger_privacy_meta WHERE key = 'identity_hmac_version'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(LedgerError::Database)?;
+    let version = existing_version.unwrap_or_else(|| {
+        if key.len() == 36 {
+            IDENTITY_HMAC_UUID_V1.to_owned()
+        } else {
+            IDENTITY_HMAC_KEY256_V2.to_owned()
+        }
+    });
+    validate_identity_hmac_key(&key, &version)?;
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO ledger_privacy_meta (key, value)
+             VALUES ('identity_hmac_version', ?1)",
+            [&version],
+        )
+        .map_err(LedgerError::Database)?;
+    Ok(())
+}
+
+fn agent_identity_hash(connection: &Connection, value: &str) -> Result<String, LedgerError> {
+    let key = ledger_identity_key(connection)?;
     Ok(keyed_identity_hash(key.as_bytes(), "agent", value))
+}
+
+fn session_identity_hash(connection: &Connection, value: &str) -> Result<String, LedgerError> {
+    let key = ledger_identity_key(connection)?;
+    Ok(keyed_identity_hash(key.as_bytes(), "session", value))
+}
+
+fn session_identity_hashes(
+    connection: &Connection,
+    value: &str,
+) -> Result<(String, String), LedgerError> {
+    Ok((
+        session_identity_hash(connection, value)?,
+        privacy_identity_hash("session", value),
+    ))
+}
+
+fn accounting_policy_predicate(include_legacy_versions: bool) -> String {
+    if include_legacy_versions {
+        "1 = 1".into()
+    } else {
+        format!("accounting_policy_version = '{CURRENT_ACCOUNTING_POLICY_VERSION}'")
+    }
 }
 
 fn privacy_safe_family(value: &str) -> String {
@@ -853,7 +987,8 @@ fn scrub_sensitive_ledger_payloads(connection: &Connection) -> Result<(), Ledger
             let (project_hash, scope_hashes) = project_hashes(&project);
             let session_hash = session
                 .as_deref()
-                .map(|value| privacy_identity_hash("session", value));
+                .map(|value| session_identity_hash(&transaction, value))
+                .transpose()?;
             let agent_hash = agent
                 .as_deref()
                 .map(|value| agent_identity_hash(&transaction, value))
@@ -989,6 +1124,12 @@ fn scrub_sensitive_ledger_payloads(connection: &Connection) -> Result<(), Ledger
 }
 
 impl Ledger {
+    pub fn privacy_pseudonymizer(&self) -> Result<PrivacyPseudonymizer, LedgerError> {
+        Ok(PrivacyPseudonymizer {
+            key: ledger_identity_key(&self.connection)?,
+        })
+    }
+
     /// Read dashboard totals without creating or migrating the ledger.
     ///
     /// The visualizer endpoint is GET-only, so a fresh installation with no ledger file
@@ -1006,6 +1147,25 @@ impl Ledger {
             .map_err(LedgerError::Database)?;
         let ledger = Self { connection };
         Ok((ledger.summary()?, ledger.efficiency_summary()?))
+    }
+
+    /// Collect a complete stats snapshot without schema writes or migrations.
+    /// The daemon/installer owns schema reconciliation; concurrent readers must not contend on DDL.
+    pub fn stats_collection_read_only(
+        path: &Path,
+        query: StatsQuery<'_>,
+    ) -> Result<StatsCollection, LedgerError> {
+        if !path.is_file() {
+            return Ok(StatsCollection {
+                snapshot: StatsSnapshot::default(),
+            });
+        }
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(LedgerError::Database)?;
+        connection
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(LedgerError::Database)?;
+        Self { connection }.stats_collection(query)
     }
 
     /// Read exact-path local activity without creating or migrating the ledger.
@@ -1112,7 +1272,11 @@ impl Ledger {
                     avoidable INTEGER,
                     enforcement_tier TEXT,
                     fidelity_reason TEXT,
-                    fidelity_validation TEXT
+                    fidelity_validation TEXT,
+                    replacement_capability TEXT,
+                    replacement_route TEXT,
+                    replacement_reason TEXT,
+                    fidelity_reservation_id TEXT
                  );
                  CREATE INDEX IF NOT EXISTS idx_timestamp ON commands(timestamp);
                  CREATE INDEX IF NOT EXISTS idx_project_path_timestamp
@@ -1180,12 +1344,7 @@ impl Ledger {
                  );",
             )
             .map_err(LedgerError::Database)?;
-        connection
-            .execute(
-                "INSERT OR IGNORE INTO ledger_privacy_meta (key, value) VALUES ('identity_hmac_key', ?1)",
-                [TraceId::new().to_string()],
-            )
-            .map_err(LedgerError::Database)?;
+        initialize_identity_hmac(&connection)?;
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN agent TEXT", []);
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN session_id TEXT", []);
         let _ = connection.execute(
@@ -1230,9 +1389,21 @@ impl Ledger {
             "enforcement_tier TEXT",
             "fidelity_reason TEXT",
             "fidelity_validation TEXT",
+            "replacement_capability TEXT",
+            "replacement_route TEXT",
+            "replacement_reason TEXT",
+            "fidelity_reservation_id TEXT",
         ] {
             let _ = connection.execute(&format!("ALTER TABLE commands ADD COLUMN {column}"), []);
         }
+        connection
+            .execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_fidelity_reservation
+                   ON commands(fidelity_reservation_id)
+                 WHERE fidelity_reservation_id IS NOT NULL",
+                [],
+            )
+            .map_err(LedgerError::Database)?;
         // Идемпотентно: существующие БД получают колонку; повторный ALTER безопасно игнорируется.
         let _ = connection.execute(
             "ALTER TABLE usage_records ADD COLUMN project_path TEXT NOT NULL DEFAULT ''",
@@ -1367,10 +1538,8 @@ impl Ledger {
         Ok(self.stats_collection(query)?.snapshot)
     }
 
-    /// Collect one snapshot and the distinct raw commands requiring canonical fork capability
-    /// classification. The command inputs stay in this non-serializable transient type.
     pub fn stats_collection(&self, query: StatsQuery<'_>) -> Result<StatsCollection, LedgerError> {
-        let (by_family, capability_inputs) = self.operation_family_summary(
+        let by_family = self.operation_family_summary(
             query.project_path,
             query.since_unix_seconds,
             query.include_legacy_versions,
@@ -1392,17 +1561,12 @@ impl Ledger {
                 by_family,
                 evasion: self.evasion_summary(query)?,
             },
-            capability_inputs,
         })
     }
 
     /// Aggregate evasion evidence without returning commands, paths, arguments, or identities.
     pub fn evasion_summary(&self, query: StatsQuery<'_>) -> Result<EvasionSummary, LedgerError> {
-        let version_predicate = if query.include_legacy_versions {
-            "1 = 1"
-        } else {
-            "accounting_policy_version = 'privacy_typed_v1'"
-        };
+        let version_predicate = accounting_policy_predicate(query.include_legacy_versions);
         let sql = format!(
             "SELECT evasion_class, COUNT(*), COALESCE(SUM(output_tokens), 0),
                     COALESCE(SUM(CASE WHEN avoidable = 1 THEN 1 ELSE 0 END), 0),
@@ -1536,14 +1700,20 @@ impl Ledger {
         session_id: &str,
         allowance: FidelityAllowance,
     ) -> Result<FidelitySessionUsage, LedgerError> {
-        let session_hash = privacy_identity_hash("session", session_id);
+        let (session_hash, legacy_session_hash) =
+            session_identity_hashes(&self.connection, session_id)?;
         let (operations, delivered_tokens) = self
             .connection
             .query_row(
                 "SELECT COUNT(*), COALESCE(SUM(output_tokens), 0) FROM commands
-              WHERE session_hash = ?1 AND hatch_marker = 1
-                AND accounting_policy_version = ?2",
-                params![session_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
+              WHERE session_hash IN (?1, ?2) AND hatch_marker = 1
+                AND accounting_policy_version IN (?3, ?4)",
+                params![
+                    session_hash,
+                    legacy_session_hash,
+                    CURRENT_ACCOUNTING_POLICY_VERSION,
+                    LEGACY_ACCOUNTING_POLICY_VERSION_V1
+                ],
                 |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
             )
             .map_err(LedgerError::Database)?;
@@ -1564,7 +1734,8 @@ impl Ledger {
         session_id: &str,
         allowance: FidelityAllowance,
     ) -> Result<SessionEvasionSummary, LedgerError> {
-        let session_hash = privacy_identity_hash("session", session_id);
+        let (session_hash, legacy_session_hash) =
+            session_identity_hashes(&self.connection, session_id)?;
         let mut summary = self
             .connection
             .query_row(
@@ -1572,8 +1743,12 @@ impl Ledger {
                     COALESCE(SUM(CASE WHEN avoidable = 1 THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN avoidable = 1 THEN output_tokens ELSE 0 END), 0),
                     MAX(agent), MAX(agent_hash)
-               FROM commands WHERE session_hash = ?1 AND accounting_policy_version = ?2",
-                params![session_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
+               FROM commands WHERE session_hash IN (?1, ?2) AND accounting_policy_version = ?3",
+                params![
+                    session_hash,
+                    legacy_session_hash,
+                    CURRENT_ACCOUNTING_POLICY_VERSION
+                ],
                 |row| {
                     Ok(SessionEvasionSummary {
                         agent: row.get(4)?,
@@ -1595,10 +1770,14 @@ impl Ledger {
         summary.top_class = self
             .connection
             .query_row(
-                "SELECT evasion_class FROM commands WHERE session_hash = ?1
-                AND evasion_class IS NOT NULL AND accounting_policy_version = ?2
+                "SELECT evasion_class FROM commands WHERE session_hash IN (?1, ?2)
+                AND evasion_class IS NOT NULL AND accounting_policy_version = ?3
               GROUP BY evasion_class ORDER BY SUM(output_tokens) DESC, evasion_class LIMIT 1",
-                params![session_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
+                params![
+                    session_hash,
+                    legacy_session_hash,
+                    CURRENT_ACCOUNTING_POLICY_VERSION
+                ],
                 |row| row.get::<_, String>(0),
             )
             .optional()
@@ -1609,10 +1788,14 @@ impl Ledger {
             summary.top_class = self
                 .connection
                 .query_row(
-                    "SELECT evasion_class FROM policy_events WHERE session_hash = ?1
-                        AND accounting_policy_version = ?2
+                    "SELECT evasion_class FROM policy_events WHERE session_hash IN (?1, ?2)
+                        AND accounting_policy_version = ?3
                       GROUP BY evasion_class ORDER BY COUNT(*) DESC, evasion_class LIMIT 1",
-                    params![session_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
+                    params![
+                        session_hash,
+                        legacy_session_hash,
+                        CURRENT_ACCOUNTING_POLICY_VERSION
+                    ],
                     |row| row.get::<_, String>(0),
                 )
                 .optional()
@@ -1628,8 +1811,12 @@ impl Ledger {
                     COALESCE(SUM(CASE WHEN decision = 'deny' THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN decision = 'correction' THEN 1 ELSE 0 END), 0)
                FROM policy_events
-              WHERE session_hash = ?1 AND accounting_policy_version = ?2",
-                params![session_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
+              WHERE session_hash IN (?1, ?2) AND accounting_policy_version = ?3",
+                params![
+                    session_hash,
+                    legacy_session_hash,
+                    CURRENT_ACCOUNTING_POLICY_VERSION
+                ],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .map_err(LedgerError::Database)?;
@@ -1703,11 +1890,7 @@ impl Ledger {
     ) -> Result<EfficiencySummary, LedgerError> {
         let raw_predicate = raw_route_sql_predicate("rtk_cmd");
         let neutral_predicate = format!("({raw_predicate}) OR rtk_cmd = 'rtk write'");
-        let version_predicate = if include_legacy_versions {
-            "1 = 1"
-        } else {
-            "accounting_policy_version = 'privacy_typed_v1'"
-        };
+        let version_predicate = accounting_policy_predicate(include_legacy_versions);
         let totals_query = format!(
             "SELECT
                 COUNT(*),
@@ -1724,7 +1907,7 @@ impl Ledger {
              FROM commands
              WHERE measurement = 'estimated'
                AND COALESCE(route, '') != 'native_unaccounted'
-               AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+               AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
                AND ({version_predicate})
                AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                AND length(?2) = 1
@@ -1778,7 +1961,7 @@ impl Ledger {
              FROM commands
              WHERE measurement = 'estimated'
                AND COALESCE(route, '') != 'native_unaccounted'
-               AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+               AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
                AND ({version_predicate})
                AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                AND length(?2) = 1
@@ -1822,7 +2005,7 @@ impl Ledger {
                FROM commands
               WHERE (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND length(?2) = 1
-                AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
                 AND ({version_predicate})
                 AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
         );
@@ -1852,7 +2035,7 @@ impl Ledger {
             "SELECT channel, COUNT(*) FROM commands
               WHERE (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND length(?2) = 1
-                AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
                 AND ({version_predicate})
                 AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
               GROUP BY channel"
@@ -1926,15 +2109,18 @@ impl Ledger {
             )
             .map_err(LedgerError::Database)?;
         if !include_legacy_versions {
+            let excluded_query = format!(
+                "SELECT COUNT(*) FROM commands
+                  WHERE COALESCE(accounting_policy_version, '') != '{CURRENT_ACCOUNTING_POLICY_VERSION}'
+                    AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                    AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
+                    AND length(?2) = 1
+                    AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
+            );
             summary.excluded_legacy_operations = self
                 .connection
                 .query_row(
-                    "SELECT COUNT(*) FROM commands
-                      WHERE COALESCE(accounting_policy_version, '') != 'privacy_typed_v1'
-                        AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
-                        AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
-                        AND length(?2) = 1
-                        AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)",
+                    &excluded_query,
                     params![
                         project_path.map(|value| privacy_identity_hash("project", value)),
                         std::path::MAIN_SEPARATOR.to_string(),
@@ -1953,11 +2139,7 @@ impl Ledger {
         since_unix_seconds: Option<i64>,
         include_legacy_versions: bool,
     ) -> Result<Vec<OperationModeSummary>, LedgerError> {
-        let version_predicate = if include_legacy_versions {
-            "1 = 1"
-        } else {
-            "accounting_policy_version = 'privacy_typed_v1'"
-        };
+        let version_predicate = accounting_policy_predicate(include_legacy_versions);
         let query = format!(
             "SELECT operation_kind, operation_mode, accounting_stage, COUNT(*),
                     COALESCE(SUM(output_tokens), 0)
@@ -2157,6 +2339,17 @@ impl Ledger {
                 .map(|detail| detail.operation.as_str())
                 .unwrap_or(&classification.operation),
         );
+        let replacement = first_class_replacement(recorded_command)
+            .or_else(|| efficient_route_replacement(recorded_command));
+        let replacement_capability =
+            if attribution.route == OperationRoute::Optimized || replacement.is_some() {
+                ReplacementCapability::Available
+            } else {
+                ReplacementCapability::Unknown
+            };
+        let replacement_route = replacement
+            .as_ref()
+            .map(|_| format!("hzr exec run '<{family} command>'"));
         let command_hash = privacy_identity_hash(
             "command",
             &format!("{original_command}\0{recorded_command}"),
@@ -2164,7 +2357,8 @@ impl Ledger {
         let (project_hash, project_scope_hashes) = project_hashes(attribution.project_path);
         let session_hash = attribution
             .session_id
-            .map(|value| privacy_identity_hash("session", value));
+            .map(|value| session_identity_hash(&self.connection, value))
+            .transpose()?;
         let agent_hash = attribution
             .agent
             .map(|value| agent_identity_hash(&self.connection, value))
@@ -2182,12 +2376,13 @@ impl Ledger {
                     agent_hash, producer_version, accounting_policy_version,
                     evasion_class, wrapper_depth, interpreter_kind, path_form, stage_count,
                     hatch_marker, avoidable, enforcement_tier, fidelity_reason,
-                    fidelity_validation
+                    fidelity_validation, replacement_capability, replacement_route,
+                    replacement_reason
                  ) VALUES (
                     datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
                     ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40,
-                    ?41, ?42, ?43, ?44, ?45
+                    ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48
                  )",
                 params![
                     format!("[redacted:{family}]"),
@@ -2243,6 +2438,80 @@ impl Ledger {
                     evasion.map(|value| value.tier.as_str()),
                     evasion.and_then(|value| value.fidelity_reason.map(|reason| reason.as_str())),
                     evasion.map(|value| value.fidelity_validation.as_str()),
+                    replacement_capability.as_str(),
+                    replacement_route,
+                    replacement.as_ref().map(|value| value.rationale),
+                ],
+            )
+            .map_err(LedgerError::Database)?;
+        Ok(())
+    }
+
+    pub fn record_privacy_safe_fidelity_operation(
+        &self,
+        record: &PrivacySafeFidelityOperation,
+    ) -> Result<(), LedgerError> {
+        if record.reservation_id.is_empty() || record.evasion.class != EvasionClass::E7FidelityHatch
+        {
+            return Err(LedgerError::InvalidOperation(
+                "durable fidelity record requires an E7 reservation identity".into(),
+            ));
+        }
+        if record.measurement == OperationMeasurement::Unmeasured
+            && (record.input_tokens != 0 || record.output_tokens != 0)
+        {
+            return Err(LedgerError::InvalidOperation(
+                "unmeasured durable fidelity operations cannot carry token counts".into(),
+            ));
+        }
+        let saved = record.input_tokens.saturating_sub(record.output_tokens);
+        let savings_pct = if record.input_tokens == 0 {
+            0.0
+        } else {
+            saved as f64 * 100.0 / record.input_tokens as f64
+        };
+        self.connection
+            .execute(
+                "INSERT OR IGNORE INTO commands (
+                    timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
+                    saved_tokens, savings_pct, exec_time_ms, project_path, agent, session_id,
+                    channel, measurement, route, operation_family, command_hash, project_hash,
+                    project_scope_hashes, session_hash, agent_hash, producer_version,
+                    accounting_policy_version, evasion_class, wrapper_depth, interpreter_kind,
+                    path_form, stage_count, hatch_marker, avoidable, enforcement_tier,
+                    fidelity_reason, fidelity_validation, fidelity_reservation_id
+                 ) VALUES (
+                    datetime('now'), '[redacted:execution]', 'rtk raw execution', ?1, ?2, ?3,
+                    ?4, ?5, '[redacted]', ?6, NULL, 'hook_cli', ?14, 'bypassed',
+                    'execution', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?15, ?16, ?17, ?18,
+                    ?19, ?20, ?21, ?22, ?23, ?24, ?25
+                 )",
+                params![
+                    record.input_tokens,
+                    record.output_tokens,
+                    saved,
+                    savings_pct,
+                    record.execution_ms,
+                    record.agent.as_deref(),
+                    privacy_identity_hash("command", &record.reservation_id),
+                    record.project_hash.as_str(),
+                    record.project_scope_hashes.as_str(),
+                    record.session_hash.as_deref(),
+                    record.agent_hash.as_deref(),
+                    CURRENT_PRODUCER_VERSION,
+                    CURRENT_ACCOUNTING_POLICY_VERSION,
+                    record.measurement.as_str(),
+                    record.evasion.class.as_str(),
+                    record.evasion.wrapper_depth,
+                    record.evasion.interpreter.map(|value| value.as_str()),
+                    record.evasion.path_form.as_str(),
+                    record.evasion.stage_count,
+                    record.evasion.hatch_marker,
+                    record.evasion.avoidable,
+                    record.evasion.tier.as_str(),
+                    record.evasion.fidelity_reason.map(|value| value.as_str()),
+                    record.evasion.fidelity_validation.as_str(),
+                    record.reservation_id.as_str(),
                 ],
             )
             .map_err(LedgerError::Database)?;
@@ -2255,7 +2524,8 @@ impl Ledger {
         let (project_hash, project_scope_hashes) = project_hashes(event.project_path);
         let session_hash = event
             .session_id
-            .map(|value| privacy_identity_hash("session", value));
+            .map(|value| session_identity_hash(&self.connection, value))
+            .transpose()?;
         let agent_hash = event
             .agent
             .map(|value| agent_identity_hash(&self.connection, value))
@@ -2322,17 +2592,13 @@ impl Ledger {
         since_unix_seconds: Option<i64>,
         include_legacy_versions: bool,
     ) -> Result<BypassSummary, LedgerError> {
-        let version_predicate = if include_legacy_versions {
-            "1 = 1"
-        } else {
-            "accounting_policy_version = 'privacy_typed_v1'"
-        };
+        let version_predicate = accounting_policy_predicate(include_legacy_versions);
         let totals_query = format!(
             "SELECT COUNT(*), COALESCE(SUM(output_tokens), 0)
                FROM commands
               WHERE (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND (?2 IS NULL OR ?2 IS NOT NULL)
-                AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
                 AND ({version_predicate})
                 AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
         );
@@ -2349,15 +2615,16 @@ impl Ledger {
             )
             .map_err(LedgerError::Database)?;
         let query = format!(
-            "SELECT rtk_cmd, COUNT(*), COALESCE(SUM(output_tokens), 0)
+            "SELECT rtk_cmd, replacement_capability, replacement_route, replacement_reason,
+                    COUNT(*), COALESCE(SUM(output_tokens), 0)
              FROM commands
              WHERE ({})
-               AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+               AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
                AND ({version_predicate})
                AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                AND (?2 IS NULL OR ?2 IS NOT NULL)
                AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
-             GROUP BY rtk_cmd",
+             GROUP BY rtk_cmd, replacement_capability, replacement_route, replacement_reason",
             raw_route_sql_predicate("rtk_cmd")
         );
         let mut statement = self
@@ -2374,8 +2641,11 @@ impl Ledger {
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
-                        row.get::<_, u64>(1)?,
-                        row.get::<_, u64>(2)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, u64>(4)?,
+                        row.get::<_, u64>(5)?,
                     ))
                 },
             )
@@ -2383,44 +2653,51 @@ impl Ledger {
             .collect::<Result<Vec<_>, _>>()
             .map_err(LedgerError::Database)?;
 
-        let mut by_tool: BTreeMap<String, BypassTool> = BTreeMap::new();
-        let mut heaviest: BTreeMap<String, u64> = BTreeMap::new();
+        let mut by_tool: BTreeMap<(String, ReplacementCapability), BypassTool> = BTreeMap::new();
+        let mut heaviest: BTreeMap<(String, ReplacementCapability), u64> = BTreeMap::new();
         let mut operations = 0;
         let mut delivered = 0;
-        for (command, executions, delivered_tokens) in groups {
+        for (
+            command,
+            stored_capability,
+            stored_replacement,
+            stored_reason,
+            executions,
+            delivered_tokens,
+        ) in groups
+        {
             let classification = classify_operation(&command);
+            let inferred_replacement = classification.replacement.as_ref();
+            let stored_capability = parse_replacement_capability(stored_capability.as_deref());
+            let capability = if stored_capability == ReplacementCapability::Unknown
+                && inferred_replacement.is_some()
+            {
+                ReplacementCapability::Available
+            } else {
+                stored_capability
+            };
+            let key = (classification.operation.clone(), capability);
             operations += executions;
             delivered += delivered_tokens;
-            let entry = by_tool
-                .entry(classification.operation.clone())
-                .or_insert_with(|| BypassTool {
-                    tool: classification.operation.clone(),
-                    executions: 0,
-                    delivered_tokens_estimated: 0,
-                    example_command: command.clone(),
-                    replacement: None,
-                    first_class_replacement_available: false,
-                    rationale: None,
-                });
+            let entry = by_tool.entry(key.clone()).or_insert_with(|| BypassTool {
+                tool: classification.operation.clone(),
+                executions: 0,
+                delivered_tokens_estimated: 0,
+                example_command: command.clone(),
+                replacement: stored_replacement.clone(),
+                replacement_capability: capability,
+                rationale: stored_reason.clone(),
+            });
             entry.executions += executions;
             entry.delivered_tokens_estimated += delivered_tokens;
             // The costliest concrete invocation becomes the worked example, so the
             // suggestion an operator reads is the one that would have saved the most.
-            let previous = heaviest
-                .entry(classification.operation.clone())
-                .or_default();
+            let previous = heaviest.entry(key).or_default();
             if delivered_tokens >= *previous {
                 *previous = delivered_tokens;
                 entry.example_command = command.clone();
-                entry.replacement = classification
-                    .replacement
-                    .as_ref()
-                    .map(|replacement| replacement.suggestion.clone());
-                entry.first_class_replacement_available = classification.replacement.is_some();
-                entry.rationale = classification
-                    .replacement
-                    .as_ref()
-                    .map(|replacement| replacement.rationale.to_owned());
+                entry.replacement = stored_replacement.clone();
+                entry.rationale = stored_reason.clone();
             }
         }
         let mut by_tool = by_tool.into_values().collect::<Vec<_>>();
@@ -2447,22 +2724,19 @@ impl Ledger {
         project_path: Option<&str>,
         since_unix_seconds: Option<i64>,
         include_legacy_versions: bool,
-    ) -> Result<(Vec<OperationFamilySummary>, Vec<OperationCapabilityInput>), LedgerError> {
-        let version_predicate = if include_legacy_versions {
-            "1 = 1"
-        } else {
-            "accounting_policy_version = 'privacy_typed_v1'"
-        };
+    ) -> Result<Vec<OperationFamilySummary>, LedgerError> {
+        let version_predicate = accounting_policy_predicate(include_legacy_versions);
         let query = format!(
-            "SELECT rtk_cmd, route, COALESCE(operation_family, operation_kind), COUNT(*),
-                    COALESCE(SUM(output_tokens), 0)
+            "SELECT rtk_cmd, route, COALESCE(operation_family, operation_kind),
+                    replacement_capability, COUNT(*), COALESCE(SUM(output_tokens), 0)
                FROM commands
               WHERE (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND (?2 IS NULL OR ?2 IS NOT NULL)
                 AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
-                AND COALESCE(accounting_stage, 'internal_transport') != 'final_delivery'
+                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
                 AND ({version_predicate})
-              GROUP BY rtk_cmd, route, COALESCE(operation_family, operation_kind)"
+              GROUP BY rtk_cmd, route, COALESCE(operation_family, operation_kind),
+                       replacement_capability"
         );
         let mut statement = self
             .connection
@@ -2480,8 +2754,9 @@ impl Ledger {
                         row.get::<_, String>(0)?,
                         row.get::<_, Option<String>>(1)?,
                         row.get::<_, Option<String>>(2)?,
-                        row.get::<_, u64>(3)?,
+                        row.get::<_, Option<String>>(3)?,
                         row.get::<_, u64>(4)?,
+                        row.get::<_, u64>(5)?,
                     ))
                 },
             )
@@ -2489,9 +2764,11 @@ impl Ledger {
             .collect::<Result<Vec<_>, _>>()
             .map_err(LedgerError::Database)?;
 
-        let mut families = BTreeMap::<(String, String), OperationFamilySummary>::new();
-        let mut capability_targets = BTreeMap::<String, Vec<(String, OperationRoute)>>::new();
-        for (command, stored_route, stored_operation, operations, delivered) in rows {
+        let mut families =
+            BTreeMap::<(String, String, ReplacementCapability), OperationFamilySummary>::new();
+        for (command, stored_route, stored_operation, stored_capability, operations, delivered) in
+            rows
+        {
             let classification = classify_operation(&command);
             let route = route_from_ledger(stored_route.as_deref(), classification.route);
             let family = stored_operation
@@ -2499,18 +2776,17 @@ impl Ledger {
                 .and_then(parse_operation_kind)
                 .map(|operation| operation.as_str().to_owned())
                 .unwrap_or(classification.operation);
-            let replacement_available = route == OperationRoute::Optimized
-                || first_class_replacement(&command).is_some()
-                || efficient_route_replacement(&command).is_some();
-            if route == OperationRoute::Bypassed && !replacement_available {
-                let candidate = managed_raw_payload(&command).unwrap_or(&command).to_owned();
-                let target = (family.clone(), route);
-                let targets = capability_targets.entry(candidate).or_default();
-                if !targets.contains(&target) {
-                    targets.push(target);
-                }
-            }
-            let key = (family.clone(), route.as_str().to_owned());
+            let stored_capability = parse_replacement_capability(stored_capability.as_deref());
+            let capability = if stored_capability == ReplacementCapability::Unknown
+                && (route == OperationRoute::Optimized
+                    || first_class_replacement(&command).is_some()
+                    || efficient_route_replacement(&command).is_some())
+            {
+                ReplacementCapability::Available
+            } else {
+                stored_capability
+            };
+            let key = (family.clone(), route.as_str().to_owned(), capability);
             let summary = families
                 .entry(key)
                 .or_insert_with(|| OperationFamilySummary {
@@ -2518,12 +2794,11 @@ impl Ledger {
                     route,
                     operations: 0,
                     delivered_tokens_estimated: 0,
-                    first_class_replacement_available: false,
+                    replacement_capability: capability,
                 });
             summary.operations = summary.operations.saturating_add(operations);
             summary.delivered_tokens_estimated =
                 summary.delivered_tokens_estimated.saturating_add(delivered);
-            summary.first_class_replacement_available |= replacement_available;
         }
 
         let mut summaries = families.into_values().collect::<Vec<_>>();
@@ -2535,11 +2810,7 @@ impl Ledger {
                 .then_with(|| left.family.cmp(&right.family))
                 .then_with(|| left.route.as_str().cmp(right.route.as_str()))
         });
-        let capability_inputs = capability_targets
-            .into_iter()
-            .map(|(command, targets)| OperationCapabilityInput { command, targets })
-            .collect();
-        Ok((summaries, capability_inputs))
+        Ok(summaries)
     }
 
     pub fn project_activity(
@@ -2550,6 +2821,7 @@ impl Ledger {
         let raw_predicate = raw_route_sql_predicate("rtk_cmd");
         let measured_predicate =
             "measurement = 'estimated' AND COALESCE(route, '') != 'native_unaccounted'";
+        let headline_stage_predicate = "COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')";
         let activity_query = format!(
             "SELECT
                 COUNT(*),
@@ -2568,14 +2840,15 @@ impl Ledger {
                 MAX(timestamp)
              FROM commands
              WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
-               AND (?2 IS NULL OR ?2 IS NOT NULL)
-               AND command_hash IS NOT NULL"
+               AND accounting_policy_version = ?2
+               AND command_hash IS NOT NULL
+               AND {headline_stage_predicate}"
         );
         let mut summary = self
             .connection
             .query_row(
                 &activity_query,
-                params![project_hash, std::path::MAIN_SEPARATOR.to_string()],
+                params![project_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
                 |row| {
                     Ok(ProjectActivitySummary {
                         operations: row.get(0)?,
@@ -2592,6 +2865,7 @@ impl Ledger {
                         first_record_at: row.get(7)?,
                         last_record_at: row.get(8)?,
                         unscoped_operations: 0,
+                        excluded_legacy_operations: 0,
                         recent_operations: Vec::new(),
                     })
                 },
@@ -2602,8 +2876,10 @@ impl Ledger {
             .query_row(
                 "SELECT COUNT(*) FROM commands
                   WHERE project_path = ''
-                    AND command_hash IS NOT NULL",
-                [],
+                    AND accounting_policy_version = ?1
+                    AND command_hash IS NOT NULL
+                    AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')",
+                [CURRENT_ACCOUNTING_POLICY_VERSION],
                 |row| row.get(0),
             )
             .map_err(LedgerError::Database)?;
@@ -2614,14 +2890,15 @@ impl Ledger {
                     "SELECT COUNT(*)
                      FROM commands
                      WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
-                       AND (?2 IS NULL OR ?2 IS NOT NULL)
+                       AND accounting_policy_version = ?2
                        AND measurement = 'estimated'
                        AND COALESCE(route, '') != 'native_unaccounted'
                        AND command_hash IS NOT NULL
+                       AND {headline_stage_predicate}
                        AND ({})",
                     raw_route_sql_predicate("rtk_cmd")
                 ),
-                params![project_hash, std::path::MAIN_SEPARATOR.to_string()],
+                params![project_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
                 |row| row.get(0),
             )
             .map_err(LedgerError::Database)?;
@@ -2632,14 +2909,15 @@ impl Ledger {
                     "SELECT COUNT(*)
                      FROM commands
                      WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
-                       AND (?2 IS NULL OR ?2 IS NOT NULL)
+                       AND accounting_policy_version = ?2
                        AND measurement = 'estimated'
                        AND COALESCE(route, '') != 'native_unaccounted'
                        AND command_hash IS NOT NULL
+                       AND {headline_stage_predicate}
                        AND NOT ({})",
                     raw_route_sql_predicate("rtk_cmd")
                 ),
-                params![project_hash, std::path::MAIN_SEPARATOR.to_string()],
+                params![project_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
                 |row| row.get(0),
             )
             .map_err(LedgerError::Database)?;
@@ -2654,10 +2932,23 @@ impl Ledger {
                     COALESCE(SUM(measurement = 'unmeasured' AND route = 'bypassed'), 0)
                  FROM commands
                  WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
-                   AND (?2 IS NULL OR ?2 IS NOT NULL)
-                   AND command_hash IS NOT NULL",
-                params![project_hash, std::path::MAIN_SEPARATOR.to_string()],
+                   AND accounting_policy_version = ?2
+                   AND command_hash IS NOT NULL
+                   AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')",
+                params![project_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
                 |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(LedgerError::Database)?;
+        summary.excluded_legacy_operations = self
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM commands
+                  WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
+                    AND accounting_policy_version != ?2
+                    AND command_hash IS NOT NULL
+                    AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')",
+                params![project_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
+                |row| row.get(0),
             )
             .map_err(LedgerError::Database)?;
         let mut statement = self
@@ -2668,15 +2959,16 @@ impl Ledger {
                         COALESCE(route, ''), producer_version, accounting_policy_version
                  FROM commands
                  WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
-                   AND (?2 IS NULL OR ?2 IS NOT NULL)
+                   AND accounting_policy_version = ?2
                    AND command_hash IS NOT NULL
+                   AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
                  ORDER BY id DESC
                  LIMIT 24",
             )
             .map_err(LedgerError::Database)?;
         summary.recent_operations = statement
             .query_map(
-                params![project_hash, std::path::MAIN_SEPARATOR.to_string()],
+                params![project_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
                 |row| {
                     let command: String = row.get(2)?;
                     let (mut operation, classified_route, replacement, rationale) =
@@ -3156,6 +3448,8 @@ fn import_legacy_efficiency(connection: &Connection, path: &Path) -> Result<(), 
 pub enum LedgerError {
     #[error("invalid operation accounting: {0}")]
     InvalidOperation(String),
+    #[error("invalid ledger privacy identity: {0}")]
+    InvalidPrivacyIdentity(String),
     #[error("failed to create ledger directory {path}: {source}")]
     Directory {
         path: PathBuf,
@@ -3233,6 +3527,7 @@ mod tests {
         Ledger, LedgerRecord, OperationAttribution, PriceTable, ProjectOperationRoute, StatsQuery,
         operation_identity,
     };
+    use crate::operation::ReplacementCapability;
 
     fn insert_family_row(
         ledger: &Ledger,
@@ -3251,8 +3546,15 @@ mod tests {
                     measurement, route, operation_kind, producer_version,
                     accounting_policy_version
                  ) VALUES (datetime(?1, 'unixepoch'), '', ?2, ?3, ?3, 0, 0, 0, '',
-                           'hook_cli', 'estimated', ?4, ?5, 'test', 'privacy_typed_v1')",
-                params![timestamp, command, delivered, route, operation_kind],
+                           'hook_cli', 'estimated', ?4, ?5, 'test', ?6)",
+                params![
+                    timestamp,
+                    command,
+                    delivered,
+                    route,
+                    operation_kind,
+                    CURRENT_ACCOUNTING_POLICY_VERSION
+                ],
             )
             .expect("family fixture row");
     }
@@ -3331,7 +3633,7 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_gate_capability_batch_reconciles_family_and_tool_views() {
+    fn acceptance_gate_stored_capability_reconciles_family_and_tool_views() {
         let directory = tempdir().expect("temporary directory");
         let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
         insert_family_row(
@@ -3342,11 +3644,18 @@ mod tests {
             Some("bypassed"),
             Some("other"),
         );
-        let mut collection = ledger
+        ledger
+            .connection
+            .execute(
+                "UPDATE commands
+                    SET replacement_capability = 'unavailable'
+                  WHERE rtk_cmd = 'rtk raw other'",
+                [],
+            )
+            .expect("persist capability evidence");
+        let collection = ledger
             .stats_collection(StatsQuery::default())
             .expect("stats collection");
-        assert_eq!(collection.capability_commands().count(), 1);
-        assert!(collection.apply_capabilities(&[true]));
         let family = collection
             .snapshot
             .by_family
@@ -3360,8 +3669,14 @@ mod tests {
             .iter()
             .find(|tool| tool.tool == "other")
             .expect("bypass tool");
-        assert!(family.first_class_replacement_available);
-        assert!(tool.first_class_replacement_available);
+        assert_eq!(
+            family.replacement_capability,
+            ReplacementCapability::Unavailable
+        );
+        assert_eq!(
+            tool.replacement_capability,
+            ReplacementCapability::Unavailable
+        );
     }
 
     #[test]
@@ -3412,9 +3727,10 @@ mod tests {
             ("rg", 2)
         );
         assert_eq!(families[1].delivered_tokens_estimated, 30);
-        assert!(
-            !families[1].first_class_replacement_available,
-            "snapshot must not reconstruct capability outside canonical fork batch"
+        assert_eq!(
+            families[1].replacement_capability,
+            ReplacementCapability::Unknown,
+            "historical rows without evidence must remain unknown"
         );
     }
 
@@ -3451,33 +3767,26 @@ mod tests {
             None,
         );
 
-        let mut collection = ledger
+        ledger
+            .connection
+            .execute(
+                "UPDATE commands
+                    SET replacement_capability = 'available'
+                  WHERE rtk_cmd GLOB 'rtk raw bun *'
+                     OR rtk_cmd GLOB 'rtk raw git *'
+                     OR rtk_cmd GLOB 'rtk raw ssh *'
+                     OR rtk_cmd GLOB 'rtk raw gh *'
+                     OR rtk_cmd GLOB 'rtk raw cargo *'",
+                [],
+            )
+            .expect("persist canonical registry evidence");
+        let collection = ledger
             .stats_collection(StatsQuery {
                 project_path: None,
                 since_unix_seconds: Some(cutoff),
                 include_legacy_versions: true,
             })
             .expect("seven-day snapshot");
-        let commands = collection
-            .capability_commands()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            commands.len(),
-            6,
-            "only distinct in-window commands are probed"
-        );
-        assert!(!commands.iter().any(|command| command.contains("terraform")));
-        let supported = commands
-            .iter()
-            .map(|command| {
-                ["bun", "git", "ssh", "gh", "cargo"]
-                    .iter()
-                    .any(|family| command.starts_with(family))
-            })
-            .collect::<Vec<_>>();
-        assert!(collection.apply_capabilities(&supported));
-        assert!(!collection.apply_capabilities(&supported[..supported.len() - 1]));
         let families = collection.snapshot.by_family;
 
         for family in ["bun", "git", "ssh", "gh", "cargo"] {
@@ -3485,10 +3794,15 @@ mod tests {
                 .iter()
                 .find(|summary| summary.family == family)
                 .expect("dedicated legacy family");
-            assert!(summary.first_class_replacement_available, "{family}");
+            assert_eq!(
+                summary.replacement_capability,
+                ReplacementCapability::Available,
+                "{family}"
+            );
         }
         assert!(families.iter().any(|summary| {
-            summary.family == "unknown-tool" && !summary.first_class_replacement_available
+            summary.family == "unknown-tool"
+                && summary.replacement_capability == ReplacementCapability::Unknown
         }));
         assert!(!families.iter().any(|summary| summary.family == "terraform"));
         let encoded = serde_json::to_string(&families).expect("family JSON");
@@ -3800,13 +4114,51 @@ mod tests {
                 )
                 .expect("record stage");
         }
+        let control_plane = AccountingAttribution {
+            operation: AccountingOperationKind::Doctor,
+            mode: AccountingOperationMode::DoctorCheck,
+            stage: AccountingStage::ControlPlane,
+            requested_mode: None,
+            effective_mode: Some(AccountingOperationMode::DoctorCheck),
+            search_strategy: None,
+            search_fallback_code: None,
+            include_content: None,
+            limit: None,
+            path_scope_count: None,
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: None,
+            evasion: None,
+        };
+        ledger
+            .record_operation_attributed_with_detail(
+                "hzr doctor",
+                "hzr doctor",
+                10,
+                10,
+                1,
+                DetailedOperationAttribution {
+                    attribution: OperationAttribution {
+                        project_path: "/work",
+                        agent: Some("cli"),
+                        session_id: Some("session"),
+                        channel: OperationChannel::HookCli,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Optimized,
+                    },
+                    detail: Some(&control_plane),
+                    evasion: None,
+                },
+            )
+            .expect("record control plane stage");
 
         let summary = ledger.efficiency_summary().expect("efficiency summary");
         assert_eq!(summary.operations, 1);
         assert_eq!(summary.baseline_tokens_estimated, 100);
         assert_eq!(summary.delivered_tokens_estimated, 20);
         assert_eq!(summary.total_observed_operations, 1);
-        assert_eq!(summary.by_mode.len(), 2);
+        assert_eq!(summary.by_mode.len(), 3);
         assert!(
             summary
                 .by_mode
@@ -3817,6 +4169,10 @@ mod tests {
         assert_eq!(bypass.lifetime.operations, 0);
         assert_eq!(bypass.lifetime.total_operations, 1);
         assert_eq!(bypass.lifetime.total_delivered_tokens_estimated, 20);
+        let project = ledger.project_activity("/work").expect("project activity");
+        assert_eq!(project.operations, 1);
+        assert_eq!(project.recent_operations.len(), 1);
+        assert_eq!(project.delivered_tokens_estimated, 20);
     }
 
     #[test]
@@ -3920,6 +4276,48 @@ mod tests {
     }
 
     #[test]
+    fn project_activity_separates_current_policy_from_legacy_rows() {
+        let directory = tempdir().expect("temp directory");
+        let ledger = Ledger::open(&directory.path().join("usage.sqlite")).expect("ledger");
+        for command in ["cargo test current", "cargo test legacy"] {
+            ledger
+                .record_operation_attributed(
+                    command,
+                    "rtk cargo test",
+                    100,
+                    20,
+                    1,
+                    OperationAttribution {
+                        project_path: "/work/project",
+                        agent: Some("test"),
+                        session_id: Some("session"),
+                        channel: OperationChannel::HookCli,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Optimized,
+                    },
+                )
+                .expect("operation");
+        }
+        ledger
+            .connection
+            .execute(
+                "UPDATE commands SET accounting_policy_version = ?1 WHERE id = (SELECT MAX(id) FROM commands)",
+                [super::LEGACY_ACCOUNTING_POLICY_VERSION_V1],
+            )
+            .expect("legacy fixture");
+
+        let activity = ledger
+            .project_activity("/work/project")
+            .expect("current project activity");
+        assert_eq!(activity.operations, 1);
+        assert_eq!(activity.excluded_legacy_operations, 1);
+        assert_eq!(activity.recent_operations.len(), 1);
+        assert!(activity.recent_operations.iter().all(|operation| {
+            operation.policy_version.as_deref() == Some(CURRENT_ACCOUNTING_POLICY_VERSION)
+        }));
+    }
+
+    #[test]
     fn test_proxy_ledger_rows_are_classified_as_raw() {
         assert_eq!(
             operation_identity("rtk proxy sed -n 1,20p file"),
@@ -3981,6 +4379,13 @@ mod tests {
             .expect("activity fixture");
         drop(ledger);
         let ledger = Ledger::open(&path).expect("scrubbed ledger");
+        ledger
+            .connection
+            .execute(
+                "UPDATE commands SET accounting_policy_version = ?1",
+                [CURRENT_ACCOUNTING_POLICY_VERSION],
+            )
+            .expect("current-policy scope fixture");
 
         let activity = ledger
             .project_activity("/work/a")
@@ -4421,6 +4826,159 @@ mod tests {
         let stored_json = serde_json::to_string(&stored).expect("stored JSON");
         assert!(!stored_json.contains(sentinel));
         assert_eq!(stored.4.as_deref(), Some("machine_protocol"));
+
+        let keyed_session_hash: String = ledger
+            .connection
+            .query_row("SELECT session_hash FROM commands LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .expect("stored session pseudonym");
+        assert!(keyed_session_hash.starts_with("hmac-sha256:"));
+        assert_ne!(
+            keyed_session_hash,
+            super::privacy_identity_hash("session", "session-private-id")
+        );
+        let identity_version: String = ledger
+            .connection
+            .query_row(
+                "SELECT value FROM ledger_privacy_meta WHERE key = 'identity_hmac_version'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("identity HMAC version");
+        assert_eq!(identity_version, super::IDENTITY_HMAC_KEY256_V2);
+
+        // Rows written before the keyed-session migration cannot be rewritten because their
+        // raw session IDs were intentionally scrubbed. Budget reads therefore match both the
+        // current keyed pseudonym and the legacy domain-separated SHA-256 pseudonym.
+        ledger
+            .connection
+            .execute(
+                "UPDATE commands SET session_hash = ?1, accounting_policy_version = ?2
+                  WHERE id = (SELECT MIN(id) FROM commands)",
+                params![
+                    super::privacy_identity_hash("session", "session-private-id"),
+                    super::LEGACY_ACCOUNTING_POLICY_VERSION_V1,
+                ],
+            )
+            .expect("legacy session fixture");
+        let migrated_usage = ledger
+            .fidelity_session_usage("session-private-id", super::FidelityAllowance::default())
+            .expect("legacy-compatible fidelity usage");
+        assert_eq!(migrated_usage.operations, 5);
+        let current = ledger.efficiency_summary().expect("current-only claims");
+        assert_eq!(current.operations, 4);
+        assert_eq!(current.excluded_legacy_operations, 1);
+        let current_stats = ledger
+            .stats_collection(StatsQuery::default())
+            .expect("current stats");
+        assert_eq!(current_stats.snapshot.efficiency.operations, 4);
+        assert_eq!(current_stats.snapshot.bypass.lifetime.total_operations, 4);
+        assert_eq!(current_stats.snapshot.evasion.fidelity_operations, 4);
+        assert_eq!(
+            current_stats
+                .snapshot
+                .by_family
+                .iter()
+                .map(|family| family.operations)
+                .sum::<u64>(),
+            4
+        );
+        let compatibility_stats = ledger
+            .stats_collection(StatsQuery {
+                include_legacy_versions: true,
+                ..StatsQuery::default()
+            })
+            .expect("legacy-inclusive stats");
+        assert_eq!(compatibility_stats.snapshot.efficiency.operations, 5);
+        assert_eq!(
+            compatibility_stats
+                .snapshot
+                .bypass
+                .lifetime
+                .total_operations,
+            5
+        );
+        assert_eq!(compatibility_stats.snapshot.evasion.fidelity_operations, 5);
+
+        drop(ledger);
+        let reopened = Ledger::open(&directory.path().join("ledger.sqlite")).expect("reopen");
+        let reopened_usage = reopened
+            .fidelity_session_usage("session-private-id", super::FidelityAllowance::default())
+            .expect("stable keyed identity after restart");
+        assert_eq!(reopened_usage.operations, 5);
+    }
+
+    #[test]
+    fn identity_hmac_key_integrity_is_versioned_and_fail_closed() {
+        assert!(super::PrivacyPseudonymizer::from_key("").is_err());
+        assert!(super::PrivacyPseudonymizer::from_key("not-a-key").is_err());
+
+        for (key, version) in [
+            (String::new(), super::IDENTITY_HMAC_KEY256_V2),
+            ("ab".repeat(32), "unknown_hmac_v9"),
+            (
+                "00000000-0000-4000-8000-000000000000".into(),
+                super::IDENTITY_HMAC_KEY256_V2,
+            ),
+        ] {
+            let directory = tempdir().expect("temporary directory");
+            let path = directory.path().join("ledger.sqlite");
+            drop(Ledger::open(&path).expect("initial ledger"));
+            let connection = Connection::open(&path).expect("fixture connection");
+            connection
+                .execute(
+                    "UPDATE ledger_privacy_meta SET value = ?1 WHERE key = 'identity_hmac_key'",
+                    [key.as_str()],
+                )
+                .expect("corrupt key fixture");
+            connection
+                .execute(
+                    "UPDATE ledger_privacy_meta SET value = ?1 WHERE key = 'identity_hmac_version'",
+                    [version],
+                )
+                .expect("corrupt version fixture");
+            drop(connection);
+            assert!(
+                matches!(
+                    Ledger::open(&path),
+                    Err(super::LedgerError::InvalidPrivacyIdentity(_))
+                ),
+                "key/version corruption must fail closed"
+            );
+        }
+
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("legacy.sqlite");
+        drop(Ledger::open(&path).expect("initial ledger"));
+        let connection = Connection::open(&path).expect("fixture connection");
+        let legacy_key = "00000000-0000-4000-8000-000000000000";
+        connection
+            .execute(
+                "UPDATE ledger_privacy_meta SET value = ?1 WHERE key = 'identity_hmac_key'",
+                [legacy_key],
+            )
+            .expect("legacy UUID key");
+        connection
+            .execute(
+                "DELETE FROM ledger_privacy_meta WHERE key = 'identity_hmac_version'",
+                [],
+            )
+            .expect("unversioned legacy fixture");
+        drop(connection);
+        let ledger = Ledger::open(&path).expect("legacy UUID key remains supported");
+        let persisted: (String, String) = ledger
+            .connection
+            .query_row(
+                "SELECT
+                    (SELECT value FROM ledger_privacy_meta WHERE key = 'identity_hmac_key'),
+                    (SELECT value FROM ledger_privacy_meta WHERE key = 'identity_hmac_version')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("persisted legacy key metadata");
+        assert_eq!(persisted.0, legacy_key);
+        assert_eq!(persisted.1, super::IDENTITY_HMAC_UUID_V1);
     }
 
     #[test]

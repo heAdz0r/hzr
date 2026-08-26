@@ -151,6 +151,12 @@ impl Config {
         if self.daemon.request_limit_bytes == 0 {
             return Err(ConfigError::InvalidRequestLimit);
         }
+        if self.engines.grepai_watcher_limit == 0
+            || self.engines.grepai_watcher_idle_ttl_seconds == 0
+            || self.engines.grepai_watcher_sweep_seconds == 0
+        {
+            return Err(ConfigError::InvalidWatcherLifecycle);
+        }
         if self.policy.input_token_budget() == 0 {
             return Err(ConfigError::InvalidPolicyBudget);
         }
@@ -276,6 +282,9 @@ pub struct EngineConfig {
     /// blocks its first memory mutation on an implicit model download.
     pub icm_embeddings: bool,
     pub auto_index: bool,
+    pub grepai_watcher_limit: usize,
+    pub grepai_watcher_idle_ttl_seconds: u64,
+    pub grepai_watcher_sweep_seconds: u64,
 }
 
 impl Default for EngineConfig {
@@ -286,6 +295,9 @@ impl Default for EngineConfig {
             auto_start_icm: true,
             icm_embeddings: false,
             auto_index: true,
+            grepai_watcher_limit: 8,
+            grepai_watcher_idle_ttl_seconds: 15 * 60,
+            grepai_watcher_sweep_seconds: 30,
         }
     }
 }
@@ -448,6 +460,8 @@ pub enum ConfigError {
     NonLoopbackBind(std::net::SocketAddr),
     #[error("daemon request limit must be greater than zero")]
     InvalidRequestLimit,
+    #[error("grepai watcher limit, idle TTL, and sweep interval must be greater than zero")]
+    InvalidWatcherLifecycle,
     #[error("context token limit must exceed output reserve plus safety margin")]
     InvalidPolicyBudget,
     #[error("activation workspaces require absolute roots and lowercase SHA-256 identities")]
@@ -728,6 +742,20 @@ mod tests {
         let config = EngineConfig::default();
 
         assert!(!config.icm_embeddings);
+        assert_eq!(config.grepai_watcher_limit, 8);
+        assert_eq!(config.grepai_watcher_idle_ttl_seconds, 15 * 60);
+        assert_eq!(config.grepai_watcher_sweep_seconds, 30);
+    }
+
+    #[test]
+    fn test_config_rejects_disabled_watcher_lifecycle_budget() {
+        let mut config = Config::default();
+        config.engines.grepai_watcher_limit = 0;
+
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidWatcherLifecycle)
+        ));
     }
 
     #[test]

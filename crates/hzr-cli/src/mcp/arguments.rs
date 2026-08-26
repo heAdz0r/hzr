@@ -168,13 +168,3 @@ pub(super) fn string_array(arguments: &Value, key: &str, maximum: usize) -> Resu
         })
         .collect()
 }
-
-pub(super) fn reject_unknown(arguments: &Value, allowed: &[&str]) -> Result<()> {
-    let object = arguments
-        .as_object()
-        .context("tool arguments must be an object")?;
-    if let Some(key) = object.keys().find(|key| !allowed.contains(&key.as_str())) {
-        anyhow::bail!("unknown argument `{key}`");
-    }
-    Ok(())
-}

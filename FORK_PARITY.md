@@ -1,7 +1,7 @@
-# HZR 0.5.1 — fork-core parity ledger
+# HZR 0.6.0 — fork-core parity ledger
 
 **Audit date:** 2026-08-23
-**Status:** HZR 0.5.1 audit delta on the 0.5.0 upstream sync; full deterministic gate green
+**Status:** HZR 0.6.0 audit delta on the 0.5.0 upstream sync; full deterministic gate green
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -37,12 +37,12 @@ Snapshot v2 includes ordered path, entry type, Git-portable mode, size and conte
 
 Baseline identity immutable. `fork-core/rtk` after `v0.1.0` develops directly into HZR: each delta is required to preserve the inherited capability surface, update the current-engine identity/parity and go through a full regression suite. The old `/Users/andrew/Programming/rtk` is not changed.
 
-The 0.5.1 gate verified current engine manifest
+The 0.6.0 gate verified current engine manifest
 `be0459b8d4dde1a76dcfe836afd77fe0432cf5cb22e83845c522c4568f6a3f53`, 1,940 passed tests,
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
 
-### 0.5.1 audit delta
+### 0.6.0 audit delta
 
 A post-release audit of 0.5.0 for correctness, races and efficiency headroom found two defects
 in 0.5.0's own new code and one long-standing cost in the most-used route.
@@ -96,6 +96,21 @@ Passing raw diff shapes through unchanged **reduces** measured savings on those 
 is the correct direction, and a ledger delta across this boundary is a behaviour change rather
 than a regression.
 
+### 0.6.0 fidelity correction delta
+
+A critical command-fidelity audit found that `git log` changed history semantics by adding
+`--no-merges` and truncating records without a recovery path. The current engine now preserves
+the requested `git log` byte stream, including merge commits and its terminal newline. The generic
+never-worse guard also rejects an empty successful rendering when the child emitted content and
+rejects a rendering that erases the child failure signal. Bounded failure recovery retains both
+the beginning and terminal evidence, with an explicit omitted-line count.
+
+`read` accounting now measures the complete delivered stdout, including recovery notices and the
+newlines that join them to source text. Regression tests compare native and filtered merge history,
+verify terminal failure evidence, and assert the ledger token estimate against the exact captured
+stdout. These fidelity changes intentionally take zero savings credit where preserving semantics
+requires the native output.
+
 ### Current command-output parity delta
 
 The controlled RAW / upstream RTK v0.44.1 / HZR run, methodology and replayable
@@ -133,7 +148,7 @@ failure-first filtering cannot change a failing verification command into succes
 |---|---|
 | ✅ |Implemented and locally tested in the specified area|
 | 🟡 |There is a working path, but an honestly described border remains|
-| ⚪ |Not knowingly included in 0.5.1; exact compatibility path is not affected|
+| ⚪ |Not knowingly included in 0.6.0; exact compatibility path is not affected|
 
 ## Capability and routing matrix
 
@@ -228,13 +243,13 @@ An external grepai process that does not respect HZR `hzr-owner.lock` cannot be 
 
 ## Caveman boundary
 
-Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.5.1 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
+Managed bridge disables native RTK, repo map, memory, hooks, tool/ML compression, auto-snapshot, telemetry, external resources, builtins, agents, skills and extensions. An exact custom-tool allowlist applies before each tool call. Node/npm integrity is checked before the agent session; to prompt - authenticated daemon health with protocol 1, HZR 0.6.0 and exactly one ready `rtk`. The order is checked by the real Node runtime test through the same `prepareManagedRuntime` that calls production `run()`.
 
 Response density is set before generation by a short cache-stable contract. HZR Codec remains a separate explicit protected transform for CLI/API. Text quality is protected by instructions, native layer guards and raw exact tools; this is not a formal semantic equivalence proof.
 
 ## Release gates
 
-### Functional 0.5.1 gates
+### Functional 0.6.0 gates
 
 - [x] Exact dirty fork snapshot v2 imported and verified.
 - [x] Exact fork builds and its synthetic-Git suite passes.

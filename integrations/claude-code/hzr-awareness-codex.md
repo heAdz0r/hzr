@@ -1,10 +1,11 @@
 # HZR awareness for Codex
 
-Use HZR as the sole agent-efficiency control plane. Plan with `hzr context
-plan`, search with `hzr rgai` or exact `hzr search`, and persist memory with
-`hzr memory`. Use `hzr rtk -- read|write|raw` for the complete inherited engine
-surface. Do not invoke another RTK installation or create local grepai/ICM
-stores outside HZR ownership.
+Use HZR as the sole agent-efficiency control plane. The managed AGENTS.md block
+is rendered from `share/hzr/agent-capabilities.json`: plan with `hzr context plan`,
+search with `hzr search`, read and write with the first-class `hzr read` and
+`hzr write` routes, and run shell or project-build commands through `hzr exec run`.
+Use `hzr rtk -- ...` only for the complete inherited engine surface. Do not invoke
+another RTK installation or create local grepai/ICM stores outside HZR ownership.
 
 TDD is opt-in. Use `hzr tdd` when the user or repository requires it, or when
 regression risk justifies test-first overhead. When token or time efficiency
@@ -35,6 +36,9 @@ Then prefer these tools — they reach the same single store and index as the CL
   *before* re-reading files analysed in an earlier session.
 - `hzr_memory_store` — persist a decision, resolved error, preference or finished
   work. Not for ephemeral session state.
+- `hzr_memory_update` — replace one superseded memory after namespace verification.
+- `hzr_memory_forget` — delete one invalid memory after namespace verification.
+- `hzr_memory_prune` — preview or remove low-weight memories in one namespace.
 - `hzr_codec` — apply or shadow-measure protected response-density transforms.
 
 Inputs reject invalid types, enums, unknown fields and limits outside 1–50.

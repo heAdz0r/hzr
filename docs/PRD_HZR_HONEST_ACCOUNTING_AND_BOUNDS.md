@@ -1,6 +1,22 @@
 # HZR Honest Accounting and Bounded Output — Product Requirements Document
 
-**Status:** implemented and release-verified for HZR 0.3.7
+> [!IMPORTANT]
+> **Status: historical / superseded.** This is the preserved HZR 0.3.7
+> requirements and verification record, not the current product contract. Its unique W1–W8
+> acceptance provenance remains authoritative for auditing that release; use the current owners
+> below for new implementation and release decisions.
+
+### Requirement migration map
+
+| Historical requirement | Current owner |
+|---|---|
+| W1–W3 — accounting coverage, MCP attribution, native-tool blind spots | [`PRD_HZR_TOKEN_ECONOMY_UTILIZATION.md`](PRD_HZR_TOKEN_ECONOMY_UTILIZATION.md) and [`PRD_HZR_ANTI_EVASION_SOTA.md`](PRD_HZR_ANTI_EVASION_SOTA.md) |
+| W4 and W6 — bounded recovery and effective search reporting | [`../HZR.md`](../HZR.md) and [`SOTA_RELEASE_GATES.md`](SOTA_RELEASE_GATES.md) |
+| W5 — typed protocol fields must have real producers | [`../FORK_PARITY.md`](../FORK_PARITY.md) and [`SOTA_RELEASE_GATES.md`](SOTA_RELEASE_GATES.md) |
+| W7 — observable progress and failure evidence | [`PRD_HZR_SOTA_OBSERVATORY.md`](PRD_HZR_SOTA_OBSERVATORY.md) |
+| W8 — symlink-safe workspace identity | [`PRD_HZR_PROJECT_ACTIVATION.md`](PRD_HZR_PROJECT_ACTIVATION.md) |
+
+**Historical implementation status:** implemented and release-verified for HZR 0.3.7
 
 **Surface:** usage ledger, `hzr stats`, MCP gateway, `rtk read`, `hzr search`, `hzr-protocol`, `install.sh`, `scripts/build-bundle.sh`
 

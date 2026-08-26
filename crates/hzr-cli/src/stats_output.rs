@@ -128,7 +128,7 @@ fn write_operation_modes(
             "│ {:<8} │ {:<17} │ {:<18} │ {:>6} │ {:>9} │",
             mode.operation.as_str(),
             truncate(mode.mode.as_str(), 17),
-            mode.stage.as_str(),
+            truncate(mode.stage.as_str(), 18),
             format_count(mode.operations),
             format_count(mode.delivered_tokens_estimated)
         )?;
@@ -173,11 +173,12 @@ fn write_operation_families(
             hzr_core::OperationRoute::Bypassed => "raw",
             hzr_core::OperationRoute::NativeUnaccounted => "native_unaccounted",
         };
-        let route = if family.first_class_replacement_available {
-            format!("{route} / yes")
-        } else {
-            format!("{route} / no")
+        let capability = match family.replacement_capability {
+            hzr_core::ReplacementCapability::Available => "available",
+            hzr_core::ReplacementCapability::Unavailable => "no filter",
+            hzr_core::ReplacementCapability::Unknown => "unknown",
         };
+        let route = format!("{route} / {capability}");
         writeln!(
             output,
             "│ {:<22} │ {:<18} │ {:>10} │ {:>11} │",
@@ -341,17 +342,35 @@ fn write_optimizer_bypass(
             format_count(tool.executions),
             format_count(tool.delivered_tokens_estimated)
         )?;
-        match tool.replacement.as_deref() {
-            Some(replacement) => writeln!(
-                output,
-                "     {}",
-                style(&format!("→ {replacement}"), "32", color)
-            )?,
-            None => writeln!(
+        match tool.replacement_capability {
+            hzr_core::ReplacementCapability::Available => writeln!(
                 output,
                 "     {}",
                 style(
-                    "→ no first-class equivalent; raw is correct here",
+                    &format!(
+                        "→ {}",
+                        tool.replacement.as_deref().unwrap_or(
+                            "first-class HZR route available (exact route not retained)"
+                        )
+                    ),
+                    "32",
+                    color
+                )
+            )?,
+            hzr_core::ReplacementCapability::Unavailable => writeln!(
+                output,
+                "     {}",
+                style(
+                    "→ no HZR filter yet; use hzr exec run (tracked fallback, zero savings credit)",
+                    "2;37",
+                    color
+                )
+            )?,
+            hzr_core::ReplacementCapability::Unknown => writeln!(
+                output,
+                "     {}",
+                style(
+                    "→ capability unknown; historical/redacted evidence was insufficient",
                     "2;37",
                     color
                 )
@@ -370,7 +389,7 @@ fn write_optimizer_bypass(
         output,
         "   {}",
         style(
-            "each replacement is reconstructed from the costliest recorded invocation",
+            "available/no-filter states come from execution-time registry evidence; older rows remain unknown",
             "2;37",
             color
         )
@@ -678,7 +697,7 @@ mod tests {
     use hzr_core::{
         EvasionClassSummary, EvasionSummary, FidelityAllowance, LedgerSummary,
         OperationFamilySummary, OperationModeSummary, OperationRoute, PolicyEventSummary,
-        ReadPipelineSummary,
+        ReadPipelineSummary, ReplacementCapability,
     };
     use hzr_protocol::{
         AccountingOperationKind, AccountingOperationMode, AccountingStage, EvasionClass,
@@ -805,6 +824,7 @@ mod tests {
                 delivered_tokens_estimated: 983_969,
                 example_command: "rtk proxy sed -n 1,80p install.sh".into(),
                 replacement: Some("hzr rtk -- read install.sh --from 1 --to 80".into()),
+                replacement_capability: ReplacementCapability::Available,
                 rationale: Some("hzr read streams the requested span".into()),
             }],
             by_tool_total: 1,
@@ -830,6 +850,44 @@ mod tests {
             "the bypass panel belongs beside the headline, not after the breakdown"
         );
         assert_aligned(&rendered);
+    }
+
+    #[test]
+    fn acceptance_gate_bypass_capability_states_are_truthful_and_actionable() {
+        let tools = [
+            ("git", ReplacementCapability::Available),
+            ("terraform", ReplacementCapability::Unavailable),
+            ("legacy", ReplacementCapability::Unknown),
+        ]
+        .into_iter()
+        .map(|(tool, replacement_capability)| BypassToolReport {
+            tool: tool.into(),
+            executions: 1,
+            delivered_tokens_estimated: 10,
+            example_command: format!("bypassed {tool} <arguments omitted>"),
+            replacement: (replacement_capability == ReplacementCapability::Available)
+                .then(|| "hzr rtk -- git status".into()),
+            replacement_capability,
+            rationale: None,
+        })
+        .collect();
+        let rendered = render(&report_with_bypass(BypassReport {
+            operations: 3,
+            total_operations: 3,
+            operation_share_pct: 100.0,
+            delivered_tokens_estimated: 30,
+            total_delivered_tokens_estimated: 30,
+            token_share_pct: 100.0,
+            by_tool: tools,
+            by_tool_total: 3,
+            by_tool_omitted: 0,
+            by_tool_recovery: "hzr stats --json --all --since 7d".into(),
+        }));
+
+        assert!(rendered.contains("hzr rtk -- git status"));
+        assert!(rendered.contains("no HZR filter yet; use hzr exec run"));
+        assert!(rendered.contains("capability unknown"));
+        assert!(!rendered.contains("raw is correct"));
     }
 
     /// A workspace that never bypassed the optimizer should not be shown an empty table.
@@ -1085,13 +1143,13 @@ mod tests {
             route: OperationRoute::Bypassed,
             operations: 3,
             delivered_tokens_estimated: 1_024,
-            first_class_replacement_available: true,
+            replacement_capability: ReplacementCapability::Available,
         }];
 
         let rendered = render(&report);
 
         assert!(rendered.contains("OPERATION FAMILIES"));
-        assert!(rendered.contains("raw / yes"));
+        assert!(rendered.contains("raw / available"));
         assert!(rendered.contains("arguments and content omitted"));
         assert_aligned(&rendered);
     }

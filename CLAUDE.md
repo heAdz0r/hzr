@@ -2,8 +2,8 @@
 
 # HZR tool contract (managed)
 
-`hzr` — heAdz0r's Zero-Redundancy engine — is the only control plane. Do not
-invoke a separately installed `rtk`, `grepai` or `icm` binary: HZR owns those
+`hzr` — HZR's Zero-Redundancy control plane — is the only control plane. Do not
+invoke separately installed `rtk`, `grepai`, `icm` binaries: HZR owns those
 engines internally, and a direct call creates the duplicate scan, duplicate
 store and unaccounted usage this engine exists to remove.
 
@@ -11,98 +11,70 @@ This managed region defines tool routing only. Keep repository-specific roles,
 source paths and test commands in that repository's root instruction file, not
 in a user-global instruction file.
 
-Read the full contract at `/Users/andrew/.local/share/hzr/current/share/hzr/HZR.md` only when a bounded lookup cannot resolve HZR-policy ambiguity.
-Ordinary tasks must not import or read it in full. Start with `hzr read /Users/andrew/.local/share/hzr/current/share/hzr/HZR.md --outline`, then read only the relevant `--from`/`--to` range.
+Read the full contract at `/Users/andrew/Programming/hzr/HZR.md` only when a bounded lookup cannot resolve HZR-policy ambiguity.
+Ordinary tasks must not import or read it in full. Start with `hzr read /Users/andrew/Programming/hzr/HZR.md --outline`, then read only the relevant `--from`/`--to` range.
 
 | Instead of | Use |
 |---|---|
-| `Read` | `hzr read <file>` uses the smart default; use `--outline` first for structure and ranges for exact evidence |
-| `Grep` | `hzr rgai "<intent>"` or `hzr search "<intent>" --mode auto`; use `--mode exact` only for a known literal |
-| `Edit`/`Write` | `hzr write patch\|replace\|set\|create\|batch ...` |
-| memory | `hzr memory recall\|store` |
-| context | `hzr context plan "<intent>"` |
-| shell command | `hzr exec run '<shell command>'`; canonical policy selects the filtered route and preserves shell grammar |
-| explicit unfiltered recovery | `HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr rtk -- raw <command...>`; reason must be `binary`, `checksum`, `machine_protocol`, `complete_log`, `full_patch`, or `verbatim_source` |
-| optional TDD | `hzr tdd` only when user/repository policy or regression risk justifies test-first overhead |
-| build this project | `hzr build <args>` (not `hzr release`, which rebuilds HZR) |
+| Read | `hzr read <file>`; Uses the smart default; use --outline first for structure and ranges for exact evidence. |
+| Grep or repository search | `hzr search "<intent>" --mode auto`; Use --mode exact only for a known literal; hzr rgai is the semantic shorthand. |
+| Edit or Write | `hzr write patch\|replace\|set\|create\|batch ...`; Writes are atomic and idempotent per file; a batch is not an all-files transaction. |
+| durable memory | `hzr memory recall\|store\|update\|forget\|prune`; Project is the default scope; global is only for durable user-wide facts. |
+| cross-cutting context discovery | `hzr context plan "<intent>"`; Builds bounded graph-first evidence from independently calibrated retrieval sources. |
+| shell command | `hzr exec run '<shell command>'`; Default policy route; preserves shell grammar and selects managed filtering or tracked fallback. |
+| build this project | `hzr exec run '<project build command>'`; Project builds are ordinary managed shell commands; hzr build is not a generic project-build wrapper. |
+| optional TDD | `hzr tdd`; Use only when requested, repository-required, or justified by regression risk. |
+| explicit unfiltered recovery | `HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'`; Allowed reasons: binary, checksum, machine_protocol, complete_log, full_patch, or verbatim_source. |
+
+## Execution invariants
 
 For agent-originated shell work, `hzr exec run` is the default. If
 `hzr exec rewrite '<shell command>'` returns `allow_rewrite`, `raw` is forbidden.
-Do not choose `raw` merely because a command uses SSH, JSON, pipes, redirects or
-unfamiliar arguments. When no filter exists, `hzr exec run` performs the tracked
-fallback without requiring the agent to select `raw`. POSIX shell launchers, env prefixes,
-and simple Python file/JSON/subprocess wrappers do not bypass policy: HZR rewrites the
-proven leaf or returns `Ask`. Opaque computation/migration remains tracked with zero
-savings credit.
-
-For a plain argv command whose output intent is known, the existing
+When no filter exists, it performs a tracked fallback; policy ambiguity returns `Ask`.
+For plain argv commands with known output intent,
 `hzr rtk -- test`, `err`, `summary` and `log` routes provide bounded
-generic filtering. Do not use them to reconstruct pipes, redirects or
-other shell grammar; keep those commands on `hzr exec run`.
+filtering. Keep pipes, redirects and other shell grammar on `hzr exec run`.
 
 Unbounded `read --level none` defeats the smart default and is automatically reduced.
 Prefer `--outline` for structure and `--from`/`--to` for exact evidence. Use
 `HZR_EXACT_FIDELITY=1 hzr read <file> --level none` only when the whole file
-is authoritative input that cannot be bounded. Search defaults to `--mode auto` for
-discovery; `--mode exact` remains the escape hatch for a known symbol, error, key, or
-audit literal.
+is authoritative input that cannot be bounded. Multi-file reads use
+`hzr read --batch --max-tokens N <files...>`.
 
 TDD is opt-in, not the default. When token or time efficiency matters, skip it
 and use proportionate verification; repository-required quality gates still apply.
-
-`read -n` defaults to exact content and preserves source coordinates, including
-ranged and tail reads. `--max-lines N` is the exact head equivalent. `--outline`
-returns Markdown headings or heuristic symbols for Rust, Python, TypeScript,
-JavaScript, Go and Java. For several files, use
-`hzr read --batch --max-tokens N <files...>`; it preserves order and coordinates and
-emits exact recovery ranges for omitted content.
-
-Batch writes are atomic and idempotent per file; independent file groups can fail separately,
-so inspect every operation result. Batch is not an all-files transaction.
 
 ## Memory scopes
 
 One store, two namespaces. `--scope project` (the store default) is for facts about
 *this repository*. `--scope global` is for facts about the **user** — a preference or
-a standing rule that should apply in every repository, so it does not have to be
-restated per project. Recall defaults to project + global; another repository's
-memory is never reachable from any scope.
+standing rule that applies in every repository. Recall may combine project and global;
+another repository's memory is never reachable.
 
 ## MCP tools
 
-If the `hzr` MCP server is registered, prefer its tools over the CLI — same
-single store and index, and the calls are accounted:
+Use a registered `hzr` MCP server only after its initialize result reports
+`serverInfo.workspace.bound = true` and `serverInfo.workspace.project` exactly matches
+the canonical current worktree. Otherwise use the CLI routes and repair the project pin;
+never recommend or use an MCP session bound to another workspace:
 
 | Tool | Use it for |
 |---|---|
 | `hzr_context_plan` | Build bounded graph-first evidence for unfamiliar or cross-cutting work. |
-| `hzr_search` | Find code by intent (`mode: semantic`) or exactly (`mode: exact`). |
-| `hzr_memory_recall` | Recall decisions, resolved errors and prior context before re-reading files. |
-| `hzr_memory_store` | Persist a decision, resolved error or finished work. Not ephemeral state. |
+| `hzr_search` | Find code by intent or by a known exact literal. |
+| `hzr_memory_recall` | Recall durable decisions, resolved errors, and prior context. |
+| `hzr_memory_store` | Persist one durable fact or finished handoff, not ephemeral state. |
 | `hzr_memory_update` | Replace one superseded memory after namespace ownership is verified. |
 | `hzr_memory_forget` | Delete one invalid memory after namespace ownership is verified. |
-| `hzr_memory_prune` | Preview or remove low-weight memories in one namespace; preview is the default. |
+| `hzr_memory_prune` | Preview or remove low-weight memories in one namespace. |
 | `hzr_codec` | Apply or shadow-measure protected response-density transforms. |
 
-MCP inputs are strictly validated and results include typed `structuredContent`.
-`isError: true` means no success was confirmed and no fallback engine or store
-was used. If a store transport fails after dispatch, recall before retrying because
-completion may be unknown.
-MCP is client-managed stdio: `hzr init` never starts it. Run `hzr install --force`
-once to register it, and `hzr mcp status` to audit native client launch state.
-`hzr mcp config --client codex\|claude-desktop --workspace <dir> --apply` writes a pinned registration; omit `--apply` to print a paste snippet. Never
-register `icm`, `grepai` or `rtk` as your own MCP server: each direct launch adds
-another writer to the store HZR supervises and leaks orphans when the session dies.
+MCP is client-managed stdio; `hzr init` writes the trusted-project Codex registration
+but never starts it. `isError: true` confirms no
+success and no fallback store. Recall before retrying an ambiguously completed write.
+Never register `rtk`, `grepai`, `icm` as separate MCP servers.
 
-`hzr rtk -- raw <command> <args...>` directly spawns the first argument and receives
-zero savings credit. It is an explicit fidelity escape hatch, not the default shell
-wrapper; normal agent shell work goes through `hzr exec run '<shell command>'`. The
-fidelity marker without one of the closed reasons above returns `Ask`; even a valid
-reason cannot override a managed equivalent, deny, or ambiguous-policy decision. The
-per-session allowance is five operations or 100,000 estimated delivered tokens; an
-oversized local read or unmeasurable remote exact stream asks before execution.
-
-The installed `PreToolUse` hook routes Bash through the managed daemon and
+The Claude Code `PreToolUse` hook routes Bash through the managed daemon and
 falls back to the same pinned fork-core when the daemon is down. A degraded
 rewrite keeps command policy but is absent from the usage ledger; `hzr doctor`
 and `hzr stats` report that incomplete accounting rather than hiding it.
@@ -110,9 +82,8 @@ and `hzr stats` report that incomplete accounting rather than hiding it.
 The failure-open `PreToolUse` hook sees native `Read`, `Grep`, `Glob`, `Edit` and
 `Write`. In `steer` mode it prescribes `hzr read`/`hzr search`; `Glob` and native
 edits remain allowed. `strict` additionally prescribes `hzr write`, while `observe`
-retains measurement-only compatibility for existing installations. The `PostToolUse`
-observer stores no tool content and grants no savings credit. In `steer`/`strict`,
-policy-allowed native calls are accounted as typed E10 bypasses, not hidden as
-`native_unaccounted`.
+retains measurement-only compatibility. The `PostToolUse` observer stores no tool
+content and grants no savings credit. In `steer`/`strict`, policy-allowed native
+calls are accounted as typed E10 bypasses, not hidden as `native_unaccounted`.
 
 <!-- hzr:end managed agent contract -->

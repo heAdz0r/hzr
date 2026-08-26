@@ -3,18 +3,18 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use hzr_context::{ContextError, PlanRequest, SearchRequest};
 use hzr_core::{
     FidelityAllowance, FidelityBudget, FidelityPreflight, Ledger, LedgerRecord,
     ProjectOperationRoute, ProjectOperationSummary, RawFidelityReason, RawFidelityRequest,
-    efficient_route_replacement, fidelity_preflight_required, first_class_replacement,
-    locked_engines, privacy_identity_hash, raw_fidelity_request,
+    efficient_route_replacement, first_class_replacement, locked_engines, raw_fidelity_request,
 };
 use hzr_exec::{
-    CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent, ExecutionEnvelope,
-    ExecutionOutcome, ForkCoreInvocation, NotStarted, PINNED_RTK_VERSION, PinnedRtkAdapter,
-    RewriteDecision, RewriteSource, RtkRewriteOutcome, StdinSpec, TerminationCause,
+    AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent,
+    ExecutionEnvelope, ExecutionOutcome, ForkCoreInvocation, NotStarted, PINNED_RTK_VERSION,
+    PinnedRtkAdapter, RewriteDecision, RewriteSource, RtkRewriteOutcome, StdinSpec,
+    TerminationCause,
 };
 use hzr_index::{
     Deadlines, IndexCoordinatorSnapshot, IndexWatcherState, Workspace, WorkspaceRegistration,
@@ -33,10 +33,12 @@ use hzr_protocol::{
     DashboardLocalOperation, DashboardMemoryDetail, DashboardMemoryEdge,
     DashboardMemoryObservatory, DashboardMemoryRetrieval, DashboardMemoryTopic,
     DashboardMemoryTopicDetails, DashboardObservedUsage, DashboardOperationRoute, DashboardProject,
-    DashboardProjectArtifacts, DashboardProjectState, DashboardProviderReceiptState,
-    DashboardProviderReceipts, DashboardResponse, DashboardSearchActivity, DashboardService,
-    DashboardState, EnforcementTier, EngineHealth, EngineState, EvasionAttribution, EvasionClass,
-    EvasionPathForm, ExecApiRequest, ExecApprovalApiRequest, FidelityReason, FidelityValidation,
+    DashboardProjectArtifacts, DashboardProjectPage, DashboardProjectState,
+    DashboardProviderReceiptState, DashboardProviderReceipts, DashboardResponse,
+    DashboardSearchActivity, DashboardService, DashboardState, DashboardTraceStage,
+    DashboardTraceState, EnforcementTier, EngineHealth, EngineState, EvasionAttribution,
+    EvasionClass, EvasionPathForm, ExecApiRequest, ExecApprovalApiRequest, FidelityReason,
+    FidelityReconcileApiRequest, FidelityReconcileReceipt, FidelityValidation, ForkManagedWrite,
     ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryForgetApiRequest,
     MemoryImportance, MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
     MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope,
@@ -46,6 +48,7 @@ use hzr_protocol::{
 
 use crate::approval::PendingApproval;
 use crate::error::ApiError;
+use crate::observability::TraceSpanInput;
 use crate::state::{AppState, MemoryStartState};
 
 #[cfg(test)]
@@ -53,25 +56,27 @@ use crate::state::{AppState, MemoryStartState};
 mod anti_evasion_fixture;
 
 const MAX_CALLER_PATH_BYTES: usize = 32 * 1024;
+const DEFAULT_PROJECT_PAGE_LIMIT: usize = 100;
+const MAX_PROJECT_PAGE_LIMIT: usize = 200;
 
 pub async fn health(State(state): State<AppState>) -> Result<Json<HealthResponse>, ApiError> {
-    let (memory_health, _) = memory_engine_health(&state).await;
-    Ok(Json(health_response(&state, memory_health)))
+    let ((memory_health, _), index_health) =
+        tokio::join!(memory_engine_health(&state), grepai_engine_health(&state));
+    Ok(Json(health_response(&state, memory_health, index_health)))
 }
 
-fn health_response(state: &AppState, memory_health: EngineHealth) -> HealthResponse {
+fn health_response(
+    state: &AppState,
+    memory_health: EngineHealth,
+    index_health: EngineHealth,
+) -> HealthResponse {
     let rtk_capabilities = state.rtk.capabilities();
     let rtk_ready = matches!(
         &rtk_capabilities.rewrite,
         hzr_exec::RtkRewriteInterface::ForkCli
     );
     let engines = vec![
-        EngineHealth {
-            name: "grepai".into(),
-            version: Some(hzr_index::SUPPORTED_GREPAI_VERSION.into()),
-            state: EngineState::Stopped,
-            detail: Some("workspace index is started on demand".into()),
-        },
+        index_health,
         memory_health,
         EngineHealth {
             name: "rtk".into(),
@@ -100,6 +105,43 @@ fn health_response(state: &AppState, memory_health: EngineHealth) -> HealthRespo
             "exec".into(),
             "codec".into(),
         ],
+    }
+}
+
+async fn grepai_engine_health(state: &AppState) -> EngineHealth {
+    match state.context.index_registry_snapshot().await {
+        Ok(snapshot) => {
+            let failed = snapshot
+                .watchers
+                .iter()
+                .filter(|watcher| watcher.state == IndexWatcherState::Failed)
+                .count();
+            let engine_state = if failed > 0 {
+                EngineState::Degraded
+            } else if snapshot.active_watchers > 0 {
+                EngineState::Ready
+            } else {
+                EngineState::Stopped
+            };
+            EngineHealth {
+                name: "grepai".into(),
+                version: Some(hzr_index::SUPPORTED_GREPAI_VERSION.into()),
+                state: engine_state,
+                detail: Some(format!(
+                    "{} active watcher(s), {} failed, limit {}, idle TTL {}ms",
+                    snapshot.active_watchers,
+                    failed,
+                    snapshot.watcher_limit,
+                    snapshot.watcher_idle_ttl_ms
+                )),
+            }
+        }
+        Err(error) => EngineHealth {
+            name: "grepai".into(),
+            version: Some(hzr_index::SUPPORTED_GREPAI_VERSION.into()),
+            state: EngineState::Degraded,
+            detail: Some(format!("watcher registry unavailable: {error}")),
+        },
     }
 }
 
@@ -181,22 +223,116 @@ fn caveman_engine_health(layout: &hzr_agent::IntegrationLayout) -> EngineHealth 
     }
 }
 
-pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardResponse>, ApiError> {
-    let (memory_health, memory_retrieval) = memory_engine_health(&state).await;
-    let health = health_response(&state, memory_health.clone());
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct DashboardQuery {
+    project: Option<String>,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct ProjectPageQuery {
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+pub async fn dashboard_projects(
+    Query(query): Query<ProjectPageQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<DashboardProjectPage>, ApiError> {
+    let offset = query.offset.unwrap_or_default();
+    let limit = query.limit.unwrap_or(DEFAULT_PROJECT_PAGE_LIMIT);
+    validate_project_page(limit)?;
     let registry = registered_workspaces(&state.config.data_dir);
-    let registry_warnings = registry.warnings.len();
-    let selected = registry.registrations.first().cloned();
+    let total = registry.registrations.len();
     let projects = registry
         .registrations
         .iter()
-        .map(dashboard_project)
+        .skip(offset)
+        .take(limit)
+        .map(|registration| dashboard_project(registration, &state.observability))
         .collect::<Result<Vec<_>, ApiError>>()?;
+    let consumed = offset.saturating_add(projects.len());
+    Ok(Json(DashboardProjectPage {
+        projects,
+        total,
+        offset,
+        limit,
+        next_offset: (consumed < total).then_some(consumed),
+    }))
+}
+
+fn validate_project_page(limit: usize) -> Result<(), ApiError> {
+    if limit == 0 || limit > MAX_PROJECT_PAGE_LIMIT {
+        return Err(ApiError::bad_request(
+            "project page limit must be between 1 and 200",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ObservabilityQuery {
+    project: String,
+    after: Option<u64>,
+    limit: Option<usize>,
+}
+
+pub async fn dashboard_observability(
+    Query(query): Query<ObservabilityQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<hzr_protocol::DashboardObservability>, ApiError> {
+    let registrations = registered_workspaces(&state.config.data_dir).registrations;
+    let registration = dashboard_registration(&registrations, Some(&query.project))?
+        .expect("an explicitly requested dashboard project must resolve");
+    let limit = query
+        .limit
+        .unwrap_or(crate::observability::DEFAULT_OBSERVABILITY_LIMIT);
+    if limit == 0 || limit > crate::observability::MAX_OBSERVABILITY_LIMIT {
+        return Err(ApiError::bad_request(
+            "observability limit must be between 1 and 100",
+        ));
+    }
+    let project_hash = state
+        .observability
+        .project_hash(&registration.root.to_string_lossy());
+    Ok(Json(state.observability.snapshot(
+        Some(&project_hash),
+        query.after,
+        limit,
+    )))
+}
+
+pub async fn dashboard(
+    Query(query): Query<DashboardQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<DashboardResponse>, ApiError> {
+    let ((memory_health, memory_retrieval), index_health) =
+        tokio::join!(memory_engine_health(&state), grepai_engine_health(&state));
+    let health = health_response(&state, memory_health.clone(), index_health);
+    let registry = registered_workspaces(&state.config.data_dir);
+    let registry_warnings = registry.warnings.len();
+    let selected = dashboard_registration(&registry.registrations, query.project.as_deref())?;
+    let all_projects = registry
+        .registrations
+        .iter()
+        .map(|registration| dashboard_project(registration, &state.observability))
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let projects_total = all_projects.len();
+    let projects = all_projects
+        .iter()
+        .take(DEFAULT_PROJECT_PAGE_LIMIT)
+        .cloned()
+        .collect::<Vec<_>>();
+    let projects_next_offset = (projects.len() < projects_total).then_some(projects.len());
     let ledger_path = state.config.data_dir.join("ledger/hzr.sqlite");
     let selected_path = selected
         .as_ref()
         .and_then(|registration| registration.root.to_str())
         .map(str::to_owned);
+    let selected_project_hash = selected.as_ref().map(|registration| {
+        state
+            .observability
+            .project_hash(&registration.root.to_string_lossy())
+    });
     let ledger_project_path = selected_path.clone();
     let ledger = tokio::task::spawn_blocking(move || {
         let summaries = Ledger::summaries_read_only(&ledger_path)?;
@@ -220,8 +356,19 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
 
     let search_activity = dashboard_search_activity(&activity.recent_operations);
     let (memory_observatory, index_observatory) = tokio::join!(
-        dashboard_memory_observatory(&state, selected.as_ref(), &memory_health, memory_retrieval,),
-        dashboard_index_observatory(&state, selected.as_ref(), search_activity),
+        dashboard_memory_observatory(
+            &state,
+            selected.as_ref(),
+            selected_project_hash.as_deref(),
+            &memory_health,
+            memory_retrieval,
+        ),
+        dashboard_index_observatory(
+            &state,
+            selected.as_ref(),
+            selected_project_hash.as_deref(),
+            search_activity,
+        ),
     );
 
     let mut services = Vec::with_capacity(4);
@@ -260,10 +407,14 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
             _ => "Managed index is waiting for its watcher".into(),
         };
     }
-    let overall_state = dashboard_overall_state(&services);
+    let overall_state = dashboard_overall_state(&services, &all_projects);
     let reduction_pct = signed_percentage(
         estimated.net_avoided_tokens_estimated,
         estimated.baseline_tokens_estimated,
+    );
+    let observability = state.observability.latest_snapshot(
+        selected_project_hash.as_deref(),
+        crate::observability::DEFAULT_OBSERVABILITY_LIMIT,
     );
     let mut notes = vec![
         "Provider-observed usage and UTF-8-byte estimates are displayed separately.".into(),
@@ -277,6 +428,14 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
                 .into(),
         );
     }
+    if estimated.excluded_legacy_operations > 0 || activity.excluded_legacy_operations > 0 {
+        notes.push(format!(
+            "Current efficiency uses accounting policy {}; {} global and {} selected-project legacy operation(s) are excluded from current claims.",
+            hzr_core::CURRENT_ACCOUNTING_POLICY_VERSION,
+            estimated.excluded_legacy_operations,
+            activity.excluded_legacy_operations,
+        ));
+    }
 
     Ok(Json(DashboardResponse {
         protocol_version: PROTOCOL_VERSION,
@@ -288,6 +447,11 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
         overall_state,
         services,
         projects,
+        projects_total,
+        projects_next_offset,
+        selected_worktree_id: selected
+            .as_ref()
+            .map(|registration| registration.worktree_id.clone()),
         registry_warnings,
         observed_usage: DashboardObservedUsage {
             tasks: observed.tasks,
@@ -298,6 +462,8 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
             cost_microusd: observed.cost_microusd,
         },
         estimated_efficiency: DashboardEstimatedEfficiency {
+            accounting_policy_version: hzr_core::CURRENT_ACCOUNTING_POLICY_VERSION.into(),
+            excluded_legacy_operations: estimated.excluded_legacy_operations,
             operations: estimated.operations,
             baseline_tokens_estimated: estimated.baseline_tokens_estimated,
             delivered_tokens_estimated: estimated.delivered_tokens_estimated,
@@ -311,9 +477,9 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
         memory_observatory,
         index_observatory,
         local_activity: DashboardLocalActivity {
-            project: selected.as_ref().map(|registration| {
-                privacy_identity_hash("project", &registration.root.to_string_lossy())
-            }),
+            project: selected_project_hash.clone(),
+            accounting_policy_version: hzr_core::CURRENT_ACCOUNTING_POLICY_VERSION.into(),
+            excluded_legacy_operations: activity.excluded_legacy_operations,
             operations: activity.operations,
             optimized_operations: activity.optimized_operations,
             raw_operations: activity.raw_operations,
@@ -345,10 +511,12 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
                             DashboardOperationRoute::NativeUnaccounted
                         }
                     },
-                    command_hash: operation.command_hash,
-                    project_hash: operation.project_hash,
+                    command_hash: state.observability.command_hash(&operation.command_hash),
+                    project_hash: selected_project_hash.clone().unwrap_or_default(),
                     agent: operation.agent,
-                    session_hash: operation.session_hash,
+                    session_hash: operation
+                        .session_hash
+                        .filter(|hash| hash.starts_with("hmac-sha256:")),
                     producer_version: operation.producer_version,
                     policy_version: operation.policy_version,
                     baseline_tokens_estimated: operation.baseline_tokens_estimated,
@@ -360,6 +528,7 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
                 })
                 .collect(),
         },
+        observability,
         provider_receipts: DashboardProviderReceipts {
             state: if observed.tasks > 0 {
                 DashboardProviderReceiptState::Available
@@ -386,8 +555,12 @@ pub async fn dashboard(State(state): State<AppState>) -> Result<Json<DashboardRe
 pub async fn dashboard_memory_topic(
     State(state): State<AppState>,
     AxumPath(topic_id): AxumPath<String>,
+    Query(query): Query<DashboardQuery>,
 ) -> Result<Json<DashboardMemoryTopicDetails>, ApiError> {
-    memory_topic_response(&state, topic_id, true)
+    let project = query.project.ok_or_else(|| {
+        ApiError::bad_request("dashboard memory topic requires a stable project identifier")
+    })?;
+    memory_topic_response(&state, topic_id, true, Some(&project))
         .await
         .map(Json)
 }
@@ -395,8 +568,12 @@ pub async fn dashboard_memory_topic(
 pub async fn memory_topic_details(
     State(state): State<AppState>,
     AxumPath(topic_id): AxumPath<String>,
+    Query(query): Query<DashboardQuery>,
 ) -> Result<Json<DashboardMemoryTopicDetails>, ApiError> {
-    memory_topic_response(&state, topic_id, false)
+    let project = query.project.ok_or_else(|| {
+        ApiError::bad_request("memory topic requires a stable project identifier")
+    })?;
+    memory_topic_response(&state, topic_id, false, Some(&project))
         .await
         .map(Json)
 }
@@ -405,34 +582,46 @@ async fn memory_topic_response(
     state: &AppState,
     topic_id: String,
     redact_content: bool,
+    worktree_id: Option<&str>,
 ) -> Result<DashboardMemoryTopicDetails, ApiError> {
-    if topic_id.len() != 64 || !topic_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    let public_topic_id = topic_id.strip_prefix("hmac-sha256:").is_some_and(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    });
+    let internal_topic_id =
+        topic_id.len() == 64 && topic_id.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if (redact_content && !public_topic_id) || (!redact_content && !internal_topic_id) {
         return Err(ApiError::bad_request(
-            "memory topic identifier must be 64 hexadecimal characters",
+            "memory topic identifier does not match the endpoint identity scheme",
         ));
     }
-    let registration = registered_workspaces(&state.config.data_dir)
-        .registrations
-        .into_iter()
-        .next()
-        .ok_or_else(|| {
+    let registrations = registered_workspaces(&state.config.data_dir).registrations;
+    let registration = match worktree_id {
+        Some(worktree_id) => dashboard_registration(&registrations, Some(worktree_id))?
+            .expect("a requested dashboard project must resolve"),
+        None => registrations.into_iter().next().ok_or_else(|| {
             ApiError::not_found("project_not_found", "no registered project selected")
-        })?;
-    let (memory_health, _) = memory_engine_health(state).await;
-    if memory_health.state != EngineState::Ready {
-        return Err(ApiError::service(
-            "memory_unavailable",
-            memory_health
-                .detail
-                .unwrap_or_else(|| "ICM is not ready".into()),
-            true,
-        ));
-    }
+        })?,
+    };
+    // Topic details are a read-only view of the canonical store. Keep them available
+    // during an ICM restart; a missing/corrupt store still returns an explicit 503 below.
     let database = state.memory.layout().database.clone();
     let repository_id = registration.repository_id;
     let requested_id = topic_id.clone();
+    let privacy = state.ledger.privacy_pseudonymizer();
     let details = tokio::task::spawn_blocking(move || {
-        read_project_topic_details(&database, &repository_id, &requested_id)
+        let source_id = if redact_content {
+            read_project_snapshot(&database, &repository_id)?
+                .topics
+                .into_iter()
+                .find(|topic| privacy.hash("topic", &topic.id) == requested_id)
+                .map(|topic| topic.id)
+        } else {
+            Some(requested_id)
+        };
+        source_id
+            .map(|source_id| read_project_topic_details(&database, &repository_id, &source_id))
+            .transpose()
+            .map(Option::flatten)
     })
     .await
     .map_err(|error| ApiError::internal(format!("memory topic task failed: {error}")))?
@@ -450,9 +639,18 @@ async fn memory_topic_response(
         )
     })?;
 
+    let public_privacy = state.ledger.privacy_pseudonymizer();
     Ok(DashboardMemoryTopicDetails {
-        id: details.id,
-        label: details.label,
+        id: if redact_content {
+            public_privacy.hash("topic", &details.id)
+        } else {
+            details.id
+        },
+        label: if redact_content {
+            "Memory topic".into()
+        } else {
+            details.label
+        },
         memory_count: details.memory_count,
         visible_memory_count: details.visible_memory_count,
         hidden_memory_count: details.hidden_memory_count,
@@ -460,7 +658,7 @@ async fn memory_topic_response(
         memories: details
             .memories
             .into_iter()
-            .map(|memory| dashboard_memory_detail(memory, redact_content))
+            .map(|memory| dashboard_memory_detail(memory, redact_content, &public_privacy))
             .collect(),
     })
 }
@@ -468,9 +666,14 @@ async fn memory_topic_response(
 fn dashboard_memory_detail(
     memory: ProjectMemoryDetail,
     redact_content: bool,
+    privacy: &hzr_core::PrivacyPseudonymizer,
 ) -> DashboardMemoryDetail {
     DashboardMemoryDetail {
-        id: memory.id,
+        id: if redact_content {
+            privacy.hash("memory", &memory.id)
+        } else {
+            memory.id
+        },
         created_at: memory.created_at,
         updated_at: memory.updated_at,
         last_accessed: memory.last_accessed,
@@ -498,13 +701,22 @@ fn dashboard_memory_detail(
         } else {
             memory.source_data
         },
-        related_ids: memory.related_ids,
+        related_ids: if redact_content {
+            memory
+                .related_ids
+                .into_iter()
+                .map(|id| privacy.hash("memory", &id))
+                .collect()
+        } else {
+            memory.related_ids
+        },
     }
 }
 
 async fn dashboard_memory_observatory(
     state: &AppState,
     selected: Option<&WorkspaceRegistration>,
+    project_identity: Option<&str>,
     memory_health: &EngineHealth,
     retrieval: DashboardMemoryRetrieval,
 ) -> DashboardMemoryObservatory {
@@ -541,7 +753,7 @@ async fn dashboard_memory_observatory(
     };
     if runtime_state != DashboardState::Ready {
         return empty_memory_observatory(
-            registration,
+            project_identity,
             runtime_state,
             retrieval,
             observed_at_ms,
@@ -555,7 +767,8 @@ async fn dashboard_memory_observatory(
         tokio::task::spawn_blocking(move || read_project_snapshot(&database, &repository_id)).await;
     match snapshot {
         Ok(Ok(snapshot)) => memory_snapshot_observatory(
-            registration,
+            state,
+            project_identity,
             retrieval,
             observed_at_ms,
             elapsed_ms(started_at),
@@ -563,7 +776,7 @@ async fn dashboard_memory_observatory(
             snapshot,
         ),
         Ok(Err(error)) => empty_memory_observatory(
-            registration,
+            project_identity,
             DashboardState::Degraded,
             retrieval,
             observed_at_ms,
@@ -571,7 +784,7 @@ async fn dashboard_memory_observatory(
             format!("ICM is ready, but its read-only project snapshot failed: {error}"),
         ),
         Err(error) => empty_memory_observatory(
-            registration,
+            project_identity,
             DashboardState::Degraded,
             retrieval,
             observed_at_ms,
@@ -582,7 +795,8 @@ async fn dashboard_memory_observatory(
 }
 
 fn memory_snapshot_observatory(
-    registration: &WorkspaceRegistration,
+    state: &AppState,
+    project_identity: Option<&str>,
     retrieval: DashboardMemoryRetrieval,
     observed_at_ms: u64,
     latency_ms: u64,
@@ -591,7 +805,7 @@ fn memory_snapshot_observatory(
 ) -> DashboardMemoryObservatory {
     DashboardMemoryObservatory {
         state: DashboardState::Ready,
-        project: Some(registration_name(registration)),
+        project: project_identity.map(str::to_owned),
         retrieval,
         observed_at_ms,
         latency_ms,
@@ -603,9 +817,10 @@ fn memory_snapshot_observatory(
         topics: snapshot
             .topics
             .into_iter()
-            .map(|topic| DashboardMemoryTopic {
-                id: topic.id,
-                label: topic.label,
+            .enumerate()
+            .map(|(index, topic)| DashboardMemoryTopic {
+                id: state.observability.topic_hash(&topic.id),
+                label: format!("Memory topic {}", index + 1),
                 memory_count: topic.memory_count,
                 average_weight: topic.average_weight,
                 newest_at: topic.newest_at,
@@ -615,8 +830,8 @@ fn memory_snapshot_observatory(
             .edges
             .into_iter()
             .map(|edge| DashboardMemoryEdge {
-                source: edge.source,
-                target: edge.target,
+                source: state.observability.topic_hash(&edge.source),
+                target: state.observability.topic_hash(&edge.target),
                 relationship_count: edge.relationship_count,
             })
             .collect(),
@@ -629,7 +844,7 @@ fn memory_snapshot_observatory(
 }
 
 fn empty_memory_observatory(
-    registration: &WorkspaceRegistration,
+    project_identity: Option<&str>,
     state: DashboardState,
     retrieval: DashboardMemoryRetrieval,
     observed_at_ms: u64,
@@ -638,7 +853,7 @@ fn empty_memory_observatory(
 ) -> DashboardMemoryObservatory {
     DashboardMemoryObservatory {
         state,
-        project: Some(registration_name(registration)),
+        project: project_identity.map(str::to_owned),
         retrieval,
         observed_at_ms,
         latency_ms,
@@ -658,6 +873,7 @@ fn empty_memory_observatory(
 async fn dashboard_index_observatory(
     state: &AppState,
     selected: Option<&WorkspaceRegistration>,
+    project_identity: Option<&str>,
     search_activity: DashboardSearchActivity,
 ) -> DashboardIndexObservatory {
     let observed_at_ms = now_ms().unwrap_or_default();
@@ -674,7 +890,7 @@ async fn dashboard_index_observatory(
         Ok(snapshot) => snapshot,
         Err(error) => {
             return empty_index_observatory(
-                Some(registration_name(registration)),
+                project_identity.map(str::to_owned),
                 DashboardState::Degraded,
                 observed_at_ms,
                 format!("grepai index status failed: {error}"),
@@ -682,11 +898,11 @@ async fn dashboard_index_observatory(
             );
         }
     };
-    index_snapshot_observatory(registration, observed_at_ms, initial, search_activity)
+    index_snapshot_observatory(project_identity, observed_at_ms, initial, search_activity)
 }
 
 fn index_snapshot_observatory(
-    registration: &WorkspaceRegistration,
+    project_identity: Option<&str>,
     observed_at_ms: u64,
     snapshot: IndexCoordinatorSnapshot,
     search_activity: DashboardSearchActivity,
@@ -710,7 +926,7 @@ fn index_snapshot_observatory(
     let state = dashboard_index_state(artifact_ready, snapshot.watcher.state);
     DashboardIndexObservatory {
         state,
-        project: Some(registration_name(registration)),
+        project: project_identity.map(str::to_owned),
         observed_at_ms,
         generation: snapshot
             .index
@@ -837,8 +1053,30 @@ fn elapsed_ms(started_at: Instant) -> u64 {
     u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-fn registration_name(registration: &WorkspaceRegistration) -> String {
-    privacy_identity_hash("project", &registration.root.to_string_lossy())
+fn dashboard_registration(
+    registrations: &[WorkspaceRegistration],
+    worktree_id: Option<&str>,
+) -> Result<Option<WorkspaceRegistration>, ApiError> {
+    worktree_id
+        .map(|worktree_id| {
+            if worktree_id.len() != 64 || !worktree_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(ApiError::bad_request(
+                    "dashboard project identifier must be 64 hexadecimal characters",
+                ));
+            }
+            registrations
+                .iter()
+                .find(|registration| registration.worktree_id == worktree_id)
+                .cloned()
+                .ok_or_else(|| {
+                    ApiError::not_found(
+                        "dashboard_project_not_found",
+                        "dashboard project is no longer registered",
+                    )
+                })
+        })
+        .transpose()
 }
 
 fn dashboard_service(health: &EngineHealth) -> DashboardService {
@@ -864,17 +1102,31 @@ fn dashboard_service(health: &EngineHealth) -> DashboardService {
     }
 }
 
-fn dashboard_overall_state(services: &[DashboardService]) -> DashboardState {
+fn dashboard_overall_state(
+    services: &[DashboardService],
+    projects: &[DashboardProject],
+) -> DashboardState {
     if services.iter().any(|service| {
         matches!(
             service.state,
             DashboardState::Degraded | DashboardState::Stopped | DashboardState::Unknown
+        )
+    }) || projects.iter().any(|project| {
+        matches!(
+            project.state,
+            DashboardProjectState::Degraded | DashboardProjectState::Unavailable
         )
     }) {
         DashboardState::Degraded
     } else if services
         .iter()
         .any(|service| service.state == DashboardState::Rebuilding)
+        || projects.iter().any(|project| {
+            matches!(
+                project.state,
+                DashboardProjectState::Warming | DashboardProjectState::Registered
+            )
+        })
     {
         DashboardState::Rebuilding
     } else {
@@ -882,7 +1134,10 @@ fn dashboard_overall_state(services: &[DashboardService]) -> DashboardState {
     }
 }
 
-fn dashboard_project(registration: &WorkspaceRegistration) -> Result<DashboardProject, ApiError> {
+fn dashboard_project(
+    registration: &WorkspaceRegistration,
+    observability: &crate::observability::ObservabilityStore,
+) -> Result<DashboardProject, ApiError> {
     let root = registration.root.to_str().ok_or_else(|| {
         ApiError::internal("registered workspace path is not valid UTF-8".to_owned())
     })?;
@@ -904,11 +1159,17 @@ fn dashboard_project(registration: &WorkspaceRegistration) -> Result<DashboardPr
     } else {
         DashboardProjectState::Registered
     };
-    let identity = privacy_identity_hash("project", root);
+    let identity = observability.project_hash(root);
+    let short_identity = identity
+        .strip_prefix("hmac-sha256:")
+        .unwrap_or(&identity)
+        .chars()
+        .take(8)
+        .collect::<String>();
     Ok(DashboardProject {
-        name: identity.clone(),
+        name: format!("Project {short_identity}"),
         root: identity,
-        repository_id: registration.repository_id.clone(),
+        repository_id: observability.repository_hash(&registration.repository_id),
         worktree_id: registration.worktree_id.clone(),
         git_backed: registration.git_backed,
         linked_worktree: registration.linked_worktree,
@@ -1024,19 +1285,55 @@ pub async fn search(
 ) -> Result<Json<SearchApiResponse>, ApiError> {
     validate_search(&request)?;
     let workspace = canonical_workspace(&request.workspace)?;
-    state
+    let started = Instant::now();
+    let trace = state
+        .observability
+        .begin_trace(&workspace.to_string_lossy(), None);
+    let outcome = state
         .context
         .search(SearchRequest {
-            workspace,
+            workspace: workspace.clone(),
             query: request.query,
             path: request.path.map(PathBuf::from),
             limit: request.limit,
             mode: request.mode,
             include_content: request.include_content,
         })
-        .await
-        .map(Json)
-        .map_err(context_error)
+        .await;
+    let trace_state = if outcome.is_ok() {
+        DashboardTraceState::Completed
+    } else {
+        DashboardTraceState::Failed
+    };
+    let generation = outcome
+        .as_ref()
+        .ok()
+        .and_then(|response| response.index_generation.as_deref());
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Engine,
+            state: trace_state,
+            engine: "grepai",
+            duration_ms: elapsed_ms(started),
+            route: Some("search"),
+            error_code: outcome.as_ref().err().map(|_| "search_failed"),
+            generation,
+        },
+    );
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Request,
+            state: trace_state,
+            engine: "hzrd",
+            duration_ms: elapsed_ms(started),
+            route: Some("search"),
+            error_code: outcome.as_ref().err().map(|_| "search_failed"),
+            generation,
+        },
+    );
+    outcome.map(Json).map_err(context_error)
 }
 
 pub async fn context_plan(
@@ -1044,19 +1341,51 @@ pub async fn context_plan(
     Json(request): Json<ContextPlanApiRequest>,
 ) -> Result<Json<ContextPlanApiResponse>, ApiError> {
     let workspace = canonical_workspace(&request.workspace)?;
-    state
+    let started = Instant::now();
+    let trace = state
+        .observability
+        .begin_trace(&workspace.to_string_lossy(), None);
+    let outcome = state
         .context
         .plan(PlanRequest {
-            workspace,
+            workspace: workspace.clone(),
             intent: request.intent,
             path: request.path.map(PathBuf::from),
             topic: request.topic,
             search_limit: request.search_limit,
             memory_limit: request.memory_limit,
         })
-        .await
-        .map(Json)
-        .map_err(context_error)
+        .await;
+    let trace_state = if outcome.is_ok() {
+        DashboardTraceState::Completed
+    } else {
+        DashboardTraceState::Failed
+    };
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Engine,
+            state: trace_state,
+            engine: "context_planner",
+            duration_ms: elapsed_ms(started),
+            route: Some("context_plan"),
+            error_code: outcome.as_ref().err().map(|_| "context_plan_failed"),
+            generation: None,
+        },
+    );
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Request,
+            state: trace_state,
+            engine: "hzrd",
+            duration_ms: elapsed_ms(started),
+            route: Some("context_plan"),
+            error_code: outcome.as_ref().err().map(|_| "context_plan_failed"),
+            generation: None,
+        },
+    );
+    outcome.map(Json).map_err(context_error)
 }
 
 pub async fn memory_recall(
@@ -1068,6 +1397,8 @@ pub async fn memory_recall(
     }
     validate_limit(request.limit)?;
     let project = memory_project(&state, &request.workspace).await?;
+    let request_started = Instant::now();
+    let trace = state.observability.begin_trace(&project, None);
     if let Some(kind) = request.topic.as_deref() {
         validate_memory_kind(kind).map_err(|error| ApiError::bad_request(error.to_string()))?;
     }
@@ -1099,46 +1430,103 @@ pub async fn memory_recall(
         ApiError::service("memory_unavailable", error.to_string(), true)
     };
 
-    let records = match request.scope {
-        MemoryScopeSelector::Project => isolate_memories(
-            client.recall(&project_recall).await.map_err(unavailable)?,
-            &project,
-            MemoryNamespace::Project,
-            project_topic.as_deref(),
-            candidate_limit,
-        ),
-        MemoryScopeSelector::Global => isolate_memories(
-            client.recall(&global_recall).await.map_err(unavailable)?,
-            &project,
-            MemoryNamespace::Global,
-            global_topic.as_deref(),
-            candidate_limit,
-        ),
-        MemoryScopeSelector::ProjectAndGlobal => {
-            let (project_records, global_records) = tokio::try_join!(
-                client.recall(&project_recall),
-                client.recall(&global_recall)
-            )
-            .map_err(unavailable)?;
-            let project_records = isolate_memories(
-                project_records,
+    let records_result = async {
+        Ok::<Vec<MemoryRecord>, ApiError>(match request.scope {
+            MemoryScopeSelector::Project => isolate_memories(
+                client.recall(&project_recall).await.map_err(unavailable)?,
                 &project,
                 MemoryNamespace::Project,
                 project_topic.as_deref(),
                 candidate_limit,
-            );
-            let global_records = isolate_memories(
-                global_records,
+            ),
+            MemoryScopeSelector::Global => isolate_memories(
+                client.recall(&global_recall).await.map_err(unavailable)?,
                 &project,
                 MemoryNamespace::Global,
                 global_topic.as_deref(),
                 candidate_limit,
+            ),
+            MemoryScopeSelector::ProjectAndGlobal => {
+                let (project_records, global_records) = tokio::try_join!(
+                    client.recall(&project_recall),
+                    client.recall(&global_recall)
+                )
+                .map_err(unavailable)?;
+                let project_records = isolate_memories(
+                    project_records,
+                    &project,
+                    MemoryNamespace::Project,
+                    project_topic.as_deref(),
+                    candidate_limit,
+                );
+                let global_records = isolate_memories(
+                    global_records,
+                    &project,
+                    MemoryNamespace::Global,
+                    global_topic.as_deref(),
+                    candidate_limit,
+                );
+                merge_memories(project_records, global_records, candidate_limit)
+            }
+        })
+    }
+    .await;
+    let records = match records_result {
+        Ok(records) => records,
+        Err(error) => {
+            state.observability.record_span(
+                &trace,
+                TraceSpanInput {
+                    stage: DashboardTraceStage::Engine,
+                    state: DashboardTraceState::Failed,
+                    engine: "icm",
+                    duration_ms: elapsed_ms(request_started),
+                    route: Some("memory_recall"),
+                    error_code: Some("memory_unavailable"),
+                    generation: None,
+                },
             );
-            merge_memories(project_records, global_records, candidate_limit)
+            state.observability.record_span(
+                &trace,
+                TraceSpanInput {
+                    stage: DashboardTraceStage::Request,
+                    state: DashboardTraceState::Failed,
+                    engine: "hzrd",
+                    duration_ms: elapsed_ms(request_started),
+                    route: Some("memory_recall"),
+                    error_code: Some("memory_unavailable"),
+                    generation: None,
+                },
+            );
+            return Err(error);
         }
     };
     let total_matches = records.len();
     let memories = records.into_iter().take(request.limit).collect::<Vec<_>>();
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Engine,
+            state: DashboardTraceState::Completed,
+            engine: "icm",
+            duration_ms: elapsed_ms(request_started),
+            route: Some("memory_recall"),
+            error_code: None,
+            generation: None,
+        },
+    );
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Request,
+            state: DashboardTraceState::Completed,
+            engine: "hzrd",
+            duration_ms: elapsed_ms(request_started),
+            route: Some("memory_recall"),
+            error_code: None,
+            generation: None,
+        },
+    );
     Ok(Json(hzr_memory::MemoryRecallResponse {
         count: memories.len(),
         total_matches,
@@ -1162,6 +1550,8 @@ pub async fn memory_store(
         ));
     }
     let project = memory_project(&state, &request.workspace).await?;
+    let started = Instant::now();
+    let trace = state.observability.begin_trace(&project, None);
     // One write targets exactly one namespace, so a global preference is stored once and
     // is reachable from every repository instead of being duplicated per project.
     let topic = match request.scope {
@@ -1173,11 +1563,37 @@ pub async fn memory_store(
     store.importance = memory_importance(request.importance);
     store.keywords = request.keywords;
     store.raw = request.raw;
-    state
-        .memory
-        .client()
-        .store(&store)
-        .await
+    let outcome = state.memory.client().store(&store).await;
+    let trace_state = if outcome.is_ok() {
+        DashboardTraceState::Completed
+    } else {
+        DashboardTraceState::Failed
+    };
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Engine,
+            state: trace_state,
+            engine: "icm",
+            duration_ms: elapsed_ms(started),
+            route: Some("memory_store"),
+            error_code: outcome.as_ref().err().map(|_| "memory_unavailable"),
+            generation: None,
+        },
+    );
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Request,
+            state: trace_state,
+            engine: "hzrd",
+            duration_ms: elapsed_ms(started),
+            route: Some("memory_store"),
+            error_code: outcome.as_ref().err().map(|_| "memory_unavailable"),
+            generation: None,
+        },
+    );
+    outcome
         .map(Json)
         .map_err(|error| ApiError::service("memory_unavailable", error.to_string(), true))
 }
@@ -1359,8 +1775,14 @@ pub async fn exec_run(
     validate_caller_path(request.caller_path.as_deref())?;
     let budget = ManagedExecutionBudget::new(&state, request.timeout_ms)?;
     let cwd = canonical_workspace(&request.cwd)?;
+    let request_started = Instant::now();
+    let trace = state
+        .observability
+        .begin_trace(&cwd.to_string_lossy(), request.session_id.as_deref());
     let command = CanonicalCommand::shell(request.command.clone());
-    let preflight = daemon_fidelity_preflight(&state.ledger, &request, &cwd).await;
+    let policy_started = Instant::now();
+    let (preflight, fidelity_reservation) =
+        daemon_fidelity_preflight_for_run(&state.ledger, &request, &cwd).await;
     let mut plan = match &preflight {
         FidelityPreflight::Ask { evasion, reason } => RtkRewriteOutcome {
             decision: RewriteDecision::Ask {
@@ -1370,16 +1792,100 @@ pub async fn exec_run(
             evasion: Some(*evasion),
         },
         FidelityPreflight::NotRequested | FidelityPreflight::Allow { .. } => {
-            fork_outcome_with_managed_unwrap(&state.rtk, &request.command, &cwd).await
+            if request.fidelity_requested {
+                let command = CanonicalCommand::shell(request.command.clone());
+                state
+                    .rtk
+                    .decide_byte_fidelity_with_plan_in(&command, Some(&cwd))
+                    .await
+            } else {
+                fork_outcome_with_managed_unwrap(&state.rtk, &request.command, &cwd).await
+            }
         }
     };
     if let FidelityPreflight::Allow { evasion, .. } = preflight {
         plan.evasion = Some(evasion);
     }
     let decision = enforce_first_class(&request.command, plan.decision.clone());
-    record_exec_policy_event(&state, &request, &cwd, plan.evasion.as_ref(), &decision).await?;
+    let route = match &decision {
+        RewriteDecision::AllowRewrite { .. } => "optimized",
+        RewriteDecision::AllowRaw { .. } => "raw",
+        RewriteDecision::Ask { .. } => "ask",
+        RewriteDecision::Deny { .. } => "deny",
+    };
+    let decision_state = match &decision {
+        RewriteDecision::Ask { .. } => DashboardTraceState::ApprovalRequired,
+        RewriteDecision::Deny { .. } => DashboardTraceState::Denied,
+        _ => DashboardTraceState::Completed,
+    };
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Policy,
+            state: decision_state,
+            engine: "rtk",
+            duration_ms: elapsed_ms(policy_started),
+            route: Some(route),
+            error_code: None,
+            generation: None,
+        },
+    );
+    let ledger_started = Instant::now();
+    let policy_event_expected =
+        plan.evasion.is_some() && !matches!(&decision, RewriteDecision::AllowRaw { .. });
+    if let Err(error) =
+        record_exec_policy_event(&state, &request, &cwd, plan.evasion.as_ref(), &decision).await
+    {
+        state.observability.record_span(
+            &trace,
+            TraceSpanInput {
+                stage: DashboardTraceStage::Ledger,
+                state: DashboardTraceState::Failed,
+                engine: "ledger",
+                duration_ms: elapsed_ms(ledger_started),
+                route: Some("policy_event"),
+                error_code: Some("policy_event_write_failed"),
+                generation: None,
+            },
+        );
+        state.observability.record_span(
+            &trace,
+            TraceSpanInput {
+                stage: DashboardTraceStage::Request,
+                state: DashboardTraceState::Failed,
+                engine: "hzrd",
+                duration_ms: elapsed_ms(request_started),
+                route: Some(route),
+                error_code: Some("ledger_unavailable"),
+                generation: None,
+            },
+        );
+        if let Some(reservation) = fidelity_reservation {
+            let _ = state.ledger.cancel_fidelity(reservation).await;
+        }
+        return Err(error);
+    }
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Ledger,
+            state: if policy_event_expected {
+                DashboardTraceState::Completed
+            } else {
+                DashboardTraceState::Skipped
+            },
+            engine: "ledger",
+            duration_ms: elapsed_ms(ledger_started),
+            route: Some("policy_event"),
+            error_code: None,
+            generation: None,
+        },
+    );
     let decision = match decision {
         RewriteDecision::Ask { proposed, reason } => {
+            if let Some(reservation) = fidelity_reservation {
+                let _ = state.ledger.cancel_fidelity(reservation).await;
+            }
             let timeout_ms = Some(budget.limit_ms());
             let decision_id = if let Some(proposed_command) = proposed.clone() {
                 Some(
@@ -1395,12 +1901,27 @@ pub async fn exec_run(
                             cwd,
                             timeout_ms,
                             caller_path: request.caller_path,
+                            agent: request.agent,
+                            session_id: request.session_id,
+                            trace_hash: trace.hash.clone(),
                         })
                         .await,
                 )
             } else {
                 None
             };
+            state.observability.record_span(
+                &trace,
+                TraceSpanInput {
+                    stage: DashboardTraceStage::Request,
+                    state: DashboardTraceState::ApprovalRequired,
+                    engine: "hzrd",
+                    duration_ms: elapsed_ms(request_started),
+                    route: Some(route),
+                    error_code: None,
+                    generation: None,
+                },
+            );
             return Ok(Json(ExecutionOutcome::NotStarted {
                 disposition: NotStarted::ApprovalRequired {
                     decision_id,
@@ -1414,7 +1935,7 @@ pub async fn exec_run(
     };
     let mut envelope = ExecutionEnvelope::allow_raw(command);
     envelope.decision = decision;
-    envelope.cwd = Some(cwd);
+    envelope.cwd = Some(cwd.clone());
     envelope.timeout_ms = Some(budget.remaining_ms()?);
     RtkRewriteOutcome {
         decision: envelope.decision.clone(),
@@ -1422,13 +1943,211 @@ pub async fn exec_run(
     }
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
-    apply_caller_path(&mut envelope, request.caller_path);
-    state
-        .executor
-        .execute(envelope)
-        .await
-        .map(Json)
-        .map_err(|error| ApiError::service("execution_failed", error.to_string(), true))
+    apply_caller_path(&mut envelope, request.caller_path.clone());
+    if let Some(reservation) = fidelity_reservation.as_ref()
+        && let Some(evasion) = plan.evasion
+        && let Err(error) = state
+            .ledger
+            .begin_fidelity(
+                reservation,
+                fidelity_pending_record_for_context(
+                    &cwd,
+                    request.agent.clone(),
+                    request.session_id.clone(),
+                    evasion,
+                ),
+            )
+            .await
+    {
+        let cancellation = state.ledger.cancel_fidelity(reservation.clone()).await;
+        return Err(ApiError::service(
+            "fidelity_execution_boundary_failed",
+            format!(
+                "command was not executed because the durable execution boundary failed: {error}; cancellation={cancellation:?}; rerun the original command"
+            ),
+            false,
+        ));
+    }
+    let engine_started = Instant::now();
+    let (outcome, process_started) = match state.executor.start(envelope) {
+        Ok(handle) => (handle.wait().await, true),
+        Err(error) => {
+            if let Some(reservation) = fidelity_reservation.as_ref()
+                && let Err(recovery) = state
+                    .ledger
+                    .recover_fidelity_pre_spawn(reservation.clone())
+                    .await
+            {
+                return Err(ApiError::service(
+                    "fidelity_pre_spawn_recovery_failed",
+                    format!(
+                        "process was not spawned ({error}), but its durable reservation could not be released: {recovery}; do not replay until `hzr doctor` is clean"
+                    ),
+                    false,
+                ));
+            }
+            (Err(error), false)
+        }
+    };
+    let fidelity_execution_unknown =
+        fidelity_reservation.is_some() && process_started && outcome.is_err();
+    let fidelity_accounting_error = match fidelity_reservation {
+        Some(reservation) => match &outcome {
+            Ok(execution) => match plan
+                .evasion
+                .and_then(|evasion| fidelity_operation_record(&request, &cwd, evasion, execution))
+            {
+                Some(record) => state
+                    .ledger
+                    .complete_fidelity(reservation, record)
+                    .await
+                    .err(),
+                None => Some(crate::ledger_writer::LedgerWriterError::execution_unknown(
+                    "executor returned no recordable completion after the execution boundary; durable state retained",
+                )),
+            },
+            Err(_) => None,
+        },
+        None => None,
+    };
+    let execution_state = if outcome.is_ok() {
+        DashboardTraceState::Completed
+    } else {
+        DashboardTraceState::Failed
+    };
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Engine,
+            state: execution_state,
+            engine: "rtk",
+            duration_ms: elapsed_ms(engine_started),
+            route: Some(route),
+            error_code: outcome.as_ref().err().map(|_| "execution_failed"),
+            generation: None,
+        },
+    );
+    if fidelity_accounting_error.is_some() {
+        state.observability.record_span(
+            &trace,
+            TraceSpanInput {
+                stage: DashboardTraceStage::Ledger,
+                state: DashboardTraceState::Failed,
+                engine: "ledger",
+                duration_ms: 0,
+                route: Some("fidelity_completion"),
+                error_code: Some("fidelity_accounting_failed"),
+                generation: None,
+            },
+        );
+    }
+    let request_state = if outcome.is_ok() && fidelity_accounting_error.is_none() {
+        DashboardTraceState::Completed
+    } else {
+        DashboardTraceState::Failed
+    };
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Request,
+            state: request_state,
+            engine: "hzrd",
+            duration_ms: elapsed_ms(request_started),
+            route: Some(route),
+            error_code: fidelity_accounting_error
+                .as_ref()
+                .map(|_| "fidelity_accounting_failed")
+                .or_else(|| outcome.as_ref().err().map(|_| "execution_failed")),
+            generation: None,
+        },
+    );
+    let outcome = outcome.map_err(|error| {
+        if fidelity_execution_unknown {
+            ApiError::service(
+                "fidelity_execution_state_unknown",
+                format!(
+                    "execution may have started before the executor failed: {error}; do not replay; inspect `hzr doctor`"
+                ),
+                false,
+            )
+        } else {
+            ApiError::service("execution_failed", error.to_string(), true)
+        }
+    })?;
+    Ok(Json(mark_accounting_incomplete(
+        outcome,
+        fidelity_accounting_error.as_ref(),
+    )))
+}
+
+fn fidelity_operation_record(
+    request: &ExecApiRequest,
+    cwd: &Path,
+    evasion: EvasionAttribution,
+    outcome: &ExecutionOutcome,
+) -> Option<crate::ledger_writer::OperationRecord> {
+    fidelity_operation_record_for_context(
+        cwd,
+        request.agent.clone(),
+        request.session_id.clone(),
+        evasion,
+        outcome,
+    )
+}
+
+fn fidelity_operation_record_for_context(
+    cwd: &Path,
+    agent: Option<String>,
+    session_id: Option<String>,
+    evasion: EvasionAttribution,
+    outcome: &ExecutionOutcome,
+) -> Option<crate::ledger_writer::OperationRecord> {
+    let ExecutionOutcome::Completed { result } = outcome else {
+        return None;
+    };
+    let delivered_bytes = result
+        .stdout
+        .total_bytes
+        .saturating_add(result.stderr.total_bytes);
+    let delivered_tokens = delivered_bytes.div_ceil(4);
+    Some(crate::ledger_writer::OperationRecord {
+        original_command: "hzr exec fidelity".into(),
+        recorded_command: "hzr exec fidelity".into(),
+        input_tokens: delivered_tokens,
+        output_tokens: delivered_tokens,
+        execution_ms: result.duration_ms,
+        project_path: cwd.to_string_lossy().into_owned(),
+        channel: hzr_core::OperationChannel::HookCli,
+        measurement: hzr_core::OperationMeasurement::Estimated,
+        route: hzr_core::OperationRoute::Bypassed,
+        agent,
+        session_id,
+        attribution: None,
+        evasion: Some(evasion),
+    })
+}
+
+fn fidelity_pending_record_for_context(
+    cwd: &Path,
+    agent: Option<String>,
+    session_id: Option<String>,
+    evasion: EvasionAttribution,
+) -> crate::ledger_writer::OperationRecord {
+    crate::ledger_writer::OperationRecord {
+        original_command: "hzr exec fidelity".into(),
+        recorded_command: "hzr exec fidelity".into(),
+        input_tokens: 0,
+        output_tokens: 0,
+        execution_ms: 0,
+        project_path: cwd.to_string_lossy().into_owned(),
+        channel: hzr_core::OperationChannel::HookCli,
+        measurement: hzr_core::OperationMeasurement::Unmeasured,
+        route: hzr_core::OperationRoute::Bypassed,
+        agent,
+        session_id,
+        attribution: None,
+        evasion: Some(evasion),
+    }
 }
 
 fn approved_execution_decision(
@@ -1461,7 +2180,37 @@ pub async fn exec_approval(
         .take(&request.decision_id)
         .await
         .ok_or_else(|| ApiError::bad_request("approval is unknown, expired, or already used"))?;
+    let request_started = Instant::now();
+    let trace = state.observability.begin_continuation(
+        &pending.cwd.to_string_lossy(),
+        pending.session_id.as_deref(),
+        pending.trace_hash.clone(),
+    );
     if !request.approved {
+        state.observability.record_span(
+            &trace,
+            TraceSpanInput {
+                stage: DashboardTraceStage::Policy,
+                state: DashboardTraceState::Denied,
+                engine: "approval",
+                duration_ms: elapsed_ms(request_started),
+                route: Some("approval_denied"),
+                error_code: None,
+                generation: None,
+            },
+        );
+        state.observability.record_span(
+            &trace,
+            TraceSpanInput {
+                stage: DashboardTraceStage::Request,
+                state: DashboardTraceState::Denied,
+                engine: "hzrd",
+                duration_ms: elapsed_ms(request_started),
+                route: Some("approval_continuation"),
+                error_code: None,
+                generation: None,
+            },
+        );
         return Ok(Json(ExecutionOutcome::NotStarted {
             disposition: NotStarted::Denied {
                 requested: pending.requested,
@@ -1469,6 +2218,51 @@ pub async fn exec_approval(
             },
         }));
     }
+    let fidelity_context = pending
+        .evasion
+        .as_ref()
+        .filter(|evasion| evasion.class == EvasionClass::E7FidelityHatch)
+        .copied()
+        .map(|evasion| {
+            (
+                pending.cwd.clone(),
+                pending.agent.clone(),
+                pending.session_id.clone(),
+                evasion,
+            )
+        });
+    let fidelity_reservation = if let Some((_, _, session_id, _)) = &fidelity_context {
+        let session_id = session_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "approved fidelity execution requires a non-empty session identity",
+                )
+            })?;
+        let allowance = FidelityAllowance::default();
+        Some(
+            state
+                .ledger
+                .reserve_fidelity_override(
+                    session_id.to_owned(),
+                    allowance,
+                    allowance.max_delivered_tokens,
+                )
+                .await
+                .map_err(|error| {
+                    ApiError::service(
+                        "fidelity_reservation_failed",
+                        format!(
+                            "approved command was not executed because its durable fidelity reservation failed: {error}; rerun the original command to request a new approval"
+                        ),
+                        false,
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
     let mut envelope = ExecutionEnvelope::allow_raw(pending.requested);
     envelope.decision = pending.approved_decision;
     envelope.cwd = Some(pending.cwd);
@@ -1480,12 +2274,180 @@ pub async fn exec_approval(
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
     apply_caller_path(&mut envelope, pending.caller_path);
+    if let Some(reservation) = fidelity_reservation.as_ref()
+        && let Some((cwd, agent, session_id, evasion)) = fidelity_context.as_ref()
+        && let Err(error) = state
+            .ledger
+            .begin_fidelity(
+                reservation,
+                fidelity_pending_record_for_context(
+                    cwd,
+                    agent.clone(),
+                    session_id.clone(),
+                    *evasion,
+                ),
+            )
+            .await
+    {
+        let cancellation = state.ledger.cancel_fidelity(reservation.clone()).await;
+        return Err(ApiError::service(
+            "fidelity_execution_boundary_failed",
+            format!(
+                "approved command was not executed because the durable execution boundary failed: {error}; cancellation={cancellation:?}; rerun the original command to request a new approval"
+            ),
+            false,
+        ));
+    }
+    let engine_started = Instant::now();
+    let (outcome, process_started) = match state.executor.start(envelope) {
+        Ok(handle) => (handle.wait().await, true),
+        Err(error) => {
+            if let Some(reservation) = fidelity_reservation.as_ref()
+                && let Err(recovery) = state
+                    .ledger
+                    .recover_fidelity_pre_spawn(reservation.clone())
+                    .await
+            {
+                return Err(ApiError::service(
+                    "fidelity_pre_spawn_recovery_failed",
+                    format!(
+                        "approved process was not spawned ({error}), but its durable reservation could not be released: {recovery}; do not replay until `hzr doctor` is clean"
+                    ),
+                    false,
+                ));
+            }
+            (Err(error), false)
+        }
+    };
+    let fidelity_execution_unknown =
+        fidelity_reservation.is_some() && process_started && outcome.is_err();
+    let mut fidelity_accounting_error = None;
+    if let Some(reservation) = fidelity_reservation {
+        if let (Ok(execution), Some((cwd, agent, session_id, evasion))) =
+            (outcome.as_ref(), fidelity_context)
+            && let Some(record) =
+                fidelity_operation_record_for_context(&cwd, agent, session_id, evasion, execution)
+        {
+            if let Err(error) = state.ledger.complete_fidelity(reservation, record).await {
+                fidelity_accounting_error = Some(error);
+            }
+        } else if outcome.is_ok() {
+            fidelity_accounting_error = Some(
+                crate::ledger_writer::LedgerWriterError::execution_unknown(
+                    "approved executor returned no recordable completion after the execution boundary; durable state retained",
+                ),
+            );
+        }
+    }
+    let engine_state = if outcome.is_ok() {
+        DashboardTraceState::Completed
+    } else {
+        DashboardTraceState::Failed
+    };
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Engine,
+            state: engine_state,
+            engine: "rtk",
+            duration_ms: elapsed_ms(engine_started),
+            route: Some("approved_execution"),
+            error_code: outcome.as_ref().err().map(|_| "execution_failed"),
+            generation: None,
+        },
+    );
+    if fidelity_accounting_error.is_some() {
+        state.observability.record_span(
+            &trace,
+            TraceSpanInput {
+                stage: DashboardTraceStage::Ledger,
+                state: DashboardTraceState::Failed,
+                engine: "ledger",
+                duration_ms: 0,
+                route: Some("approved_fidelity_completion"),
+                error_code: Some("fidelity_accounting_failed"),
+                generation: None,
+            },
+        );
+    }
+    let request_state = if outcome.is_ok() && fidelity_accounting_error.is_none() {
+        DashboardTraceState::Completed
+    } else {
+        DashboardTraceState::Failed
+    };
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Request,
+            state: request_state,
+            engine: "hzrd",
+            duration_ms: elapsed_ms(request_started),
+            route: Some("approval_continuation"),
+            error_code: fidelity_accounting_error
+                .as_ref()
+                .map(|_| "fidelity_accounting_failed")
+                .or_else(|| outcome.as_ref().err().map(|_| "execution_failed")),
+            generation: None,
+        },
+    );
+    let outcome = outcome.map_err(|error| {
+        if fidelity_execution_unknown {
+            ApiError::service(
+                "fidelity_execution_state_unknown",
+                format!(
+                    "approved execution may have started before the executor failed: {error}; do not replay; inspect `hzr doctor`"
+                ),
+                false,
+            )
+        } else {
+            ApiError::service("execution_failed", error.to_string(), true)
+        }
+    })?;
+    Ok(Json(mark_accounting_incomplete(
+        outcome,
+        fidelity_accounting_error.as_ref(),
+    )))
+}
+
+pub async fn fidelity_reconcile(
+    State(state): State<AppState>,
+    Json(request): Json<FidelityReconcileApiRequest>,
+) -> Result<Json<FidelityReconcileReceipt>, ApiError> {
+    let reservation_id = request.reservation_id.trim();
+    if reservation_id.is_empty()
+        || reservation_id.len() > 128
+        || !reservation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(ApiError::bad_request("invalid fidelity reservation id"));
+    }
     state
-        .executor
-        .execute(envelope)
+        .ledger
+        .reconcile_fidelity(reservation_id.to_owned(), request.resolution)
         .await
         .map(Json)
-        .map_err(|error| ApiError::service("execution_failed", error.to_string(), true))
+        .map_err(|error| ApiError::service("fidelity_reconcile_failed", error.to_string(), false))
+}
+
+fn mark_accounting_incomplete(
+    outcome: ExecutionOutcome,
+    error: Option<&crate::ledger_writer::LedgerWriterError>,
+) -> ExecutionOutcome {
+    let Some(error) = error else {
+        return outcome;
+    };
+    match outcome {
+        ExecutionOutcome::Completed { result } => ExecutionOutcome::ExecutedAccountingIncomplete {
+            result,
+            accounting: AccountingIncomplete {
+                code: "fidelity_accounting_incomplete".into(),
+                retryable: false,
+                incident_persisted: error.incident_persisted(),
+            },
+        },
+        other => other,
+    }
 }
 
 pub async fn fork_run(
@@ -1495,19 +2457,25 @@ pub async fn fork_run(
     validate_fork_run(&request)?;
     let budget = ManagedExecutionBudget::new(&state, request.timeout_ms)?;
     let cwd = canonical_workspace(&request.cwd)?;
-    validate_managed_fork_tool(&request.args, &cwd)?;
+    let (args, stdin, _managed_write_files): (
+        Vec<String>,
+        Option<String>,
+        Option<tempfile::TempDir>,
+    ) = match request.managed_write {
+        Some(write) => materialize_managed_write(write)?,
+        None => (request.args, request.stdin, None),
+    };
+    validate_managed_fork_tool(&args, &cwd)?;
     let runner = state
         .rtk
         .runner()
         .map_err(|error| ApiError::service("fork_core_unavailable", error.to_string(), true))?;
-    let mut invocation = ForkCoreInvocation::new(request.args);
+    let mut invocation = ForkCoreInvocation::new(args);
     invocation.cwd = Some(cwd);
     invocation.timeout_ms = Some(budget.remaining_ms()?);
-    invocation.stdin = request
-        .stdin
-        .map_or(StdinSpec::Null, |stdin| StdinSpec::Bytes {
-            data: stdin.into_bytes(),
-        });
+    invocation.stdin = stdin.map_or(StdinSpec::Null, |stdin| StdinSpec::Bytes {
+        data: stdin.into_bytes(),
+    });
     invocation.capture = CaptureConfig {
         memory_limit_bytes: 192 * 1024,
         max_capture_bytes: 192 * 1024,
@@ -1520,6 +2488,11 @@ pub async fn fork_run(
         .map_err(|error| ApiError::service("fork_core_failed", error.to_string(), true))?;
     let result = match outcome {
         ExecutionOutcome::Completed { result } => result,
+        ExecutionOutcome::ExecutedAccountingIncomplete { accounting, .. } => {
+            return Err(ApiError::internal(format!(
+                "fork-core executed but accounting is incomplete; do not retry: {accounting:?}"
+            )));
+        }
         ExecutionOutcome::NotStarted { disposition } => {
             return Err(ApiError::internal(format!(
                 "direct fork-core invocation was not started: {disposition:?}"
@@ -1545,6 +2518,65 @@ pub async fn fork_run(
         stdout_truncated: result.stdout.truncated,
         stderr_truncated: result.stderr.truncated,
     }))
+}
+
+fn materialize_managed_write(
+    write: ForkManagedWrite,
+) -> Result<(Vec<String>, Option<String>, Option<tempfile::TempDir>), ApiError> {
+    match write {
+        ForkManagedWrite::Patch { path, old, new } => {
+            if old.len() > 65_536 || new.len() > 65_536 {
+                return Err(ApiError::bad_request(
+                    "managed patch blocks must contain at most 65536 UTF-8 bytes",
+                ));
+            }
+            let directory = tempfile::tempdir()
+                .map_err(|error| ApiError::internal(format!("stage managed patch: {error}")))?;
+            let old_path = directory.path().join("old");
+            let new_path = directory.path().join("new");
+            fs::write(&old_path, old)
+                .and_then(|_| fs::write(&new_path, new))
+                .map_err(|error| ApiError::internal(format!("stage managed patch: {error}")))?;
+            Ok((
+                vec![
+                    "write".to_owned(),
+                    "--output".to_owned(),
+                    "json".to_owned(),
+                    "patch".to_owned(),
+                    path,
+                    "--old".to_owned(),
+                    format!("@{}", old_path.display()),
+                    "--new".to_owned(),
+                    format!("@{}", new_path.display()),
+                    "--cas".to_owned(),
+                    "--retry".to_owned(),
+                    "2".to_owned(),
+                ],
+                None,
+                Some(directory),
+            ))
+        }
+        ForkManagedWrite::Create { path, content } => {
+            if content.len() > 192 * 1024 {
+                return Err(ApiError::bad_request(
+                    "managed create content must contain at most 196608 UTF-8 bytes",
+                ));
+            }
+            Ok((
+                vec![
+                    "write".to_owned(),
+                    "--output".to_owned(),
+                    "json".to_owned(),
+                    "create".to_owned(),
+                    path,
+                    "--content".to_owned(),
+                    "@-".to_owned(),
+                ],
+                Some(content),
+                None,
+            ))
+        }
+    }
 }
 
 pub async fn usage(
@@ -1578,6 +2610,10 @@ pub async fn operation(
     State(state): State<AppState>,
     Json(request): Json<hzr_protocol::OperationApiRequest>,
 ) -> Result<Json<hzr_protocol::OperationApiResponse>, ApiError> {
+    let request_started = Instant::now();
+    let trace = state
+        .observability
+        .begin_trace(&request.project_path, request.session_id.as_deref());
     let channel = match request.channel {
         hzr_protocol::AccountingChannel::HookCli => hzr_core::OperationChannel::HookCli,
         hzr_protocol::AccountingChannel::Mcp => hzr_core::OperationChannel::Mcp,
@@ -1596,7 +2632,8 @@ pub async fn operation(
             hzr_core::OperationRoute::NativeUnaccounted
         }
     };
-    state
+    let ledger_started = Instant::now();
+    let outcome = state
         .ledger
         .record_operation(crate::ledger_writer::OperationRecord {
             original_command: request.original_command,
@@ -1611,8 +2648,50 @@ pub async fn operation(
             agent: request.agent,
             session_id: request.session_id,
             attribution: request.attribution,
+            evasion: None,
         })
-        .await
+        .await;
+    let trace_state = if outcome.is_ok() {
+        DashboardTraceState::Completed
+    } else {
+        DashboardTraceState::Failed
+    };
+    let route_name = match route {
+        hzr_core::OperationRoute::Optimized => "optimized_operation",
+        hzr_core::OperationRoute::Bypassed => "bypassed_operation",
+        hzr_core::OperationRoute::NativeUnaccounted => "native_operation",
+    };
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Ledger,
+            state: trace_state,
+            engine: "ledger",
+            duration_ms: elapsed_ms(ledger_started),
+            route: Some(route_name),
+            error_code: outcome
+                .as_ref()
+                .err()
+                .map(|_| "operation_ledger_write_failed"),
+            generation: None,
+        },
+    );
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Request,
+            state: trace_state,
+            engine: "hzrd",
+            duration_ms: elapsed_ms(request_started),
+            route: Some("operation_accounting"),
+            error_code: outcome
+                .as_ref()
+                .err()
+                .map(|_| "operation_ledger_write_failed"),
+            generation: None,
+        },
+    );
+    outcome
         .map_err(|error| ApiError::internal(format!("operation ledger write failed: {error}")))?;
     Ok(Json(hzr_protocol::OperationApiResponse { recorded: true }))
 }
@@ -1657,9 +2736,18 @@ async fn daemon_fidelity_preflight(
     request: &ExecApiRequest,
     cwd: &Path,
 ) -> FidelityPreflight {
-    if !fidelity_preflight_required(&request.command) {
+    if !request.fidelity_requested {
         return FidelityPreflight::NotRequested;
     }
+    // The public route transports fidelity intent as typed request fields. Build the legacy
+    // classifier shape only in-memory for the compatibility parser; never execute this wrapper.
+    let classifier_command = match request.fidelity_reason.as_deref() {
+        Some(reason) => format!(
+            "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON={reason} hzr rtk -- raw {}",
+            request.command
+        ),
+        None => format!("HZR_RAW_FIDELITY=1 hzr rtk -- raw {}", request.command),
+    };
     let budget = match request
         .session_id
         .as_deref()
@@ -1676,7 +2764,74 @@ async fn daemon_fidelity_preflight(
             }),
         None => None,
     };
-    hzr_core::fidelity_preflight(&request.command, cwd, budget)
+    hzr_core::fidelity_preflight(&classifier_command, cwd, budget)
+}
+
+async fn daemon_fidelity_preflight_for_run(
+    ledger: &crate::ledger_writer::LedgerWriter,
+    request: &ExecApiRequest,
+    cwd: &Path,
+) -> (
+    FidelityPreflight,
+    Option<crate::ledger_writer::FidelityReservation>,
+) {
+    let preflight = daemon_fidelity_preflight(ledger, request, cwd).await;
+    let FidelityPreflight::Allow {
+        evasion,
+        output_tokens_upper_bound,
+    } = preflight
+    else {
+        return (preflight, None);
+    };
+    let Some(session_id) = request.session_id.as_ref() else {
+        return (
+            FidelityPreflight::Ask {
+                evasion,
+                reason: "T4 fidelity preflight cannot reserve an anonymous session allowance"
+                    .into(),
+            },
+            None,
+        );
+    };
+    match ledger
+        .reserve_fidelity(
+            session_id.clone(),
+            FidelityAllowance::default(),
+            output_tokens_upper_bound,
+        )
+        .await
+    {
+        Ok(Some(reservation)) => (
+            FidelityPreflight::Allow {
+                evasion,
+                output_tokens_upper_bound,
+            },
+            Some(reservation),
+        ),
+        Ok(None) => {
+            let mut evasion = evasion;
+            evasion.avoidable = true;
+            evasion.tier = EnforcementTier::T3BudgetExhaustion;
+            evasion.fidelity_validation = FidelityValidation::BudgetExhausted;
+            (
+                FidelityPreflight::Ask {
+                    evasion,
+                    reason: "T4 fidelity session allowance is exhausted or concurrently reserved"
+                        .into(),
+                },
+                None,
+            )
+        }
+        Err(error) => (
+            FidelityPreflight::Ask {
+                evasion,
+                reason: format!(
+                    "T4 fidelity allowance reservation is unavailable; execution remains blocked: {error}"
+                ),
+            },
+            None,
+        ),
+    }
 }
 
 async fn record_exec_policy_event(
@@ -1882,6 +3037,7 @@ pub async fn codec_compile(
     Json(request): Json<CodecApiRequest>,
 ) -> Result<Json<hzr_codec::Transform>, ApiError> {
     let started = Instant::now();
+    let trace = state.observability.begin_trace("", None);
     let transform = hzr_codec::transform_for_risk(
         &request.content,
         request.fidelity,
@@ -1889,7 +3045,48 @@ pub async fn codec_compile(
         request.risk,
     )
     .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    record_codec_operation(&state, &request, &transform, started.elapsed()).await;
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Engine,
+            state: DashboardTraceState::Completed,
+            engine: "caveman",
+            duration_ms: elapsed_ms(started),
+            route: Some("codec_compile"),
+            error_code: None,
+            generation: None,
+        },
+    );
+    let ledger_started = Instant::now();
+    let recorded = record_codec_operation(&state, &request, &transform, started.elapsed()).await;
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Ledger,
+            state: if recorded {
+                DashboardTraceState::Completed
+            } else {
+                DashboardTraceState::Failed
+            },
+            engine: "ledger",
+            duration_ms: elapsed_ms(ledger_started),
+            route: Some("codec_compile"),
+            error_code: (!recorded).then_some("codec_accounting_failed"),
+            generation: None,
+        },
+    );
+    state.observability.record_span(
+        &trace,
+        TraceSpanInput {
+            stage: DashboardTraceStage::Request,
+            state: DashboardTraceState::Completed,
+            engine: "hzrd",
+            duration_ms: elapsed_ms(started),
+            route: Some("codec_compile"),
+            error_code: None,
+            generation: None,
+        },
+    );
     Ok(Json(transform))
 }
 
@@ -1904,13 +3101,13 @@ async fn record_codec_operation(
     request: &CodecApiRequest,
     transform: &hzr_codec::Transform,
     elapsed: Duration,
-) {
+) -> bool {
     // Shadow reports what it *would* have saved; every other profile reports what it did.
     let delivered = match &transform.counterfactual {
         Some(counterfactual) => counterfactual.output_bytes,
         None => transform.content.len(),
     };
-    let _ = state
+    state
         .ledger
         .record_operation(crate::ledger_writer::OperationRecord {
             original_command: "hzr codec compile".into(),
@@ -1918,7 +3115,7 @@ async fn record_codec_operation(
             input_tokens: estimated_tokens(request.content.len()),
             output_tokens: estimated_tokens(delivered),
             execution_ms: elapsed.as_millis() as u64,
-            project_path: String::new(),
+            project_path: request.project_path.clone(),
             channel: match request.channel {
                 Some(hzr_protocol::AccountingChannel::Mcp) => hzr_core::OperationChannel::Mcp,
                 Some(hzr_protocol::AccountingChannel::NativeHost) => {
@@ -1933,9 +3130,27 @@ async fn record_codec_operation(
             agent: matches!(request.channel, Some(hzr_protocol::AccountingChannel::Mcp))
                 .then(|| "mcp".to_owned()),
             session_id: None,
-            attribution: None,
+            attribution: Some(hzr_protocol::AccountingAttribution {
+                operation: hzr_protocol::AccountingOperationKind::Codec,
+                mode: hzr_protocol::AccountingOperationMode::CodecCompile,
+                stage: hzr_protocol::AccountingStage::InternalTransport,
+                requested_mode: None,
+                effective_mode: Some(hzr_protocol::AccountingOperationMode::CodecCompile),
+                search_strategy: None,
+                search_fallback_code: None,
+                include_content: None,
+                limit: None,
+                path_scope_count: None,
+                filter_level: None,
+                from_line: None,
+                to_line: None,
+                source_bytes: Some(u64::try_from(request.content.len()).unwrap_or(u64::MAX)),
+                evasion: None,
+            }),
+            evasion: None,
         })
-        .await;
+        .await
+        .is_ok()
 }
 
 /// The same `bytes / 4` heuristic the rest of the estimated ledger uses. Sharing it is the
@@ -2044,8 +3259,13 @@ fn managed_timeout_ms(state: &AppState, requested: Option<u64>) -> Result<u64, A
 
 fn validate_fork_run(request: &ForkRunApiRequest) -> Result<(), ApiError> {
     validate_exec_timeout(request.timeout_ms)?;
-    if request.args.is_empty() {
+    if request.args.is_empty() && request.managed_write.is_none() {
         return Err(ApiError::bad_request("fork-core args must not be empty"));
+    }
+    if request.managed_write.is_some() && (!request.args.is_empty() || request.stdin.is_some()) {
+        return Err(ApiError::bad_request(
+            "typed managed write cannot be combined with raw fork args or stdin",
+        ));
     }
     if request.args.len() > 256 {
         return Err(ApiError::bad_request(
@@ -2391,8 +3611,9 @@ mod tests {
     use super::{
         ManagedExecutionBudget, apply_caller_path, approved_execution_decision,
         caveman_engine_health, daemon_fidelity_preflight, dashboard_index_state,
-        dashboard_memory_detail, dashboard_overall_state, dashboard_search_activity,
-        enforce_first_class, fork_outcome_with_managed_unwrap, memory_mutation_targets,
+        dashboard_memory_detail, dashboard_overall_state, dashboard_registration,
+        dashboard_search_activity, enforce_first_class, fidelity_operation_record_for_context,
+        fork_outcome_with_managed_unwrap, materialize_managed_write, memory_mutation_targets,
         memory_ready_state, overall_engine_state, raw_policy_evasion, validate_caller_path,
         validate_managed_fork_tool,
     };
@@ -2404,13 +3625,14 @@ mod tests {
     };
     use hzr_exec::{
         CanonicalCommand, CapturedContent, ExecutionEnvelope, ExecutionOutcome, ExecutionPipeline,
-        ForkRuntimePaths, PINNED_RTK_VERSION, PinnedRtkAdapter, RewriteDecision, RewriteSource,
-        RtkAdapterConfig, RtkRewriteOutcome,
+        ForkRuntimePaths, NotStarted, PINNED_RTK_VERSION, PinnedRtkAdapter, RewriteDecision,
+        RewriteSource, RtkAdapterConfig, RtkRewriteOutcome,
     };
-    use hzr_index::IndexWatcherState;
+    use hzr_index::{IndexWatcherState, WorkspaceRegistration};
     use hzr_memory::{Importance, MemoryRecord, MemoryScope, MemorySource, ProjectMemoryDetail};
     use hzr_protocol::{
-        DashboardOperationRoute, DashboardService, DashboardState, EnforcementTier, EngineHealth,
+        DashboardOperationRoute, DashboardProject, DashboardProjectArtifacts,
+        DashboardProjectState, DashboardService, DashboardState, EnforcementTier, EngineHealth,
         EngineState, EvasionAttribution, EvasionClass, EvasionPathForm, ExecApiRequest,
         FidelityReason, FidelityValidation, MemoryWriteScope, PolicyDecision,
     };
@@ -2424,7 +3646,9 @@ mod tests {
         let writer = LedgerWriter::open(&ledger_path).expect("ledger writer");
         let request = ExecApiRequest {
             cwd: directory.path().to_string_lossy().into_owned(),
-            command: "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw sha256sum artifact.bin".into(),
+            command: "sha256sum artifact.bin".into(),
+            fidelity_requested: true,
+            fidelity_reason: Some("checksum".into()),
             timeout_ms: None,
             caller_path: None,
             agent: Some("claude-code:agent-private".into()),
@@ -2437,9 +3661,7 @@ mod tests {
         ));
 
         let mut contradicted = request.clone();
-        contradicted.command =
-            "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw cat artifact.bin"
-                .into();
+        contradicted.command = "cat artifact.bin".into();
         assert!(matches!(
             daemon_fidelity_preflight(&writer, &contradicted, directory.path()).await,
             FidelityPreflight::Ask {
@@ -2533,7 +3755,7 @@ mod tests {
 
     #[test]
     fn acceptance_gate_approved_checksum_preserves_exact_requested_command() {
-        let raw = "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr rtk -- raw sha256sum artifact.bin";
+        let raw = "sha256sum artifact.bin";
         let requested = CanonicalCommand::shell(raw);
         let evasion = EvasionAttribution {
             class: EvasionClass::E7FidelityHatch,
@@ -2947,6 +4169,11 @@ exit 64
             .expect("managed execution");
         let result = match outcome {
             ExecutionOutcome::Completed { result } => result,
+            ExecutionOutcome::ExecutedAccountingIncomplete { accounting, .. } => {
+                return Err(std::io::Error::other(format!(
+                    "caller executable accounting is incomplete: {accounting:?}"
+                )));
+            }
             ExecutionOutcome::NotStarted { disposition } => {
                 return Err(std::io::Error::other(format!(
                     "caller executable did not start: {disposition:?}"
@@ -2959,6 +4186,66 @@ exit 64
         };
         assert_eq!(bytes, b"caller-path");
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn approved_fidelity_completion_is_recorded_once_with_delivered_bytes() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let ledger_path = directory.path().join("ledger.sqlite");
+        let writer = LedgerWriter::open(&ledger_path).expect("ledger writer");
+        let outcome = ExecutionPipeline
+            .execute(ExecutionEnvelope::allow_raw(CanonicalCommand::shell(
+                "printf exact-output",
+            )))
+            .await
+            .expect("managed execution");
+        let evasion = EvasionAttribution {
+            class: EvasionClass::E7FidelityHatch,
+            wrapper_depth: 0,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 1,
+            hatch_marker: true,
+            avoidable: false,
+            tier: EnforcementTier::T4HatchQuarantine,
+            fidelity_reason: Some(FidelityReason::MachineProtocol),
+            fidelity_validation: FidelityValidation::Valid,
+        };
+        let record = fidelity_operation_record_for_context(
+            directory.path(),
+            Some("test".into()),
+            Some("approved-session".into()),
+            evasion,
+            &outcome,
+        )
+        .expect("completed execution record");
+        assert_eq!(record.output_tokens, 3);
+        writer
+            .record_operation(record)
+            .await
+            .expect("approved fidelity ledger write");
+
+        let summary = Ledger::open(&ledger_path)
+            .expect("ledger reader")
+            .evasion_summary(hzr_core::StatsQuery::default())
+            .expect("evasion summary");
+        assert_eq!(summary.fidelity_operations, 1);
+        assert_eq!(summary.fidelity_delivered_tokens, 3);
+        assert!(
+            fidelity_operation_record_for_context(
+                directory.path(),
+                None,
+                Some("failed-session".into()),
+                evasion,
+                &ExecutionOutcome::NotStarted {
+                    disposition: NotStarted::Denied {
+                        requested: CanonicalCommand::shell("printf denied"),
+                        reason: "denied".into(),
+                    },
+                },
+            )
+            .is_none()
+        );
     }
 
     fn memory(id: &str, topic: &str, weight: f32) -> MemoryRecord {
@@ -3031,13 +4318,15 @@ exit 64
             related_ids: vec!["related".into()],
         };
 
-        let public = dashboard_memory_detail(detail.clone(), true);
+        let privacy = hzr_core::PrivacyPseudonymizer::from_key("11".repeat(32))
+            .expect("valid test privacy key");
+        let public = dashboard_memory_detail(detail.clone(), true, &privacy);
         assert!(!public.summary.contains("secret"));
         assert!(public.raw_excerpt.is_none());
         assert!(public.keywords.is_empty());
         assert!(public.source_data.is_none());
 
-        let authenticated = dashboard_memory_detail(detail, false);
+        let authenticated = dashboard_memory_detail(detail, false, &privacy);
         assert_eq!(authenticated.summary, "secret summary");
         assert_eq!(authenticated.raw_excerpt.as_deref(), Some("secret raw"));
         assert_eq!(authenticated.keywords, ["secret-keyword"]);
@@ -3072,14 +4361,17 @@ exit 64
     fn index_state_distinguishes_standby_from_active_rebuild() {
         let standby = dashboard_index_state(true, IndexWatcherState::Standby);
         assert_eq!(
-            dashboard_overall_state(&[DashboardService {
-                id: "grepai".into(),
-                name: "grepai index".into(),
-                version: None,
-                state: standby,
-                detail: "on demand".into(),
-                command: None,
-            }]),
+            dashboard_overall_state(
+                &[DashboardService {
+                    id: "grepai".into(),
+                    name: "grepai index".into(),
+                    version: None,
+                    state: standby,
+                    detail: "on demand".into(),
+                    command: None,
+                }],
+                &[]
+            ),
             DashboardState::Ready
         );
         assert_eq!(standby, DashboardState::Standby);
@@ -3094,6 +4386,63 @@ exit 64
         assert_eq!(
             dashboard_index_state(true, IndexWatcherState::Failed),
             DashboardState::Degraded
+        );
+    }
+
+    #[test]
+    fn dashboard_requires_explicit_stable_project_selection() {
+        let worktree_id = "b".repeat(64);
+        let registration = WorkspaceRegistration {
+            schema_version: 1,
+            root: "/workspace/one".into(),
+            repository_id: "repository-one".into(),
+            worktree_id: worktree_id.clone(),
+            git_backed: true,
+            linked_worktree: false,
+            index_directory: "/index/one".into(),
+            registered_at_ms: 1,
+            last_seen_at_ms: 2,
+        };
+
+        assert!(matches!(
+            dashboard_registration(std::slice::from_ref(&registration), None),
+            Ok(None)
+        ));
+        let selected = dashboard_registration(&[registration], Some(&worktree_id))
+            .ok()
+            .flatten()
+            .expect("registration");
+        assert_eq!(selected.worktree_id, worktree_id);
+        assert!(dashboard_registration(&[], Some(&"c".repeat(64))).is_err());
+        assert!(dashboard_registration(&[], Some("malformed")).is_err());
+    }
+
+    #[test]
+    fn warming_project_prevents_global_ready_state() {
+        let project = DashboardProject {
+            name: "project".into(),
+            root: "project".into(),
+            repository_id: "repository".into(),
+            worktree_id: "worktree".into(),
+            git_backed: true,
+            linked_worktree: false,
+            state: DashboardProjectState::Warming,
+            registered_at_ms: 1,
+            last_seen_at_ms: 2,
+            artifacts: DashboardProjectArtifacts {
+                config_present: true,
+                vectors_present: false,
+                symbols_present: false,
+                repository_graph_present: false,
+                size_bytes: 0,
+                modified_at_ms: None,
+            },
+            command: "hzr index status --workspace <workspace>".into(),
+        };
+
+        assert_eq!(
+            dashboard_overall_state(&[], &[project]),
+            DashboardState::Rebuilding
         );
     }
 
@@ -3274,6 +4623,32 @@ exit 64
             validate_managed_fork_tool(&["read".into(), "../outside".into()], &workspace).is_err()
         );
         assert!(validate_managed_fork_tool(&["config".into()], &workspace).is_err());
+    }
+
+    #[test]
+    fn typed_managed_patch_keeps_content_out_of_process_arguments() {
+        let secret_old = "private old block";
+        let secret_new = "private new block";
+        let (args, stdin, files) =
+            materialize_managed_write(hzr_protocol::ForkManagedWrite::Patch {
+                path: "src/lib.rs".into(),
+                old: secret_old.into(),
+                new: secret_new.into(),
+            })
+            .unwrap_or_else(|_| panic!("typed patch materializes"));
+        let command_line = args.join(" ");
+        assert!(!command_line.contains(secret_old));
+        assert!(!command_line.contains(secret_new));
+        assert!(stdin.is_none());
+        let files = files.expect("patch staging files");
+        assert_eq!(
+            fs::read_to_string(files.path().join("old")).expect("old"),
+            secret_old
+        );
+        assert_eq!(
+            fs::read_to_string(files.path().join("new")).expect("new"),
+            secret_new
+        );
     }
 
     #[cfg(unix)]

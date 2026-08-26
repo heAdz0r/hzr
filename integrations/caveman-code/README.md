@@ -4,9 +4,19 @@ This directory pins `@juliusbrussee/caveman-code` 0.65.2 and adapts its SDK into
 HZR's single-owner runtime. Build or packaging must run `npm ci`; HZR refuses to
 launch if the runtime bridge differs byte-for-byte from the bridge embedded in
 the Rust build, or if `package-lock.json` differs from the compiled SHA-256 pin
-`3f0447b23174cc99cd7f09eef6ad614d8c615366d488e3022c31d097e6371cae`.
+`f4e16e1ac5b2c6560115058379daa5e37a4a49e5a7d238f7a2183f661711d15d`.
 The exact lock digest covers every transitive version and registry integrity,
-while preflight separately verifies the installed Caveman Code manifest.
+while preflight separately verifies the installed Caveman Code manifest. The
+bridge's own `package.json` version is the SSOT for its required HZR daemon
+version; Rust preflight and the JavaScript health check both reject version drift.
+
+`contracts/agent-capabilities.json` is the machine-readable SSOT for routes,
+MCP inventory, and harness differences. The build copies the exact artifact next
+to the bridge and Rust preflight verifies it byte-for-byte. The managed harness
+accepts only the tool inventory declared for `managed_agent`. It strips complete
+generated HZR blocks from repository `AGENTS.md` and `CLAUDE.md` files before
+loading their remaining repository-specific rules, so the same global contract
+is never injected twice; malformed marker pairs fail closed.
 
 The certified runtime range is Node.js `>=20.18.1 <26`. The lower bound comes
 from `undici` in the exact lock. The upper bound is fail-closed because
@@ -28,6 +38,9 @@ file tools are not registered.
 Before creating the session, the bridge retrieves one bounded HZR context plan
 for the original intent. The plan is produced by the preserved fork memory
 planner and centralized ICM, then injected once as explicitly untrusted data.
+Freshness, trust, and provenance metadata remain visible to the model. Delivery
+uses the planner's token limit and omits only complete candidate blocks rather
+than slicing exact content mid-line.
 The bridge also appends a short, cache-stable response-density contract to the
 system prompt before generation. This can reduce billed output; post-generation
 deduplication alone cannot. JSON responses get an exact compact-JSON contract,

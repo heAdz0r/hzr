@@ -9,7 +9,7 @@ use hzr_core::{
 };
 use hzr_index::{
     Deadlines, IndexGeneration, IndexMigrationOutcome, IndexPlacement, IndexStatus, Workspace,
-    migrate_legacy_index,
+    migrate_legacy_index, registered_workspaces,
 };
 use hzr_protocol::{EngineState, PROTOCOL_VERSION};
 use serde::Serialize;
@@ -48,6 +48,8 @@ pub struct DoctorReport {
     pub checks: Vec<DoctorCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repair: Option<IndexMigrationOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fidelity_reconcile: Option<hzr_protocol::FidelityReconcileReceipt>,
 }
 
 pub async fn repair_legacy_index(
@@ -117,6 +119,55 @@ fn fidelity_allowance_check() -> DoctorCheck {
     )
 }
 
+fn fidelity_durability_check(config: &Config) -> DoctorCheck {
+    let directory = config.data_dir.join("ledger/fidelity-pending");
+    match hzr_daemon::inspect_fidelity_pending(&directory) {
+        Ok(status) => fidelity_durability_status_check(&directory, status),
+        Err(error) => check(
+            "fidelity_durability",
+            CheckStatus::Error,
+            format!("cannot inspect {}: {error}", directory.display()),
+        ),
+    }
+}
+
+fn fidelity_durability_status_check(
+    directory: &Path,
+    status: hzr_daemon::FidelityDurabilityStatus,
+) -> DoctorCheck {
+    if status.healthy() && status.reserved == 0 {
+        return check(
+            "fidelity_durability",
+            CheckStatus::Pass,
+            "no pending fidelity reservations, unknown executions, replay backlog, or corrupt records",
+        );
+    }
+    if status.healthy() {
+        return check(
+            "fidelity_durability",
+            CheckStatus::Warning,
+            format!(
+                "{} provably pre-execution reservation(s) are pending in {}; stale reservations auto-expire after 5 minutes",
+                status.reserved,
+                directory.display()
+            ),
+        );
+    }
+    check(
+        "fidelity_durability",
+        CheckStatus::Error,
+        format!(
+            "reserved={}, executing_unknown={}, executed_pending_replay={}, corrupt={} in {}; unknown_ids={}; reconcile with `hzr doctor --resolve-fidelity <ID> --acknowledge-executed` (records zero unmeasured tokens) or only after proof use `hzr doctor --resolve-fidelity <ID> --prove-not-executed`; restart hzrd to replay executed records; preserve corrupt records because corruption blocks new fidelity execution",
+            status.reserved,
+            status.executing_unknown,
+            status.executed_pending_replay,
+            status.corrupt,
+            directory.display(),
+            status.unknown_reservation_ids.join(",")
+        ),
+    )
+}
+
 fn instruction_health_check(
     name: &str,
     surface: instructions::Surface,
@@ -126,13 +177,17 @@ fn instruction_health_check(
         Ok(report) if report.healthy() => check(name, CheckStatus::Pass, report.path.display()),
         Ok(report) => {
             let mut reasons = Vec::new();
+            let mut managed_repair_needed = false;
             if !report.installed {
                 reasons.push("HZR contract block is absent".to_owned());
+                managed_repair_needed = true;
             }
             if report.installed && !report.current {
                 reasons.push("managed routing policy is stale".to_owned());
+                managed_repair_needed = true;
             }
             if report.installed && !report.contract_readable {
+                managed_repair_needed = true;
                 reasons.push(match &report.contract_path {
                     Some(contract) => {
                         format!("referenced contract {} is unreadable", contract.display())
@@ -142,15 +197,28 @@ fn instruction_health_check(
             }
             if !report.conflicting_mandates.is_empty() {
                 reasons.push(format!(
-                    "legacy directives still active outside the managed block: {}",
+                    "directives still active outside the managed block: {}",
                     report.conflicting_mandates.join(", ")
                 ));
             }
+            let remediation = match (
+                managed_repair_needed,
+                report.conflicting_mandates.is_empty(),
+            ) {
+                (true, true) => "run `hzr init --if-needed`",
+                (true, false) => {
+                    "run `hzr init --if-needed` for the managed block, then manually edit the listed user-authored lines and re-run `hzr doctor`; HZR will not rewrite those lines"
+                }
+                (false, false) => {
+                    "manually edit the listed user-authored lines and re-run `hzr doctor`; `hzr init` intentionally will not rewrite those lines"
+                }
+                (false, true) => "re-run `hzr doctor`",
+            };
             check(
                 name,
                 CheckStatus::Error,
                 format!(
-                    "{}: {}; run `hzr init --if-needed`",
+                    "{}: {}; {remediation}",
                     report.path.display(),
                     reasons.join("; ")
                 ),
@@ -178,8 +246,112 @@ fn workspace_instruction_health_check(
     }
 }
 
+fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) -> Vec<DoctorCheck> {
+    let snapshot = registered_workspaces(&config.data_dir);
+    let mut checks = Vec::new();
+    let mut stale_paths = Vec::new();
+    let mut conflict_count = 0_usize;
+    for warning in snapshot.warnings {
+        checks.push(check(
+            "fleet_instruction_registry",
+            CheckStatus::Warning,
+            format!("{}: {}", warning.path.display(), warning.detail),
+        ));
+    }
+    for registration in snapshot.registrations {
+        if registration.root == current_workspace || intentionally_unmanaged_rtk(&registration.root)
+        {
+            continue;
+        }
+        for (surface, path) in activation::local_instruction_paths(&registration.root) {
+            let audit = match instructions::audit(surface, &path) {
+                Ok(audit) => audit,
+                Err(error) => {
+                    checks.push(check(
+                        format!("fleet_{}_instructions", surface.as_str()),
+                        CheckStatus::Warning,
+                        format!("{}: {error}", path.display()),
+                    ));
+                    continue;
+                }
+            };
+            if !audit.installed && audit.conflicting_mandates.is_empty() {
+                continue;
+            }
+            if audit.conflicting_mandates.is_empty() {
+                if !audit.healthy() {
+                    stale_paths.push(path);
+                }
+                continue;
+            }
+            conflict_count = conflict_count.saturating_add(1);
+            if conflict_count > 32 {
+                continue;
+            }
+            let mut finding = instruction_health_check(
+                &format!("fleet_{}_instructions", surface.as_str()),
+                surface,
+                &path,
+            );
+            if finding.status != CheckStatus::Pass {
+                finding.detail.push_str(&format!(
+                    "; the managed block can be refreshed with `cd {} && hzr init --if-needed`; manually apply each listed line remediation because direct user-authored conflict lines are never auto-rewritten",
+                    registration.root.display()
+                ));
+            }
+            checks.push(finding);
+        }
+    }
+    if !stale_paths.is_empty() {
+        stale_paths.sort();
+        let examples = stale_paths
+            .iter()
+            .take(8)
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        checks.push(check(
+            "fleet_stale_managed_contracts",
+            CheckStatus::Error,
+            format!(
+                "{} registered instruction files have a stale/unreadable managed block; examples: {}; reconcile each owning workspace explicitly with `hzr init --if-needed` ({} more not expanded)",
+                stale_paths.len(),
+                examples,
+                stale_paths.len().saturating_sub(8)
+            ),
+        ));
+    }
+    if conflict_count > 32 {
+        checks.push(check(
+            "fleet_instruction_conflicts_truncated",
+            CheckStatus::Error,
+            format!(
+                "{} additional registered instruction files contain direct engine/native mandates; output is capped at 32 detailed files",
+                conflict_count - 32
+            ),
+        ));
+    }
+    if checks.is_empty() {
+        checks.push(check(
+            "fleet_instructions",
+            CheckStatus::Pass,
+            "registered workspace instruction files have no stale managed block or direct engine mandate",
+        ));
+    }
+    checks
+}
+
+fn intentionally_unmanaged_rtk(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| name == "rtk")
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "Programming")
+}
+
 pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> DoctorReport {
     let mut checks = Vec::new();
+    checks.push(install_transaction_check(config_path, config, workspace));
     match adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
         Ok(status) => checks.push(hook_ownership_check(status)),
         Err(error) => checks.push(check("hook_ownership", CheckStatus::Warning, error)),
@@ -205,6 +377,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         Err(error) => checks.push(check("native_tool_mode", CheckStatus::Warning, error)),
     }
     checks.push(fidelity_allowance_check());
+    checks.push(fidelity_durability_check(config));
     if let Ok(status) = adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
         if status.external_icm_entries > 0 {
             // A direct `icm hook` writes to a store HZR does not supervise: that is a
@@ -299,6 +472,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             "workspace is disabled; no local HZR contract is required",
         )),
     }
+    checks.extend(fleet_instruction_health_checks(config, workspace));
     // Direct client ICM registration is a second memory writer regardless of what the
     // instruction files say, so it is audited separately from the text.
     match client_config::direct_icm_registrations() {
@@ -319,8 +493,26 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     // audited but never written by install, so a missing HZR MCP there is its own check —
     // otherwise hooks can look healthy while `hzr mcp status` shows registered=false.
     match client_config::status_all() {
-        Ok(statuses) => {
-            checks.push(workspace_binding_check(&statuses));
+        Ok(mut statuses) => {
+            let project_codex_path = client_config::project_codex_path(workspace);
+            match client_config::status(client_config::Client::Codex, &project_codex_path) {
+                Ok(project_codex) if project_codex.registered => {
+                    // Trusted project configuration has precedence over the user-global Codex
+                    // registration. Audit the effective pin instead of reporting a stale global
+                    // fallback that Codex will not launch in this workspace.
+                    statuses = effective_workspace_mcp_statuses(statuses, Some(project_codex));
+                }
+                Ok(_) => {}
+                Err(error) => checks.push(check(
+                    "project_codex_mcp",
+                    CheckStatus::Error,
+                    format!(
+                        "invalid project Codex MCP {}: {error}",
+                        project_codex_path.display()
+                    ),
+                )),
+            }
+            checks.push(workspace_binding_check(&statuses, workspace));
             checks.push(claude_code_mcp_check(&statuses));
         }
         Err(error) => {
@@ -651,11 +843,171 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         healthy,
         checks,
         repair: None,
+        fidelity_reconcile: None,
     }
 }
 
+fn effective_workspace_mcp_statuses(
+    mut global: Vec<client_config::ClientMcpStatus>,
+    project_codex: Option<client_config::ClientMcpStatus>,
+) -> Vec<client_config::ClientMcpStatus> {
+    if let Some(project_codex) = project_codex.filter(|status| status.registered) {
+        global.retain(|status| status.client != client_config::Client::Codex);
+        global.push(project_codex);
+    }
+    global
+}
+
+fn install_transaction_check(config_path: &Path, config: &Config, workspace: &Path) -> DoctorCheck {
+    let path = config.data_dir.join("runtime/install-transaction.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return check(
+                "install_transaction",
+                CheckStatus::Warning,
+                "no install transaction journal; run `hzr install --dry-run` to inspect desired state",
+            );
+        }
+        Err(error) => return check("install_transaction", CheckStatus::Error, error),
+    };
+    let journal: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(journal) => journal,
+        Err(error) => {
+            return check(
+                "install_transaction",
+                CheckStatus::Error,
+                format!("invalid install journal {}: {error}", path.display()),
+            );
+        }
+    };
+    let expected_stages = crate::INSTALL_STAGES
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    let planned = journal["planned_stages"].as_array().map(|stages| {
+        stages
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>()
+    });
+    let completed = journal["completed_stages"].as_array().map(|stages| {
+        stages
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>()
+    });
+    let valid_plan = planned.as_ref().is_some_and(|stages| {
+        stages.len() == crate::INSTALL_STAGES.len()
+            && stages
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+                == expected_stages
+    });
+    let valid_completed = completed.as_ref().is_some_and(|stages| {
+        stages.len() == journal["completed_stages"].as_array().map_or(0, Vec::len)
+            && stages
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                == stages.len()
+            && stages.iter().all(|stage| expected_stages.contains(stage))
+    });
+    let valid_digest = journal["plan_sha256"].as_str().is_some_and(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    });
+    let state = journal["state"].as_str();
+    let owner_config = journal["config_path"].as_str();
+    let owner_workspace = journal["workspace"].as_str();
+    if journal["schema_version"].as_u64() != Some(u64::from(crate::INSTALL_JOURNAL_SCHEMA_VERSION))
+        || !matches!(state, Some("applying" | "recovering" | "complete"))
+        || !valid_plan
+        || !valid_completed
+        || !valid_digest
+        || owner_config.is_none()
+        || owner_workspace.is_none()
+    {
+        return check(
+            "install_transaction",
+            CheckStatus::Error,
+            format!(
+                "install journal {} has invalid schema or receipt metadata",
+                path.display()
+            ),
+        );
+    }
+    let owner_config = PathBuf::from(owner_config.expect("validated owner config"));
+    let owner_workspace = PathBuf::from(owner_workspace.expect("validated owner workspace"));
+    let current_config = if config_path.is_absolute() {
+        config_path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(config_path)
+    };
+    let current_workspace =
+        std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let journal_workspace =
+        std::fs::canonicalize(&owner_workspace).unwrap_or_else(|_| owner_workspace.clone());
+    if owner_config != current_config || journal_workspace != current_workspace {
+        return check(
+            "install_transaction",
+            CheckStatus::Error,
+            format!(
+                "install journal {} belongs to config {} workspace {}, not current config {} workspace {}",
+                path.display(),
+                owner_config.display(),
+                owner_workspace.display(),
+                current_config.display(),
+                current_workspace.display()
+            ),
+        );
+    }
+    if state == Some("complete") {
+        let completed_all = completed.as_ref().is_some_and(|stages| {
+            stages.len() == crate::INSTALL_STAGES.len()
+                && stages
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::HashSet<_>>()
+                    == expected_stages
+        });
+        if !completed_all {
+            return check(
+                "install_transaction",
+                CheckStatus::Error,
+                format!(
+                    "complete install journal {} is missing stage receipts",
+                    path.display()
+                ),
+            );
+        }
+        return check(
+            "install_transaction",
+            CheckStatus::Pass,
+            format!("complete forward-recovery journal at {}", path.display()),
+        );
+    }
+    check(
+        "install_transaction",
+        CheckStatus::Error,
+        format!(
+            "incomplete forward-recovery install transaction at {}; recover the same desired state with `hzr --config {} install --force --workspace {}`",
+            path.display(),
+            shell_quote_diagnostic(&owner_config.to_string_lossy()),
+            shell_quote_diagnostic(&owner_workspace.to_string_lossy())
+        ),
+    )
+}
+
+fn shell_quote_diagnostic(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 fn attest_active_bundle(config: &Config) -> Vec<DoctorCheck> {
-    const ARTIFACTS: [(&str, &str); 10] = [
+    const ARTIFACTS: [(&str, &str); 11] = [
         ("hzr", "bin/hzr"),
         ("hzrd", "bin/hzrd"),
         ("rtk", "engines/rtk"),
@@ -664,6 +1016,7 @@ fn attest_active_bundle(config: &Config) -> Vec<DoctorCheck> {
         ("node", "runtime/node/bin/node"),
         ("caveman_bridge", "engines/caveman-code/bridge.mjs"),
         ("contract", "share/hzr/HZR.md"),
+        ("agent_capabilities", "share/hzr/agent-capabilities.json"),
         ("hzr_tdd_skill", "share/hzr/skills/hzr-tdd/SKILL.md"),
         (
             "hzr_tdd_patterns",
@@ -987,7 +1340,32 @@ fn index_readiness_check(status: &IndexStatus) -> DoctorCheck {
 /// wrote every memory into the namespace of the filesystem root while looking healthy. This
 /// is a warning and not an error because an unpinned server bound to a real repository still
 /// works — it is the *silence* that was wrong, not the configuration in every case.
-fn workspace_binding_check(statuses: &[client_config::ClientMcpStatus]) -> DoctorCheck {
+fn workspace_binding_check(
+    statuses: &[client_config::ClientMcpStatus],
+    workspace: &Path,
+) -> DoctorCheck {
+    let expected = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    let mismatched = statuses
+        .iter()
+        .filter(|status| status.registered)
+        .filter_map(|status| {
+            let pinned = status.pinned_workspace.as_deref()?;
+            let pinned_path = PathBuf::from(pinned);
+            let actual = std::fs::canonicalize(&pinned_path).unwrap_or(pinned_path);
+            (actual != expected).then(|| format!("{}={}", status.client.as_str(), actual.display()))
+        })
+        .collect::<Vec<_>>();
+    if !mismatched.is_empty() {
+        return check(
+            "client_mcp_workspace",
+            CheckStatus::Error,
+            format!(
+                "registered MCP workspace mismatch: expected {}; found {}. Re-register every client for the current project before using project-scoped tools",
+                expected.display(),
+                mismatched.join(", ")
+            ),
+        );
+    }
     let unpinned: Vec<&str> = statuses
         .iter()
         .filter(|status| status.registered && status.pinned_workspace.is_none())
@@ -1078,9 +1456,10 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use hzr_core::Config;
-    use hzr_index::{IndexMigrationOutcome, IndexPlacement, IndexStatus};
+    use hzr_index::{Deadlines, IndexMigrationOutcome, IndexPlacement, IndexStatus, Workspace};
     use sha2::{Digest, Sha256};
 
     use crate::client_config::{Client, ClientMcpStatus};
@@ -1088,9 +1467,11 @@ mod tests {
 
     use super::{
         CheckStatus, attest_active_bundle, bounded, claude_code_mcp_check,
-        direct_icm_registration_detail, fidelity_allowance_check, hook_ownership_check,
-        index_readiness_check, instruction_health_check, integration_layout, repair_legacy_index,
-        workspace_binding_check, workspace_instruction_health_check,
+        direct_icm_registration_detail, effective_workspace_mcp_statuses, fidelity_allowance_check,
+        fidelity_durability_status_check, fleet_instruction_health_checks, hook_ownership_check,
+        index_readiness_check, install_transaction_check, instruction_health_check,
+        integration_layout, repair_legacy_index, workspace_binding_check,
+        workspace_instruction_health_check,
     };
 
     #[test]
@@ -1100,6 +1481,39 @@ mod tests {
         assert!(result.detail.contains("5 operations"));
         assert!(result.detail.contains("100000 delivered tokens"));
         assert!(result.detail.contains("Stop scorecard"));
+    }
+
+    #[test]
+    fn doctor_distinguishes_reserved_unknown_replay_and_corrupt_fidelity_records() {
+        let directory = Path::new("/data/ledger/fidelity-pending");
+        let reserved = fidelity_durability_status_check(
+            directory,
+            hzr_daemon::FidelityDurabilityStatus {
+                reserved: 1,
+                ..Default::default()
+            },
+        );
+        assert_eq!(reserved.status, CheckStatus::Warning);
+        assert!(reserved.detail.contains("pre-execution"));
+        assert!(reserved.detail.contains("auto-expire after 5 minutes"));
+
+        let unsafe_pending = fidelity_durability_status_check(
+            directory,
+            hzr_daemon::FidelityDurabilityStatus {
+                executing_unknown: 1,
+                executed_pending_replay: 1,
+                corrupt: 1,
+                ..Default::default()
+            },
+        );
+        assert_eq!(unsafe_pending.status, CheckStatus::Error);
+        assert!(unsafe_pending.detail.contains("never retry or delete"));
+        assert!(unsafe_pending.detail.contains("idempotently replay"));
+        assert!(
+            unsafe_pending
+                .detail
+                .contains("blocks new fidelity execution")
+        );
     }
 
     #[test]
@@ -1119,6 +1533,73 @@ mod tests {
         assert_eq!(result.status, CheckStatus::Error);
         assert!(result.detail.contains("managed routing policy is stale"));
         assert!(result.detail.contains("hzr init --if-needed"));
+    }
+
+    #[tokio::test]
+    async fn acceptance_gate_doctor_audits_registered_workspace_direct_engine_mandates() {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let current = fixture.path().join("current");
+        let fleet = fixture.path().join("fleet");
+        let contract = fixture.path().join("HZR.md");
+        fs::create_dir_all(&current).expect("current workspace");
+        fs::create_dir_all(&fleet).expect("fleet workspace");
+        fs::write(&contract, "contract").expect("contract fixture");
+        let mut config = Config::default();
+        config.data_dir = fixture.path().join("data");
+        let workspace = Workspace::discover_managed(
+            &fleet,
+            Path::new("git"),
+            &config.data_dir,
+            Deadlines::default().version,
+        )
+        .await
+        .expect("workspace discovery");
+        workspace
+            .ensure_managed_location()
+            .expect("managed placement");
+        workspace.register().expect("workspace registration");
+        let target = fleet.join("CLAUDE.md");
+        fs::write(
+            &target,
+            "# Rules\nUse Bash: grepai callers important_symbol\n",
+        )
+        .expect("user instruction fixture");
+        instructions::install(Surface::Claude, &target, &contract, false, true)
+            .expect("managed instruction fixture");
+
+        let checks = fleet_instruction_health_checks(&config, &current);
+        let finding = checks
+            .iter()
+            .find(|check| check.detail.contains("direct-grepai at line 2"))
+            .expect("fleet conflict finding");
+        assert_eq!(finding.status, CheckStatus::Error);
+        assert!(finding.detail.contains(&target.display().to_string()));
+        assert!(finding.detail.contains("remediation:"));
+    }
+
+    #[test]
+    fn acceptance_gate_doctor_truthfully_marks_user_conflicts_as_manual_only() {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let contract = fixture.path().join("HZR.md");
+        let target = fixture.path().join("AGENTS.md");
+        fs::write(&contract, "contract").expect("contract fixture");
+        fs::write(&target, "Run `grepai trace important_symbol`.\n").expect("user rules");
+        instructions::install(Surface::Codex, &target, &contract, false, true)
+            .expect("managed instruction fixture");
+
+        let result = instruction_health_check("codex_instructions", Surface::Codex, &target);
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(
+            result
+                .detail
+                .contains("manually edit the listed user-authored lines")
+        );
+        assert!(
+            result
+                .detail
+                .contains("`hzr init` intentionally will not rewrite those lines")
+        );
+        assert!(!result.detail.contains("run `hzr init --if-needed`"));
     }
 
     #[test]
@@ -1272,13 +1753,18 @@ mod tests {
     /// nothing reported it, because a registration was judged only on being present.
     #[test]
     fn test_doctor_reports_an_unpinned_client_workspace() {
-        let pinned = workspace_binding_check(&[registration(
-            Client::ClaudeDesktop,
-            Some("/Users/andrew/code/app"),
-        )]);
+        let workspace = std::path::Path::new("/Users/andrew/code/app");
+        let pinned = workspace_binding_check(
+            &[registration(
+                Client::ClaudeDesktop,
+                Some("/Users/andrew/code/app"),
+            )],
+            workspace,
+        );
         assert_eq!(pinned.status, CheckStatus::Pass);
 
-        let unpinned = workspace_binding_check(&[registration(Client::ClaudeDesktop, None)]);
+        let unpinned =
+            workspace_binding_check(&[registration(Client::ClaudeDesktop, None)], workspace);
         assert_eq!(unpinned.status, CheckStatus::Warning);
         assert!(
             unpinned.detail.contains("--workspace") && unpinned.detail.contains("--apply"),
@@ -1292,6 +1778,127 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_doctor_rejects_a_pinned_workspace_other_than_the_current_project() {
+        let check = workspace_binding_check(
+            &[registration(
+                Client::Codex,
+                Some("/Users/andrew/code/other"),
+            )],
+            std::path::Path::new("/Users/andrew/code/app"),
+        );
+
+        assert_eq!(check.status, CheckStatus::Error);
+        assert!(check.detail.contains("workspace mismatch"));
+        assert!(check.detail.contains("codex=/Users/andrew/code/other"));
+        assert!(check.detail.contains("expected /Users/andrew/code/app"));
+    }
+
+    #[test]
+    fn project_codex_registration_takes_precedence_over_stale_global_codex_pin() {
+        let workspace = std::path::Path::new("/Users/andrew/code/app");
+        let statuses = effective_workspace_mcp_statuses(
+            vec![
+                registration(Client::Codex, Some("/Users/andrew/code/other")),
+                registration(Client::ClaudeDesktop, Some("/Users/andrew/code/app")),
+            ],
+            Some(registration(Client::Codex, Some("/Users/andrew/code/app"))),
+        );
+        let check = workspace_binding_check(&statuses, workspace);
+        assert_eq!(check.status, CheckStatus::Pass);
+    }
+
+    #[test]
+    fn install_journal_desired_state_fails_closed_and_names_exact_recovery() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let workspace = fixture.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("workspace");
+        let config_path = fixture.path().join("config.toml");
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Config::default()
+        };
+        config.ensure_layout().expect("layout");
+        let journal_path = config.data_dir.join("runtime/install-transaction.json");
+        let journal = serde_json::json!({
+            "schema_version": crate::INSTALL_JOURNAL_SCHEMA_VERSION,
+            "state": "recovering",
+            "config_path": config_path,
+            "workspace": workspace,
+            "plan_sha256": "a".repeat(64),
+            "planned_stages": crate::INSTALL_STAGES,
+            "completed_stages": ["config", "workspace"],
+            "attempt": 2
+        });
+        fs::write(
+            &journal_path,
+            serde_json::to_vec(&journal).expect("journal JSON"),
+        )
+        .expect("journal fixture");
+        let incomplete = install_transaction_check(&config_path, &config, &workspace);
+        assert_eq!(incomplete.status, CheckStatus::Error);
+        assert!(incomplete.detail.contains("install --force --workspace"));
+        assert!(
+            incomplete
+                .detail
+                .contains(workspace.to_str().expect("workspace"))
+        );
+
+        let mut corrupt = journal;
+        corrupt["schema_version"] = serde_json::json!(999);
+        fs::write(
+            &journal_path,
+            serde_json::to_vec(&corrupt).expect("journal JSON"),
+        )
+        .expect("corrupt journal fixture");
+        let corrupt = install_transaction_check(&config_path, &config, &workspace);
+        assert_eq!(corrupt.status, CheckStatus::Error);
+        assert!(
+            corrupt
+                .detail
+                .contains("invalid schema or receipt metadata")
+        );
+
+        let incomplete_complete = serde_json::json!({
+            "schema_version": crate::INSTALL_JOURNAL_SCHEMA_VERSION,
+            "state": "complete",
+            "config_path": config_path,
+            "workspace": workspace,
+            "plan_sha256": "b".repeat(64),
+            "planned_stages": crate::INSTALL_STAGES,
+            "completed_stages": ["config"],
+            "attempt": 1
+        });
+        fs::write(
+            &journal_path,
+            serde_json::to_vec(&incomplete_complete).expect("journal JSON"),
+        )
+        .expect("incomplete complete journal");
+        let missing = install_transaction_check(&config_path, &config, &workspace);
+        assert_eq!(missing.status, CheckStatus::Error);
+        assert!(missing.detail.contains("missing stage receipts"));
+
+        let wrong_workspace = fixture.path().join("other-workspace");
+        let wrong_owner = serde_json::json!({
+            "schema_version": crate::INSTALL_JOURNAL_SCHEMA_VERSION,
+            "state": "complete",
+            "config_path": config_path,
+            "workspace": wrong_workspace,
+            "plan_sha256": "c".repeat(64),
+            "planned_stages": crate::INSTALL_STAGES,
+            "completed_stages": crate::INSTALL_STAGES,
+            "attempt": 1
+        });
+        fs::write(
+            &journal_path,
+            serde_json::to_vec(&wrong_owner).expect("journal JSON"),
+        )
+        .expect("wrong owner journal");
+        let wrong = install_transaction_check(&config_path, &config, &workspace);
+        assert_eq!(wrong.status, CheckStatus::Error);
+        assert!(wrong.detail.contains("not current config"));
+    }
+
     /// A client with no `hzr` registration at all is not an unpinned one; reporting it here
     /// would duplicate the ownership check and bury the real signal.
     #[test]
@@ -1300,7 +1907,7 @@ mod tests {
         status.registered = false;
 
         assert_eq!(
-            workspace_binding_check(&[status]).status,
+            workspace_binding_check(&[status], std::path::Path::new("/work/app")).status,
             CheckStatus::Pass,
             "only registered servers can have a workspace binding"
         );
@@ -1409,6 +2016,7 @@ mod tests {
             "runtime/node/bin/node",
             "engines/caveman-code/bridge.mjs",
             "share/hzr/HZR.md",
+            "share/hzr/agent-capabilities.json",
             "share/hzr/skills/hzr-tdd/SKILL.md",
             "share/hzr/skills/hzr-tdd/references/testing-patterns.md",
         ];

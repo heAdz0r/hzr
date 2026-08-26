@@ -11,11 +11,16 @@ import {
   relativeTime,
 } from "./utils";
 
-const project = (name: string, root: string, state: DashboardProject["state"]): DashboardProject => ({
+const project = (
+  name: string,
+  root: string,
+  state: DashboardProject["state"],
+  worktreeId = "b".repeat(64),
+): DashboardProject => ({
   name,
   root,
   repository_id: "a".repeat(64),
-  worktree_id: "b".repeat(64),
+  worktree_id: worktreeId,
   git_backed: true,
   linked_worktree: false,
   state,
@@ -72,12 +77,13 @@ describe("dashboard formatters", () => {
 describe("project filtering", () => {
   const projects = [
     project("hzr", "/work/hzr", "ready"),
-    project("caveman", "/work/caveman", "warming"),
+    project("caveman", "/work/caveman", "warming", "c".repeat(64)),
   ];
 
-  test("filters by visible name or exact visible path text", () => {
+  test("filters by visible digest or stable project identity", () => {
     expect(filterProjects(projects, "CAVE", "all")).toHaveLength(1);
     expect(filterProjects(projects, "/work/hzr", "all")[0]?.name).toBe("hzr");
+    expect(filterProjects(projects, "bbbb", "all")).toHaveLength(1);
   });
 
   test("combines query and state filters", () => {

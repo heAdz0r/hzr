@@ -232,6 +232,8 @@ install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/bridge.mjs" \
   "${HZR_CAVEMAN_STAGE}/bridge.mjs"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/package.json" \
   "${HZR_CAVEMAN_STAGE}/package.json"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/contracts/agent-capabilities.json" \
+  "${HZR_CAVEMAN_STAGE}/agent-capabilities.json"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/package-lock.json" \
   "${HZR_CAVEMAN_STAGE}/package-lock.json"
 cp -R "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/vendor" \
@@ -316,6 +318,8 @@ done
 mkdir -p "${HZR_PROVENANCE_OUTPUT}/integrations/claude-code"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/HZR.md" \
   "${HZR_PROVENANCE_OUTPUT}/HZR.md"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/contracts/agent-capabilities.json" \
+  "${HZR_PROVENANCE_OUTPUT}/agent-capabilities.json"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/install.sh" \
   "${HZR_PROVENANCE_OUTPUT}/install.sh"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/.claude/skills/hzr-tdd/SKILL.md" \

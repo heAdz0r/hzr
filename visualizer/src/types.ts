@@ -113,6 +113,8 @@ export interface DashboardIndexObservatory {
 
 export interface DashboardLocalActivity {
   project: string | null;
+  accounting_policy_version: string;
+  excluded_legacy_operations: number;
   operations: number;
   optimized_operations: number;
   raw_operations: number;
@@ -137,7 +139,7 @@ export interface DashboardLocalOperation {
   operation: string;
   route: "optimized" | "raw" | "native_unaccounted";
   command_hash: string;
-  project_hash: string;
+  project_hash: string | null;
   agent: string | null;
   session_hash: string | null;
   producer_version: string | null;
@@ -148,6 +150,47 @@ export interface DashboardLocalOperation {
   execution_ms: number;
   replacement: string | null;
   rationale: string | null;
+}
+
+export type TraceStage = "request" | "policy" | "engine" | "ledger";
+export type TraceState = "completed" | "approval_required" | "denied" | "failed" | "skipped";
+
+export interface DashboardTraceSpan {
+  sequence: number;
+  trace_hash: string;
+  linked_trace_hash: string | null;
+  span_id: number;
+  parent_span_id: number | null;
+  stage: TraceStage;
+  state: TraceState;
+  engine: string;
+  observed_at_ms: number;
+  duration_ms: number;
+  project_hash: string | null;
+  session_hash: string | null;
+  route: string | null;
+  error_code: string | null;
+  producer_version: string;
+  policy_version: string;
+  generation: string | null;
+}
+
+export interface DashboardLifecycleEvent {
+  sequence: number;
+  observed_at_ms: number;
+  engine: string;
+  kind: "starting" | "ready" | "degraded" | "restart_scheduled" | "reaped" | "stopped";
+  project_hash: string | null;
+  detail_code: string;
+  producer_version: string;
+  generation: string | null;
+}
+
+export interface DashboardObservability {
+  trace_spans: DashboardTraceSpan[];
+  lifecycle_events: DashboardLifecycleEvent[];
+  next_cursor: number | null;
+  truncated: boolean;
 }
 
 export interface DashboardProviderReceipts {
@@ -192,6 +235,14 @@ export interface DashboardProject {
   command: string;
 }
 
+export interface DashboardProjectPage {
+  projects: DashboardProject[];
+  total: number;
+  offset: number;
+  limit: number;
+  next_offset: number | null;
+}
+
 export interface DashboardObservedUsage {
   tasks: number;
   accepted: number;
@@ -202,6 +253,8 @@ export interface DashboardObservedUsage {
 }
 
 export interface DashboardEstimatedEfficiency {
+  accounting_policy_version: string;
+  excluded_legacy_operations: number;
   operations: number;
   baseline_tokens_estimated: number;
   delivered_tokens_estimated: number;
@@ -229,12 +282,16 @@ export interface DashboardResponse {
   overall_state: DashboardState;
   services: DashboardService[];
   projects: DashboardProject[];
+  projects_total: number;
+  projects_next_offset: number | null;
+  selected_worktree_id: string | null;
   registry_warnings: number;
   observed_usage: DashboardObservedUsage;
   estimated_efficiency: DashboardEstimatedEfficiency;
   memory_observatory: DashboardMemoryObservatory;
   index_observatory: DashboardIndexObservatory;
   local_activity: DashboardLocalActivity;
+  observability: DashboardObservability;
   provider_receipts: DashboardProviderReceipts;
   help: DashboardHelpCommand[];
   notes: string[];

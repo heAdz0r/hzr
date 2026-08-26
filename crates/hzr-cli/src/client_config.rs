@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use directories::BaseDirs;
+use directories::{BaseDirs, ProjectDirs};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
-use crate::adoption::{atomic_write, backup_path, commit, read_optional, sha256};
+use crate::adoption::{atomic_write, commit_with_lock, read_optional, sha256};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -192,6 +192,58 @@ pub fn install_all(
         .collect()
 }
 
+pub fn project_codex_path(workspace: &Path) -> PathBuf {
+    workspace.join(".codex/config.toml")
+}
+
+fn client_state_paths(path: &Path, before: &[u8]) -> Result<(PathBuf, PathBuf)> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let project = ProjectDirs::from("dev", "headz0r", "hzr")
+        .context("cannot determine HZR client config state directory")?;
+    let identity = sha256(absolute.as_os_str().as_encoded_bytes());
+    let directory = project
+        .data_dir()
+        .join("client-config-state")
+        .join(identity);
+    Ok((
+        directory.join(format!("backup-{}", sha256(before))),
+        directory.join("write.lock"),
+    ))
+}
+
+pub fn install_project_codex(
+    binary: &Path,
+    workspace: &Path,
+    dry_run: bool,
+    confirmed: bool,
+) -> Result<ClientConfigReport> {
+    install(
+        Client::Codex,
+        &project_codex_path(workspace),
+        binary,
+        workspace,
+        dry_run,
+        confirmed,
+    )
+}
+
+pub fn uninstall_project_codex(
+    workspace: &Path,
+    dry_run: bool,
+    confirmed: bool,
+) -> Result<ClientConfigReport> {
+    uninstall(
+        Client::Codex,
+        &project_codex_path(workspace),
+        dry_run,
+        confirmed,
+    )
+}
+
 /// Записать (или обновить) регистрацию одного клиента с пином `--workspace`.
 pub fn apply(
     client: Client,
@@ -233,7 +285,10 @@ fn uninstall(
         Client::ClaudeCode => anyhow::bail!("Claude Code MCP state is audited, never written"),
     };
     let changed = before != after.as_bytes();
-    let backup = (changed && !before.is_empty()).then(|| backup_path(path, &before));
+    let state = (changed && !before.is_empty())
+        .then(|| client_state_paths(path, &before))
+        .transpose()?;
+    let backup = state.as_ref().map(|(backup, _)| backup.clone());
     if changed && !dry_run {
         if !confirmed {
             bail!(
@@ -242,7 +297,14 @@ fn uninstall(
             );
         }
         match backup.as_ref() {
-            Some(backup) => commit(path, &before, after.as_bytes(), backup, b"")?,
+            Some(backup) => commit_with_lock(
+                path,
+                &before,
+                after.as_bytes(),
+                backup,
+                b"",
+                &state.as_ref().context("client config state")?.1,
+            )?,
             None => atomic_write(path, after.as_bytes())?,
         }
     }
@@ -379,7 +441,10 @@ pub fn install(
         ),
     };
     let changed = before != after.as_bytes();
-    let backup = (changed && !before.is_empty()).then(|| backup_path(path, &before));
+    let state = (changed && !before.is_empty())
+        .then(|| client_state_paths(path, &before))
+        .transpose()?;
+    let backup = state.as_ref().map(|(backup, _)| backup.clone());
 
     if changed && !dry_run {
         if !confirmed {
@@ -389,7 +454,14 @@ pub fn install(
             );
         }
         match backup.as_ref() {
-            Some(backup) => commit(path, &before, after.as_bytes(), backup, b"")?,
+            Some(backup) => commit_with_lock(
+                path,
+                &before,
+                after.as_bytes(),
+                backup,
+                b"",
+                &state.as_ref().context("client config state")?.1,
+            )?,
             None => atomic_write(path, after.as_bytes())?,
         }
     }
@@ -470,7 +542,15 @@ fn migrate_codex(
     let direct_before = codex_direct_icm_count(&document);
     let hzr_matches = codex_hzr_registration(&document)
         .as_ref()
-        .is_some_and(|registration| registration.matches_desired(binary, workspace));
+        .is_some_and(|registration| registration.matches_desired(binary, workspace))
+        && document
+            .get("mcp_servers")
+            .and_then(Item::as_table)
+            .and_then(|servers| servers.get("hzr"))
+            .and_then(Item::as_table)
+            .and_then(|hzr| hzr.get("cwd"))
+            .and_then(Item::as_str)
+            == Some(workspace_arg(workspace).as_str());
     if direct_before == 0 && hzr_matches {
         return Ok((text, 0, true));
     }
@@ -501,6 +581,7 @@ fn migrate_codex(
         .as_table_mut()
         .with_context(|| format!("mcp_servers.hzr in {} is not a table", path.display()))?;
     hzr["command"] = value(binary.to_string_lossy().as_ref());
+    hzr["cwd"] = value(workspace_arg(workspace));
     let mut args = Array::new();
     for argument in mcp_serve_args(workspace) {
         args.push(argument);
@@ -676,7 +757,10 @@ mod tests {
     use tempfile::tempdir;
     use toml_edit::DocumentMut;
 
-    use super::{Client, MCP_LIFECYCLE, audit_paths, default_paths, install, status, uninstall};
+    use super::{
+        Client, MCP_LIFECYCLE, audit_paths, default_paths, install, install_project_codex, status,
+        uninstall,
+    };
 
     fn binary() -> &'static Path {
         Path::new("/opt/hzr/current/bin/hzr")
@@ -806,6 +890,33 @@ mod tests {
             status.pinned_workspace.as_deref(),
             Some(project.to_string_lossy().as_ref())
         );
+    }
+
+    #[test]
+    fn acceptance_gate_project_codex_configs_isolate_workspace_a_from_b() {
+        let directory = tempdir().expect("temporary directory");
+        let project_a = directory.path().join("a");
+        let project_b = directory.path().join("b");
+        fs::create_dir_all(project_a.join(".codex")).expect("project A config directory");
+        fs::create_dir_all(project_b.join(".codex")).expect("project B config directory");
+        fs::write(
+            project_b.join(".codex/config.toml"),
+            "model = 'keep-user-model'\n\n[mcp_servers.other]\ncommand = '/opt/other'\n",
+        )
+        .expect("unrelated project config");
+
+        install_project_codex(binary(), &project_a, false, true).expect("project A install");
+        install_project_codex(binary(), &project_b, false, true).expect("project B install");
+
+        let a = fs::read_to_string(project_a.join(".codex/config.toml")).expect("project A");
+        let b = fs::read_to_string(project_b.join(".codex/config.toml")).expect("project B");
+        assert!(a.contains(&project_a.to_string_lossy().to_string()));
+        assert!(!a.contains(&project_b.to_string_lossy().to_string()));
+        assert!(b.contains(&project_b.to_string_lossy().to_string()));
+        assert!(!b.contains(&project_a.to_string_lossy().to_string()));
+        assert!(b.contains("model = 'keep-user-model'"));
+        assert!(b.contains("[mcp_servers.other]"));
+        assert!(b.contains(&format!("cwd = {:?}", project_b.to_string_lossy())));
     }
 
     /// An already-matching unpinned registration must be rewritten: matching only on binary

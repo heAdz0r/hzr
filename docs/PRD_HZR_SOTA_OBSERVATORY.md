@@ -25,7 +25,7 @@ The visualizer remains read-only. It never starts a second ICM, grepai, or fork-
 
 - `/v1/dashboard` stays a bounded public loopback snapshot. It may expose commands and paths that HZR already records locally, but never provider secrets, environment variables, stdin, or captured output bodies.
 - Public topic details use a dedicated read-only endpoint and a server-side opaque-ID lookup. A caller cannot submit a raw ICM topic or repository token, and summary, raw excerpt, keywords, and source data are redacted.
-- Full bounded topic details use `/v1/memory/topics/{topic_id}` behind the daemon bearer token. The authenticated endpoint returns at most 100 positively project-filtered records and still never returns the canonical database path or repository token.
+- Full bounded topic details use `/v1/memory/topics/{topic_id}?project={stable_worktree_id}` behind the daemon bearer token. Authentication is not treated as workspace authorization: the stable project identifier is mandatory, and the endpoint returns at most 100 positively project-filtered records while never returning the canonical database path or repository token.
 - Agent attribution is evidence-based. The ledger stores an optional agent label and session identifier at record time. Historical rows remain unattributed.
 - Background failures keep the last successful snapshot and show a compact stale indicator. No zero-value fallback is substituted for unavailable data.
 
@@ -157,7 +157,8 @@ The visualizer remains read-only. It never starts a second ICM, grepai, or fork-
 - Resolve the opaque ID only after positive repository filtering.
 - Return topic summary plus bounded redacted record metadata and `truncated` metadata.
 - Keep summary, raw excerpt, keywords, and source data redacted on this public route; expose full
-  bounded details only through authenticated `GET /v1/memory/topics/{opaque_topic_id}`.
+  bounded details only through authenticated, explicitly project-scoped
+  `GET /v1/memory/topics/{opaque_topic_id}?project={stable_worktree_id}`.
 - Reject malformed identifiers and unknown topics with explicit 4xx errors.
 
 ### FR-3 — Memory graph

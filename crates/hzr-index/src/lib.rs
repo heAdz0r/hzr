@@ -11,8 +11,8 @@ mod watch;
 mod workspace;
 
 pub use coordinator::{
-    IndexCoordinator, IndexCoordinatorSnapshot, IndexWatcherSnapshot, IndexWatcherState,
-    PreparedIndex,
+    IndexCoordinator, IndexCoordinatorRegistrySnapshot, IndexCoordinatorSnapshot,
+    IndexRegistryWatcherSnapshot, IndexWatcherSnapshot, IndexWatcherState, PreparedIndex,
 };
 pub use error::{ErrorCode, IndexError, Result};
 pub use generation::{CACHE_SCHEMA_VERSION, IndexGeneration};

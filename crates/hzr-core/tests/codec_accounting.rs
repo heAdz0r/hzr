@@ -5,7 +5,9 @@
 //! capability that cannot be measured cannot be justified, and one that is never called is
 //! indistinguishable from one that does not work.
 
-use hzr_core::{Ledger, OperationContext, OperationSubsystem, classify_operation};
+use hzr_core::{
+    Ledger, OperationContext, OperationSubsystem, classify_operation, privacy_identity_hash,
+};
 use tempfile::tempdir;
 
 #[test]
@@ -113,7 +115,11 @@ fn test_recent_activity_exposes_only_hashed_request_context() {
         operation
             .session_hash
             .as_deref()
-            .is_some_and(|value| value.starts_with("sha256:"))
+            .is_some_and(|value| value.starts_with("hmac-sha256:"))
+    );
+    assert_ne!(
+        operation.session_hash.as_deref(),
+        Some(privacy_identity_hash("session", "thread-123").as_str())
     );
     let encoded = serde_json::to_string(operation).expect("operation JSON");
     for sensitive in ["visualizer/src", "/work/project", "thread-123", "--files"] {

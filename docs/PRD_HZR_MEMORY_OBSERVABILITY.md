@@ -1,6 +1,24 @@
 # HZR Live Observatory — Product Requirements Document
 
-**Status:** implemented in HZR 0.3.1
+> [!IMPORTANT]
+> **Status: historical / superseded.** This file preserves the HZR 0.3.1 FR and acceptance
+> provenance. It is not the current UI, API, privacy, or release contract. Current work must use
+> the privacy-v2 trust boundary and interaction requirements in
+> [`PRD_HZR_SOTA_OBSERVATORY.md`](PRD_HZR_SOTA_OBSERVATORY.md), the workspace isolation rules in
+> [`PRD_HZR_PROJECT_ACTIVATION.md`](PRD_HZR_PROJECT_ACTIVATION.md), and the release bar in
+> [`SOTA_RELEASE_GATES.md`](SOTA_RELEASE_GATES.md).
+
+### Requirement migration map
+
+| Historical requirement | Current owner |
+|---|---|
+| FR-1 — startup and installation | [`PRD_HZR_PROJECT_ACTIVATION.md`](PRD_HZR_PROJECT_ACTIVATION.md) |
+| FR-2–FR-5 and FR-7 — service, ICM, grepai, activity, version and help evidence | [`PRD_HZR_SOTA_OBSERVATORY.md`](PRD_HZR_SOTA_OBSERVATORY.md) |
+| FR-6 — accounting boundaries | [`PRD_HZR_TOKEN_ECONOMY_UTILIZATION.md`](PRD_HZR_TOKEN_ECONOMY_UTILIZATION.md) and [`SOTA_RELEASE_GATES.md`](SOTA_RELEASE_GATES.md) |
+| Public/authenticated privacy and project isolation | [`PRD_HZR_SOTA_OBSERVATORY.md`](PRD_HZR_SOTA_OBSERVATORY.md) and [`PRD_HZR_PROJECT_ACTIVATION.md`](PRD_HZR_PROJECT_ACTIVATION.md) |
+| Sections 10 and 13 — original acceptance and release checklist | Historical evidence only; current releases use [`SOTA_RELEASE_GATES.md`](SOTA_RELEASE_GATES.md) |
+
+**Historical implementation status:** implemented in HZR 0.3.1
 
 **Surface:** local Bun + Vue application served by `hzrd`
 

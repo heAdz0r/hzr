@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "product": "HZR",
+  "control_plane": "hzr",
+  "internal_engines": ["rtk", "grepai", "icm"],
+  "routes": [
+    {
+      "id": "read",
+      "instead_of": "Read",
+      "command": "hzr read <file>",
+      "guidance": "Uses the smart default; use --outline first for structure and ranges for exact evidence."
+    },
+    {
+      "id": "search",
+      "instead_of": "Grep or repository search",
+      "command": "hzr search \"<intent>\" --mode auto",
+      "guidance": "Use --mode exact only for a known literal; hzr rgai is the semantic shorthand."
+    },
+    {
+      "id": "write",
+      "instead_of": "Edit or Write",
+      "command": "hzr write patch|replace|set|create|batch ...",
+      "guidance": "Writes are atomic and idempotent per file; a batch is not an all-files transaction."
+    },
+    {
+      "id": "memory",
+      "instead_of": "durable memory",
+      "command": "hzr memory recall|store|update|forget|prune",
+      "guidance": "Project is the default scope; global is only for durable user-wide facts."
+    },
+    {
+      "id": "context",
+      "instead_of": "cross-cutting context discovery",
+      "command": "hzr context plan \"<intent>\"",
+      "guidance": "Builds bounded graph-first evidence from independently calibrated retrieval sources."
+    },
+    {
+      "id": "shell",
+      "instead_of": "shell command",
+      "command": "hzr exec run '<shell command>'",
+      "guidance": "Default policy route; preserves shell grammar and selects managed filtering or tracked fallback."
+    },
+    {
+      "id": "project_build",
+      "instead_of": "build this project",
+      "command": "hzr exec run '<project build command>'",
+      "guidance": "Project builds are ordinary managed shell commands; hzr build is not a generic project-build wrapper."
+    },
+    {
+      "id": "tdd",
+      "instead_of": "optional TDD",
+      "command": "hzr tdd",
+      "guidance": "Use only when requested, repository-required, or justified by regression risk."
+    },
+    {
+      "id": "exact_raw",
+      "instead_of": "explicit unfiltered recovery",
+      "command": "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'",
+      "guidance": "Allowed reasons: binary, checksum, machine_protocol, complete_log, full_patch, or verbatim_source."
+    }
+  ],
+  "mcp_tools": [
+    { "name": "hzr_context_plan", "purpose": "Build bounded graph-first evidence for unfamiliar or cross-cutting work." },
+    { "name": "hzr_search", "purpose": "Find code by intent or by a known exact literal." },
+    { "name": "hzr_memory_recall", "purpose": "Recall durable decisions, resolved errors, and prior context." },
+    { "name": "hzr_memory_store", "purpose": "Persist one durable fact or finished handoff, not ephemeral state." },
+    { "name": "hzr_memory_update", "purpose": "Replace one superseded memory after namespace ownership is verified." },
+    { "name": "hzr_memory_forget", "purpose": "Delete one invalid memory after namespace ownership is verified." },
+    { "name": "hzr_memory_prune", "purpose": "Preview or remove low-weight memories in one namespace." },
+    { "name": "hzr_codec", "purpose": "Apply or shadow-measure protected response-density transforms." },
+    { "name": "hzr_read", "purpose": "Read bounded exact content through the daemon-owned confined fork path." },
+    { "name": "hzr_write", "purpose": "Apply confined atomic patch or create operations with typed CAS receipts." },
+    { "name": "hzr_exec", "purpose": "Run shell commands through daemon policy and accounting without direct fallback." },
+    { "name": "hzr_observability", "purpose": "Return typed daemon, engine, capability, and workspace health." },
+    { "name": "hzr_doctor", "purpose": "Run desired-state diagnostics for the exact MCP workspace." }
+  ],
+  "harnesses": {
+    "claude": {
+      "instruction_file": "CLAUDE.md",
+      "native_hook_routing": true
+    },
+    "codex": {
+      "instruction_file": "AGENTS.md",
+      "native_hook_routing": false
+    },
+    "managed_agent": {
+      "instruction_file": null,
+      "native_hook_routing": false,
+      "tool_names": [
+        "hzr_context_plan",
+        "hzr_search",
+        "hzr_read",
+        "hzr_write",
+        "hzr_memory_recall",
+        "hzr_memory_store",
+        "hzr_memory_forget",
+        "hzr_memory_update",
+        "hzr_memory_prune",
+        "hzr_exec",
+        "hzr_observability",
+        "hzr_doctor",
+        "hzr_codec"
+      ]
+    }
+  }
+}

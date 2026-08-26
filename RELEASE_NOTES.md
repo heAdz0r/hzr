@@ -1,91 +1,61 @@
-# HZR 0.5.1 — two holes in 0.5.0, and the memory a read was holding
+# HZR 0.6.0 — one control plane, end to end
 
-A post-release audit of 0.5.0 for correctness, races and remaining efficiency
-headroom. It found two defects in 0.5.0's own new code and one long-standing cost
-in the most-used route in the product.
+0.6.0 is the architectural release where HZR stops behaving like a collection of adjacent
+optimizers and becomes one owned system. RTK fork-core, grepai, ICM, the Caveman-derived agent
+loop, policy, accounting, doctor, MCP, and the local UI now share project identity, lifecycle,
+typed contracts, and failure semantics.
 
-## `sudo` was still being rewritten when it was not the first word
+## What changes for users
 
-0.5.0 stopped HZR inserting itself into a privilege elevation, and pinned it with
-tests. The guard only looked at the head of the command:
+- Agent shell commands go through one canonical policy route. A managed filter cannot be bypassed
+  by choosing a direct RAW wrapper; legitimate exact recovery is explicit, budgeted, and receives
+  zero savings credit.
+- One grepai index belongs to one worktree, and one HZR-supervised ICM process owns durable memory.
+  Failed watchers, restarts, stale caches, and project mismatches are visible instead of silently
+  producing empty or cross-project answers.
+- The local observatory connects service topology, memory graph, grepai health, routes, latency,
+  traces, and accounting posture. Its public loopback view is pseudonymized and content-redacted.
+- MCP is now a real typed capability surface: 13 tools use one schema/dispatch contract and route
+  confined reads, writes, execution, memory, observability, and doctor through `hzrd`.
+- `init`, `install`, and `doctor` converge the desired state transactionally across workspaces,
+  including project-scoped Codex configuration and forward recovery after interrupted adoption.
 
-```
-sudo docker ps                     -> no rewrite      ✅
-SUDO_ASKPASS=/bin/true sudo docker ps -> sudo rtk docker ps  ❌
-env sudo docker ps                 -> env sudo rtk docker ps ❌
-```
+## Fidelity and accounting
 
-The regex that strips environment prefixes treats `sudo`, `env` and `VAR=value`
-as one interchangeable run, so by the time the check ran the elevation had already
-been folded into the prefix and the head was an assignment. Both forms are what an
-agent actually writes, and both re-created exactly the root-owned-state problem
-0.5.0 set out to close.
+Exact-output allowance is durably reserved before execution. The state machine is
+`Reserved → Executing → Executed`; an error after spawn becomes an operator-visible unknown
+execution and is not automatically retried or refunded. Completed records replay idempotently
+after restart, corrupt records are quarantined, and new fidelity work fails closed while the
+ledger cannot establish a safe state.
 
-The guard now skips the run of assignments and `env` invocations the way the shell
-would and tests what actually runs, stopping at the first real command word so an
-elevator name appearing only as an argument (`git commit -m 'run sudo later'`)
-still rewrites normally.
+Actual provider receipts remain separate from token estimates. Native, degraded, excluded, and
+unmeasured operations affect coverage instead of becoming savings. 0.6.0 still has no paired
+provider-billed benchmark, so `economic_claim_ready` remains false.
 
-## `playwright -r` was being swallowed
+## Architecture and documentation
 
-0.5.0's reporter fix stripped `--reporter` and its value, and also `-r`. Playwright
-has no `-r` alias for `--reporter` — that is mocha's `--require` — so an unrelated
-short flag and its value were being removed from the invocation. Only the long
-forms are stripped now.
+The README is shorter and rebuilt around the ownership architecture and what it provides. It
+includes a native Mermaid system diagram, the pinned command-output evidence with its limits, a
+one-minute workflow, the 13-tool MCP boundary, and an explicit note that HZR is built by an RTK
+contributor with hands-on experience of the techniques being evolved.
 
-## A bounded read was loading the whole file
+Historical PRDs that retain unique normative evidence are marked superseded and mapped to their
+current owners. Stale false-ready reviews, unsupported projections, obsolete screenshots, and
+runtime backup/lock residue were removed.
 
-`head -n 20 big.log` rewrites to `hzr read big.log --max-lines 20`, and that read
-loaded the entire file into memory to keep twenty lines — then read it a **second**
-time to count its newlines for the "N of M" notice. Two full copies of the file to
-produce twenty lines and one integer.
+## Compatibility
 
-The bound now stops the read where the bound is, the file total streams through a
-fixed buffer instead of being loaded, and the filter path borrows the content
-instead of cloning it twice.
+The release continues to ship native self-contained bundles for Linux x86_64/ARM64 and macOS
+Apple Silicon/Intel. Windows is not published. `hzr build` remains inherited fork maintenance
+compatibility; project builds use `hzr exec run '<project build command>'`.
 
-Measured on a 20 MB, 400k-line log, output byte-identical in every case:
+## Verification status
 
-| route | 0.5.0 | 0.5.1 |
-|---|---|---|
-| `read --max-lines 20` | 51.7 MB peak | 10.5 MB peak, no longer scales with the file |
-| filtered whole-file read | 199 MB peak | 137 MB peak |
+Targeted compile and implementation gates passed during development, including real MCP
+stdio-to-daemon confined I/O and the durable post-spawn recovery path. At the user's explicit
+release priority, repeated full-suite, browser, fleet, and immutable-SHA acceptance runs were
+deferred rather than presented as completed. The exact mandatory follow-up list is
+[`docs/TEST_DEBT_0.6.0.md`](docs/TEST_DEBT_0.6.0.md).
 
-## `gh api` column collection was quadratic
-
-`jsonpack`, new in 0.5.0, scanned its column vector linearly for every leaf of
-every row, and then walked every path again for every column to decide
-nullability. On a wide `gh api` page that is quadratic in the payload. It is now a
-single pass with a name index, with nullability decided from a presence count in
-the same walk.
-
-## What the audit did not find
-
-Recorded because a future audit should not have to re-derive it:
-
-- The daemon ledger writer is a single-threaded actor over a bounded channel with
-  one connection — writes cannot interleave.
-- SQLite is opened WAL with a busy timeout on every path; the 250 ms timeout on the
-  read-only dashboard queries is deliberate, so a polling visualizer fails fast
-  rather than blocking behind a writer.
-- `Cancellation` registers its `Notify` future before checking the flag, so the
-  lost-wakeup race is already closed.
-- The exec capture path is bounded by an explicit memory limit with overflow to
-  disk and a `truncated` flag.
-- `ensure_watcher` serializes per worktree and holds the lifecycle read guard
-  across the spawn, so a concurrent shutdown cannot leave an orphan.
-- The per-command rewrite is ~9 ms wall clock, essentially all of it process
-  spawn; the tokenizer's allocations are not worth optimizing against that.
-
-Two accepted, unfixed observations: the coordinator's per-worktree lock map is
-never pruned (bounded by the number of worktrees the daemon ever served), and tee
-rotation is not atomic across processes (a file can only be deleted once
-`max_files` newer ones exist, so a just-announced recovery path cannot realistically
-be removed).
-
-## Gates
-
-`cargo fmt --check`, `clippy --workspace -D warnings`, 28 suites / 551 tests,
-`verify-fork-core.sh --test` with 1,940 engine tests, the 141-warning inherited
-ratchet unchanged, visualizer typecheck and tests, `npm audit` clean, and an
-assembled-bundle smoke on the development platform.
+This release must therefore be described as **built with deferred full verification**, not as a
+fully accepted or economically proven release.

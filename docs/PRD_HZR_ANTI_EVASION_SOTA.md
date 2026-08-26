@@ -4,8 +4,8 @@ Status: Implemented for HZR 0.4.4; seven-day operational SLO observation pending
 Owner: HZR control plane
 Date: 2026-08-21
 Probed version: HZR 0.4.3 (fork-core rtk 0.44.1-fork.1)
-Supersedes nothing; extends `docs/PRD_HZR_TOKEN_ECONOMY_UTILIZATION.md` and the
-`docs/review/20260821_*_High-Critical.md` audits with the evasion dimension they do not cover.
+Extends `docs/PRD_HZR_TOKEN_ECONOMY_UTILIZATION.md` with the evasion dimension
+that its accounting and utilization baseline does not cover.
 
 All token figures are `estimated_utf8_bytes_div_4_v1` estimates from the HZR ledger. They are
 not provider billing and this document makes no economic savings claim.

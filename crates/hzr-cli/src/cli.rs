@@ -105,6 +105,12 @@ pub enum Command {
         /// Re-run initialization even when the workspace is already registered
         #[arg(long)]
         force: bool,
+        /// Replace the existing configuration with defaults; requires --force and creates a backup
+        #[arg(long, requires = "force")]
+        reset: bool,
+        /// Print the initialization plan without changing config, registry, instructions, or services
+        #[arg(long, conflicts_with_all = ["if_needed", "if_enabled"])]
+        dry_run: bool,
         /// Override the private HZR data directory for this workspace
         #[arg(long, value_name = "DIR")]
         data_dir: Option<PathBuf>,
@@ -219,6 +225,23 @@ pub enum Command {
         /// Safely migrate one unambiguous legacy .grepai before diagnosing
         #[arg(long)]
         fix: bool,
+        /// Resolve one doctor-reported unknown fidelity reservation through hzrd
+        #[arg(long, value_name = "RESERVATION_ID")]
+        resolve_fidelity: Option<String>,
+        /// Conservatively record the unknown execution with zero unmeasured tokens
+        #[arg(
+            long,
+            requires = "resolve_fidelity",
+            conflicts_with = "prove_not_executed"
+        )]
+        acknowledge_executed: bool,
+        /// Release the allowance only after the operator proved the process never executed
+        #[arg(
+            long,
+            requires = "resolve_fidelity",
+            conflicts_with = "acknowledge_executed"
+        )]
+        prove_not_executed: bool,
     },
     #[command(about = "Operate the authenticated loopback daemon")]
     Daemon {
@@ -316,8 +339,8 @@ pub enum Command {
     #[command(about = "Print the optional HZR Red-Green-Refactor contract")]
     Tdd,
     #[command(
-        about = "Build your project (token-optimized wrapper)",
-        long_about = "Build your project through the inherited fork-core build wrapper with token-optimized output. Deliberately kept as `build` rather than folded into `hzr rtk -- build` so RTK muscle memory keeps working. Building the HZR distribution itself is `hzr release`."
+        about = "Run the inherited fork-core self-build pipeline",
+        long_about = "Compatibility alias for the inherited fork-core `build` command. This is not a generic project-build wrapper; run project builds through `hzr exec run '<project build command>'`. Building the HZR distribution itself is `hzr release`."
     )]
     Build(ForkForwardArgs),
     #[command(about = "Run tests through the inherited failure-first filter")]
@@ -992,7 +1015,8 @@ mod tests {
             cli.command,
             Command::Doctor {
                 workspace: Some(_),
-                fix: true
+                fix: true,
+                ..
             }
         ));
     }
@@ -1473,6 +1497,22 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn test_init_reset_is_explicit_and_dry_run_is_first_class() {
+        let init = Cli::try_parse_from(["hzr", "init", "--force", "--reset", "--dry-run"])
+            .expect("explicit reset preview");
+        assert!(matches!(
+            init.command,
+            Command::Init {
+                force: true,
+                reset: true,
+                dry_run: true,
+                ..
+            }
+        ));
+        assert!(Cli::try_parse_from(["hzr", "init", "--reset"]).is_err());
     }
 
     #[test]

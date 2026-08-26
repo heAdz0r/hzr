@@ -715,14 +715,6 @@ fn run_log(
         parse_limit_from_tokens(&tokens).unwrap_or(10)
     };
 
-    // Only add --no-merges if user didn't explicitly request merge commits
-    let wants_merges = flag_args
-        .iter()
-        .any(|arg| *arg == "--merges" || *arg == "--min-parents=2" || *arg == "--no-merges");
-    if !wants_merges {
-        cmd.arg("--no-merges");
-    }
-
     // Pass all user arguments
     for arg in args {
         cmd.arg(arg);
@@ -746,7 +738,7 @@ fn run_log(
     // Post-process: truncate long messages, cap lines
     let filtered = filter_log_output(&stdout, limit);
     let filtered = crate::guard::never_worse(&stdout, &filtered).to_string();
-    println!("{}", filtered);
+    print!("{}", filtered);
 
     timer.track(
         &format!("git log {}", args.join(" ")),
@@ -936,23 +928,10 @@ fn parse_limit_from_tokens(tokens: &[LogArg<'_>]) -> Option<usize> {
     None
 }
 
-/// Filter git log output: truncate long messages, cap lines
-pub(crate) fn filter_log_output(output: &str, limit: usize) -> String {
-    let lines: Vec<&str> = output.lines().collect();
-    let capped: Vec<String> = lines
-        .iter()
-        .take(limit)
-        .map(|line| {
-            if line.len() > 80 {
-                let truncated: String = line.chars().take(77).collect();
-                format!("{}...", truncated)
-            } else {
-                line.to_string()
-            }
-        })
-        .collect();
-
-    capped.join("\n").trim().to_string()
+/// Preserve the exact log payload. The child command already applies the user-provided
+/// limit, and changing commits or subjects would make history inspection unreliable.
+pub(crate) fn filter_log_output(output: &str, _limit: usize) -> String {
+    output.to_string()
 }
 
 // upstream v0.39: extract in-progress state from plain git status output
@@ -2630,31 +2609,12 @@ M  file7.rs
     }
 
     #[test]
-    fn test_filter_log_output() {
-        let output = "abc1234 This is a commit message (2 days ago) <author>\ndef5678 Another commit (1 week ago) <other>\n";
-        let result = filter_log_output(output, 10);
-        assert!(result.contains("abc1234"));
-        assert!(result.contains("def5678"));
-        assert_eq!(result.lines().count(), 2);
-    }
-
-    #[test]
-    fn test_filter_log_output_truncate_long() {
-        let long_line = "abc1234 ".to_string() + &"x".repeat(100) + " (2 days ago) <author>";
-        let result = filter_log_output(&long_line, 10);
-        assert!(result.len() < long_line.len());
-        assert!(result.contains("..."));
-        assert!(result.len() <= 80);
-    }
-
-    #[test]
-    fn test_filter_log_output_cap_lines() {
-        let output = (0..20)
-            .map(|i| format!("hash{} message {} (1 day ago) <author>", i, i))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let result = filter_log_output(&output, 5);
-        assert_eq!(result.lines().count(), 5);
+    fn test_filter_log_output_preserves_commits_subjects_and_newline() {
+        let output = format!(
+            "abc1234 {} (2 days ago) <author>\ndef5678 Merge branch feature\n",
+            "x".repeat(100)
+        );
+        assert_eq!(filter_log_output(&output, 1), output);
     }
 
     #[test]
@@ -2687,23 +2647,15 @@ no changes added to commit (use "git add" and/or "git commit -a")
     }
 
     #[test]
-    fn test_filter_log_output_multibyte() {
-        // Thai characters: each is 3 bytes. A line with >80 bytes but few chars
+    fn test_filter_log_output_preserves_multibyte_text() {
         let thai_msg = format!("abc1234 {} (2 days ago) <author>", "ก".repeat(30));
-        let result = filter_log_output(&thai_msg, 10);
-        // Should not panic
-        assert!(result.contains("abc1234"));
-        // The line has 30 Thai chars (90 bytes) + other text, so > 80 bytes
-        // It should be truncated with "..."
-        assert!(result.contains("..."));
+        assert_eq!(filter_log_output(&thai_msg, 10), thai_msg);
     }
 
     #[test]
-    fn test_filter_log_output_emoji() {
+    fn test_filter_log_output_preserves_emoji() {
         let emoji_msg = "abc1234 🎉🎊🎈🎁🎂🎄🎃🎆🎇✨🎉🎊🎈🎁🎂🎄🎃🎆🎇✨ (1 day ago) <user>";
-        let result = filter_log_output(emoji_msg, 10);
-        // Should not panic, should have "..."
-        assert!(result.contains("..."));
+        assert_eq!(filter_log_output(emoji_msg, 10), emoji_msg);
     }
 
     #[test]

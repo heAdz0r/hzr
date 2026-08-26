@@ -60,7 +60,7 @@ Agent tools:
 Distribution:
   release    Build, install, and verify an HZR release
   update     Install a newer GitHub release when available
-  build      Build your project (token-optimized wrapper)
+  build      Run the inherited fork-core self-build pipeline
   stats      Show cumulative efficiency gains
 
 Legacy:

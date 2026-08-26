@@ -299,8 +299,23 @@ pub enum NotStarted {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum ExecutionOutcome {
-    Completed { result: Box<ExecutionResult> },
-    NotStarted { disposition: NotStarted },
+    Completed {
+        result: Box<ExecutionResult>,
+    },
+    ExecutedAccountingIncomplete {
+        result: Box<ExecutionResult>,
+        accounting: AccountingIncomplete,
+    },
+    NotStarted {
+        disposition: NotStarted,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AccountingIncomplete {
+    pub code: String,
+    pub retryable: bool,
+    pub incident_persisted: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

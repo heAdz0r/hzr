@@ -1,7 +1,7 @@
 use hzr_core::Config;
 use hzr_protocol::{
-    AccountingChannel, AccountingOperationMode, AccountingRoute, AccountingSearchStrategy,
-    AccountingStage, SearchFallbackCode, SearchMode,
+    AccountingChannel, AccountingOperationKind, AccountingOperationMode, AccountingRoute,
+    AccountingSearchStrategy, AccountingStage, SearchFallbackCode, SearchMode,
 };
 use serde_json::{Value, json};
 
@@ -9,9 +9,10 @@ use crate::cli::McpClientArg;
 
 use super::{
     INVALID_REQUEST, LATEST_MCP_PROTOCOL_VERSION, METHOD_NOT_FOUND, PARSE_ERROR, SessionState,
-    apply_workspace_policy, bounded_usize, cancelled_request_id, classify_workspace_binding,
-    handle_line, initialize_result, lifecycle_metadata, mcp_operation_request, optional_enum,
-    parse_mode, registration_snippet, reject_unknown, tool_definitions, tool_error, tool_success,
+    ToolKind, apply_workspace_policy, bounded_usize, cancelled_request_id,
+    classify_workspace_binding, fork_result, handle_line, initialize_result, lifecycle_metadata,
+    mcp_operation_request, optional_enum, parse_mode, read_fork_request, registration_snippet,
+    tool_definitions, tool_error, tool_success, validate_tool_arguments, write_fork_request,
 };
 
 #[test]
@@ -37,8 +38,14 @@ fn acceptance_gate_mcp_accounting_is_typed_private_and_stage_explicit() {
         "fallback_code": "semantic_index_unavailable",
         "fallback_reason": "private failure detail"
     });
-    let request = mcp_operation_request("hzr_search", "/work", &arguments, &response)
-        .expect("accounting request");
+    let request = mcp_operation_request(
+        ToolKind::Search,
+        "hzr_search",
+        "/work",
+        &arguments,
+        &response,
+    )
+    .expect("accounting request");
 
     assert_eq!(request.channel, AccountingChannel::Mcp);
     assert_eq!(request.route, AccountingRoute::Optimized);
@@ -87,11 +94,16 @@ fn acceptance_gate_mcp_accounting_is_typed_private_and_stage_explicit() {
         "strategy": "fork_rgai_ripgrep",
         "fallback_code": "grepai_unavailable"
     });
-    let actual_backend =
-        mcp_operation_request("hzr_search", "/work", &arguments, &actual_backend_response)
-            .expect("actual backend accounting request")
-            .attribution
-            .expect("actual backend attribution");
+    let actual_backend = mcp_operation_request(
+        ToolKind::Search,
+        "hzr_search",
+        "/work",
+        &arguments,
+        &actual_backend_response,
+    )
+    .expect("actual backend accounting request")
+    .attribution
+    .expect("actual backend attribution");
     assert_eq!(
         actual_backend.search_strategy,
         Some(AccountingSearchStrategy::ForkRgaiRipgrep)
@@ -104,6 +116,100 @@ fn acceptance_gate_mcp_accounting_is_typed_private_and_stage_explicit() {
         actual_backend.search_fallback_code,
         Some(SearchFallbackCode::GrepaiUnavailable)
     );
+}
+
+#[test]
+fn acceptance_gate_every_non_dedicated_mcp_tool_has_typed_accounting() {
+    let cases = [
+        (
+            ToolKind::Read,
+            "hzr_read",
+            json!({"path": "private/source", "outline": true}),
+            AccountingOperationKind::Read,
+            AccountingOperationMode::ReadOutline,
+            AccountingStage::FinalDelivery,
+        ),
+        (
+            ToolKind::Write,
+            "hzr_write",
+            json!({}),
+            AccountingOperationKind::Write,
+            AccountingOperationMode::Write,
+            AccountingStage::FinalDelivery,
+        ),
+        (
+            ToolKind::ContextPlan,
+            "hzr_context_plan",
+            json!({}),
+            AccountingOperationKind::Context,
+            AccountingOperationMode::ContextPlan,
+            AccountingStage::StandaloneDelivery,
+        ),
+        (
+            ToolKind::MemoryRecall,
+            "hzr_memory_recall",
+            json!({}),
+            AccountingOperationKind::Memory,
+            AccountingOperationMode::MemoryRecall,
+            AccountingStage::StandaloneDelivery,
+        ),
+        (
+            ToolKind::MemoryStore,
+            "hzr_memory_store",
+            json!({}),
+            AccountingOperationKind::Memory,
+            AccountingOperationMode::MemoryStore,
+            AccountingStage::StandaloneDelivery,
+        ),
+        (
+            ToolKind::MemoryForget,
+            "hzr_memory_forget",
+            json!({}),
+            AccountingOperationKind::Memory,
+            AccountingOperationMode::MemoryForget,
+            AccountingStage::StandaloneDelivery,
+        ),
+        (
+            ToolKind::MemoryUpdate,
+            "hzr_memory_update",
+            json!({}),
+            AccountingOperationKind::Memory,
+            AccountingOperationMode::MemoryUpdate,
+            AccountingStage::StandaloneDelivery,
+        ),
+        (
+            ToolKind::MemoryPrune,
+            "hzr_memory_prune",
+            json!({}),
+            AccountingOperationKind::Memory,
+            AccountingOperationMode::MemoryPrune,
+            AccountingStage::StandaloneDelivery,
+        ),
+        (
+            ToolKind::Observability,
+            "hzr_observability",
+            json!({}),
+            AccountingOperationKind::Observability,
+            AccountingOperationMode::ObservabilitySnapshot,
+            AccountingStage::ControlPlane,
+        ),
+        (
+            ToolKind::Doctor,
+            "hzr_doctor",
+            json!({}),
+            AccountingOperationKind::Doctor,
+            AccountingOperationMode::DoctorCheck,
+            AccountingStage::ControlPlane,
+        ),
+    ];
+    for (kind, name, arguments, operation, mode, stage) in cases {
+        let request = mcp_operation_request(kind, name, "/work", &arguments, &json!({"ok": true}))
+            .expect("typed accounting request");
+        let attribution = request.attribution.expect("typed attribution");
+        assert_eq!(attribution.operation, operation, "{name}");
+        assert_eq!(attribution.mode, mode, "{name}");
+        assert_eq!(attribution.stage, stage, "{name}");
+    }
 }
 
 /// Mirror of the notification rule in `handle_line`, which cannot be exercised
@@ -181,7 +287,7 @@ fn test_initialize_requires_a_protocol_version() {
 #[test]
 fn test_every_tool_has_model_guidance_and_typed_schemas() {
     let tools = tool_definitions();
-    assert_eq!(tools.len(), 8);
+    assert_eq!(tools.len(), super::tools::TOOL_CONTRACTS.len());
     for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
         assert!(
@@ -209,75 +315,6 @@ fn test_every_tool_has_model_guidance_and_typed_schemas() {
         tools.iter().any(|tool| tool["name"] == "hzr_context_plan"),
         "the MCP surface must expose HZR graph-first planning"
     );
-}
-
-fn schema_accepts(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
-    if let Some(options) = schema.get("anyOf").and_then(Value::as_array) {
-        if options
-            .iter()
-            .any(|option| schema_accepts(option, value, path).is_ok())
-        {
-            return Ok(());
-        }
-        return Err(format!("{path} matched no anyOf branch"));
-    }
-    if let Some(expected) = schema.get("const") {
-        if expected != value {
-            return Err(format!("{path} expected constant {expected}, got {value}"));
-        }
-    }
-    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
-        if !values.contains(value) {
-            return Err(format!("{path} is outside enum: {value}"));
-        }
-    }
-    if let Some(kind) = schema.get("type") {
-        let kinds = kind
-            .as_array()
-            .cloned()
-            .unwrap_or_else(|| vec![kind.clone()]);
-        let matches = kinds.iter().any(|kind| match kind.as_str() {
-            Some("object") => value.is_object(),
-            Some("array") => value.is_array(),
-            Some("string") => value.is_string(),
-            Some("integer") => value.as_i64().is_some() || value.as_u64().is_some(),
-            Some("number") => value.is_number(),
-            Some("boolean") => value.is_boolean(),
-            Some("null") => value.is_null(),
-            _ => false,
-        });
-        if !matches {
-            return Err(format!("{path} has {value}, expected type {kind}"));
-        }
-    }
-    if let Some(object) = value.as_object() {
-        let properties = schema.get("properties").and_then(Value::as_object);
-        if let Some(required) = schema.get("required").and_then(Value::as_array) {
-            for key in required.iter().filter_map(Value::as_str) {
-                if !object.contains_key(key) {
-                    return Err(format!("{path} is missing required property {key}"));
-                }
-            }
-        }
-        for (key, child) in object {
-            if let Some(child_schema) = properties.and_then(|items| items.get(key)) {
-                schema_accepts(child_schema, child, &format!("{path}.{key}"))?;
-            } else if schema.get("additionalProperties") == Some(&Value::Bool(false)) {
-                return Err(format!("{path} emitted undeclared property {key}"));
-            } else if let Some(additional) = schema
-                .get("additionalProperties")
-                .filter(|value| value.is_object())
-            {
-                schema_accepts(additional, child, &format!("{path}.{key}"))?;
-            }
-        }
-    }
-    if let (Some(items), Some(values)) = (schema.get("items"), value.as_array()) {
-        for (index, item) in values.iter().enumerate() {
-            schema_accepts(items, item, &format!("{path}[{index}]"))?;
-        }
-    }
-    Ok(())
 }
 
 fn representative_output(name: &str) -> Option<Value> {
@@ -361,6 +398,49 @@ fn representative_output(name: &str) -> Option<Value> {
             "profile": "adaptive",
             "protected_spans": [{"start": 0, "end": 4, "kind": "code"}]
         }),
+        "hzr_read" => json!({
+            "content": "line one\n",
+            "stderr": "",
+            "termination": "exited",
+            "exit_code": 0,
+            "signal": null,
+            "duration_ms": 1,
+            "stdout_sha256": "abc",
+            "stderr_sha256": "def",
+            "stdout_truncated": false,
+            "stderr_truncated": false
+        }),
+        "hzr_write" => json!({
+            "receipt": {"version": 1, "ok": true, "op": "patch", "applied": 1},
+            "stderr": "",
+            "termination": "exited",
+            "exit_code": 0,
+            "signal": null,
+            "duration_ms": 1,
+            "stdout_sha256": "abc",
+            "stderr_sha256": "def",
+            "stdout_truncated": false,
+            "stderr_truncated": false
+        }),
+        "hzr_exec" => json!({"outcome": "not_started", "disposition": {}}),
+        "hzr_observability" => json!({
+            "protocol_version": 1,
+            "hzr_version": "0.6.0",
+            "state": "ready",
+            "workspace_root": "/work",
+            "engines": [{
+                "name": "grepai", "version": null, "state": "ready", "detail": null
+            }],
+            "capabilities": ["search"]
+        }),
+        "hzr_doctor" => json!({
+            "hzr_version": "0.6.0",
+            "config_path": "/config.toml",
+            "data_dir": "/data",
+            "workspace": "/work",
+            "healthy": true,
+            "checks": [{"name": "binding", "status": "pass", "detail": "exact"}]
+        }),
         _ => return None,
     })
 }
@@ -371,10 +451,9 @@ fn test_representative_structured_content_conforms_to_every_output_schema() {
         let name = tool["name"].as_str().expect("tool name");
         let output = representative_output(name);
         assert!(output.is_some(), "missing representative output for {name}");
-        let result = schema_accepts(
-            &tool["outputSchema"],
-            output.as_ref().expect("representative output"),
+        let result = super::tools::validate_tool_output(
             name,
+            output.as_ref().expect("representative output"),
         );
         assert!(
             result.is_ok(),
@@ -461,7 +540,10 @@ fn test_invalid_tool_arguments_are_not_silently_defaulted() {
         .is_err()
     );
     assert!(bounded_usize(&json!({"limit": 51}), "limit", 10, 50).is_err());
-    assert!(reject_unknown(&json!({"query": "x", "workspace": "/other"}), &["query"]).is_err());
+    assert!(
+        validate_tool_arguments("hzr_search", &json!({"query": "x", "workspace": "/other"}))
+            .is_err()
+    );
 }
 
 #[test]
@@ -479,6 +561,111 @@ fn test_unavailable_backend_reports_an_error_not_a_fake_success() {
     assert_eq!(result["isError"], false);
     assert_eq!(result["structuredContent"]["ok"], true);
     assert_eq!(result["content"][0]["text"], r#"{"ok":true}"#);
+}
+
+fn fork_response(
+    stdout: &str,
+    stderr: &str,
+    termination: hzr_protocol::CommandTermination,
+    exit_code: Option<i32>,
+) -> hzr_protocol::ForkRunApiResponse {
+    hzr_protocol::ForkRunApiResponse {
+        stdout: stdout.to_owned(),
+        stderr: stderr.to_owned(),
+        termination,
+        exit_code,
+        signal: None,
+        duration_ms: 1,
+        stdout_sha256: "a".repeat(64),
+        stderr_sha256: "b".repeat(64),
+        stdout_truncated: false,
+        stderr_truncated: false,
+    }
+}
+
+#[test]
+fn mcp_fork_result_never_turns_failed_read_or_write_into_success() {
+    let missing = fork_response(
+        "",
+        "missing file",
+        hzr_protocol::CommandTermination::Exited,
+        Some(2),
+    );
+    let error = fork_result(missing, "content", false).expect_err("missing read must fail");
+    assert!(error.to_string().contains("exit code Some(2)"));
+    assert!(error.to_string().contains("missing file"));
+
+    let timed_out = fork_response(
+        "{\"ok\":true}",
+        "",
+        hzr_protocol::CommandTermination::TimedOut,
+        None,
+    );
+    assert!(fork_result(timed_out, "receipt", true).is_err());
+
+    let rejected = fork_response(
+        "{\"ok\":false,\"error\":\"CAS conflict\"}",
+        "",
+        hzr_protocol::CommandTermination::Exited,
+        Some(0),
+    );
+    assert!(fork_result(rejected, "receipt", true).is_err());
+
+    let success = fork_response(
+        "{\"ok\":true,\"op\":\"patch\"}",
+        "",
+        hzr_protocol::CommandTermination::Exited,
+        Some(0),
+    );
+    let receipt = fork_result(success, "receipt", true).expect("successful write receipt");
+    assert_eq!(receipt["receipt"]["ok"], true);
+}
+
+#[test]
+fn mcp_read_and_write_build_only_confined_typed_fork_requests() {
+    let read = read_fork_request("/work", &json!({"path": "src/lib.rs", "from": 2, "to": 4}))
+        .expect("read request");
+    assert_eq!(read.cwd, "/work");
+    assert_eq!(
+        read.args,
+        ["read", "src/lib.rs", "--from", "2", "--to", "4"]
+    );
+    assert!(read.managed_write.is_none());
+    assert!(read_fork_request("/work", &json!({"path": "x", "from": 5, "to": 4})).is_err());
+
+    let old = "private old block";
+    let new = "private new block";
+    let patch = write_fork_request(
+        "/work",
+        &json!({
+            "operation": "patch", "path": "src/lib.rs", "old": old, "new": new, "cas": true
+        }),
+    )
+    .expect("patch request");
+    assert!(patch.args.is_empty());
+    assert!(patch.stdin.is_none());
+    assert_eq!(
+        patch.managed_write,
+        Some(hzr_protocol::ForkManagedWrite::Patch {
+            path: "src/lib.rs".into(),
+            old: old.into(),
+            new: new.into(),
+        })
+    );
+    assert!(
+        write_fork_request(
+            "/work",
+            &json!({"operation": "patch", "path": "x", "old": "a", "new": "b", "cas": false})
+        )
+        .is_err()
+    );
+    assert!(
+        write_fork_request(
+            "/work",
+            &json!({"operation": "create", "path": "x", "old": "a", "content": "b"})
+        )
+        .is_err()
+    );
 }
 
 #[test]

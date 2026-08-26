@@ -8,8 +8,10 @@ do not invoke a separately installed `rtk` binary.
 second engine process costs tokens twice and can disagree with itself. Route
 through HZR and there is exactly one of each.
 
-Managed agent blocks contain the default routing policy and point back to this canonical
-contract. Ordinary tasks must not import or read this whole file. When a routing question is
+`contracts/agent-capabilities.json` is the machine-readable SSOT for command routes,
+tool inventories, and harness capabilities. This file is its normative human projection:
+it adds safety and recovery semantics without redefining those facts. Managed agent blocks
+are rendered from the SSOT and point back here for detail. Ordinary tasks must not import or read this whole file. When a routing question is
 not answered by the managed block, read this file with `--outline`, then retrieve only the
 relevant `--from`/`--to` range. Full exact content is reserved for material contract audits.
 
@@ -79,7 +81,7 @@ Write    -> hzr write patch|replace|set|create|batch ...
 Shell    -> hzr exec run '<shell command>'   (default policy route; preserves shell grammar)
 Known output -> hzr rtk -- test|err|summary|log <command...>   (plain argv only)
 Density  -> hzr codec compile --profile shadow|adaptive|compact
-Exact raw -> HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr rtk -- raw <command...>
+Exact raw -> HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'
 TDD      -> hzr tdd                  (optional; strict when selected)
 MCP      -> hzr mcp serve            (launched by a client, never by hand)
 Config   -> hzr mcp config --client codex|claude-desktop  (prints a snippet)
@@ -88,7 +90,7 @@ Health   -> hzr doctor [--fix]     (--fix migrates one unambiguous legacy .grepa
 Enable   -> hzr enable [--workspace DIR]
 Disable  -> hzr disable [--workspace DIR]   (keeps index and memory)
 Gains    -> hzr stats [--workspace DIR] [--since 7d]
-Project build -> hzr build <args>    (your project, token-optimized output)
+Project build -> hzr exec run '<project build command>'
 HZR release   -> hzr release --force (rebuild and reinstall HZR itself)
 ```
 
@@ -116,9 +118,10 @@ is selected, follow its strict RED → GREEN → REFACTOR contract. The canonica
 skill is shipped at `share/hzr/skills/hzr-tdd/SKILL.md`; a passing test without
 an observed relevant failure is regression coverage, not TDD.
 
-`hzr build` and `hzr release` are different verbs on purpose: `build` builds **your
-project**, `release` rebuilds and reinstalls **HZR itself**. Do not use `release` to build
-a project.
+`hzr build` is a compatibility alias for the inherited fork-core self-build pipeline;
+it is not a generic project-build wrapper. Route ordinary project builds through
+`hzr exec run` so policy can select the correct filter. `hzr release` rebuilds and
+reinstalls **HZR itself**; do not use it to build another project.
 
 ## Project-only activation
 
@@ -168,7 +171,7 @@ structure and `--from N --to M` for exact evidence. When the complete file is it
 authoritative text input, use
 `HZR_EXACT_FIDELITY=1 hzr read <file> --level none`. The read engine intentionally previews
 binary data; when byte-for-byte binary stdout is itself required, use the explicit
-`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=binary hzr rtk -- raw <command...>` recovery path.
+`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=binary hzr exec run '<command>'` recovery path.
 Batch reads keep caller order and source coordinates, reserve a bounded share for every file,
 and print exact range recovery commands when content is omitted. `-n` defaults to exact content
 and prints original
@@ -214,17 +217,14 @@ tracked no-equivalent route; they receive no savings credit.
 
 ## The cost of `raw`
 
-`hzr rtk -- raw <cmd> <args...>` directly spawns the first argument and forwards its argv
-unfiltered; it does not interpret pipes, redirects, globs or shell variables. Use an explicit
-shell such as `sh -c '...'` only when shell grammar is actually required. The invocation is
-recorded in the
-ledger as a bypass and receives **zero** savings credit. Captured output contributes equal
-baseline and delivered estimates. Inherited stdio that cannot be captured is marked
-`unmeasured`, never invented as zero output, and reduces the coverage share shown by
-`hzr stats`.
+Direct `hzr rtk -- raw ...` and `hzr rtk -- proxy ...` entry points are rejected because they
+cannot reserve the managed fidelity allowance atomically. Shell grammar stays on `hzr exec run`,
+which transports fidelity intent separately from the command, applies policy before spawning, and
+records captured output with equal baseline and delivered estimates. Output that cannot be measured
+is never invented as zero and reduces the coverage share shown by `hzr stats`.
 
 Exact operator/debug recovery uses
-`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr rtk -- raw <command...>`, where `reason`
+`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'`, where `reason`
 is one of `binary`, `checksum`, `machine_protocol`, `complete_log`, `full_patch`, or
 `verbatim_source`. A missing or unknown reason returns a policy `Ask` and is never echoed into
 telemetry. Even a valid reason cannot override a deny/ask decision or an equivalent managed HZR
@@ -273,13 +273,13 @@ Legacy-import records lack trustworthy repository provenance. HZR retains them f
 explicit migration, but excludes them from automatic project recall instead of assigning all
 of them to whichever repository happened to run the import.
 
-The installed Bash hook routes commands through the managed daemon and falls
+The installed Claude Code Bash hook routes commands through the managed daemon and falls
 back to the same pinned HZR fork-core when the daemon is unavailable. A
 degraded rewrite preserves command policy but is absent from the managed usage
 ledger; `hzr doctor` and `hzr stats` report that incomplete accounting instead of
 hiding it.
 
-## What the hooks cover, and what only you can
+## What the Claude Code hooks cover, and what only you can
 
 The failure-open `PreToolUse` hook matches `Bash`, `Agent`, `Task`, `Read`, `Grep`, `Glob`,
 `Edit` and `Write`. New installations use `steer`: native Read/Grep calls receive one concrete
@@ -293,6 +293,11 @@ Policy-allowed native calls in steer/strict are typed E10 bypasses rather than b
 `native_unaccounted`; observe mode preserves the historical native-unaccounted measurement.
 Session nudges and stop scorecards are bounded, name the recovered route and never include the
 underlying command, path, query, content, or raw agent identity.
+
+Codex and the managed caveman-code harness do not run these Claude hooks. Codex follows its
+generated AGENTS.md routes and registered HZR MCP tools explicitly. The managed harness exposes
+only its HZR-owned custom tools and strips generated HZR blocks from repository instruction files
+before loading the remaining repository-specific rules.
 
 Prefer the bounded HZR planner for discovery. Never create a second `.grepai` index,
 a second ICM database, or parallel RTK hooks.
