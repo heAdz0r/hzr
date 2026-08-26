@@ -1447,6 +1447,109 @@ main {
   line-height: 1.5;
 }
 
+.session-roi {
+  display: grid;
+  gap: 18px;
+  margin-top: 20px;
+  padding: 24px;
+  border: 1px solid color-mix(in srgb, var(--ember-500) 34%, var(--surface-border));
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(255, 108, 55, 0.09), rgba(14, 18, 22, 0.78));
+}
+
+.session-roi-head,
+.session-roi-value,
+.session-roi-unavailable,
+.session-roi-claim,
+.session-command-list li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.session-roi-head h3 {
+  margin: 4px 0;
+  font-size: clamp(1.35rem, 3vw, 2rem);
+}
+
+.session-roi-head p,
+.session-roi-value small,
+.session-roi-unavailable span,
+.session-roi-claim span,
+.session-command-list span {
+  color: var(--text-secondary);
+}
+
+.session-roi-value,
+.session-roi-unavailable {
+  flex-direction: column;
+  padding: 20px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.session-roi-value strong {
+  color: var(--ember-300);
+  font-size: clamp(1.8rem, 4vw, 3.2rem);
+  letter-spacing: -0.04em;
+}
+
+.session-roi-evidence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.session-roi-evidence div,
+.session-roi-claim,
+.session-command-list {
+  padding: 14px;
+  border: 1px solid var(--surface-border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.session-roi-evidence dt {
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.session-roi-evidence dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.session-command-list ol {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-command-list li {
+  padding: 9px 0;
+  border-top: 1px solid var(--surface-border);
+}
+
+@media (max-width: 800px) {
+  .session-roi-evidence {
+    grid-template-columns: 1fr;
+  }
+
+  .session-roi-head,
+  .session-roi-claim,
+  .session-command-list li {
+    flex-direction: column;
+  }
+}
+
 .receipt-state {
   padding: 7px 10px;
   border: 1px solid rgba(104, 169, 255, 0.16);

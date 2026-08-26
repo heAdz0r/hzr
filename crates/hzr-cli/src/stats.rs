@@ -6,8 +6,9 @@ use anyhow::Result;
 use hzr_core::{
     BypassSummary, CURRENT_ACCOUNTING_POLICY_VERSION, Config, EfficiencySummary, EvasionSummary,
     Ledger, LedgerSummary, OperationChannel, OperationFamilySummary, OperationModeSummary,
-    OperationRoute, RawPublicEstimate, ReadPipelineSummary, ReplacementCapability, StatsQuery,
-    classify_operation, load_pricing_catalog, price_avoided_input_tokens, privacy_identity_hash,
+    OperationRoute, RawPublicEstimate, RawPublicEstimateRequest, ReadPipelineSummary,
+    ReplacementCapability, StatsQuery, classify_operation, load_pricing_catalog,
+    price_avoided_input_tokens, privacy_identity_hash,
 };
 use serde::Serialize;
 
@@ -235,12 +236,19 @@ pub async fn collect(
         match load_pricing_catalog(config.billing.pricing_file.as_deref()).and_then(|catalog| {
             price_avoided_input_tokens(
                 &catalog,
-                &config.billing.harness,
-                &config.billing.provider,
-                &config.billing.model,
-                &config.billing.method,
-                config.billing.effective_pricing_basis(),
-                report.direct_savings.net_avoided_tokens_estimated.max(0) as u64,
+                RawPublicEstimateRequest {
+                    harness: &config.billing.harness,
+                    provider: &config.billing.provider,
+                    model: &config.billing.model,
+                    method: &config.billing.method,
+                    context_window_tokens: config.billing.context_window_tokens,
+                    basis: config.billing.effective_pricing_basis(),
+                    avoided_tokens: report
+                        .direct_savings
+                        .net_avoided_tokens_estimated
+                        .max(0)
+                        .unsigned_abs(),
+                },
             )
         }) {
             Ok(estimate) => report.raw_public_estimate = Some(estimate),

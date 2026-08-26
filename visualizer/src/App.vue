@@ -9,6 +9,7 @@ import IndexPipeline from "./components/IndexPipeline.vue";
 import LiveActivity from "./components/LiveActivity.vue";
 import ProjectCard from "./components/ProjectCard.vue";
 import ServiceNode from "./components/ServiceNode.vue";
+import SessionRoi from "./components/SessionRoi.vue";
 import StatusChip from "./components/StatusChip.vue";
 import type { DashboardProjectPage, DashboardResponse, ProjectState } from "./types";
 import {
@@ -590,6 +591,7 @@ onBeforeUnmount(() => {
                 tone="estimated"
               />
             </div>
+            <SessionRoi :roi="snapshot.session_roi" />
             <LiveActivity
               :operations="snapshot.local_activity.recent_operations"
               :optimized-count="snapshot.local_activity.optimized_operations"

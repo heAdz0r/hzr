@@ -21,8 +21,8 @@ use thiserror::Error;
 
 use crate::billing::{
     BillingError, EconomicAmount, PricingCatalog, ProviderEconomicReceipt,
-    ProviderReceiptRecordResult, SessionEconomicSummary, price_receipt, receipt_payload_hash,
-    validate_receipt,
+    ProviderReceiptRecordResult, ReceiptProvenance, SessionEconomicSummary, price_receipt,
+    receipt_payload_hash, validate_receipt,
 };
 
 pub const CURRENT_ACCOUNTING_POLICY_VERSION: &str = "privacy_typed_v2";
@@ -1212,6 +1212,41 @@ impl Ledger {
         Self { connection }.project_activity(project_path)
     }
 
+    /// Read one already-pseudonymized session selected from project-scoped dashboard activity.
+    /// Raw session identifiers are never accepted or returned by this surface.
+    pub fn session_roi_read_only(
+        path: &Path,
+        project_path: &str,
+        session_hash: &str,
+    ) -> Result<(SessionEfficiencySummary, SessionEconomicSummary), LedgerError> {
+        if !session_hash.starts_with("hmac-sha256:") {
+            return Err(LedgerError::InvalidPrivacyIdentity(
+                "dashboard session identity must be an HMAC digest".into(),
+            ));
+        }
+        if !path.is_file() {
+            return Ok((
+                SessionEfficiencySummary::default(),
+                SessionEconomicSummary::default(),
+            ));
+        }
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(LedgerError::Database)?;
+        connection
+            .busy_timeout(std::time::Duration::from_millis(250))
+            .map_err(LedgerError::Database)?;
+        let ledger = Self { connection };
+        let project_hash = privacy_identity_hash("project", project_path);
+        Ok((
+            ledger.session_efficiency_summary_for_hashes(
+                session_hash,
+                session_hash,
+                Some(&project_hash),
+            )?,
+            ledger.session_economic_summary_for_hashes(session_hash, session_hash, project_path)?,
+        ))
+    }
+
     pub fn open(path: &Path) -> Result<Self, LedgerError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| LedgerError::Directory {
@@ -1383,6 +1418,9 @@ impl Ledger {
                     price_table_identity TEXT,
                     price_entry_version TEXT,
                     public_estimate_enabled INTEGER NOT NULL,
+                    provenance TEXT NOT NULL DEFAULT 'user_supplied',
+                    externally_verified INTEGER NOT NULL DEFAULT 0,
+                    result_json TEXT NOT NULL DEFAULT '',
                     producer_version TEXT NOT NULL
                  );
                  CREATE INDEX IF NOT EXISTS idx_provider_economic_session
@@ -1403,6 +1441,18 @@ impl Ledger {
             .map_err(LedgerError::Database)?;
         initialize_identity_hmac(&connection)?;
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN agent TEXT", []);
+        let _ = connection.execute(
+            "ALTER TABLE provider_economic_receipts ADD COLUMN provenance TEXT NOT NULL DEFAULT 'user_supplied'",
+            [],
+        );
+        let _ = connection.execute(
+            "ALTER TABLE provider_economic_receipts ADD COLUMN externally_verified INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = connection.execute(
+            "ALTER TABLE provider_economic_receipts ADD COLUMN result_json TEXT NOT NULL DEFAULT ''",
+            [],
+        );
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN session_id TEXT", []);
         let _ = connection.execute(
             "ALTER TABLE commands ADD COLUMN channel TEXT NOT NULL DEFAULT 'hook_cli'",
@@ -1458,6 +1508,20 @@ impl Ledger {
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_commands_fidelity_reservation
                    ON commands(fidelity_reservation_id)
                  WHERE fidelity_reservation_id IS NOT NULL",
+                [],
+            )
+            .map_err(LedgerError::Database)?;
+        connection
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_commands_session_accounting_project
+                   ON commands(session_hash, accounting_policy_version, project_hash)",
+                [],
+            )
+            .map_err(LedgerError::Database)?;
+        connection
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_provider_economic_session_project
+                   ON provider_economic_receipts(session_hash, project_hash)",
                 [],
             )
             .map_err(LedgerError::Database)?;
@@ -1542,7 +1606,8 @@ impl Ledger {
     pub fn record_provider_receipt(
         &self,
         receipt: &ProviderEconomicReceipt,
-        catalog: &PricingCatalog,
+        catalog: Option<&PricingCatalog>,
+        pricing_unavailable_reason: Option<&str>,
     ) -> Result<ProviderReceiptRecordResult, LedgerError> {
         validate_receipt(receipt).map_err(LedgerError::Billing)?;
         let key = ledger_identity_key(&self.connection)?;
@@ -1557,13 +1622,31 @@ impl Ledger {
         let existing = self
             .connection
             .query_row(
-                "SELECT payload_hash FROM provider_economic_receipts WHERE receipt_hash = ?1",
+                "SELECT payload_hash, result_json
+                   FROM provider_economic_receipts WHERE receipt_hash = ?1",
                 [&receipt_hash],
-                |row| row.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()
             .map_err(LedgerError::Database)?;
-        let invoice_actual = match (
+        if let Some((existing_hash, result_json)) = existing {
+            if existing_hash != payload_hash {
+                return Err(LedgerError::InvalidOperation(
+                    "provider receipt id was already used with different content".into(),
+                ));
+            }
+            if result_json.is_empty() {
+                return Err(LedgerError::InvalidOperation(
+                    "stored provider receipt predates replay-safe result snapshots".into(),
+                ));
+            }
+            let mut result: ProviderReceiptRecordResult =
+                serde_json::from_str(&result_json).map_err(LedgerError::Serialize)?;
+            result.recorded = false;
+            result.idempotent_replay = true;
+            return Ok(result);
+        }
+        let reported_actual = match (
             receipt.actual_baseline_cost_microunits,
             receipt.actual_delivered_cost_microunits,
         ) {
@@ -1581,10 +1664,20 @@ impl Ledger {
             }
         };
         let (public_estimate, unavailable_reason) = if receipt.enable_public_estimate {
-            match price_receipt(catalog, receipt) {
-                Ok(estimate) => (Some(estimate), None),
-                Err(BillingError::PricingUnavailable(reason)) => (None, Some(reason)),
-                Err(error) => return Err(LedgerError::Billing(error)),
+            match catalog {
+                Some(catalog) => match price_receipt(catalog, receipt) {
+                    Ok(estimate) => (Some(estimate), None),
+                    Err(BillingError::PricingUnavailable(reason)) => (None, Some(reason)),
+                    Err(error) => return Err(LedgerError::Billing(error)),
+                },
+                None => (
+                    None,
+                    Some(
+                        pricing_unavailable_reason
+                            .unwrap_or("public pricing catalog is unavailable")
+                            .to_owned(),
+                    ),
+                ),
             }
         } else {
             (
@@ -1592,21 +1685,17 @@ impl Ledger {
                 Some("public pricing estimate is disabled for this receipt".into()),
             )
         };
-        if let Some(existing) = existing {
-            if existing != payload_hash {
-                return Err(LedgerError::InvalidOperation(
-                    "provider receipt id was already used with different content".into(),
-                ));
-            }
-            return Ok(ProviderReceiptRecordResult {
-                recorded: false,
-                idempotent_replay: true,
-                receipt_hash,
-                invoice_actual,
-                public_estimate,
-                unavailable_reason,
-            });
-        }
+        let result = ProviderReceiptRecordResult {
+            recorded: true,
+            idempotent_replay: false,
+            receipt_hash: receipt_hash.clone(),
+            reported_actual: reported_actual.clone(),
+            provenance: ReceiptProvenance::UserSupplied,
+            externally_verified: false,
+            public_estimate: public_estimate.clone(),
+            unavailable_reason: unavailable_reason.clone(),
+        };
+        let result_json = serde_json::to_string(&result).map_err(LedgerError::Serialize)?;
         let (project_hash, project_scope_hashes) = project_hashes(&receipt.project_path);
         let session_hash = session_identity_hash(&self.connection, &receipt.session_id)?;
         let baseline_json =
@@ -1622,9 +1711,9 @@ impl Ledger {
                     invoice_baseline_microunits, invoice_delivered_microunits,
                     public_baseline_microunits, public_delivered_microunits,
                     price_table_identity, price_entry_version, public_estimate_enabled,
-                    producer_version
+                    provenance, externally_verified, result_json, producer_version
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-                    ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+                    ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
                 params![
                     receipt_hash,
                     payload_hash,
@@ -1641,10 +1730,10 @@ impl Ledger {
                     project_scope_hashes,
                     baseline_json,
                     delivered_json,
-                    invoice_actual
+                    reported_actual
                         .as_ref()
                         .map(|value| value.baseline_microunits),
-                    invoice_actual
+                    reported_actual
                         .as_ref()
                         .map(|value| value.delivered_microunits),
                     public_estimate
@@ -1660,47 +1749,60 @@ impl Ledger {
                         .as_ref()
                         .map(|value| value.entry_version.as_str()),
                     receipt.enable_public_estimate,
+                    "user_supplied",
+                    false,
+                    result_json,
                     CURRENT_PRODUCER_VERSION,
                 ],
             )
             .map_err(LedgerError::Database)?;
-        Ok(ProviderReceiptRecordResult {
-            recorded: true,
-            idempotent_replay: false,
-            receipt_hash,
-            invoice_actual,
-            public_estimate,
-            unavailable_reason,
-        })
+        Ok(result)
     }
 
     pub fn session_economic_summary(
         &self,
         session_id: &str,
+        project_path: &str,
     ) -> Result<SessionEconomicSummary, LedgerError> {
         let (session_hash, legacy_session_hash) =
             session_identity_hashes(&self.connection, session_id)?;
+        self.session_economic_summary_for_hashes(&session_hash, &legacy_session_hash, project_path)
+    }
+
+    fn session_economic_summary_for_hashes(
+        &self,
+        session_hash: &str,
+        legacy_session_hash: &str,
+        project_path: &str,
+    ) -> Result<SessionEconomicSummary, LedgerError> {
+        let project_hash = privacy_identity_hash("project", project_path);
         let rows = self
             .connection
             .prepare_cached(
                 "SELECT currency,
                         invoice_baseline_microunits, invoice_delivered_microunits,
                         public_baseline_microunits, public_delivered_microunits,
-                        price_table_identity
+                        price_table_identity, provenance, externally_verified
                    FROM provider_economic_receipts
-                  WHERE session_hash IN (?1, ?2)",
+                  WHERE session_hash IN (?1, ?2)
+                    AND project_hash = ?3",
             )
             .map_err(LedgerError::Database)?
-            .query_map(params![session_hash, legacy_session_hash], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<u64>>(1)?,
-                    row.get::<_, Option<u64>>(2)?,
-                    row.get::<_, Option<u64>>(3)?,
-                    row.get::<_, Option<u64>>(4)?,
-                    row.get::<_, Option<String>>(5)?,
-                ))
-            })
+            .query_map(
+                params![session_hash, legacy_session_hash, project_hash],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<u64>>(1)?,
+                        row.get::<_, Option<u64>>(2)?,
+                        row.get::<_, Option<u64>>(3)?,
+                        row.get::<_, Option<u64>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, bool>(7)?,
+                    ))
+                },
+            )
             .map_err(LedgerError::Database)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(LedgerError::Database)?;
@@ -1960,13 +2062,23 @@ impl Ledger {
     ) -> Result<SessionEfficiencySummary, LedgerError> {
         let (session_hash, legacy_session_hash) =
             session_identity_hashes(&self.connection, session_id)?;
+        self.session_efficiency_summary_for_hashes(&session_hash, &legacy_session_hash, None)
+    }
+
+    fn session_efficiency_summary_for_hashes(
+        &self,
+        session_hash: &str,
+        legacy_session_hash: &str,
+        project_hash: Option<&str>,
+    ) -> Result<SessionEfficiencySummary, LedgerError> {
         let raw_predicate = raw_route_sql_predicate("rtk_cmd");
         let neutral_predicate = format!("({raw_predicate}) OR rtk_cmd = 'rtk write'");
         let measured_scope = "session_hash IN (?1, ?2)
                AND accounting_policy_version = ?3
                AND measurement = 'estimated'
                AND COALESCE(route, '') != 'native_unaccounted'
-               AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')";
+               AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+               AND (?4 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?4 || '|') > 0)";
         let totals_query = format!(
             "SELECT
                 COUNT(*),
@@ -1988,7 +2100,8 @@ impl Ledger {
                 params![
                     session_hash,
                     legacy_session_hash,
-                    CURRENT_ACCOUNTING_POLICY_VERSION
+                    CURRENT_ACCOUNTING_POLICY_VERSION,
+                    project_hash,
                 ],
                 |row| {
                     Ok(SessionEfficiencySummary {
@@ -2005,7 +2118,7 @@ impl Ledger {
             .map_err(LedgerError::Database)?;
         let commands_query = format!(
             "SELECT
-                rtk_cmd,
+                COALESCE(operation_family, 'legacy_command'),
                 COUNT(*),
                 COALESCE(SUM(CASE WHEN ({neutral_predicate})
                                   THEN output_tokens ELSE input_tokens END), 0),
@@ -2018,11 +2131,11 @@ impl Ledger {
                                   THEN 0 ELSE input_tokens - output_tokens END), 0),
                 CAST(COALESCE(AVG(exec_time_ms), 0) AS INTEGER)
              FROM commands WHERE {measured_scope}
-             GROUP BY rtk_cmd
+             GROUP BY COALESCE(operation_family, 'legacy_command')
              ORDER BY COUNT(*) DESC,
                       SUM(CASE WHEN ({neutral_predicate})
                                THEN 0 ELSE input_tokens - output_tokens END) DESC,
-                      rtk_cmd
+                      COALESCE(operation_family, 'legacy_command')
              LIMIT 3"
         );
         let mut statement = self
@@ -2034,7 +2147,8 @@ impl Ledger {
                 params![
                     session_hash,
                     legacy_session_hash,
-                    CURRENT_ACCOUNTING_POLICY_VERSION
+                    CURRENT_ACCOUNTING_POLICY_VERSION,
+                    project_hash,
                 ],
                 |row| {
                     Ok(EfficiencyCommandSummary {
@@ -3713,6 +3827,8 @@ type EconomicRow = (
     Option<u64>,
     Option<u64>,
     Option<String>,
+    String,
+    bool,
 );
 
 fn aggregate_economic_rows(rows: &[EconomicRow]) -> Result<SessionEconomicSummary, LedgerError> {
@@ -3747,11 +3863,19 @@ fn aggregate_economic_rows(rows: &[EconomicRow]) -> Result<SessionEconomicSummar
         .iter()
         .filter_map(|row| row.1.zip(row.2))
         .collect::<Vec<_>>();
+    let provenances = rows
+        .iter()
+        .map(|row| row.6.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if provenances.len() == 1 && provenances.contains("user_supplied") {
+        summary.provenance = Some(ReceiptProvenance::UserSupplied);
+    }
+    summary.externally_verified = rows.iter().all(|row| row.7);
     if invoice_pairs.len() == rows.len() {
-        summary.invoice_actual = Some(sum_economic_pairs(currency, &invoice_pairs)?);
+        summary.reported_actual = Some(sum_economic_pairs(currency, &invoice_pairs)?);
     } else {
         summary.unavailable_reasons.push(
-            "actual billed savings require baseline and delivered provider cost on every receipt"
+            "reported actual savings require baseline and delivered amounts on every imported receipt"
                 .into(),
         );
     }
@@ -5551,8 +5675,9 @@ mod tests {
             harness: "codex".into(),
             provider: "openai".into(),
             model: "gpt-5.6-sol".into(),
-            method: "standard_short_context".into(),
+            method: "standard_short_context_lte_272k".into(),
             currency: "USD".into(),
+            context_window_tokens: Some(100_000),
             session_id: "session-private".into(),
             project_path: "/private/project".into(),
             baseline: crate::ProviderTokenUsage {
@@ -5571,25 +5696,28 @@ mod tests {
         };
 
         let first = ledger
-            .record_provider_receipt(&receipt, &catalog)
+            .record_provider_receipt(&receipt, Some(&catalog), None)
             .expect("first receipt");
         let replay = ledger
-            .record_provider_receipt(&receipt, &catalog)
+            .record_provider_receipt(&receipt, None, Some("catalog now unavailable"))
             .expect("idempotent replay");
         let summary = ledger
-            .session_economic_summary("session-private")
+            .session_economic_summary("session-private", "/private/project")
             .expect("session summary");
         let other = ledger
-            .session_economic_summary("other-session")
+            .session_economic_summary("other-session", "/private/project")
             .expect("other summary");
 
         assert!(first.recorded);
         assert!(!first.receipt_hash.contains("external-receipt-private"));
         assert!(replay.idempotent_replay);
+        assert_eq!(replay.public_estimate, first.public_estimate);
+        assert_eq!(replay.provenance, crate::ReceiptProvenance::UserSupplied);
+        assert!(!replay.externally_verified);
         assert_eq!(summary.paired_receipts, 1);
         assert_eq!(
             summary
-                .invoice_actual
+                .reported_actual
                 .expect("actual pair")
                 .savings_microunits,
             4_000_000
@@ -5609,8 +5737,48 @@ mod tests {
 
         receipt.delivered.input_tokens += 1;
         let conflict = ledger
-            .record_provider_receipt(&receipt, &catalog)
+            .record_provider_receipt(&receipt, None, Some("catalog now unavailable"))
             .expect_err("conflicting replay");
         assert!(conflict.to_string().contains("different content"));
+    }
+
+    #[test]
+    fn session_roi_hot_queries_use_composite_indexes() {
+        let directory = tempdir().expect("temp directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+
+        let command_plan = ledger
+            .connection
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id FROM commands
+                  WHERE session_hash = ?1
+                    AND accounting_policy_version = ?2
+                    AND project_hash = ?3",
+            )
+            .expect("command query plan")
+            .query_map(["session", "policy", "project"], |row| {
+                row.get::<_, String>(3)
+            })
+            .expect("command plan rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("command plan details")
+            .join("\n");
+        assert!(command_plan.contains("idx_commands_session_accounting_project"));
+
+        let receipt_plan = ledger
+            .connection
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT receipt_hash FROM provider_economic_receipts
+                  WHERE session_hash = ?1 AND project_hash = ?2",
+            )
+            .expect("receipt query plan")
+            .query_map(["session", "project"], |row| row.get::<_, String>(3))
+            .expect("receipt plan rows")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("receipt plan details")
+            .join("\n");
+        assert!(receipt_plan.contains("idx_provider_economic_session_project"));
     }
 }

@@ -8,15 +8,16 @@ use fs2::FileExt;
 use hzr_core::{
     Config, DetailedOperationAttribution, FidelityAllowance, FidelityBudget, FidelityPreflight,
     Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-    PolicyEvent, RawFidelityRequest, RawPublicEstimate, SessionEconomicSummary,
-    SessionEfficiencySummary, SessionEvasionSummary, efficient_route_replacement,
-    fidelity_preflight_required, first_class_replacement, load_pricing_catalog,
-    price_avoided_input_tokens, raw_fidelity_request,
+    PolicyEvent, RawFidelityRequest, RawPublicEstimate, RawPublicEstimateRequest,
+    SessionEconomicSummary, SessionEfficiencySummary, SessionEvasionSummary,
+    efficient_route_replacement, fidelity_preflight_required, first_class_replacement,
+    load_pricing_catalog, price_avoided_input_tokens, raw_fidelity_request,
 };
 use hzr_exec::{
     CanonicalCommand, ForkRuntimePaths, PinnedRtkAdapter, RewriteDecision, RewriteSource,
     RtkAdapterConfig,
 };
+use hzr_index::registered_workspaces;
 use hzr_protocol::{
     ContextPlanApiRequest, EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm,
     ExecApiRequest, FidelityValidation, PolicyDecision,
@@ -1065,11 +1066,11 @@ fn economic_message(
     efficiency: Option<&SessionEfficiencySummary>,
     economics: Option<&SessionEconomicSummary>,
 ) -> String {
-    let invoice = economics
-        .and_then(|summary| summary.invoice_actual.as_ref())
+    let reported = economics
+        .and_then(|summary| summary.reported_actual.as_ref())
         .map(|amount| {
             format!(
-                "\nProvider invoice evidence: saved {} {} ({} -> {})",
+                "\nUser-supplied reported amount (unverified): saved {} {} ({} -> {})",
                 amount.currency,
                 format_signed_microunits(amount.savings_microunits),
                 format_microunits(amount.baseline_microunits),
@@ -1078,12 +1079,14 @@ fn economic_message(
         })
         .unwrap_or_default();
     if !config.billing.public_estimate_enabled {
-        return "Potential public-list savings: unavailable (opt-in disabled; not an invoice)"
-            .into();
+        return format!(
+            "Potential public-list savings: unavailable (opt-in disabled; not an invoice){reported}"
+        );
     }
     let Some(efficiency) = efficiency else {
-        return "Potential public-list savings: unavailable (ledger unavailable; not an invoice)"
-            .into();
+        return format!(
+            "Potential public-list savings: unavailable (ledger unavailable; not an invoice){reported}"
+        );
     };
     let avoided_tokens = efficiency
         .net_avoided_tokens_estimated
@@ -1093,12 +1096,15 @@ fn economic_message(
         load_pricing_catalog(config.billing.pricing_file.as_deref()).and_then(|catalog| {
             price_avoided_input_tokens(
                 &catalog,
-                &config.billing.harness,
-                &config.billing.provider,
-                &config.billing.model,
-                &config.billing.method,
-                config.billing.effective_pricing_basis(),
-                avoided_tokens,
+                RawPublicEstimateRequest {
+                    harness: &config.billing.harness,
+                    provider: &config.billing.provider,
+                    model: &config.billing.model,
+                    method: &config.billing.method,
+                    context_window_tokens: config.billing.context_window_tokens,
+                    basis: config.billing.effective_pricing_basis(),
+                    avoided_tokens,
+                },
             )
         });
     match estimate {
@@ -1111,11 +1117,13 @@ fn economic_message(
             price_table_identity,
             ..
         }) => format!(
-            "Potential public-list savings: {currency} {} preliminary from {avoided_tokens} avoided input tokens ({model}/{method}, basis={pricing_basis}, catalog={price_table_identity}); not an invoice{invoice}",
+            "Potential public-list savings: {currency} {} preliminary from {avoided_tokens} avoided input tokens ({model}/{method}, basis={pricing_basis}, catalog={price_table_identity}); not an invoice{reported}",
             format_microunits(savings_microunits),
         ),
         Err(error) => {
-            format!("Potential public-list savings: unavailable ({error}); not an invoice{invoice}")
+            format!(
+                "Potential public-list savings: unavailable ({error}); not an invoice{reported}"
+            )
         }
     }
 }
@@ -1149,12 +1157,20 @@ pub async fn feedback(config: &Config) {
             .and_then(Value::as_str)
             .and_then(|session_id| {
                 let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite")).ok()?;
+                let project_path = input
+                    .get("cwd")
+                    .and_then(Value::as_str)
+                    .and_then(|cwd| registered_workspace_root(config, cwd));
                 Some((
                     ledger
                         .session_evasion_summary(session_id, FidelityAllowance::default())
                         .ok(),
                     ledger.session_efficiency_summary(session_id).ok(),
-                    ledger.session_economic_summary(session_id).ok(),
+                    project_path.as_deref().and_then(|project_path| {
+                        ledger
+                            .session_economic_summary(session_id, project_path)
+                            .ok()
+                    }),
                 ))
             });
     let session_summary = session_summaries
@@ -1197,6 +1213,30 @@ pub async fn feedback(config: &Config) {
         }
         _ => {}
     }
+}
+
+fn registered_workspace_root(config: &Config, requested: &str) -> Option<String> {
+    let requested = fs::canonicalize(requested).ok()?;
+    let registry = registered_workspaces(&config.data_dir);
+    deepest_registered_root(
+        &requested,
+        registry
+            .registrations
+            .iter()
+            .map(|registration| registration.root.as_path()),
+    )
+    .and_then(Path::to_str)
+    .map(str::to_owned)
+}
+
+fn deepest_registered_root<'a>(
+    requested: &Path,
+    roots: impl IntoIterator<Item = &'a Path>,
+) -> Option<&'a Path> {
+    roots
+        .into_iter()
+        .filter(|root| requested.starts_with(root))
+        .max_by_key(|root| root.components().count())
 }
 
 async fn task(config: &Config, input: &Value) -> Result<()> {
@@ -1505,8 +1545,9 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use hzr_core::{
-        Config, FidelityAllowance, Ledger, OperationAttribution, OperationChannel,
-        OperationMeasurement, OperationRoute, SessionEfficiencySummary, SessionEvasionSummary,
+        Config, EconomicAmount, FidelityAllowance, Ledger, OperationAttribution, OperationChannel,
+        OperationMeasurement, OperationRoute, ReceiptProvenance, SessionEconomicSummary,
+        SessionEfficiencySummary, SessionEvasionSummary,
     };
     use hzr_protocol::{
         EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, FidelityValidation,
@@ -1522,12 +1563,41 @@ mod tests {
     use super::{
         HookFidelityPreflight, SessionFeedback, agent_attribution, agent_identity,
         attach_policy_feedback, attach_session_attribution, clear_reconciled_rewrites,
-        context_brief, degraded_rewrite_coverage, fallback_decision, honor_host_permission_mode,
-        hook_fidelity_preflight, native_observation_policy, native_replacement, observe_input,
-        read_session, record_daemon_unavailable_operation, record_degraded_rewrite_at,
-        record_local_policy_decision, record_native_correction, render_command, scorecard_message,
-        steer_to_first_class,
+        context_brief, deepest_registered_root, degraded_rewrite_coverage, fallback_decision,
+        honor_host_permission_mode, hook_fidelity_preflight, native_observation_policy,
+        native_replacement, observe_input, read_session, record_daemon_unavailable_operation,
+        record_degraded_rewrite_at, record_local_policy_decision, record_native_correction,
+        render_command, scorecard_message, steer_to_first_class,
     };
+
+    #[test]
+    fn deepest_registered_workspace_binds_descendants_without_crossing_nested_roots() {
+        let directory = tempdir().expect("temporary directory");
+        let parent = directory.path().join("repo");
+        let parent_child = parent.join("subdirectory");
+        let nested = parent.join("nested");
+        let nested_child = nested.join("subdirectory");
+        fs::create_dir_all(&parent_child).expect("parent child");
+        fs::create_dir_all(&nested_child).expect("nested child");
+        let parent = fs::canonicalize(parent).expect("canonical parent");
+        let parent_child = fs::canonicalize(parent_child).expect("canonical parent child");
+        let nested = fs::canonicalize(nested).expect("canonical nested");
+        let nested_child = fs::canonicalize(nested_child).expect("canonical nested child");
+        let roots = [parent.as_path(), nested.as_path()];
+
+        assert_eq!(
+            deepest_registered_root(&parent_child, roots),
+            Some(parent.as_path())
+        );
+        assert_eq!(
+            deepest_registered_root(&nested_child, roots),
+            Some(nested.as_path())
+        );
+        assert_eq!(
+            deepest_registered_root(&parent, roots),
+            Some(parent.as_path())
+        );
+    }
 
     #[test]
     fn daemon_unavailable_telemetry_is_a_bounded_durable_counter() {
@@ -2238,6 +2308,29 @@ mod tests {
         assert!(message.contains("Savings: unknown (ledger unavailable, not zero)"));
         assert!(message.contains("avoidable leakage unknown"));
         assert!(!message.contains("avoidable leakage 0"));
+    }
+
+    #[test]
+    fn billing_opt_out_still_shows_user_supplied_reported_amount() {
+        let economics = SessionEconomicSummary {
+            paired_receipts: 1,
+            reported_actual: Some(EconomicAmount {
+                currency: "USD".into(),
+                baseline_microunits: 2_000_000,
+                delivered_microunits: 750_000,
+                savings_microunits: 1_250_000,
+            }),
+            provenance: Some(ReceiptProvenance::UserSupplied),
+            externally_verified: false,
+            ..SessionEconomicSummary::default()
+        };
+
+        let message = super::economic_message(&Config::default(), None, Some(&economics));
+
+        assert!(message.contains("opt-in disabled"));
+        assert!(message.contains("User-supplied reported amount (unverified)"));
+        assert!(message.contains("USD 1.250000"));
+        assert!(!message.contains("Provider invoice"));
     }
 
     #[test]

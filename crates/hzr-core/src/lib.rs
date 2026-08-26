@@ -8,9 +8,9 @@ mod operation;
 pub use billing::{
     BUILTIN_PRICING_CATALOG_IDENTITY, BillingError, EconomicAmount, PricingCatalog, PricingEntry,
     ProviderEconomicReceipt, ProviderReceiptRecordResult, ProviderTokenUsage, PublicEstimate,
-    RawPublicEstimate, SessionEconomicSummary, TokenRates, builtin_pricing_catalog,
-    load_pricing_catalog, price_avoided_input_tokens, price_receipt, receipt_payload_hash,
-    validate_receipt,
+    RawPublicEstimate, RawPublicEstimateRequest, ReceiptProvenance, SessionEconomicSummary,
+    TokenRates, builtin_pricing_catalog, load_pricing_catalog, price_avoided_input_tokens,
+    price_receipt, receipt_payload_hash, validate_receipt,
 };
 pub use budget::{BudgetPlanner, FusionInput};
 pub use config::{

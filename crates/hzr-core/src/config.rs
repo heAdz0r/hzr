@@ -45,6 +45,8 @@ pub struct BillingConfig {
     pub provider: String,
     pub model: String,
     pub method: String,
+    /// Explicit provider context tier evidence when the selected public price is banded.
+    pub context_window_tokens: Option<u64>,
     /// `input` by default; `cache_read` requires evidence that avoided context would be cached.
     pub pricing_basis: String,
     /// Optional strict schema-v1 catalog whose exact keys replace built-in entries.
@@ -214,6 +216,10 @@ impl Config {
                     .pricing_file
                     .as_ref()
                     .is_some_and(|path| !path.is_absolute())
+                || self
+                    .billing
+                    .context_window_tokens
+                    .is_some_and(|tokens| tokens == 0)
             {
                 return Err(ConfigError::InvalidBilling);
             }
@@ -517,7 +523,7 @@ pub enum ConfigError {
     #[error("activation workspaces require absolute roots and lowercase SHA-256 identities")]
     InvalidActivation,
     #[error(
-        "billing selection requires bounded ASCII identifiers, input/cache_read basis, and an absolute pricing_file"
+        "billing selection requires bounded ASCII identifiers, input/cache_read basis, a positive context_window_tokens when set, and an absolute pricing_file"
     )]
     InvalidBilling,
 }

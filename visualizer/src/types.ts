@@ -203,6 +203,53 @@ export interface DashboardProviderReceipts {
   detail: string;
 }
 
+export interface DashboardEconomicAmount {
+  currency: string;
+  baseline_microunits: number;
+  delivered_microunits: number;
+  savings_microunits: number;
+}
+
+export interface DashboardRawPublicEstimate {
+  currency: string;
+  savings_microunits: number;
+  avoided_input_tokens_estimated: number;
+  pricing_basis: string;
+  catalog_identity: string;
+  entry_version: string;
+  preliminary: boolean;
+  disclaimer: string;
+}
+
+export interface DashboardSessionCommand {
+  command_family: string;
+  executions: number;
+  net_avoided_tokens_estimated: number;
+}
+
+export interface DashboardSessionRoi {
+  session_hash: string | null;
+  operations: number;
+  baseline_tokens_estimated: number;
+  delivered_tokens_estimated: number;
+  net_avoided_tokens_estimated: number;
+  top_commands: DashboardSessionCommand[];
+  selected_harness: string;
+  selected_provider: string;
+  selected_model: string;
+  selected_method: string;
+  selected_context_window_tokens: number | null;
+  selected_pricing_basis: string;
+  catalog_identity: string | null;
+  raw_public_estimate: DashboardRawPublicEstimate | null;
+  raw_public_estimate_unavailable_reason: string | null;
+  imported_claim_records: number;
+  reported_actual: DashboardEconomicAmount | null;
+  receipt_provenance: string | null;
+  receipt_externally_verified: boolean;
+  detail: string;
+}
+
 export interface DashboardService {
   id: string;
   name: string;
@@ -293,6 +340,7 @@ export interface DashboardResponse {
   local_activity: DashboardLocalActivity;
   observability: DashboardObservability;
   provider_receipts: DashboardProviderReceipts;
+  session_roi: DashboardSessionRoi;
   help: DashboardHelpCommand[];
   notes: string[];
 }

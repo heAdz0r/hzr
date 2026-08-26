@@ -59,6 +59,14 @@ export function formatCost(microusd: number): string {
   }).format(microusd / 1_000_000);
 }
 
+export function formatEconomicAmount(currency: string, microunits: number): string {
+  const sign = microunits < 0 ? "-" : "";
+  const absolute = Math.abs(Math.trunc(microunits));
+  const units = Math.floor(absolute / 1_000_000);
+  const fraction = String(absolute % 1_000_000).padStart(6, "0");
+  return `${currency} ${sign}${units}.${fraction}`;
+}
+
 export function formatDuration(milliseconds: number): string {
   const seconds = Math.floor(milliseconds / 1000);
   if (seconds < 60) return `${seconds}s`;

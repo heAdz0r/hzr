@@ -37,7 +37,8 @@ enum WriteCommand {
     },
     ProviderReceipt {
         receipt: Box<ProviderEconomicReceipt>,
-        catalog: Box<PricingCatalog>,
+        catalog: Option<Box<PricingCatalog>>,
+        pricing_unavailable_reason: Option<String>,
         reply: oneshot::Sender<Result<ProviderReceiptRecordResult, LedgerError>>,
     },
     /// An HZR-owned reduction, written to the same table the pinned engine uses so it is
@@ -538,9 +539,14 @@ impl LedgerWriter {
                         WriteCommand::ProviderReceipt {
                             receipt,
                             catalog,
+                            pricing_unavailable_reason,
                             reply,
                         } => {
-                            let _ = reply.send(ledger.record_provider_receipt(&receipt, &catalog));
+                            let _ = reply.send(ledger.record_provider_receipt(
+                                &receipt,
+                                catalog.as_deref(),
+                                pricing_unavailable_reason.as_deref(),
+                            ));
                         }
                         WriteCommand::Operation {
                             record,
@@ -939,13 +945,15 @@ impl LedgerWriter {
     pub async fn record_provider_receipt(
         &self,
         receipt: ProviderEconomicReceipt,
-        catalog: PricingCatalog,
+        catalog: Option<PricingCatalog>,
+        pricing_unavailable_reason: Option<String>,
     ) -> Result<ProviderReceiptRecordResult, LedgerWriterError> {
         let (reply, result) = oneshot::channel();
         self.sender
             .send(WriteCommand::ProviderReceipt {
                 receipt: Box::new(receipt),
-                catalog: Box::new(catalog),
+                catalog: catalog.map(Box::new),
+                pricing_unavailable_reason,
                 reply,
             })
             .await

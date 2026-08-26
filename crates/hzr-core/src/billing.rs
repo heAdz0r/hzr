@@ -14,6 +14,8 @@ pub struct PricingCatalog {
     pub schema_version: u16,
     pub identity: String,
     pub retrieved_at: String,
+    #[serde(default)]
+    pub max_age_days: Option<u64>,
     pub entries: Vec<PricingEntry>,
 }
 
@@ -30,7 +32,15 @@ pub struct PricingEntry {
     pub currency: String,
     pub effective_at: String,
     #[serde(default)]
+    pub retrieved_at: Option<String>,
+    #[serde(default)]
+    pub max_age_days: Option<u64>,
+    #[serde(default)]
     pub valid_until: Option<String>,
+    #[serde(default)]
+    pub min_context_tokens: Option<u64>,
+    #[serde(default)]
+    pub max_context_tokens_exclusive: Option<u64>,
     pub source_url: String,
     pub unit: String,
     pub rates: TokenRates,
@@ -75,6 +85,8 @@ pub struct ProviderEconomicReceipt {
     pub model: String,
     pub method: String,
     pub currency: String,
+    #[serde(default)]
+    pub context_window_tokens: Option<u64>,
     pub session_id: String,
     pub project_path: String,
     pub baseline: ProviderTokenUsage,
@@ -92,9 +104,26 @@ pub struct ProviderReceiptRecordResult {
     pub recorded: bool,
     pub idempotent_replay: bool,
     pub receipt_hash: String,
-    pub invoice_actual: Option<EconomicAmount>,
+    pub reported_actual: Option<EconomicAmount>,
+    pub provenance: ReceiptProvenance,
+    pub externally_verified: bool,
     pub public_estimate: Option<PublicEstimate>,
     pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptProvenance {
+    #[default]
+    UserSupplied,
+}
+
+impl ReceiptProvenance {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UserSupplied => "user_supplied",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -137,10 +166,23 @@ pub struct RawPublicEstimate {
     pub disclaimer: String,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct RawPublicEstimateRequest<'a> {
+    pub harness: &'a str,
+    pub provider: &'a str,
+    pub model: &'a str,
+    pub method: &'a str,
+    pub context_window_tokens: Option<u64>,
+    pub basis: &'a str,
+    pub avoided_tokens: u64,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SessionEconomicSummary {
     pub paired_receipts: u64,
-    pub invoice_actual: Option<EconomicAmount>,
+    pub reported_actual: Option<EconomicAmount>,
+    pub provenance: Option<ReceiptProvenance>,
+    pub externally_verified: bool,
     pub public_estimate: Option<EconomicAmount>,
     pub public_estimate_preliminary: bool,
     pub price_table_identities: Vec<String>,
@@ -170,13 +212,14 @@ pub enum BillingError {
 }
 
 pub fn builtin_pricing_catalog() -> Result<PricingCatalog, BillingError> {
-    let catalog: PricingCatalog = serde_json::from_str(include_str!(
+    let mut catalog: PricingCatalog = serde_json::from_str(include_str!(
         "../../../data/pricing/public-api-pricing-2026-08-26-v1.json"
     ))
     .map_err(|source| BillingError::CatalogParse {
         path: Path::new("<embedded-public-pricing>").to_path_buf(),
         source,
     })?;
+    normalize_catalog_entries(&mut catalog);
     validate_catalog(&catalog)?;
     Ok(catalog)
 }
@@ -190,11 +233,12 @@ pub fn load_pricing_catalog(user_override: Option<&Path>) -> Result<PricingCatal
         path: path.to_path_buf(),
         source,
     })?;
-    let override_catalog: PricingCatalog =
+    let mut override_catalog: PricingCatalog =
         serde_json::from_slice(&bytes).map_err(|source| BillingError::CatalogParse {
             path: path.to_path_buf(),
             source,
         })?;
+    normalize_catalog_entries(&mut override_catalog);
     validate_catalog(&override_catalog)?;
     let mut merged = catalog
         .entries
@@ -209,9 +253,21 @@ pub fn load_pricing_catalog(user_override: Option<&Path>) -> Result<PricingCatal
         "{}+{}@sha256:{}",
         catalog.identity, override_catalog.identity, override_sha256
     );
-    catalog.retrieved_at = override_catalog.retrieved_at;
+    catalog.retrieved_at = catalog.retrieved_at.max(override_catalog.retrieved_at);
     catalog.entries = merged.into_values().collect();
+    validate_catalog(&catalog)?;
     Ok(catalog)
+}
+
+fn normalize_catalog_entries(catalog: &mut PricingCatalog) {
+    for entry in &mut catalog.entries {
+        if entry.retrieved_at.is_none() {
+            entry.retrieved_at = Some(catalog.retrieved_at.clone());
+        }
+        if entry.max_age_days.is_none() {
+            entry.max_age_days = catalog.max_age_days;
+        }
+    }
 }
 
 pub fn validate_receipt(receipt: &ProviderEconomicReceipt) -> Result<(), BillingError> {
@@ -235,6 +291,14 @@ pub fn validate_receipt(receipt: &ProviderEconomicReceipt) -> Result<(), Billing
     }
     if receipt.project_path.len() > 4096 || receipt.project_path.contains('\0') {
         return Err(BillingError::InvalidReceipt("invalid project_path".into()));
+    }
+    if receipt
+        .context_window_tokens
+        .is_some_and(|tokens| tokens == 0)
+    {
+        return Err(BillingError::InvalidReceipt(
+            "context_window_tokens must be positive when supplied".into(),
+        ));
     }
     if receipt.baseline.reasoning_tokens > receipt.baseline.output_tokens
         || receipt.delivered.reasoning_tokens > receipt.delivered.output_tokens
@@ -264,6 +328,7 @@ pub fn price_receipt(
         &receipt.provider,
         &receipt.model,
         &receipt.method,
+        receipt.context_window_tokens,
     )?;
     if entry.currency != receipt.currency {
         return Err(BillingError::PricingUnavailable(format!(
@@ -285,22 +350,24 @@ pub fn price_receipt(
         price_table_identity: catalog.identity.clone(),
         entry_version: entry.version.clone(),
         source_url: entry.source_url.clone(),
-        retrieved_at: catalog.retrieved_at.clone(),
+        retrieved_at: entry.retrieved_at.clone().unwrap_or_default(),
         disclaimer: "Preliminary public-list-price estimate; not a provider invoice or billed amount. Contract, region, tier, discounts, taxes, and tool fees may differ.".into(),
     })
 }
 
 pub fn price_avoided_input_tokens(
     catalog: &PricingCatalog,
-    harness: &str,
-    provider: &str,
-    model: &str,
-    method: &str,
-    basis: &str,
-    avoided_tokens: u64,
+    request: RawPublicEstimateRequest<'_>,
 ) -> Result<RawPublicEstimate, BillingError> {
-    let entry = find_entry(catalog, harness, provider, model, method)?;
-    let rate = match basis {
+    let entry = find_entry(
+        catalog,
+        request.harness,
+        request.provider,
+        request.model,
+        request.method,
+        request.context_window_tokens,
+    )?;
+    let rate = match request.basis {
         "input" => entry.rates.input_microunits_per_million,
         "cache_read" => entry.rates.cache_read_microunits_per_million,
         _ => {
@@ -309,8 +376,10 @@ pub fn price_avoided_input_tokens(
             ));
         }
     }
-    .ok_or_else(|| BillingError::PricingUnavailable(format!("catalog has no {basis} rate")))?;
-    let numerator = u128::from(avoided_tokens)
+    .ok_or_else(|| {
+        BillingError::PricingUnavailable(format!("catalog has no {} rate", request.basis))
+    })?;
+    let numerator = u128::from(request.avoided_tokens)
         .checked_mul(u128::from(rate))
         .ok_or(BillingError::ArithmeticOverflow)?;
     let savings_microunits = u64::try_from(numerator.div_ceil(1_000_000))
@@ -319,18 +388,18 @@ pub fn price_avoided_input_tokens(
         classification: "raw_public_estimate".into(),
         preliminary: true,
         potential: true,
-        avoided_input_tokens_estimated: avoided_tokens,
-        pricing_basis: basis.into(),
-        harness: harness.into(),
-        provider: provider.into(),
-        model: model.into(),
-        method: method.into(),
+        avoided_input_tokens_estimated: request.avoided_tokens,
+        pricing_basis: request.basis.into(),
+        harness: request.harness.into(),
+        provider: request.provider.into(),
+        model: request.model.into(),
+        method: request.method.into(),
         currency: entry.currency.clone(),
         savings_microunits,
         price_table_identity: catalog.identity.clone(),
         entry_version: entry.version.clone(),
         source_url: entry.source_url.clone(),
-        retrieved_at: catalog.retrieved_at.clone(),
+        retrieved_at: entry.retrieved_at.clone().unwrap_or_default(),
         disclaimer: "Preliminary potential savings from estimated avoided tool-output tokens priced as future model input; not usage, an invoice, or a billed amount.".into(),
     })
 }
@@ -366,9 +435,18 @@ fn validate_catalog(catalog: &PricingCatalog) -> Result<(), BillingError> {
             || !valid_identifier(&entry.currency, 8)
             || date_to_unix_days(&entry.effective_at).is_none()
             || entry
+                .retrieved_at
+                .as_deref()
+                .is_none_or(|date| date_to_unix_days(date).is_none())
+            || entry.max_age_days.is_some_and(|days| days == 0)
+            || entry
                 .valid_until
                 .as_deref()
                 .is_some_and(|date| date_to_unix_days(date).is_none())
+            || entry
+                .min_context_tokens
+                .zip(entry.max_context_tokens_exclusive)
+                .is_some_and(|(minimum, maximum)| minimum >= maximum)
             || entry.unit != "per_1m_tokens"
             || !entry.source_url.starts_with("https://")
         {
@@ -465,11 +543,7 @@ fn signed_difference(baseline: u64, delivered: u64) -> Result<i64, BillingError>
 }
 
 fn model_matches(entry: &PricingEntry, model: &str) -> bool {
-    entry.model == model
-        || entry.aliases.iter().any(|alias| alias == model)
-        || model.strip_prefix(&entry.model).is_some_and(|suffix| {
-            suffix.starts_with("-20") && suffix[1..].chars().all(|c| c.is_ascii_digit() || c == '-')
-        })
+    entry.model == model || entry.aliases.iter().any(|alias| alias == model)
 }
 
 fn find_entry<'a>(
@@ -478,6 +552,7 @@ fn find_entry<'a>(
     provider: &str,
     model: &str,
     method: &str,
+    context_window_tokens: Option<u64>,
 ) -> Result<&'a PricingEntry, BillingError> {
     let matches = catalog
         .entries
@@ -491,6 +566,15 @@ fn find_entry<'a>(
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [entry] => {
+            let current_days = current_unix_days();
+            if date_to_unix_days(&entry.effective_at)
+                .is_none_or(|effective| current_days < effective)
+            {
+                return Err(BillingError::PricingUnavailable(format!(
+                    "catalog entry {} is not effective until {}",
+                    entry.version, entry.effective_at
+                )));
+            }
             if entry
                 .valid_until
                 .as_deref()
@@ -501,6 +585,40 @@ fn find_entry<'a>(
                     entry.version,
                     entry.valid_until.as_deref().unwrap_or_default()
                 )));
+            }
+            let retrieved_at = entry.retrieved_at.as_deref().unwrap_or_default();
+            if entry.max_age_days.is_some_and(|max_age| {
+                date_to_unix_days(retrieved_at).is_none_or(|retrieved| {
+                    current_days
+                        > retrieved.saturating_add(i64::try_from(max_age).unwrap_or(i64::MAX))
+                })
+            }) {
+                return Err(BillingError::PricingUnavailable(format!(
+                    "catalog entry {} is stale: retrieved {} with max_age_days={}",
+                    entry.version,
+                    retrieved_at,
+                    entry.max_age_days.unwrap_or_default()
+                )));
+            }
+            if entry.min_context_tokens.is_some() || entry.max_context_tokens_exclusive.is_some() {
+                let context = context_window_tokens.ok_or_else(|| {
+                    BillingError::PricingUnavailable(format!(
+                        "catalog entry {} requires an explicit context_window_tokens value",
+                        entry.version
+                    ))
+                })?;
+                if entry
+                    .min_context_tokens
+                    .is_some_and(|minimum| context < minimum)
+                    || entry
+                        .max_context_tokens_exclusive
+                        .is_some_and(|maximum| context >= maximum)
+                {
+                    return Err(BillingError::PricingUnavailable(format!(
+                        "context_window_tokens={context} does not match catalog entry {}",
+                        entry.version
+                    )));
+                }
             }
             Ok(entry)
         }
@@ -517,10 +635,15 @@ fn pricing_date_expired(valid_until: &str) -> bool {
     let Some(expiry_days) = date_to_unix_days(valid_until) else {
         return true;
     };
-    let current_days = std::time::SystemTime::now()
+    current_unix_days() > expiry_days
+}
+
+fn current_unix_days() -> i64 {
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs() / 86_400);
-    u64::try_from(expiry_days).map_or(true, |expiry| current_days > expiry)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs() / 86_400).unwrap_or(i64::MAX)
+        })
 }
 
 fn date_to_unix_days(value: &str) -> Option<i64> {
@@ -577,8 +700,9 @@ mod tests {
             harness: "codex".into(),
             provider: "openai".into(),
             model: model.into(),
-            method: "standard_short_context".into(),
+            method: "standard_short_context_lte_272k".into(),
             currency: "USD".into(),
+            context_window_tokens: Some(100_000),
             session_id: "private-session".into(),
             project_path: "/work/project".into(),
             baseline: ProviderTokenUsage {
@@ -598,13 +722,12 @@ mod tests {
     }
 
     #[test]
-    fn public_catalog_prices_exact_and_snapshot_aliases() {
+    fn public_catalog_prices_exact_and_documented_aliases() {
         let catalog = builtin_pricing_catalog().expect("catalog");
         let exact = price_receipt(&catalog, &receipt("gpt-5.6-sol")).expect("exact price");
-        let snapshot =
-            price_receipt(&catalog, &receipt("gpt-5.6-sol-2026-08-01")).expect("snapshot price");
+        let alias = price_receipt(&catalog, &receipt("gpt-5.6")).expect("documented alias");
 
-        assert_eq!(exact.amount, snapshot.amount);
+        assert_eq!(exact.amount, alias.amount);
         assert_eq!(exact.amount.baseline_microunits, 6_000_000);
         assert_eq!(exact.classification, "public_estimate");
         assert!(exact.preliminary);
@@ -618,6 +741,7 @@ mod tests {
             price_receipt(&catalog, &receipt("unknown-model")),
             Err(BillingError::PricingUnavailable(_))
         ));
+        assert!(price_receipt(&catalog, &receipt("gpt-5.6-sol-2099-01-01")).is_err());
         let mut unknown_method = receipt("gpt-5.6-sol");
         unknown_method.method = "subscription".into();
         assert!(price_receipt(&catalog, &unknown_method).is_err());
@@ -631,6 +755,7 @@ mod tests {
             schema_version: 1,
             identity: "customer-contract-2026-v1".into(),
             retrieved_at: "2026-08-26".into(),
+            max_age_days: Some(30),
             entries: vec![builtin_pricing_catalog().expect("builtin").entries[0].clone()],
         };
         override_catalog.entries[0]
@@ -666,12 +791,15 @@ mod tests {
         let catalog = builtin_pricing_catalog().expect("catalog");
         let estimate = price_avoided_input_tokens(
             &catalog,
-            "openai_compatible",
-            "alibaba_model_studio",
-            "qwen3.5-plus",
-            "global_standard_0_128k",
-            "input",
-            1_000_000,
+            RawPublicEstimateRequest {
+                harness: "openai_compatible",
+                provider: "alibaba_model_studio",
+                model: "qwen3.5-plus",
+                method: "global_standard_0_128k",
+                context_window_tokens: Some(100_000),
+                basis: "input",
+                avoided_tokens: 1_000_000,
+            },
         )
         .expect("raw estimate");
 
@@ -682,10 +810,73 @@ mod tests {
     }
 
     #[test]
+    fn xai_context_tiers_require_explicit_matching_evidence() {
+        let catalog = builtin_pricing_catalog().expect("catalog");
+        let estimate = |method, context| {
+            price_avoided_input_tokens(
+                &catalog,
+                RawPublicEstimateRequest {
+                    harness: "openai_compatible",
+                    provider: "xai",
+                    model: "grok-4.6",
+                    method,
+                    context_window_tokens: context,
+                    basis: "input",
+                    avoided_tokens: 1_000_000,
+                },
+            )
+        };
+
+        assert!(estimate("standard_short_context_lt_200k", None).is_err());
+        assert_eq!(
+            estimate("standard_short_context_lt_200k", Some(199_999))
+                .expect("short tier")
+                .savings_microunits,
+            2_000_000
+        );
+        assert!(estimate("standard_short_context_lt_200k", Some(200_000)).is_err());
+        assert_eq!(
+            estimate("standard_long_context_gte_200k", Some(200_000))
+                .expect("long tier")
+                .savings_microunits,
+            4_000_000
+        );
+    }
+
+    #[test]
+    fn openai_long_context_multiplier_is_explicit_and_bounded() {
+        let catalog = builtin_pricing_catalog().expect("catalog");
+        let mut short = receipt("gpt-5.6-sol");
+        short.context_window_tokens = None;
+        assert!(price_receipt(&catalog, &short).is_err());
+        short.context_window_tokens = Some(272_000);
+        assert_eq!(
+            price_receipt(&catalog, &short)
+                .expect("short tier")
+                .amount
+                .baseline_microunits,
+            6_000_000
+        );
+        short.context_window_tokens = Some(272_001);
+        assert!(price_receipt(&catalog, &short).is_err());
+
+        let mut long = short;
+        long.method = "standard_long_context_gt_272k".into();
+        assert_eq!(
+            price_receipt(&catalog, &long)
+                .expect("long tier")
+                .amount
+                .baseline_microunits,
+            11_000_000
+        );
+    }
+
+    #[test]
     fn missing_cache_rate_is_unavailable_instead_of_zero() {
         let catalog = builtin_pricing_catalog().expect("catalog");
         let mut value = receipt("gpt-5.3-codex");
         value.method = "standard".into();
+        value.context_window_tokens = None;
         value.baseline.cache_write_5m_tokens = 10;
 
         let error = price_receipt(&catalog, &value).expect_err("missing rate");
@@ -713,5 +904,54 @@ mod tests {
             .expect_err("expired entry must not price usage");
 
         assert!(error.to_string().contains("expired on 2020-01-01"));
+    }
+
+    #[test]
+    fn future_and_stale_prices_fail_closed() {
+        let mut future = builtin_pricing_catalog().expect("catalog");
+        future.entries[0].effective_at = "2099-01-01".into();
+        assert!(
+            price_receipt(&future, &receipt("gpt-5.6-sol"))
+                .expect_err("future price")
+                .to_string()
+                .contains("not effective")
+        );
+
+        let mut stale = builtin_pricing_catalog().expect("catalog");
+        stale.entries[0].retrieved_at = Some("2020-01-01".into());
+        stale.entries[0].max_age_days = Some(1);
+        assert!(
+            price_receipt(&stale, &receipt("gpt-5.6-sol"))
+                .expect_err("stale price")
+                .to_string()
+                .contains("is stale")
+        );
+    }
+
+    #[test]
+    fn merged_override_revalidates_aliases_against_builtins() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let path = directory.path().join("pricing.json");
+        let builtin = builtin_pricing_catalog().expect("builtin");
+        let mut colliding = builtin.entries[0].clone();
+        colliding.model = "customer-model".into();
+        colliding.aliases = vec!["gpt-5.6-sol".into()];
+        let override_catalog = PricingCatalog {
+            schema_version: PRICING_CATALOG_SCHEMA_VERSION,
+            identity: "customer-collision-v1".into(),
+            retrieved_at: "2026-08-26".into(),
+            max_age_days: Some(30),
+            entries: vec![colliding],
+        };
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&override_catalog).expect("override JSON"),
+        )
+        .expect("write override");
+
+        assert!(matches!(
+            load_pricing_catalog(Some(&path)),
+            Err(BillingError::InvalidCatalog(_))
+        ));
     }
 }

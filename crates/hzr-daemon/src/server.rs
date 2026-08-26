@@ -346,6 +346,7 @@ exit 64
         assert!(payload["index_observatory"]["search_activity"]["command"].is_null());
         assert!(payload.get("local_activity").is_some());
         assert!(payload.get("provider_receipts").is_some());
+        assert!(payload.get("session_roi").is_some());
         assert!(payload["selected_worktree_id"].is_null());
         assert!(payload.get("token").is_none());
     }
@@ -403,6 +404,7 @@ exit 64
         };
         config.engines.auto_start_icm = false;
         config.engines.directory = Some(directory.path().join("missing-engines"));
+        config.billing.pricing_file = Some(directory.path().join("missing-pricing.json"));
         let first_root = directory.path().join("first-workspace");
         let second_root = directory.path().join("second-workspace");
         register_test_workspace(&config, &first_root).await;
@@ -439,8 +441,54 @@ exit 64
         let project_hash = state
             .observability
             .project_hash(second_root.to_str().expect("UTF-8 workspace"));
+        let receipt_directory = second_root.join("nested");
+        std::fs::create_dir_all(&receipt_directory).expect("nested receipt directory");
         let token = AuthToken::new(TOKEN.to_owned()).expect("test token is valid");
-        let response = router(state, token)
+        let application = router(state, token);
+        let receipt_response = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/billing/receipts")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "receipt_id": "dashboard-import-1",
+                            "source": "spoofed_provider_api",
+                            "observed_at_ms": 42,
+                            "harness": "codex",
+                            "provider": "openai",
+                            "model": "gpt-5.6-sol",
+                            "method": "standard_short_context_lte_272k",
+                            "currency": "USD",
+                            "context_window_tokens": 100000,
+                            "session_id": "test-session",
+                            "project_path": receipt_directory,
+                            "baseline": {"input_tokens": 10, "output_tokens": 2},
+                            "delivered": {"input_tokens": 5, "output_tokens": 1},
+                            "actual_baseline_cost_microunits": 20,
+                            "actual_delivered_cost_microunits": 10,
+                            "enable_public_estimate": false
+                        })
+                        .to_string(),
+                    ))
+                    .expect("receipt request"),
+            )
+            .await
+            .expect("receipt response");
+        assert_eq!(receipt_response.status(), StatusCode::OK);
+        let receipt_body = to_bytes(receipt_response.into_body(), 1_048_576)
+            .await
+            .expect("receipt body");
+        let receipt_payload: Value = serde_json::from_slice(&receipt_body).expect("receipt JSON");
+        assert_eq!(receipt_payload["provenance"], "user_supplied");
+        assert_eq!(receipt_payload["externally_verified"], false);
+        assert_eq!(receipt_payload["reported_actual"]["savings_microunits"], 10);
+        assert!(receipt_payload["public_estimate"].is_null());
+
+        let response = application
             .oneshot(
                 Request::builder()
                     .uri(format!("/v1/dashboard?project={second_id}"))
@@ -460,6 +508,27 @@ exit 64
         assert_eq!(payload["local_activity"]["project"], project_hash);
         assert_eq!(payload["index_observatory"]["project"], project_hash);
         assert_eq!(payload["memory_observatory"]["project"], project_hash);
+        assert_eq!(payload["session_roi"]["operations"], 1);
+        assert_eq!(payload["session_roi"]["imported_claim_records"], 1);
+        assert_eq!(
+            payload["session_roi"]["receipt_provenance"],
+            "user_supplied"
+        );
+        assert_eq!(payload["session_roi"]["receipt_externally_verified"], false);
+        assert_eq!(
+            payload["session_roi"]["reported_actual"]["savings_microunits"],
+            10
+        );
+        assert!(payload["session_roi"]["raw_public_estimate"].is_null());
+        assert!(
+            payload["session_roi"]["raw_public_estimate_unavailable_reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("opt-in"))
+        );
+        assert_eq!(
+            payload["session_roi"]["top_commands"][0]["command_family"],
+            "cargo"
+        );
         let projects = payload["projects"].as_array().expect("project list");
         let names = projects
             .iter()

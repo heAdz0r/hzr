@@ -8,9 +8,9 @@ use hzr_context::{ContextError, PlanRequest, SearchRequest};
 use hzr_core::{
     FidelityAllowance, FidelityBudget, FidelityPreflight, Ledger, LedgerRecord,
     ProjectOperationRoute, ProjectOperationSummary, ProviderEconomicReceipt,
-    ProviderReceiptRecordResult, RawFidelityReason, RawFidelityRequest,
+    ProviderReceiptRecordResult, RawFidelityReason, RawFidelityRequest, RawPublicEstimateRequest,
     efficient_route_replacement, first_class_replacement, load_pricing_catalog, locked_engines,
-    raw_fidelity_request, validate_receipt,
+    price_avoided_input_tokens, raw_fidelity_request, validate_receipt,
 };
 use hzr_exec::{
     AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent,
@@ -30,22 +30,22 @@ use hzr_memory::{
 };
 use hzr_protocol::{
     CodecApiRequest, CommandTermination, ContextPlanApiRequest, ContextPlanApiResponse,
-    DashboardEstimatedEfficiency, DashboardHelpCommand, DashboardIndexArtifacts,
-    DashboardIndexObservatory, DashboardIndexWatcher, DashboardLocalActivity,
-    DashboardLocalOperation, DashboardMemoryDetail, DashboardMemoryEdge,
+    DashboardEconomicAmount, DashboardEstimatedEfficiency, DashboardHelpCommand,
+    DashboardIndexArtifacts, DashboardIndexObservatory, DashboardIndexWatcher,
+    DashboardLocalActivity, DashboardLocalOperation, DashboardMemoryDetail, DashboardMemoryEdge,
     DashboardMemoryObservatory, DashboardMemoryRetrieval, DashboardMemoryTopic,
     DashboardMemoryTopicDetails, DashboardObservedUsage, DashboardOperationRoute, DashboardProject,
     DashboardProjectArtifacts, DashboardProjectPage, DashboardProjectState,
-    DashboardProviderReceiptState, DashboardProviderReceipts, DashboardResponse,
-    DashboardSearchActivity, DashboardService, DashboardState, DashboardTraceStage,
-    DashboardTraceState, EnforcementTier, EngineHealth, EngineState, EvasionAttribution,
-    EvasionClass, EvasionPathForm, ExecApiRequest, ExecApprovalApiRequest, FidelityReason,
-    FidelityReconcileApiRequest, FidelityReconcileReceipt, FidelityValidation, ForkManagedWrite,
-    ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryForgetApiRequest,
-    MemoryImportance, MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
-    MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope,
-    PROTOCOL_VERSION, PolicyDecision, SearchApiRequest, SearchApiResponse, TraceId,
-    UsageApiRequest, UsageApiResponse,
+    DashboardProviderReceiptState, DashboardProviderReceipts, DashboardRawPublicEstimate,
+    DashboardResponse, DashboardSearchActivity, DashboardService, DashboardSessionCommand,
+    DashboardSessionRoi, DashboardState, DashboardTraceStage, DashboardTraceState, EnforcementTier,
+    EngineHealth, EngineState, EvasionAttribution, EvasionClass, EvasionPathForm, ExecApiRequest,
+    ExecApprovalApiRequest, FidelityReason, FidelityReconcileApiRequest, FidelityReconcileReceipt,
+    FidelityValidation, ForkManagedWrite, ForkRunApiRequest, ForkRunApiResponse, HealthResponse,
+    MemoryForgetApiRequest, MemoryImportance, MemoryMutationApiResponse, MemoryPruneApiRequest,
+    MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest,
+    MemoryWriteScope, PROTOCOL_VERSION, PolicyDecision, SearchApiRequest, SearchApiResponse,
+    TraceId, UsageApiRequest, UsageApiResponse,
 };
 
 use crate::approval::PendingApproval;
@@ -342,16 +342,33 @@ pub async fn dashboard(
             || Ok(hzr_core::ProjectActivitySummary::default()),
             |project| Ledger::project_activity_read_only(&ledger_path, project),
         )?;
-        Ok::<_, hzr_core::LedgerError>((summaries.0, summaries.1, activity))
+        let session = activity
+            .recent_operations
+            .iter()
+            .find_map(|operation| operation.session_hash.as_deref())
+            .filter(|hash| hash.starts_with("hmac-sha256:"))
+            .map(|session_hash| {
+                Ledger::session_roi_read_only(
+                    &ledger_path,
+                    ledger_project_path.as_deref().unwrap_or_default(),
+                    session_hash,
+                )
+                .map(|summary| (session_hash.to_owned(), summary))
+            })
+            .transpose()?;
+        Ok::<_, hzr_core::LedgerError>((summaries.0, summaries.1, activity, session))
     })
     .await
     .map_err(|error| ApiError::internal(format!("dashboard ledger task failed: {error}")))?;
-    let (observed, estimated, activity, ledger_error) = match ledger {
-        Ok((observed, estimated, activity)) => (observed, estimated, activity, None),
+    let (observed, estimated, activity, session, ledger_error) = match ledger {
+        Ok((observed, estimated, activity, session)) => {
+            (observed, estimated, activity, session, None)
+        }
         Err(error) => (
             hzr_core::LedgerSummary::default(),
             hzr_core::EfficiencySummary::default(),
             hzr_core::ProjectActivitySummary::default(),
+            None,
             Some(error.to_string()),
         ),
     };
@@ -441,6 +458,7 @@ pub async fn dashboard(
             activity.excluded_legacy_operations,
         ));
     }
+    let session_roi = dashboard_session_roi(&state.config, session.as_ref());
 
     Ok(Json(DashboardResponse {
         protocol_version: PROTOCOL_VERSION,
@@ -552,9 +570,123 @@ pub async fn dashboard(
                     .into()
             },
         },
+        session_roi,
         help: dashboard_help(),
         notes,
     }))
+}
+
+fn dashboard_session_roi(
+    config: &hzr_core::Config,
+    session: Option<&(
+        String,
+        (
+            hzr_core::SessionEfficiencySummary,
+            hzr_core::SessionEconomicSummary,
+        ),
+    )>,
+) -> DashboardSessionRoi {
+    let mut response = DashboardSessionRoi {
+        selected_harness: config.billing.harness.clone(),
+        selected_provider: config.billing.provider.clone(),
+        selected_model: config.billing.model.clone(),
+        selected_method: config.billing.method.clone(),
+        selected_context_window_tokens: config.billing.context_window_tokens,
+        selected_pricing_basis: config.billing.effective_pricing_basis().into(),
+        detail: "No HMAC-attributed session is available for the selected project.".into(),
+        ..DashboardSessionRoi::default()
+    };
+    let Some((session_hash, (efficiency, economics))) = session else {
+        response.raw_public_estimate_unavailable_reason =
+            Some("no attributed session is available for the selected project".into());
+        return response;
+    };
+    response.session_hash = Some(session_hash.clone());
+    response.operations = efficiency.operations;
+    response.baseline_tokens_estimated = efficiency.baseline_tokens_estimated;
+    response.delivered_tokens_estimated = efficiency.delivered_tokens_estimated;
+    response.net_avoided_tokens_estimated = efficiency.net_avoided_tokens_estimated;
+    response.top_commands = efficiency
+        .top_commands
+        .iter()
+        .map(|command| DashboardSessionCommand {
+            command_family: command.command.clone(),
+            executions: command.executions,
+            net_avoided_tokens_estimated: command.net_avoided_tokens_estimated,
+        })
+        .collect();
+    response.imported_claim_records = economics.paired_receipts;
+    response.reported_actual =
+        economics
+            .reported_actual
+            .as_ref()
+            .map(|amount| DashboardEconomicAmount {
+                currency: amount.currency.clone(),
+                baseline_microunits: amount.baseline_microunits,
+                delivered_microunits: amount.delivered_microunits,
+                savings_microunits: amount.savings_microunits,
+            });
+    response.receipt_provenance = economics
+        .provenance
+        .map(|provenance| provenance.as_str().to_owned());
+    response.receipt_externally_verified = economics.externally_verified;
+    response.detail = if economics.paired_receipts == 0 {
+        "Latest HMAC-attributed session; no imported economic claim is attached.".into()
+    } else {
+        format!(
+            "Latest HMAC-attributed session; {} user-supplied economic claim record(s), externally verified={}. {}",
+            economics.paired_receipts,
+            economics.externally_verified,
+            economics.unavailable_reasons.join(" ")
+        )
+    };
+
+    let catalog = load_pricing_catalog(config.billing.pricing_file.as_deref());
+    if let Ok(catalog) = &catalog {
+        response.catalog_identity = Some(catalog.identity.clone());
+    }
+    if !config.billing.public_estimate_enabled {
+        response.raw_public_estimate_unavailable_reason =
+            Some("public pricing estimate is opt-in and currently disabled".into());
+        return response;
+    }
+    let catalog = match catalog {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            response.raw_public_estimate_unavailable_reason = Some(error.to_string());
+            return response;
+        }
+    };
+    match price_avoided_input_tokens(
+        &catalog,
+        RawPublicEstimateRequest {
+            harness: &config.billing.harness,
+            provider: &config.billing.provider,
+            model: &config.billing.model,
+            method: &config.billing.method,
+            context_window_tokens: config.billing.context_window_tokens,
+            basis: config.billing.effective_pricing_basis(),
+            avoided_tokens: efficiency
+                .net_avoided_tokens_estimated
+                .max(0)
+                .unsigned_abs(),
+        },
+    ) {
+        Ok(estimate) => {
+            response.raw_public_estimate = Some(DashboardRawPublicEstimate {
+                currency: estimate.currency,
+                savings_microunits: estimate.savings_microunits,
+                avoided_input_tokens_estimated: estimate.avoided_input_tokens_estimated,
+                pricing_basis: estimate.pricing_basis,
+                catalog_identity: estimate.price_table_identity,
+                entry_version: estimate.entry_version,
+                preliminary: estimate.preliminary,
+                disclaimer: estimate.disclaimer,
+            });
+        }
+        Err(error) => response.raw_public_estimate_unavailable_reason = Some(error.to_string()),
+    }
+    response
 }
 
 pub async fn dashboard_memory_topic(
@@ -2650,15 +2782,42 @@ pub async fn provider_receipt(
     Json(mut receipt): Json<ProviderEconomicReceipt>,
 ) -> Result<Json<ProviderReceiptRecordResult>, ApiError> {
     validate_receipt(&receipt).map_err(|error| ApiError::bad_request(error.to_string()))?;
-    receipt.project_path = normalize_usage_project_path(Some(&receipt.project_path));
-    let catalog = load_pricing_catalog(state.config.billing.pricing_file.as_deref())
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    receipt.project_path = receipt_workspace(&state, &receipt.project_path)?;
+    receipt.source = "user_supplied".into();
+    let (catalog, pricing_unavailable_reason) = if receipt.enable_public_estimate {
+        match load_pricing_catalog(state.config.billing.pricing_file.as_deref()) {
+            Ok(catalog) => (Some(catalog), None),
+            Err(error) => (None, Some(error.to_string())),
+        }
+    } else {
+        (None, None)
+    };
     let result = state
         .ledger
-        .record_provider_receipt(receipt, catalog)
+        .record_provider_receipt(receipt, catalog, pricing_unavailable_reason)
         .await
         .map_err(|error| ApiError::internal(format!("provider receipt write failed: {error}")))?;
     Ok(Json(result))
+}
+
+fn receipt_workspace(state: &AppState, requested: &str) -> Result<String, ApiError> {
+    let requested = canonical_workspace(requested)?;
+    let registry = registered_workspaces(&state.config.data_dir);
+    let registration = registry
+        .registrations
+        .iter()
+        .filter(|registration| requested.starts_with(&registration.root))
+        .max_by_key(|registration| registration.root.components().count())
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "provider receipt workspace must be inside a registered HZR workspace",
+            )
+        })?;
+    registration
+        .root
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::bad_request("registered workspace path is not valid UTF-8"))
 }
 
 pub async fn operation(
@@ -3669,16 +3828,17 @@ mod tests {
         ManagedExecutionBudget, apply_caller_path, approved_execution_decision,
         caveman_engine_health, daemon_fidelity_preflight, dashboard_index_state,
         dashboard_memory_detail, dashboard_overall_state, dashboard_registration,
-        dashboard_search_activity, enforce_first_class, fidelity_operation_record_for_context,
-        fork_outcome_with_managed_unwrap, materialize_managed_write, memory_mutation_targets,
-        memory_ready_state, overall_engine_state, raw_policy_evasion, validate_caller_path,
-        validate_managed_fork_tool,
+        dashboard_search_activity, dashboard_session_roi, enforce_first_class,
+        fidelity_operation_record_for_context, fork_outcome_with_managed_unwrap,
+        materialize_managed_write, memory_mutation_targets, memory_ready_state,
+        overall_engine_state, raw_policy_evasion, validate_caller_path, validate_managed_fork_tool,
     };
     use crate::ledger_writer::{LedgerWriter, PolicyEventRecord};
     use hzr_core::{
-        DetailedOperationAttribution, FidelityAllowance, FidelityPreflight, Ledger,
-        OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-        ProjectOperationRoute, ProjectOperationSummary,
+        Config, DetailedOperationAttribution, EconomicAmount, FidelityAllowance, FidelityPreflight,
+        Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
+        ProjectOperationRoute, ProjectOperationSummary, ReceiptProvenance, SessionEconomicSummary,
+        SessionEfficiencySummary,
     };
     use hzr_exec::{
         CanonicalCommand, CapturedContent, ExecutionEnvelope, ExecutionOutcome, ExecutionPipeline,
@@ -3695,6 +3855,57 @@ mod tests {
     };
 
     const PROJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn dashboard_session_roi_keeps_estimate_and_imported_claim_provenance_distinct() {
+        let mut config = Config::default();
+        config.billing.public_estimate_enabled = true;
+        config.billing.harness = "openai_compatible".into();
+        config.billing.provider = "alibaba_model_studio".into();
+        config.billing.model = "qwen3.5-plus".into();
+        config.billing.method = "global_standard_0_128k".into();
+        config.billing.context_window_tokens = Some(100_000);
+        config.billing.pricing_basis = "input".into();
+        let session = (
+            "hmac-sha256:session".into(),
+            (
+                SessionEfficiencySummary {
+                    operations: 2,
+                    baseline_tokens_estimated: 1_200,
+                    delivered_tokens_estimated: 200,
+                    gross_avoided_tokens_estimated: 1_000,
+                    regression_tokens_estimated: 0,
+                    net_avoided_tokens_estimated: 1_000,
+                    top_commands: Vec::new(),
+                },
+                SessionEconomicSummary {
+                    paired_receipts: 1,
+                    reported_actual: Some(EconomicAmount {
+                        currency: "CNY".into(),
+                        baseline_microunits: 900,
+                        delivered_microunits: 100,
+                        savings_microunits: 800,
+                    }),
+                    provenance: Some(ReceiptProvenance::UserSupplied),
+                    externally_verified: false,
+                    ..SessionEconomicSummary::default()
+                },
+            ),
+        );
+
+        let roi = dashboard_session_roi(&config, Some(&session));
+
+        assert_eq!(roi.selected_provider, "alibaba_model_studio");
+        assert_eq!(roi.selected_model, "qwen3.5-plus");
+        assert_eq!(roi.receipt_provenance.as_deref(), Some("user_supplied"));
+        assert!(!roi.receipt_externally_verified);
+        assert_eq!(
+            roi.raw_public_estimate
+                .expect("preliminary estimate")
+                .currency,
+            "CNY"
+        );
+    }
 
     #[tokio::test]
     async fn acceptance_gate_daemon_fidelity_budget_contradiction_and_policy_event() {

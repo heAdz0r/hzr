@@ -3679,8 +3679,10 @@ async fn execute_billing(config: &Config, command: BillingCommand, json: bool) -
             }
             let bytes = std::fs::read(&file)
                 .with_context(|| format!("failed to read {}", file.display()))?;
-            let receipt: ProviderEconomicReceipt = serde_json::from_slice(&bytes)
+            let mut receipt: ProviderEconomicReceipt = serde_json::from_slice(&bytes)
                 .with_context(|| format!("invalid provider receipt JSON in {}", file.display()))?;
+            receipt.project_path = canonical_directory(None)?.to_string_lossy().into_owned();
+            receipt.source = "user_supplied".into();
             let result = DaemonClient::from_config(config)?
                 .record_provider_receipt(&receipt)
                 .await?;
@@ -3688,11 +3690,13 @@ async fn execute_billing(config: &Config, command: BillingCommand, json: bool) -
                 print_json(&result)?;
             } else {
                 println!(
-                    "provider-receipt recorded={} idempotent-replay={} receipt={} invoice-actual={} public-estimate={} reason={}",
+                    "imported-receipt recorded={} idempotent-replay={} receipt={} provenance={} externally-verified={} reported-actual={} public-estimate={} reason={}",
                     result.recorded,
                     result.idempotent_replay,
                     result.receipt_hash,
-                    result.invoice_actual.is_some(),
+                    result.provenance.as_str(),
+                    result.externally_verified,
+                    result.reported_actual.is_some(),
                     result.public_estimate.is_some(),
                     result.unavailable_reason.as_deref().unwrap_or("none"),
                 );

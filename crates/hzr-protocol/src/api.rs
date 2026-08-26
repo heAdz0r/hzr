@@ -1287,6 +1287,57 @@ pub struct DashboardProviderReceipts {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardEconomicAmount {
+    pub currency: String,
+    pub baseline_microunits: u64,
+    pub delivered_microunits: u64,
+    pub savings_microunits: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardRawPublicEstimate {
+    pub currency: String,
+    pub savings_microunits: u64,
+    pub avoided_input_tokens_estimated: u64,
+    pub pricing_basis: String,
+    pub catalog_identity: String,
+    pub entry_version: String,
+    pub preliminary: bool,
+    pub disclaimer: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardSessionCommand {
+    pub command_family: String,
+    pub executions: u64,
+    pub net_avoided_tokens_estimated: i64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardSessionRoi {
+    pub session_hash: Option<String>,
+    pub operations: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub top_commands: Vec<DashboardSessionCommand>,
+    pub selected_harness: String,
+    pub selected_provider: String,
+    pub selected_model: String,
+    pub selected_method: String,
+    pub selected_context_window_tokens: Option<u64>,
+    pub selected_pricing_basis: String,
+    pub catalog_identity: Option<String>,
+    pub raw_public_estimate: Option<DashboardRawPublicEstimate>,
+    pub raw_public_estimate_unavailable_reason: Option<String>,
+    pub imported_claim_records: u64,
+    pub reported_actual: Option<DashboardEconomicAmount>,
+    pub receipt_provenance: Option<String>,
+    pub receipt_externally_verified: bool,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DashboardHelpCommand {
     pub label: String,
     pub description: String,
@@ -1315,6 +1366,7 @@ pub struct DashboardResponse {
     pub local_activity: DashboardLocalActivity,
     pub observability: DashboardObservability,
     pub provider_receipts: DashboardProviderReceipts,
+    pub session_roi: DashboardSessionRoi,
     pub help: Vec<DashboardHelpCommand>,
     pub notes: Vec<String>,
 }

@@ -6,6 +6,7 @@ import {
   formatBytes,
   formatCost,
   formatDuration,
+  formatEconomicAmount,
   formatSignedCount,
   refreshFailureAnnouncement,
   relativeTime,
@@ -41,6 +42,11 @@ describe("dashboard formatters", () => {
   test("keeps missing provider cost distinct from a derived estimate", () => {
     expect(formatCost(0)).toBe("Not reported");
     expect(formatCost(1_250_000)).toBe("$1.25");
+  });
+
+  test("formats preliminary native-currency amounts without hidden FX", () => {
+    expect(formatEconomicAmount("CNY", 800_000)).toBe("CNY 0.800000");
+    expect(formatEconomicAmount("USD", -1_250_000)).toBe("USD -1.250000");
   });
 
   test("formats exact units and signs", () => {
