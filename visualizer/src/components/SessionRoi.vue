@@ -34,7 +34,7 @@ defineProps<{ roi: DashboardSessionRoi }>();
       <div><dt>Session net tokens</dt><dd>{{ formatSignedCount(roi.net_avoided_tokens_estimated) }} estimated · {{ roi.baseline_tokens_estimated > 0 ? formatPercent((roi.net_avoided_tokens_estimated * 100) / roi.baseline_tokens_estimated) : "No baseline" }}</dd></div>
       <div><dt>Selection</dt><dd>{{ roi.selected_provider || "Not selected" }} · {{ roi.selected_model || "No model" }}</dd></div>
       <div><dt>Harness / method</dt><dd>{{ roi.selected_harness || "Not selected" }} · {{ roi.selected_method || "No method" }}</dd></div>
-      <div><dt>Context / basis</dt><dd>{{ roi.selected_context_window_tokens ?? "Not supplied" }} · {{ roi.selected_pricing_basis }}</dd></div>
+      <div><dt>Priced request input / basis</dt><dd>{{ roi.selected_request_input_tokens ?? "Not supplied" }} tokens · {{ roi.selected_pricing_basis }}</dd></div>
       <div><dt>Catalog</dt><dd><code>{{ roi.raw_public_estimate?.catalog_identity ?? roi.catalog_identity ?? "Unavailable" }}</code></dd></div>
       <div><dt>Imported claims</dt><dd>{{ formatCount(roi.imported_claim_records) }} · {{ roi.receipt_provenance ?? "none" }} · externally verified={{ roi.receipt_externally_verified }}</dd></div>
     </dl>

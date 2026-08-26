@@ -1101,7 +1101,7 @@ fn economic_message(
                     provider: &config.billing.provider,
                     model: &config.billing.model,
                     method: &config.billing.method,
-                    context_window_tokens: config.billing.context_window_tokens,
+                    request_input_tokens: config.billing.request_input_tokens,
                     basis: config.billing.effective_pricing_basis(),
                     avoided_tokens,
                 },

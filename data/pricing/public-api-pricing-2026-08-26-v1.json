@@ -11,8 +11,8 @@
       "valid_until": "2026-11-21",
       "max_context_tokens_exclusive": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol", "unit": "per_1m_tokens",
-      "rates": {"input_microunits_per_million": 4000000, "output_microunits_per_million": 20000000, "cache_read_microunits_per_million": 400000, "cache_write_5m_microunits_per_million": 5000000, "cache_write_1h_microunits_per_million": null},
-      "note": "OpenAI API Standard short-context promotional rate through 2026-11-21. ChatGPT and Codex subscriptions are excluded; this entry fails closed after expiry."
+      "rates": {"input_microunits_per_million": 4000000, "output_microunits_per_million": 20000000, "cache_read_microunits_per_million": 400000, "cache_write_microunits_per_million": 5000000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
+      "note": "OpenAI API Standard short-context promotional rate through 2026-11-21. Generic cache write is the documented 30m prompt-cache TTL at 1.25x input. ChatGPT and Codex subscriptions are excluded; this entry fails closed after expiry."
     },
     {
       "version": "openai-gpt-5.6-terra-standard-short-lte-272k-2026-08-26",
@@ -20,8 +20,8 @@
       "method": "standard_short_context_lte_272k", "currency": "USD", "effective_at": "2026-08-26",
       "max_context_tokens_exclusive": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra", "unit": "per_1m_tokens",
-      "rates": {"input_microunits_per_million": 2000000, "output_microunits_per_million": 12000000, "cache_read_microunits_per_million": 200000, "cache_write_5m_microunits_per_million": 2500000, "cache_write_1h_microunits_per_million": null},
-      "note": "OpenAI API standard short-context list rate."
+      "rates": {"input_microunits_per_million": 2000000, "output_microunits_per_million": 12000000, "cache_read_microunits_per_million": 200000, "cache_write_microunits_per_million": 2500000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
+      "note": "OpenAI API standard short-context list rate. Generic cache write is the documented 30m prompt-cache TTL at 1.25x input."
     },
     {
       "version": "openai-gpt-5.6-luna-standard-short-lte-272k-2026-08-26",
@@ -29,8 +29,8 @@
       "method": "standard_short_context_lte_272k", "currency": "USD", "effective_at": "2026-08-26",
       "max_context_tokens_exclusive": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna", "unit": "per_1m_tokens",
-      "rates": {"input_microunits_per_million": 200000, "output_microunits_per_million": 1200000, "cache_read_microunits_per_million": 20000, "cache_write_5m_microunits_per_million": 250000, "cache_write_1h_microunits_per_million": null},
-      "note": "OpenAI API standard short-context list rate."
+      "rates": {"input_microunits_per_million": 200000, "output_microunits_per_million": 1200000, "cache_read_microunits_per_million": 20000, "cache_write_microunits_per_million": 250000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
+      "note": "OpenAI API standard short-context list rate. Generic cache write is the documented 30m prompt-cache TTL at 1.25x input."
     },
     {
       "version": "openai-gpt-5.6-sol-standard-long-gt-272k-2026-08-26",
@@ -38,8 +38,8 @@
       "method": "standard_long_context_gt_272k", "currency": "USD", "effective_at": "2026-08-26",
       "valid_until": "2026-11-21", "min_context_tokens": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol", "unit": "per_1m_tokens",
-      "rates": {"input_microunits_per_million": 8000000, "output_microunits_per_million": 30000000, "cache_read_microunits_per_million": 800000, "cache_write_5m_microunits_per_million": 10000000, "cache_write_1h_microunits_per_million": null},
-      "note": "OpenAI API Standard long-context promotional rate for prompts above 272K input tokens through 2026-11-21; this entry fails closed without explicit context evidence."
+      "rates": {"input_microunits_per_million": 8000000, "output_microunits_per_million": 30000000, "cache_read_microunits_per_million": 800000, "cache_write_microunits_per_million": 10000000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
+      "note": "OpenAI API Standard long-context promotional rate for priced requests above 272K actual input tokens through 2026-11-21. Generic cache write is the documented 30m prompt-cache TTL at 1.25x input; this entry fails closed without explicit request-input evidence."
     },
     {
       "version": "openai-gpt-5.6-terra-standard-long-gt-272k-2026-08-26",
@@ -47,8 +47,8 @@
       "method": "standard_long_context_gt_272k", "currency": "USD", "effective_at": "2026-08-26",
       "min_context_tokens": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra", "unit": "per_1m_tokens",
-      "rates": {"input_microunits_per_million": 4000000, "output_microunits_per_million": 18000000, "cache_read_microunits_per_million": 400000, "cache_write_5m_microunits_per_million": 5000000, "cache_write_1h_microunits_per_million": null},
-      "note": "OpenAI API Standard long-context rate for prompts above 272K input tokens; explicit context evidence is required."
+      "rates": {"input_microunits_per_million": 4000000, "output_microunits_per_million": 18000000, "cache_read_microunits_per_million": 400000, "cache_write_microunits_per_million": 5000000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
+      "note": "OpenAI API Standard long-context rate for priced requests above 272K actual input tokens. Generic cache write is the documented 30m prompt-cache TTL at 1.25x input; explicit request-input evidence is required."
     },
     {
       "version": "openai-gpt-5.6-luna-standard-long-gt-272k-2026-08-26",
@@ -56,14 +56,14 @@
       "method": "standard_long_context_gt_272k", "currency": "USD", "effective_at": "2026-08-26",
       "min_context_tokens": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna", "unit": "per_1m_tokens",
-      "rates": {"input_microunits_per_million": 400000, "output_microunits_per_million": 1800000, "cache_read_microunits_per_million": 40000, "cache_write_5m_microunits_per_million": 500000, "cache_write_1h_microunits_per_million": null},
-      "note": "OpenAI API Standard long-context rate for prompts above 272K input tokens; explicit context evidence is required."
+      "rates": {"input_microunits_per_million": 400000, "output_microunits_per_million": 1800000, "cache_read_microunits_per_million": 40000, "cache_write_microunits_per_million": 500000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
+      "note": "OpenAI API Standard long-context rate for priced requests above 272K actual input tokens. Generic cache write is the documented 30m prompt-cache TTL at 1.25x input; explicit request-input evidence is required."
     },
     {
       "version": "openai-gpt-5.3-codex-standard-2026-08-26",
       "harness": "codex", "provider": "openai", "model": "gpt-5.3-codex", "aliases": [],
       "method": "standard", "currency": "USD", "effective_at": "2026-08-26",
-      "source_url": "https://developers.openai.com/api/docs/pricing", "unit": "per_1m_tokens",
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-5.3-codex", "unit": "per_1m_tokens",
       "rates": {"input_microunits_per_million": 1750000, "output_microunits_per_million": 14000000, "cache_read_microunits_per_million": 175000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
       "note": "OpenAI API Codex model list rate; ChatGPT subscription pricing is excluded."
     },
@@ -186,26 +186,26 @@
       "harness": "openai_compatible", "provider": "xai", "model": "grok-4.6", "aliases": ["grok-4.6-latest"],
       "method": "standard_short_context_lt_200k", "currency": "USD", "effective_at": "2026-08-21",
       "max_context_tokens_exclusive": 200000,
-      "source_url": "https://docs.x.ai/developers/models", "unit": "per_1m_tokens",
+      "source_url": "https://docs.x.ai/developers/pricing", "unit": "per_1m_tokens",
       "rates": {"input_microunits_per_million": 2000000, "output_microunits_per_million": 6000000, "cache_read_microunits_per_million": 500000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
-      "note": "xAI standard rate below 200K context. Context size must be supplied explicitly; search, tools, batch and priority charges are excluded."
+      "note": "xAI standard rate below 200K actual priced-request input tokens. Request input must be supplied explicitly; model capacity, search, tools, batch and priority charges are excluded."
     },
     {
       "version": "xai-grok-4.6-standard-long-gte-200k-2026-08-26",
       "harness": "openai_compatible", "provider": "xai", "model": "grok-4.6", "aliases": ["grok-4.6-latest"],
       "method": "standard_long_context_gte_200k", "currency": "USD", "effective_at": "2026-08-21",
       "min_context_tokens": 200000,
-      "source_url": "https://docs.x.ai/developers/models", "unit": "per_1m_tokens",
+      "source_url": "https://docs.x.ai/developers/pricing", "unit": "per_1m_tokens",
       "rates": {"input_microunits_per_million": 4000000, "output_microunits_per_million": 12000000, "cache_read_microunits_per_million": 1000000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
-      "note": "xAI standard rate at or above 200K context. Context size must be supplied explicitly; search, tools, batch and priority charges are excluded."
+      "note": "xAI standard rate at or above 200K actual priced-request input tokens. Request input must be supplied explicitly; model capacity, search, tools, batch and priority charges are excluded."
     },
     {
       "version": "alibaba-qwen3.5-plus-global-0-128k-2026-08-26",
       "harness": "openai_compatible", "provider": "alibaba_model_studio", "model": "qwen3.5-plus", "aliases": ["qwen3.5-plus-2026-02-15"],
       "method": "global_standard_0_128k", "currency": "CNY", "effective_at": "2026-08-26",
       "max_context_tokens_exclusive": 128001,
-      "source_url": "https://help.aliyun.com/zh/model-studio/model-pricing", "unit": "per_1m_tokens",
-      "rates": {"input_microunits_per_million": 800000, "output_microunits_per_million": 4800000, "cache_read_microunits_per_million": null, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
+      "source_url": "https://help.aliyun.com/en/model-studio/qwen3-5-plus", "unit": "per_1m_tokens",
+      "rates": {"input_microunits_per_million": 800000, "output_microunits_per_million": 4800000, "cache_read_microunits_per_million": 80000, "cache_write_microunits_per_million": 1000000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
       "note": "Alibaba Model Studio global deployment, 0-128K input band, CNY. Other regions and context bands require an explicit method or user override."
     },
     {
@@ -213,18 +213,18 @@
       "harness": "openai_compatible", "provider": "alibaba_model_studio", "model": "qwen3.5-plus", "aliases": ["qwen3.5-plus-2026-02-15"],
       "method": "global_standard_gt_128k_lte_256k", "currency": "CNY", "effective_at": "2026-08-26",
       "min_context_tokens": 128001, "max_context_tokens_exclusive": 256001,
-      "source_url": "https://help.aliyun.com/en/model-studio/model-pricing", "unit": "per_1m_tokens",
-      "rates": {"input_microunits_per_million": 2000000, "output_microunits_per_million": 12000000, "cache_read_microunits_per_million": null, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
-      "note": "Alibaba Model Studio global deployment, above 128K through 256K input band, CNY; explicit input-context evidence is required."
+      "source_url": "https://help.aliyun.com/en/model-studio/qwen3-5-plus", "unit": "per_1m_tokens",
+      "rates": {"input_microunits_per_million": 2000000, "output_microunits_per_million": 12000000, "cache_read_microunits_per_million": 200000, "cache_write_microunits_per_million": 2500000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
+      "note": "Alibaba Model Studio global deployment, above 128K through 256K actual priced-request input band, CNY; explicit request-input evidence is required."
     },
     {
       "version": "alibaba-qwen3.5-plus-global-gt-256k-lte-1m-2026-08-26",
       "harness": "openai_compatible", "provider": "alibaba_model_studio", "model": "qwen3.5-plus", "aliases": ["qwen3.5-plus-2026-02-15"],
       "method": "global_standard_gt_256k_lte_1m", "currency": "CNY", "effective_at": "2026-08-26",
       "min_context_tokens": 256001, "max_context_tokens_exclusive": 1000001,
-      "source_url": "https://help.aliyun.com/en/model-studio/model-pricing", "unit": "per_1m_tokens",
-      "rates": {"input_microunits_per_million": 4000000, "output_microunits_per_million": 24000000, "cache_read_microunits_per_million": null, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
-      "note": "Alibaba Model Studio global deployment, above 256K through 1M input band, CNY; explicit input-context evidence is required."
+      "source_url": "https://help.aliyun.com/en/model-studio/qwen3-5-plus", "unit": "per_1m_tokens",
+      "rates": {"input_microunits_per_million": 4000000, "output_microunits_per_million": 24000000, "cache_read_microunits_per_million": 400000, "cache_write_microunits_per_million": 5000000, "cache_write_5m_microunits_per_million": null, "cache_write_1h_microunits_per_million": null},
+      "note": "Alibaba Model Studio global deployment, above 256K through 1M actual priced-request input band, CNY; explicit request-input evidence is required."
     }
   ]
 }

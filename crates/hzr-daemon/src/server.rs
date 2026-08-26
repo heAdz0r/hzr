@@ -443,6 +443,13 @@ exit 64
             .project_hash(second_root.to_str().expect("UTF-8 workspace"));
         let receipt_directory = second_root.join("nested");
         std::fs::create_dir_all(&receipt_directory).expect("nested receipt directory");
+        let observed_at_ms = u64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_millis(),
+        )
+        .expect("timestamp fits u64");
         let token = AuthToken::new(TOKEN.to_owned()).expect("test token is valid");
         let application = router(state, token);
         let receipt_response = application
@@ -457,13 +464,13 @@ exit 64
                         serde_json::json!({
                             "receipt_id": "dashboard-import-1",
                             "source": "spoofed_provider_api",
-                            "observed_at_ms": 42,
+                            "observed_at_ms": observed_at_ms,
                             "harness": "codex",
                             "provider": "openai",
                             "model": "gpt-5.6-sol",
                             "method": "standard_short_context_lte_272k",
                             "currency": "USD",
-                            "context_window_tokens": 100000,
+                            "request_input_tokens": 100000,
                             "session_id": "test-session",
                             "project_path": receipt_directory,
                             "baseline": {"input_tokens": 10, "output_tokens": 2},

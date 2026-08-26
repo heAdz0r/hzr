@@ -1,4 +1,5 @@
 mod billing;
+mod bounded_file;
 mod budget;
 mod config;
 mod engines;
@@ -12,6 +13,7 @@ pub use billing::{
     TokenRates, builtin_pricing_catalog, load_pricing_catalog, price_avoided_input_tokens,
     price_receipt, receipt_payload_hash, validate_receipt,
 };
+pub use bounded_file::{BoundedFileError, read_bounded_regular_file};
 pub use budget::{BudgetPlanner, FusionInput};
 pub use config::{
     ActivationConfig, ActivationMode, BillingConfig, Config, ConfigError, ConfigPaths,

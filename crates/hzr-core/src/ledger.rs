@@ -22,7 +22,7 @@ use thiserror::Error;
 use crate::billing::{
     BillingError, EconomicAmount, PricingCatalog, ProviderEconomicReceipt,
     ProviderReceiptRecordResult, ReceiptProvenance, SessionEconomicSummary, price_receipt,
-    receipt_payload_hash, validate_receipt,
+    receipt_payload_hash, validate_receipt, validate_receipt_observed_at,
 };
 
 pub const CURRENT_ACCOUNTING_POLICY_VERSION: &str = "privacy_typed_v2";
@@ -1646,6 +1646,7 @@ impl Ledger {
             result.idempotent_replay = true;
             return Ok(result);
         }
+        validate_receipt_observed_at(receipt, now_ms()).map_err(LedgerError::Billing)?;
         let reported_actual = match (
             receipt.actual_baseline_cost_microunits,
             receipt.actual_delivered_cost_microunits,
@@ -5671,13 +5672,13 @@ mod tests {
         let mut receipt = crate::ProviderEconomicReceipt {
             receipt_id: "external-receipt-private".into(),
             source: "provider-api".into(),
-            observed_at_ms: 42,
+            observed_at_ms: super::now_ms(),
             harness: "codex".into(),
             provider: "openai".into(),
             model: "gpt-5.6-sol".into(),
             method: "standard_short_context_lte_272k".into(),
             currency: "USD".into(),
-            context_window_tokens: Some(100_000),
+            request_input_tokens: Some(100_000),
             session_id: "session-private".into(),
             project_path: "/private/project".into(),
             baseline: crate::ProviderTokenUsage {

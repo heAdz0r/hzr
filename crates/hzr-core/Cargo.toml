@@ -11,6 +11,7 @@ directories.workspace = true
 hex.workspace = true
 hzr-codec = { path = "../hzr-codec" }
 hzr-protocol = { path = "../hzr-protocol" }
+libc = "0.2.174"
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true

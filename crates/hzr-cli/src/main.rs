@@ -38,8 +38,9 @@ use clap::Parser;
 use fs2::FileExt;
 use hzr_agent::{BearerToken, HzrApi, ManagedAgent, ManagedAgentConfig};
 use hzr_core::{
-    Config, ConfigPaths, Ledger, PolicyEvent, ProviderEconomicReceipt, discover_legacy_rtk_history,
-    inspect_legacy_efficiency, load_pricing_catalog,
+    Config, ConfigPaths, Ledger, PolicyEvent, PricingEntry, ProviderEconomicReceipt,
+    discover_legacy_rtk_history, inspect_legacy_efficiency, load_pricing_catalog,
+    read_bounded_regular_file,
 };
 use hzr_index::{
     Deadlines, GrepAi, IndexPlacement, InitOptions, InitOutcome, Workspace, WorkspaceRegistration,
@@ -3656,33 +3657,25 @@ async fn execute_billing(config: &Config, command: BillingCommand, json: bool) -
                         .map_or_else(|| "none".into(), |path| path.display().to_string()),
                 );
                 for entry in catalog.entries {
-                    println!(
-                        "{} {} {} {} {} source={}",
-                        entry.harness,
-                        entry.provider,
-                        entry.model,
-                        entry.method,
-                        entry.currency,
-                        entry.source_url,
-                    );
+                    println!("{}", format_pricing_entry(&entry));
                 }
             }
         }
         BillingCommand::Receipt { file } => {
-            let metadata = std::fs::symlink_metadata(&file)
-                .with_context(|| format!("failed to inspect {}", file.display()))?;
-            if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 262_144
-            {
-                bail!(
-                    "provider receipt must be a regular non-symlink file of at most 262144 bytes"
+            let bytes = read_bounded_regular_file(&file, 262_144).with_context(|| {
+                format!(
+                    "provider receipt must be a regular non-symlink file of at most 262144 bytes: {}",
+                    file.display()
+                )
+            })?;
+            let project_path = canonical_directory(None)?.to_string_lossy().into_owned();
+            let (receipt, compatibility) = parse_provider_receipt_import(&bytes, &project_path)
+                .with_context(|| format!("invalid provider receipt JSON in {}", file.display()))?;
+            if compatibility == ReceiptImportCompatibility::LegacyFieldsIgnored {
+                eprintln!(
+                    "warning: legacy receipt fields `source` and `project_path` are ignored; HZR binds provenance to user_supplied and project scope to the current workspace"
                 );
             }
-            let bytes = std::fs::read(&file)
-                .with_context(|| format!("failed to read {}", file.display()))?;
-            let mut receipt: ProviderEconomicReceipt = serde_json::from_slice(&bytes)
-                .with_context(|| format!("invalid provider receipt JSON in {}", file.display()))?;
-            receipt.project_path = canonical_directory(None)?.to_string_lossy().into_owned();
-            receipt.source = "user_supplied".into();
             let result = DaemonClient::from_config(config)?
                 .record_provider_receipt(&receipt)
                 .await?;
@@ -3704,6 +3697,41 @@ async fn execute_billing(config: &Config, command: BillingCommand, json: bool) -
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn format_pricing_entry(entry: &PricingEntry) -> String {
+    let rate = |value: Option<u64>| {
+        value.map_or_else(
+            || "n/a".to_owned(),
+            |value| format!("{}.{:06}", value / 1_000_000, value % 1_000_000),
+        )
+    };
+    let request_input_range = match (entry.min_context_tokens, entry.max_context_tokens_exclusive) {
+        (Some(min), Some(max)) => format!("{min}..{max}(exclusive)"),
+        (Some(min), None) => format!(">={min}"),
+        (None, Some(max)) => format!("<{max}"),
+        (None, None) => "any".into(),
+    };
+    format!(
+        "{}/{}/{} method={} currency={} unit={} rates[input={} output={} cache-read={} cache-write={} cache-write-5m={} cache-write-1h={}] request-input={} effective={} retrieved={} valid-until={} source={}",
+        entry.harness,
+        entry.provider,
+        entry.model,
+        entry.method,
+        entry.currency,
+        entry.unit,
+        rate(entry.rates.input_microunits_per_million),
+        rate(entry.rates.output_microunits_per_million),
+        rate(entry.rates.cache_read_microunits_per_million),
+        rate(entry.rates.cache_write_microunits_per_million),
+        rate(entry.rates.cache_write_5m_microunits_per_million),
+        rate(entry.rates.cache_write_1h_microunits_per_million),
+        request_input_range,
+        entry.effective_at,
+        entry.retrieved_at.as_deref().unwrap_or("unknown"),
+        entry.valid_until.as_deref().unwrap_or("none"),
+        entry.source_url,
+    )
 }
 
 async fn execute_agent(config: &Config, command: AgentCommand, json: bool) -> Result<ExitCode> {
@@ -3830,15 +3858,88 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use hzr_core::Config;
+    use hzr_core::{Config, builtin_pricing_catalog};
     use tempfile::tempdir;
 
     use super::{
-        bounded_read_arguments, canonical_directory, contract_asset_path,
-        executable_source_directory, forwarded_fork_args, instruction_drift_alert_for_targets,
+        ReceiptImportCompatibility, bounded_read_arguments, canonical_directory,
+        contract_asset_path, executable_source_directory, format_pricing_entry,
+        forwarded_fork_args, instruction_drift_alert_for_targets, parse_provider_receipt_import,
         payload_limit, reject_direct_fork_bypass, response_codec_session_notice,
         scoped_instruction_targets, session_instruction_drift_alert, session_start_payload,
     };
+
+    #[test]
+    fn human_pricing_catalog_row_exposes_bounded_audit_dimensions() {
+        let catalog = builtin_pricing_catalog().expect("catalog");
+        let row = format_pricing_entry(&catalog.entries[0]);
+
+        for expected in [
+            "rates[input=",
+            "output=",
+            "cache-read=",
+            "cache-write=",
+            "cache-write-5m=",
+            "cache-write-1h=",
+            "request-input=",
+            "effective=",
+            "retrieved=",
+            "valid-until=",
+            "unit=",
+            "source=https://",
+        ] {
+            assert!(row.contains(expected), "missing {expected}: {row}");
+        }
+        assert!(row.len() < 2_048);
+    }
+
+    #[test]
+    fn receipt_import_owns_provenance_and_project_with_explicit_legacy_compatibility() {
+        let current = serde_json::json!({
+            "receipt_id": "receipt-1",
+            "observed_at_ms": 2_000_000_000_000_u64,
+            "harness": "codex",
+            "provider": "openai",
+            "model": "gpt-5.6-sol",
+            "method": "standard_short_context_lte_272k",
+            "currency": "USD",
+            "session_id": "session-1",
+            "baseline": { "input_tokens": 10, "output_tokens": 2 },
+            "delivered": { "input_tokens": 5, "output_tokens": 1 }
+        });
+        let (receipt, compatibility) = parse_provider_receipt_import(
+            &serde_json::to_vec(&current).expect("current JSON"),
+            "/canonical/project",
+        )
+        .expect("current import schema");
+        assert_eq!(compatibility, ReceiptImportCompatibility::Current);
+        assert_eq!(receipt.source, "user_supplied");
+        assert_eq!(receipt.project_path, "/canonical/project");
+
+        let mut legacy = current;
+        legacy["source"] = serde_json::json!("provider_api");
+        legacy["project_path"] = serde_json::json!("/spoofed/project");
+        let (receipt, compatibility) = parse_provider_receipt_import(
+            &serde_json::to_vec(&legacy).expect("legacy JSON"),
+            "/canonical/project",
+        )
+        .expect("legacy compatibility");
+        assert_eq!(
+            compatibility,
+            ReceiptImportCompatibility::LegacyFieldsIgnored
+        );
+        assert_eq!(receipt.source, "user_supplied");
+        assert_eq!(receipt.project_path, "/canonical/project");
+
+        legacy["unexpected"] = serde_json::json!(true);
+        assert!(
+            parse_provider_receipt_import(
+                &serde_json::to_vec(&legacy).expect("unknown-field JSON"),
+                "/canonical/project"
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn acceptance_gate_selected_activation_does_not_require_global_instructions() {
@@ -4057,4 +4158,40 @@ mod tests {
             release_bin.canonicalize().expect("canonical release bin")
         );
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReceiptImportCompatibility {
+    Current,
+    LegacyFieldsIgnored,
+}
+
+fn parse_provider_receipt_import(
+    bytes: &[u8],
+    project_path: &str,
+) -> Result<(ProviderEconomicReceipt, ReceiptImportCompatibility)> {
+    let mut value: serde_json::Value =
+        serde_json::from_slice(bytes).context("provider receipt import must be valid JSON")?;
+    let object = value
+        .as_object_mut()
+        .context("provider receipt import must be a JSON object")?;
+    let legacy_source = object.remove("source").is_some();
+    let legacy_project = object.remove("project_path").is_some();
+    let legacy_fields = legacy_source || legacy_project;
+    object.insert(
+        "source".into(),
+        serde_json::Value::String("user_supplied".into()),
+    );
+    object.insert(
+        "project_path".into(),
+        serde_json::Value::String(project_path.into()),
+    );
+    let receipt =
+        serde_json::from_value(value).context("provider receipt import schema is invalid")?;
+    let compatibility = if legacy_fields {
+        ReceiptImportCompatibility::LegacyFieldsIgnored
+    } else {
+        ReceiptImportCompatibility::Current
+    };
+    Ok((receipt, compatibility))
 }

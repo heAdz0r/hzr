@@ -1325,7 +1325,7 @@ pub struct DashboardSessionRoi {
     pub selected_provider: String,
     pub selected_model: String,
     pub selected_method: String,
-    pub selected_context_window_tokens: Option<u64>,
+    pub selected_request_input_tokens: Option<u64>,
     pub selected_pricing_basis: String,
     pub catalog_identity: Option<String>,
     pub raw_public_estimate: Option<DashboardRawPublicEstimate>,

@@ -238,7 +238,7 @@ export interface DashboardSessionRoi {
   selected_provider: string;
   selected_model: string;
   selected_method: string;
-  selected_context_window_tokens: number | null;
+  selected_request_input_tokens: number | null;
   selected_pricing_basis: string;
   catalog_identity: string | null;
   raw_public_estimate: DashboardRawPublicEstimate | null;

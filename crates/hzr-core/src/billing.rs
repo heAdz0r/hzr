@@ -5,8 +5,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::bounded_file::{BoundedFileError, read_bounded_regular_file};
+
 pub const BUILTIN_PRICING_CATALOG_IDENTITY: &str = "hzr-public-api-pricing-2026-08-26-v1";
 pub const PRICING_CATALOG_SCHEMA_VERSION: u16 = 1;
+pub const PRICING_OVERRIDE_MAX_BYTES: u64 = 1_048_576;
+pub const PROVIDER_RECEIPT_MAX_AGE_MS: u64 = 366 * 24 * 60 * 60 * 1_000;
+pub const PROVIDER_RECEIPT_MAX_FUTURE_SKEW_MS: u64 = 5 * 60 * 1_000;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -53,6 +58,8 @@ pub struct TokenRates {
     pub input_microunits_per_million: Option<u64>,
     pub output_microunits_per_million: Option<u64>,
     pub cache_read_microunits_per_million: Option<u64>,
+    #[serde(default)]
+    pub cache_write_microunits_per_million: Option<u64>,
     pub cache_write_5m_microunits_per_million: Option<u64>,
     pub cache_write_1h_microunits_per_million: Option<u64>,
 }
@@ -68,6 +75,8 @@ pub struct ProviderTokenUsage {
     pub reasoning_tokens: u64,
     #[serde(default)]
     pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
     #[serde(default)]
     pub cache_write_5m_tokens: u64,
     #[serde(default)]
@@ -86,7 +95,8 @@ pub struct ProviderEconomicReceipt {
     pub method: String,
     pub currency: String,
     #[serde(default)]
-    pub context_window_tokens: Option<u64>,
+    #[serde(alias = "context_window_tokens")]
+    pub request_input_tokens: Option<u64>,
     pub session_id: String,
     pub project_path: String,
     pub baseline: ProviderTokenUsage,
@@ -172,7 +182,7 @@ pub struct RawPublicEstimateRequest<'a> {
     pub provider: &'a str,
     pub model: &'a str,
     pub method: &'a str,
-    pub context_window_tokens: Option<u64>,
+    pub request_input_tokens: Option<u64>,
     pub basis: &'a str,
     pub avoided_tokens: u64,
 }
@@ -197,6 +207,13 @@ pub enum BillingError {
     CatalogRead {
         path: std::path::PathBuf,
         source: std::io::Error,
+    },
+    #[error("pricing catalog {path} must be a regular non-symlink file")]
+    InvalidCatalogFile { path: std::path::PathBuf },
+    #[error("pricing catalog {path} exceeds the {max_bytes}-byte size limit")]
+    CatalogTooLarge {
+        path: std::path::PathBuf,
+        max_bytes: u64,
     },
     #[error("failed to parse pricing catalog {path}: {source}")]
     CatalogParse {
@@ -229,10 +246,7 @@ pub fn load_pricing_catalog(user_override: Option<&Path>) -> Result<PricingCatal
     let Some(path) = user_override else {
         return Ok(catalog);
     };
-    let bytes = std::fs::read(path).map_err(|source| BillingError::CatalogRead {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let bytes = read_pricing_override(path)?;
     let mut override_catalog: PricingCatalog =
         serde_json::from_slice(&bytes).map_err(|source| BillingError::CatalogParse {
             path: path.to_path_buf(),
@@ -257,6 +271,18 @@ pub fn load_pricing_catalog(user_override: Option<&Path>) -> Result<PricingCatal
     catalog.entries = merged.into_values().collect();
     validate_catalog(&catalog)?;
     Ok(catalog)
+}
+
+fn read_pricing_override(path: &Path) -> Result<Vec<u8>, BillingError> {
+    read_bounded_regular_file(path, PRICING_OVERRIDE_MAX_BYTES).map_err(|error| match error {
+        BoundedFileError::Open { path, source } | BoundedFileError::Read { path, source } => {
+            BillingError::CatalogRead { path, source }
+        }
+        BoundedFileError::NotRegular { path } => BillingError::InvalidCatalogFile { path },
+        BoundedFileError::TooLarge { path, max_bytes } => {
+            BillingError::CatalogTooLarge { path, max_bytes }
+        }
+    })
 }
 
 fn normalize_catalog_entries(catalog: &mut PricingCatalog) {
@@ -293,11 +319,11 @@ pub fn validate_receipt(receipt: &ProviderEconomicReceipt) -> Result<(), Billing
         return Err(BillingError::InvalidReceipt("invalid project_path".into()));
     }
     if receipt
-        .context_window_tokens
+        .request_input_tokens
         .is_some_and(|tokens| tokens == 0)
     {
         return Err(BillingError::InvalidReceipt(
-            "context_window_tokens must be positive when supplied".into(),
+            "request_input_tokens must be positive when supplied".into(),
         ));
     }
     if receipt.baseline.reasoning_tokens > receipt.baseline.output_tokens
@@ -317,6 +343,30 @@ pub fn validate_receipt(receipt: &ProviderEconomicReceipt) -> Result<(), Billing
     Ok(())
 }
 
+pub(crate) fn validate_receipt_observed_at(
+    receipt: &ProviderEconomicReceipt,
+    now_ms: u64,
+) -> Result<(), BillingError> {
+    if receipt.observed_at_ms == 0 {
+        return Err(BillingError::InvalidReceipt(
+            "observed_at_ms must be a positive Unix timestamp in milliseconds".into(),
+        ));
+    }
+    if receipt.observed_at_ms > now_ms.saturating_add(PROVIDER_RECEIPT_MAX_FUTURE_SKEW_MS) {
+        return Err(BillingError::InvalidReceipt(format!(
+            "observed_at_ms exceeds the allowed {} ms future clock skew",
+            PROVIDER_RECEIPT_MAX_FUTURE_SKEW_MS
+        )));
+    }
+    if receipt.observed_at_ms < now_ms.saturating_sub(PROVIDER_RECEIPT_MAX_AGE_MS) {
+        return Err(BillingError::InvalidReceipt(format!(
+            "observed_at_ms is older than the allowed {} ms receipt age",
+            PROVIDER_RECEIPT_MAX_AGE_MS
+        )));
+    }
+    Ok(())
+}
+
 pub fn price_receipt(
     catalog: &PricingCatalog,
     receipt: &ProviderEconomicReceipt,
@@ -328,7 +378,7 @@ pub fn price_receipt(
         &receipt.provider,
         &receipt.model,
         &receipt.method,
-        receipt.context_window_tokens,
+        receipt.request_input_tokens,
     )?;
     if entry.currency != receipt.currency {
         return Err(BillingError::PricingUnavailable(format!(
@@ -365,7 +415,7 @@ pub fn price_avoided_input_tokens(
         request.provider,
         request.model,
         request.method,
-        request.context_window_tokens,
+        request.request_input_tokens,
     )?;
     let rate = match request.basis {
         "input" => entry.rates.input_microunits_per_million,
@@ -506,6 +556,11 @@ fn price_usage(usage: ProviderTokenUsage, rates: TokenRates) -> Result<u64, Bill
             rates.cache_read_microunits_per_million,
         ),
         (
+            "cache_write",
+            usage.cache_write_tokens,
+            rates.cache_write_microunits_per_million,
+        ),
+        (
             "cache_write_5m",
             usage.cache_write_5m_tokens,
             rates.cache_write_5m_microunits_per_million,
@@ -552,7 +607,7 @@ fn find_entry<'a>(
     provider: &str,
     model: &str,
     method: &str,
-    context_window_tokens: Option<u64>,
+    request_input_tokens: Option<u64>,
 ) -> Result<&'a PricingEntry, BillingError> {
     let matches = catalog
         .entries
@@ -601,9 +656,9 @@ fn find_entry<'a>(
                 )));
             }
             if entry.min_context_tokens.is_some() || entry.max_context_tokens_exclusive.is_some() {
-                let context = context_window_tokens.ok_or_else(|| {
+                let context = request_input_tokens.ok_or_else(|| {
                     BillingError::PricingUnavailable(format!(
-                        "catalog entry {} requires an explicit context_window_tokens value",
+                        "catalog entry {} requires explicit request_input_tokens (actual priced-request input, not model capacity)",
                         entry.version
                     ))
                 })?;
@@ -615,7 +670,7 @@ fn find_entry<'a>(
                         .is_some_and(|maximum| context >= maximum)
                 {
                     return Err(BillingError::PricingUnavailable(format!(
-                        "context_window_tokens={context} does not match catalog entry {}",
+                        "request_input_tokens={context} does not match catalog entry {}",
                         entry.version
                     )));
                 }
@@ -702,7 +757,7 @@ mod tests {
             model: model.into(),
             method: "standard_short_context_lte_272k".into(),
             currency: "USD".into(),
-            context_window_tokens: Some(100_000),
+            request_input_tokens: Some(100_000),
             session_id: "private-session".into(),
             project_path: "/work/project".into(),
             baseline: ProviderTokenUsage {
@@ -787,6 +842,20 @@ mod tests {
     }
 
     #[test]
+    fn pricing_override_read_is_size_bounded_before_parsing() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let path = directory.path().join("oversized-pricing.json");
+        std::fs::write(&path, vec![b' '; PRICING_OVERRIDE_MAX_BYTES as usize + 1])
+            .expect("oversized override");
+
+        assert!(matches!(
+            load_pricing_catalog(Some(&path)),
+            Err(BillingError::CatalogTooLarge { max_bytes, .. })
+                if max_bytes == PRICING_OVERRIDE_MAX_BYTES
+        ));
+    }
+
+    #[test]
     fn raw_estimate_uses_selected_input_basis_and_native_currency() {
         let catalog = builtin_pricing_catalog().expect("catalog");
         let estimate = price_avoided_input_tokens(
@@ -796,7 +865,7 @@ mod tests {
                 provider: "alibaba_model_studio",
                 model: "qwen3.5-plus",
                 method: "global_standard_0_128k",
-                context_window_tokens: Some(100_000),
+                request_input_tokens: Some(100_000),
                 basis: "input",
                 avoided_tokens: 1_000_000,
             },
@@ -820,7 +889,7 @@ mod tests {
                     provider: "xai",
                     model: "grok-4.6",
                     method,
-                    context_window_tokens: context,
+                    request_input_tokens: context,
                     basis: "input",
                     avoided_tokens: 1_000_000,
                 },
@@ -833,6 +902,12 @@ mod tests {
                 .expect("short tier")
                 .savings_microunits,
             2_000_000
+        );
+        assert_eq!(
+            estimate("standard_short_context_lt_200k", Some(199_999))
+                .expect("short tier source")
+                .source_url,
+            "https://docs.x.ai/developers/pricing"
         );
         assert!(estimate("standard_short_context_lt_200k", Some(200_000)).is_err());
         assert_eq!(
@@ -847,9 +922,9 @@ mod tests {
     fn openai_long_context_multiplier_is_explicit_and_bounded() {
         let catalog = builtin_pricing_catalog().expect("catalog");
         let mut short = receipt("gpt-5.6-sol");
-        short.context_window_tokens = None;
+        short.request_input_tokens = None;
         assert!(price_receipt(&catalog, &short).is_err());
-        short.context_window_tokens = Some(272_000);
+        short.request_input_tokens = Some(272_000);
         assert_eq!(
             price_receipt(&catalog, &short)
                 .expect("short tier")
@@ -857,7 +932,7 @@ mod tests {
                 .baseline_microunits,
             6_000_000
         );
-        short.context_window_tokens = Some(272_001);
+        short.request_input_tokens = Some(272_001);
         assert!(price_receipt(&catalog, &short).is_err());
 
         let mut long = short;
@@ -876,12 +951,68 @@ mod tests {
         let catalog = builtin_pricing_catalog().expect("catalog");
         let mut value = receipt("gpt-5.3-codex");
         value.method = "standard".into();
-        value.context_window_tokens = None;
+        value.request_input_tokens = None;
+        assert_eq!(
+            price_receipt(&catalog, &value)
+                .expect("GPT-5.3 Codex source")
+                .source_url,
+            "https://developers.openai.com/api/docs/models/gpt-5.3-codex"
+        );
         value.baseline.cache_write_5m_tokens = 10;
 
         let error = price_receipt(&catalog, &value).expect_err("missing rate");
 
         assert!(error.to_string().contains("cache_write_5m"));
+    }
+
+    #[test]
+    fn generic_cache_write_is_distinct_from_anthropic_ttl_dimensions() {
+        let catalog = builtin_pricing_catalog().expect("catalog");
+        let mut openai = receipt("gpt-5.6-sol");
+        openai.baseline = ProviderTokenUsage {
+            cache_write_tokens: 1_000_000,
+            ..ProviderTokenUsage::default()
+        };
+        openai.delivered = ProviderTokenUsage::default();
+        assert_eq!(
+            price_receipt(&catalog, &openai)
+                .expect("OpenAI generic cache write")
+                .amount
+                .baseline_microunits,
+            5_000_000
+        );
+
+        openai.baseline.cache_write_tokens = 0;
+        openai.baseline.cache_write_5m_tokens = 1;
+        assert!(
+            price_receipt(&catalog, &openai)
+                .expect_err("OpenAI has no Anthropic 5m cache-write dimension")
+                .to_string()
+                .contains("cache_write_5m")
+        );
+    }
+
+    #[test]
+    fn qwen_input_band_prices_explicit_cache_create_and_read() {
+        let catalog = builtin_pricing_catalog().expect("catalog");
+        let mut qwen = receipt("qwen3.5-plus");
+        qwen.harness = "openai_compatible".into();
+        qwen.provider = "alibaba_model_studio".into();
+        qwen.method = "global_standard_0_128k".into();
+        qwen.currency = "CNY".into();
+        qwen.baseline = ProviderTokenUsage {
+            cache_read_tokens: 1_000_000,
+            cache_write_tokens: 1_000_000,
+            ..ProviderTokenUsage::default()
+        };
+        qwen.delivered = ProviderTokenUsage::default();
+
+        let estimate = price_receipt(&catalog, &qwen).expect("Qwen cache rates");
+        assert_eq!(estimate.amount.baseline_microunits, 1_080_000);
+        assert_eq!(
+            estimate.source_url,
+            "https://help.aliyun.com/en/model-studio/qwen3-5-plus"
+        );
     }
 
     #[test]
@@ -893,6 +1024,37 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.len(), 64);
         assert!(!first.contains("private-session"));
+    }
+
+    #[test]
+    fn receipt_observation_time_has_bounded_past_and_future_skew() {
+        let now_ms = 2_000_000_000_000;
+        let mut value = receipt("gpt-5.6-sol");
+        value.observed_at_ms = now_ms;
+        validate_receipt_observed_at(&value, now_ms).expect("current receipt");
+
+        value.observed_at_ms = now_ms + PROVIDER_RECEIPT_MAX_FUTURE_SKEW_MS;
+        validate_receipt_observed_at(&value, now_ms).expect("boundary future skew");
+        value.observed_at_ms += 1;
+        assert!(
+            validate_receipt_observed_at(&value, now_ms)
+                .expect_err("excessive future skew")
+                .to_string()
+                .contains("future clock skew")
+        );
+
+        value.observed_at_ms = now_ms - PROVIDER_RECEIPT_MAX_AGE_MS;
+        validate_receipt_observed_at(&value, now_ms).expect("boundary receipt age");
+        value.observed_at_ms -= 1;
+        assert!(
+            validate_receipt_observed_at(&value, now_ms)
+                .expect_err("excessive receipt age")
+                .to_string()
+                .contains("older than")
+        );
+
+        value.observed_at_ms = 0;
+        assert!(validate_receipt_observed_at(&value, now_ms).is_err());
     }
 
     #[test]

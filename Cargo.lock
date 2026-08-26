@@ -696,6 +696,7 @@ dependencies = [
  "hex",
  "hzr-codec",
  "hzr-protocol",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

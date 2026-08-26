@@ -6,7 +6,8 @@ use std::time::Duration;
 use hzr_agent::{IntegrationLayout, preflight};
 use hzr_codec::ResponseCodecCoverageState;
 use hzr_core::{
-    Config, DEFAULT_FIDELITY_OPERATION_ALLOWANCE, DEFAULT_FIDELITY_TOKEN_ALLOWANCE, locked_engines,
+    Config, DEFAULT_FIDELITY_OPERATION_ALLOWANCE, DEFAULT_FIDELITY_TOKEN_ALLOWANCE,
+    RawPublicEstimateRequest, load_pricing_catalog, locked_engines, price_avoided_input_tokens,
 };
 use hzr_index::{
     Deadlines, IndexGeneration, IndexMigrationOutcome, IndexPlacement, IndexStatus, Workspace,
@@ -133,6 +134,61 @@ fn fidelity_allowance_check() -> DoctorCheck {
             DEFAULT_FIDELITY_OPERATION_ALLOWANCE, DEFAULT_FIDELITY_TOKEN_ALLOWANCE
         ),
     )
+}
+
+fn billing_pricing_check(config: &Config) -> DoctorCheck {
+    if !config.billing.public_estimate_enabled {
+        return check(
+            "billing_pricing",
+            CheckStatus::Pass,
+            "public pricing estimate is disabled; receipt-reported amounts remain independent",
+        );
+    }
+    let catalog = match load_pricing_catalog(config.billing.pricing_file.as_deref()) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            return check(
+                "billing_pricing",
+                CheckStatus::Error,
+                format!(
+                    "pricing catalog is unusable: {error}; run `hzr billing catalog --json`, then fix [billing].pricing_file or its catalog"
+                ),
+            );
+        }
+    };
+    match price_avoided_input_tokens(
+        &catalog,
+        RawPublicEstimateRequest {
+            harness: &config.billing.harness,
+            provider: &config.billing.provider,
+            model: &config.billing.model,
+            method: &config.billing.method,
+            request_input_tokens: config.billing.request_input_tokens,
+            basis: config.billing.effective_pricing_basis(),
+            avoided_tokens: 1,
+        },
+    ) {
+        Ok(estimate) => check(
+            "billing_pricing",
+            CheckStatus::Pass,
+            format!(
+                "selection resolves to {}/{}/{}/{} {} via catalog {}",
+                estimate.harness,
+                estimate.provider,
+                estimate.model,
+                estimate.method,
+                estimate.currency,
+                estimate.price_table_identity
+            ),
+        ),
+        Err(error) => check(
+            "billing_pricing",
+            CheckStatus::Error,
+            format!(
+                "configured pricing selection is unavailable: {error}; run `hzr billing catalog --json`, then fix provider/model/method/request_input_tokens/pricing_basis or the override"
+            ),
+        ),
+    }
 }
 
 fn fidelity_durability_check(config: &Config) -> DoctorCheck {
@@ -1058,6 +1114,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     }
     checks.push(fidelity_allowance_check());
     checks.push(fidelity_durability_check(config));
+    checks.push(billing_pricing_check(config));
     if let Ok(status) = adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
         if status.external_icm_entries > 0 {
             // A direct `icm hook` writes to a store HZR does not supervise: that is a
@@ -2410,7 +2467,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use hzr_core::Config;
+    use hzr_core::{Config, builtin_pricing_catalog};
     use hzr_index::{Deadlines, IndexMigrationOutcome, IndexPlacement, IndexStatus, Workspace};
     use sha2::{Digest, Sha256};
 
@@ -2419,14 +2476,65 @@ mod tests {
 
     use super::{
         CheckStatus, CodecInstructionSurfaces, attest_active_bundle,
-        audited_codec_instruction_surfaces, bounded, claude_code_mcp_check, contract_is_portable,
-        direct_icm_registration_detail, effective_workspace_mcp_statuses, fidelity_allowance_check,
-        fidelity_durability_status_check, fleet_instruction_health_checks, hook_ownership_check,
-        index_readiness_check, install_transaction_check, instruction_health_check,
+        audited_codec_instruction_surfaces, billing_pricing_check, bounded, claude_code_mcp_check,
+        contract_is_portable, direct_icm_registration_detail, effective_workspace_mcp_statuses,
+        fidelity_allowance_check, fidelity_durability_status_check,
+        fleet_instruction_health_checks, hook_ownership_check, index_readiness_check,
+        install_transaction_check, instruction_health_check,
         instruction_health_check_with_exemptions, integration_layout, reconcile_fleet_contracts,
         repair_legacy_index, response_codec_coverage, workspace_binding_check,
         workspace_instruction_health_check,
     };
+
+    fn enabled_billing_config() -> Config {
+        let mut config = Config::default();
+        config.billing.public_estimate_enabled = true;
+        config.billing.harness = "codex".into();
+        config.billing.provider = "openai".into();
+        config.billing.model = "gpt-5.6-sol".into();
+        config.billing.method = "standard_short_context_lte_272k".into();
+        config.billing.request_input_tokens = Some(100_000);
+        config.billing.pricing_basis = "input".into();
+        config
+    }
+
+    #[test]
+    fn doctor_rejects_invalid_billing_selection_with_exact_action() {
+        let mut config = enabled_billing_config();
+        config.billing.model = "typo-model".into();
+
+        let result = billing_pricing_check(&config);
+
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.detail.contains("hzr billing catalog --json"));
+        assert!(
+            result
+                .detail
+                .contains("provider/model/method/request_input_tokens")
+        );
+    }
+
+    #[test]
+    fn doctor_rejects_stale_pricing_override() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("stale-pricing.json");
+        let mut catalog = builtin_pricing_catalog().expect("catalog");
+        let mut entry = catalog.entries.remove(0);
+        entry.retrieved_at = Some("2020-01-01".into());
+        entry.max_age_days = Some(1);
+        catalog.identity = "stale-customer-pricing".into();
+        catalog.entries = vec![entry];
+        fs::write(&path, serde_json::to_vec(&catalog).expect("catalog JSON"))
+            .expect("stale override");
+        let mut config = enabled_billing_config();
+        config.billing.pricing_file = Some(path);
+
+        let result = billing_pricing_check(&config);
+
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.detail.contains("stale"));
+        assert!(result.detail.contains("hzr billing catalog --json"));
+    }
 
     #[test]
     fn acceptance_gate_doctor_renders_fidelity_allowance() {

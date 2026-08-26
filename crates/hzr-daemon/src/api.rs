@@ -591,7 +591,7 @@ fn dashboard_session_roi(
         selected_provider: config.billing.provider.clone(),
         selected_model: config.billing.model.clone(),
         selected_method: config.billing.method.clone(),
-        selected_context_window_tokens: config.billing.context_window_tokens,
+        selected_request_input_tokens: config.billing.request_input_tokens,
         selected_pricing_basis: config.billing.effective_pricing_basis().into(),
         detail: "No HMAC-attributed session is available for the selected project.".into(),
         ..DashboardSessionRoi::default()
@@ -664,7 +664,7 @@ fn dashboard_session_roi(
             provider: &config.billing.provider,
             model: &config.billing.model,
             method: &config.billing.method,
-            context_window_tokens: config.billing.context_window_tokens,
+            request_input_tokens: config.billing.request_input_tokens,
             basis: config.billing.effective_pricing_basis(),
             avoided_tokens: efficiency
                 .net_avoided_tokens_estimated
@@ -2796,7 +2796,12 @@ pub async fn provider_receipt(
         .ledger
         .record_provider_receipt(receipt, catalog, pricing_unavailable_reason)
         .await
-        .map_err(|error| ApiError::internal(format!("provider receipt write failed: {error}")))?;
+        .map_err(|error| match &error {
+            crate::ledger_writer::LedgerWriterError::Ledger(hzr_core::LedgerError::Billing(
+                hzr_core::BillingError::InvalidReceipt(_),
+            )) => ApiError::bad_request(error.to_string()),
+            _ => ApiError::internal(format!("provider receipt write failed: {error}")),
+        })?;
     Ok(Json(result))
 }
 
@@ -3864,7 +3869,7 @@ mod tests {
         config.billing.provider = "alibaba_model_studio".into();
         config.billing.model = "qwen3.5-plus".into();
         config.billing.method = "global_standard_0_128k".into();
-        config.billing.context_window_tokens = Some(100_000);
+        config.billing.request_input_tokens = Some(100_000);
         config.billing.pricing_basis = "input".into();
         let session = (
             "hmac-sha256:session".into(),
