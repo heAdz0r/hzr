@@ -598,6 +598,7 @@ mod tests {
                 },
             ],
             repair: None,
+            fidelity_reconcile: None,
         }
     }
 

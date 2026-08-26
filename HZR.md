@@ -25,6 +25,11 @@ results are accounted:
 |---|---|
 | `hzr_context_plan` | Build a bounded graph-first evidence plan for unfamiliar, architectural or cross-cutting work. |
 | `hzr_search` | Find code by intent (`mode: "semantic"`) or by exact pattern (`mode: "exact"`). |
+| `hzr_read` | Read bounded exact content through the daemon-owned confined fork path. |
+| `hzr_write` | Apply confined atomic patch or create operations with typed CAS receipts. |
+| `hzr_exec` | Run shell commands through daemon policy and accounting without direct fallback. |
+| `hzr_observability` | Return typed daemon, engine, capability and workspace health. |
+| `hzr_doctor` | Run desired-state diagnostics for the exact MCP workspace. |
 | `hzr_memory_recall` | Recall durable facts, past decisions and resolved errors before re-reading earlier work. |
 | `hzr_memory_store` | Persist a decision, resolved error, user preference or finished handoff. Not ephemeral state or raw tool output. |
 | `hzr_memory_update` | Replace a superseded memory after HZR verifies project/global namespace ownership. |

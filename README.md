@@ -238,6 +238,13 @@ no database and starts no internal engine; every project-scoped operation goes t
 same `hzrd` boundary. The executable contract is
 [`contracts/agent-capabilities.json`](contracts/agent-capabilities.json).
 
+| Capability | MCP tools |
+|---|---|
+| context and code | `hzr_context_plan`, `hzr_search`, `hzr_read` |
+| confined mutation and execution | `hzr_write`, `hzr_exec` |
+| durable memory | `hzr_memory_recall`, `hzr_memory_store`, `hzr_memory_update`, `hzr_memory_forget`, `hzr_memory_prune` |
+| operations | `hzr_observability`, `hzr_doctor`, `hzr_codec` |
+
 ## Honest boundaries
 
 | Guarantee | 0.6.0 posture |

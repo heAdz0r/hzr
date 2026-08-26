@@ -32,6 +32,11 @@ Then prefer these tools — they reach the same single store and index as the CL
   architectural or cross-cutting work.
 - `hzr_search` — find code by intent (`mode: "semantic"`) or exactly
   (`mode: "exact"`), optionally narrowed by `path`.
+- `hzr_read` — read bounded exact content through the confined daemon-owned fork.
+- `hzr_write` — apply confined atomic patch or create operations with typed CAS receipts.
+- `hzr_exec` — execute through daemon policy and accounting without direct fallback.
+- `hzr_observability` — inspect typed daemon, engine, capability and workspace health.
+- `hzr_doctor` — run desired-state diagnostics for the exact MCP workspace.
 - `hzr_memory_recall` — recall decisions, resolved errors and prior context
   *before* re-reading files analysed in an earlier session.
 - `hzr_memory_store` — persist a decision, resolved error, preference or finished

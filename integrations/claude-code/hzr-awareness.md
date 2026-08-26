@@ -32,7 +32,8 @@ hzr mcp status                           # audits native registration and lifecy
 `hzr mcp serve` child on connection and closes it through stdin EOF; the
 persistent HZR process is the single `hzrd` service.
 
-Tools: `hzr_context_plan`, `hzr_search`, `hzr_memory_recall`,
+Tools: `hzr_context_plan`, `hzr_search`, `hzr_read`, `hzr_write`, `hzr_exec`,
+`hzr_observability`, `hzr_doctor`, `hzr_memory_recall`,
 `hzr_memory_store`, `hzr_memory_update`, `hzr_memory_forget`,
 `hzr_memory_prune`, and `hzr_codec`. Plan first for unfamiliar or cross-cutting work, recall
 before re-reading files you already analysed, and store decisions and resolved
