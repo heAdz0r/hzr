@@ -235,6 +235,9 @@ pub enum Command {
         /// Show what --reconcile-fleet would rewrite, without writing
         #[arg(long, requires = "reconcile_fleet")]
         dry_run: bool,
+        /// Transactionally migrate each registered workspace with one unambiguous root legacy index
+        #[arg(long, requires = "reconcile_fleet")]
+        migrate_legacy_indexes: bool,
         /// Resolve one doctor-reported unknown fidelity reservation through hzrd
         #[arg(long, value_name = "RESERVATION_ID")]
         resolve_fidelity: Option<String>,
@@ -839,6 +842,21 @@ pub enum MigrateCommand {
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
+    #[command(about = "Archive one explicitly selected nested .grepai with a hash manifest")]
+    ArchiveIndex {
+        /// Parent workspace that currently reports the duplicate
+        #[arg(long, value_name = "DIR")]
+        workspace: Option<PathBuf>,
+        /// Exact nested `.grepai` directory to archive
+        #[arg(long, value_name = "PATH")]
+        source: PathBuf,
+        /// Preview the hash, backup, and manifest without writing
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply the archive after reviewing the dry-run receipt
+        #[arg(long, conflicts_with = "dry_run")]
+        force: bool,
+    },
     #[command(
         about = "Snapshot and idempotently import platform RTK history into the canonical ledger"
     )]
@@ -1049,6 +1067,27 @@ mod tests {
                 ..
             }
         ));
+        let fleet = Cli::try_parse_from([
+            "hzr",
+            "doctor",
+            "--reconcile-fleet",
+            "--migrate-legacy-indexes",
+            "--dry-run",
+        ])
+        .expect("explicit fleet migration preview");
+        assert!(matches!(
+            fleet.command,
+            Command::Doctor {
+                reconcile_fleet: true,
+                migrate_legacy_indexes: true,
+                dry_run: true,
+                ..
+            }
+        ));
+        assert!(
+            Cli::try_parse_from(["hzr", "doctor", "--migrate-legacy-indexes"]).is_err(),
+            "fleet migration must require the registered-workspace reconciliation boundary"
+        );
     }
 
     #[test]
@@ -1828,12 +1867,33 @@ mod tests {
         let migration =
             Cli::try_parse_from(["hzr", "migrate", "apply", "--workspace", "/workspace"])
                 .expect("valid migration apply command");
+        let archive = Cli::try_parse_from([
+            "hzr",
+            "migrate",
+            "archive-index",
+            "--workspace",
+            "/workspace",
+            "--source",
+            "/workspace/vendor/.grepai",
+            "--dry-run",
+        ])
+        .expect("valid explicit duplicate archive preview");
 
         assert!(matches!(
             index.command,
             Command::Index {
                 command: IndexCommand::Init { ref workspace }
             } if workspace.as_deref() == Some(std::path::Path::new("/workspace"))
+        ));
+        assert!(matches!(
+            archive.command,
+            Command::Migrate {
+                command: MigrateCommand::ArchiveIndex {
+                    dry_run: true,
+                    force: false,
+                    ..
+                }
+            }
         ));
         assert!(matches!(
             migration.command,

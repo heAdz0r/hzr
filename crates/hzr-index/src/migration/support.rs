@@ -3,12 +3,15 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path};
 
-use super::{IndexError, IndexMigrationManifest, Result, conflict};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
+use super::{IndexError, Result, conflict};
 
 #[cfg(unix)]
 use std::fs::File;
 
-pub(super) fn write_new_manifest(path: &Path, manifest: &IndexMigrationManifest) -> Result<()> {
+pub(super) fn write_new_manifest<T: Serialize>(path: &Path, manifest: &T) -> Result<()> {
     let mut encoded = serde_json::to_vec_pretty(manifest)
         .map_err(|error| conflict(format!("cannot encode migration manifest: {error}")))?;
     encoded.push(b'\n');
@@ -35,7 +38,7 @@ pub(super) fn write_new_manifest(path: &Path, manifest: &IndexMigrationManifest)
     sync_directory(path.parent().unwrap_or_else(|| Path::new(".")))
 }
 
-pub(super) fn read_manifest(path: &Path) -> Result<Option<IndexMigrationManifest>> {
+pub(super) fn read_manifest<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),

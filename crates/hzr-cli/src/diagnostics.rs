@@ -176,9 +176,45 @@ fn instruction_health_check(
     surface: instructions::Surface,
     path: &Path,
 ) -> DoctorCheck {
+    instruction_health_check_with_exemptions(
+        name,
+        surface,
+        path,
+        &fleet_exemption::FleetExemptions::default(),
+    )
+}
+
+fn instruction_health_check_with_exemptions(
+    name: &str,
+    surface: instructions::Surface,
+    path: &Path,
+    exemptions: &fleet_exemption::FleetExemptions,
+) -> DoctorCheck {
     match instructions::audit(surface, path) {
-        Ok(report) if report.healthy() => check(name, CheckStatus::Pass, report.path.display()),
-        Ok(report) => {
+        Ok(mut report) => {
+            let waived = report
+                .conflicting_mandates
+                .iter()
+                .filter(|conflict| exemptions.covers(conflict))
+                .count();
+            report
+                .conflicting_mandates
+                .retain(|conflict| !exemptions.covers(conflict));
+            if report.healthy() {
+                return if waived == 0 {
+                    check(name, CheckStatus::Pass, report.path.display())
+                } else {
+                    check(
+                        name,
+                        CheckStatus::Warning,
+                        format!(
+                            "{}: {waived} direct engine directive(s) retained under {}; the waiver is reported, not silently passed",
+                            report.path.display(),
+                            exemptions.summary()
+                        ),
+                    )
+                };
+            }
             let mut reasons = Vec::new();
             let mut managed_repair_needed = false;
             if !report.installed {
@@ -221,9 +257,17 @@ fn instruction_health_check(
                 name,
                 CheckStatus::Error,
                 format!(
-                    "{}: {}; {remediation}",
+                    "{}: {}; {remediation}{}",
                     report.path.display(),
-                    reasons.join("; ")
+                    reasons.join("; "),
+                    if waived == 0 {
+                        String::new()
+                    } else {
+                        format!(
+                            "; {waived} other directive(s) covered by {}",
+                            exemptions.summary()
+                        )
+                    }
                 ),
             )
         }
@@ -235,17 +279,34 @@ fn workspace_instruction_health_check(
     name: &str,
     surface: instructions::Surface,
     path: &Path,
+    exemptions: &fleet_exemption::FleetExemptions,
 ) -> DoctorCheck {
     match instructions::audit(surface, path) {
-        Ok(report) if !report.installed => check(
-            name,
-            CheckStatus::Warning,
-            format!(
-                "{}: managed project contract is absent; run `hzr init --if-needed`",
-                path.display()
-            ),
-        ),
-        _ => instruction_health_check(name, surface, path),
+        Ok(report)
+            if !report.installed
+                && report
+                    .conflicting_mandates
+                    .iter()
+                    .all(|conflict| exemptions.covers(conflict)) =>
+        {
+            check(
+                name,
+                CheckStatus::Warning,
+                format!(
+                    "{}: managed project contract is absent; run `hzr init --if-needed`{}",
+                    path.display(),
+                    if report.conflicting_mandates.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "; direct engine directive(s) are covered by {}",
+                            exemptions.summary()
+                        )
+                    }
+                ),
+            )
+        }
+        _ => instruction_health_check_with_exemptions(name, surface, path, exemptions),
     }
 }
 
@@ -263,12 +324,100 @@ pub struct FleetReconcileReport {
     pub dry_run: bool,
     pub workspaces_scanned: usize,
     pub rewritten: Vec<FleetContractRewrite>,
+    pub project_codex_mcp: Vec<FleetProjectMcpRewrite>,
+    pub legacy_indexes: Vec<FleetLegacyIndexAction>,
+    pub workspace_errors: Vec<FleetWorkspaceError>,
     /// Files whose managed block is stale *and* which also carry a user-authored directive.
     /// The block is still refreshed; the conflicting line is reported, never rewritten.
     pub conflicts_left_for_the_owner: Vec<PathBuf>,
     /// Set when nothing was written because the running binary has no portable contract.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
+}
+
+impl FleetReconcileReport {
+    pub fn completion_check(&self) -> DoctorCheck {
+        let write_errors = self
+            .rewritten
+            .iter()
+            .filter(|entry| entry.error.is_some())
+            .count()
+            .saturating_add(
+                self.project_codex_mcp
+                    .iter()
+                    .filter(|entry| entry.error.is_some())
+                    .count(),
+            );
+        let pending_preview = self.dry_run
+            && (self.rewritten.iter().any(|entry| entry.changed)
+                || self.project_codex_mcp.iter().any(|entry| entry.changed));
+        let unresolved_indexes = self
+            .legacy_indexes
+            .iter()
+            .filter(|entry| entry.state != "migrated")
+            .count();
+        let complete = self.refused.is_none()
+            && write_errors == 0
+            && self.workspace_errors.is_empty()
+            && self.conflicts_left_for_the_owner.is_empty()
+            && !pending_preview
+            && unresolved_indexes == 0;
+        check(
+            "fleet_reconcile",
+            if complete {
+                CheckStatus::Pass
+            } else {
+                CheckStatus::Error
+            },
+            if complete {
+                format!(
+                    "{} registered workspace(s) match managed instruction and project Codex MCP desired state",
+                    self.workspaces_scanned
+                )
+            } else {
+                format!(
+                    "fleet closure incomplete: refused={}, write_errors={write_errors}, workspace_errors={}, owner_conflicts={}, unresolved_indexes={unresolved_indexes}, preview_changes={pending_preview}; follow the structured fleet_reconcile actions",
+                    self.refused.is_some(),
+                    self.workspace_errors.len(),
+                    self.conflicts_left_for_the_owner.len()
+                )
+            },
+        )
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FleetProjectMcpRewrite {
+    pub workspace: PathBuf,
+    pub path: PathBuf,
+    pub changed: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FleetWorkspaceError {
+    pub workspace: PathBuf,
+    pub error: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FleetNextAction {
+    pub program: &'static str,
+    pub arguments: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FleetLegacyIndexAction {
+    pub workspace: PathBuf,
+    pub state: &'static str,
+    pub source: Option<PathBuf>,
+    pub duplicate_paths: Vec<PathBuf>,
+    pub changed: bool,
+    pub required_action: Option<&'static str>,
+    pub next_action: Option<FleetNextAction>,
+    pub resolution_commands: Vec<FleetNextAction>,
+    pub outcome: Option<IndexMigrationOutcome>,
+    pub error: Option<String>,
 }
 
 /// Whether a contract path is one every workspace in the fleet can follow.
@@ -285,21 +434,25 @@ fn contract_is_portable(contract: &Path) -> bool {
 ///
 /// Doctor could name the stale set but not repair it, so the only remedy was visiting each
 /// workspace by hand — which is how a fleet drifts to 158 stale files in the first place.
-/// This walks the same registry the check walks and applies the same instruction install the
-/// workspace's own `hzr init` would. It never touches a workspace that has no managed block:
-/// adopting a new project stays an explicit `hzr init`. User-authored lines outside the block
-/// are never rewritten here either — they remain a reported finding for their owner.
-pub fn reconcile_fleet_contracts(
+/// This walks the same registry the check walks and applies the same instruction and project
+/// MCP writes the workspace's own `hzr init` would. Registration is the adoption boundary:
+/// missing surfaces are created for registered roots, while unregistered directories are never
+/// discovered or changed. User-authored lines outside the managed block are preserved.
+pub async fn reconcile_fleet_contracts(
     config: &Config,
     contract: &Path,
-    current_workspace: &Path,
+    binary: &Path,
     dry_run: bool,
+    migrate_legacy_indexes: bool,
 ) -> FleetReconcileReport {
     let snapshot = registered_workspaces(&config.data_dir);
     let mut report = FleetReconcileReport {
         dry_run,
         workspaces_scanned: 0,
         rewritten: Vec::new(),
+        project_codex_mcp: Vec::new(),
+        legacy_indexes: Vec::new(),
+        workspace_errors: Vec::new(),
         conflicts_left_for_the_owner: Vec::new(),
         refused: None,
     };
@@ -311,20 +464,54 @@ pub fn reconcile_fleet_contracts(
         ));
         return report;
     }
+    if !dry_run && !binary.is_file() {
+        report.refused = Some(format!(
+            "{} is not a durable HZR binary; install HZR before reconciling project MCP pins",
+            binary.display()
+        ));
+        return report;
+    }
     for registration in snapshot.registrations {
-        if registration.root == current_workspace || !registration.root.is_dir() {
+        if !registration.root.is_dir() {
+            report.workspace_errors.push(FleetWorkspaceError {
+                workspace: registration.root,
+                error: "registered workspace root is absent or not a directory".to_owned(),
+            });
             continue;
         }
         report.workspaces_scanned = report.workspaces_scanned.saturating_add(1);
-        for (surface, path) in activation::local_instruction_paths(&registration.root) {
-            let Ok(audit) = instructions::audit(surface, &path) else {
-                continue;
-            };
-            if !audit.installed || (audit.current && audit.contract_readable) {
-                continue;
+        let exemptions = match fleet_exemption::load(&registration.root) {
+            Ok(exemptions) => exemptions,
+            Err(error) => {
+                report.workspace_errors.push(FleetWorkspaceError {
+                    workspace: registration.root.clone(),
+                    error: format!("{error:#}; an unauditable waiver is not honoured"),
+                });
+                fleet_exemption::FleetExemptions::default()
             }
-            if !audit.conflicting_mandates.is_empty() {
+        };
+        for (surface, path) in activation::local_instruction_paths(&registration.root) {
+            let audit = match instructions::audit(surface, &path) {
+                Ok(audit) => audit,
+                Err(error) => {
+                    report.rewritten.push(FleetContractRewrite {
+                        path,
+                        surface: surface.as_str(),
+                        changed: false,
+                        error: Some(format!("{error:#}")),
+                    });
+                    continue;
+                }
+            };
+            if audit
+                .conflicting_mandates
+                .iter()
+                .any(|conflict| !exemptions.covers(conflict))
+            {
                 report.conflicts_left_for_the_owner.push(path.clone());
+            }
+            if audit.installed && audit.current && audit.contract_readable {
+                continue;
             }
             match instructions::install(surface, &path, contract, dry_run, true) {
                 Ok(installed) => report.rewritten.push(FleetContractRewrite {
@@ -341,8 +528,242 @@ pub fn reconcile_fleet_contracts(
                 }),
             }
         }
+        match client_config::install_project_codex(binary, &registration.root, dry_run, true) {
+            Ok(mcp) => report.project_codex_mcp.push(FleetProjectMcpRewrite {
+                workspace: registration.root.clone(),
+                path: mcp.path,
+                changed: mcp.changed,
+                error: None,
+            }),
+            Err(error) => report.project_codex_mcp.push(FleetProjectMcpRewrite {
+                workspace: registration.root.clone(),
+                path: client_config::project_codex_path(&registration.root),
+                changed: false,
+                error: Some(format!("{error:#}")),
+            }),
+        }
+        reconcile_legacy_index(
+            config,
+            &registration.root,
+            dry_run,
+            migrate_legacy_indexes,
+            &mut report,
+        )
+        .await;
     }
     report
+}
+
+async fn reconcile_legacy_index(
+    config: &Config,
+    workspace_root: &Path,
+    dry_run: bool,
+    migrate: bool,
+    report: &mut FleetReconcileReport,
+) {
+    let deadline = Deadlines::default().version;
+    let discovered = match Workspace::discover_managed(
+        workspace_root,
+        Path::new("git"),
+        &config.data_dir,
+        deadline,
+    )
+    .await
+    {
+        Ok(discovered) => discovered,
+        Err(error) => {
+            report.workspace_errors.push(FleetWorkspaceError {
+                workspace: workspace_root.to_path_buf(),
+                error: format!("cannot inspect grepai placement: {error}"),
+            });
+            return;
+        }
+    };
+    let placement = match discovered.placement() {
+        Ok(placement) => placement,
+        Err(error) => {
+            report.workspace_errors.push(FleetWorkspaceError {
+                workspace: workspace_root.to_path_buf(),
+                error: format!("cannot classify grepai placement: {error}"),
+            });
+            return;
+        }
+    };
+    let source = match placement {
+        IndexPlacement::LegacyProject { directory } => Some(directory),
+        IndexPlacement::ManagedSymlink { .. } if discovered.duplicate_index_dirs.is_empty() => {
+            return;
+        }
+        IndexPlacement::Missing { .. } if discovered.duplicate_index_dirs.is_empty() => return,
+        _ => None,
+    };
+    let next_action = FleetNextAction {
+        program: "hzr",
+        arguments: vec![
+            "doctor".to_owned(),
+            "--fix".to_owned(),
+            "--workspace".to_owned(),
+            workspace_root.to_string_lossy().into_owned(),
+            "--json".to_owned(),
+        ],
+    };
+    if !discovered.duplicate_index_dirs.is_empty() {
+        let migrate_root = source.is_some();
+        let mut resolution_commands = Vec::new();
+        for duplicate in &discovered.duplicate_index_dirs {
+            for mode in ["--dry-run", "--force"] {
+                resolution_commands.push(FleetNextAction {
+                    program: "hzr",
+                    arguments: vec![
+                        "migrate".to_owned(),
+                        "archive-index".to_owned(),
+                        "--workspace".to_owned(),
+                        workspace_root.to_string_lossy().into_owned(),
+                        "--source".to_owned(),
+                        duplicate.to_string_lossy().into_owned(),
+                        mode.to_owned(),
+                    ],
+                });
+            }
+        }
+        if migrate_root {
+            resolution_commands.push(FleetNextAction {
+                program: "hzr",
+                arguments: vec![
+                    "migrate".to_owned(),
+                    "apply".to_owned(),
+                    "--workspace".to_owned(),
+                    workspace_root.to_string_lossy().into_owned(),
+                ],
+            });
+        }
+        report.legacy_indexes.push(FleetLegacyIndexAction {
+            workspace: workspace_root.to_path_buf(),
+            state: "blocked_duplicates",
+            source,
+            duplicate_paths: discovered.duplicate_index_dirs,
+            changed: false,
+            required_action: Some("archive_or_remove_confirmed_duplicates"),
+            next_action: migrate_root.then_some(next_action),
+            resolution_commands,
+            outcome: None,
+            error: Some(
+                "duplicate .grepai directories are never deleted automatically; archive or remove each confirmed dormant duplicate, then run the reported command"
+                    .to_owned(),
+            ),
+        });
+        return;
+    }
+    let Some(source) = source else {
+        report.legacy_indexes.push(FleetLegacyIndexAction {
+            workspace: workspace_root.to_path_buf(),
+            state: "conflicting_placement",
+            source: None,
+            duplicate_paths: Vec::new(),
+            changed: false,
+            required_action: Some("inspect_conflicting_placement"),
+            next_action: Some(next_action),
+            resolution_commands: Vec::new(),
+            outcome: None,
+            error: Some("grepai placement is neither managed, missing, nor a root legacy directory; inspect before mutation".to_owned()),
+        });
+        return;
+    };
+    let source_empty = match std::fs::read_dir(&source) {
+        Ok(mut entries) => entries.next().is_none(),
+        Err(error) => {
+            report.legacy_indexes.push(FleetLegacyIndexAction {
+                workspace: workspace_root.to_path_buf(),
+                state: "legacy_index_unreadable",
+                source: Some(source),
+                duplicate_paths: Vec::new(),
+                changed: false,
+                required_action: Some("repair_permissions_or_archive_legacy_index"),
+                next_action: None,
+                resolution_commands: Vec::new(),
+                outcome: None,
+                error: Some(error.to_string()),
+            });
+            return;
+        }
+    };
+    let config_is_regular = std::fs::symlink_metadata(source.join("config.yaml"))
+        .is_ok_and(|metadata| metadata.file_type().is_file());
+    if !config_is_regular {
+        report.legacy_indexes.push(FleetLegacyIndexAction {
+            workspace: workspace_root.to_path_buf(),
+            state: if source_empty {
+                "empty_legacy_shell"
+            } else {
+                "incomplete_legacy_index"
+            },
+            source: Some(source),
+            duplicate_paths: Vec::new(),
+            changed: false,
+            required_action: Some(if source_empty {
+                "archive_or_remove_empty_legacy_shell"
+            } else {
+                "repair_or_archive_incomplete_legacy_index"
+            }),
+            next_action: None,
+            resolution_commands: Vec::new(),
+            outcome: None,
+            error: Some(
+                "root .grepai has no regular config.yaml and is not eligible for automatic migration"
+                    .to_owned(),
+            ),
+        });
+        return;
+    }
+    if !migrate || dry_run {
+        report.legacy_indexes.push(FleetLegacyIndexAction {
+            workspace: workspace_root.to_path_buf(),
+            state: if migrate {
+                "would_migrate"
+            } else {
+                "migration_available"
+            },
+            source: Some(source),
+            duplicate_paths: Vec::new(),
+            changed: false,
+            required_action: Some(if migrate {
+                "review_dry_run_then_apply"
+            } else {
+                "run_reported_command_or_enable_fleet_migration"
+            }),
+            next_action: Some(next_action),
+            resolution_commands: Vec::new(),
+            outcome: None,
+            error: None,
+        });
+        return;
+    }
+    match migrate_legacy_index(workspace_root, Path::new("git"), &config.data_dir, deadline).await {
+        Ok(outcome) => report.legacy_indexes.push(FleetLegacyIndexAction {
+            workspace: workspace_root.to_path_buf(),
+            state: "migrated",
+            source: Some(source),
+            duplicate_paths: Vec::new(),
+            changed: true,
+            required_action: None,
+            next_action: None,
+            resolution_commands: Vec::new(),
+            outcome: Some(outcome),
+            error: None,
+        }),
+        Err(error) => report.legacy_indexes.push(FleetLegacyIndexAction {
+            workspace: workspace_root.to_path_buf(),
+            state: "migration_failed",
+            source: Some(source),
+            duplicate_paths: Vec::new(),
+            changed: false,
+            required_action: Some("inspect_failure_then_retry_reported_command"),
+            next_action: Some(next_action),
+            resolution_commands: Vec::new(),
+            outcome: None,
+            error: Some(error.to_string()),
+        }),
+    }
 }
 
 fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) -> Vec<DoctorCheck> {
@@ -564,6 +985,23 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     let workspace_enabled = activation::is_enabled(config, workspace)
         .await
         .unwrap_or(false);
+    let audits_workspace_instructions = config.activation.mode == hzr_core::ActivationMode::All
+        || (config.activation.mode == hzr_core::ActivationMode::Selected && workspace_enabled);
+    let workspace_exemptions = if audits_workspace_instructions {
+        match fleet_exemption::load(workspace) {
+            Ok(exemptions) => exemptions,
+            Err(error) => {
+                checks.push(check(
+                    "workspace_instruction_exemption",
+                    CheckStatus::Error,
+                    format!("{error:#}; an unauditable waiver is not honoured"),
+                ));
+                fleet_exemption::FleetExemptions::default()
+            }
+        }
+    } else {
+        fleet_exemption::FleetExemptions::default()
+    };
     match config.activation.mode {
         hzr_core::ActivationMode::All => {
             for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
@@ -584,6 +1022,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                     },
                     surface,
                     &path,
+                    &workspace_exemptions,
                 ));
             }
         }
@@ -596,6 +1035,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                     },
                     surface,
                     &path,
+                    &workspace_exemptions,
                 ));
             }
         }
@@ -1093,6 +1533,36 @@ fn install_transaction_check(config_path: &Path, config: &Config, workspace: &Pa
     }
     let owner_config = PathBuf::from(owner_config.expect("validated owner config"));
     let owner_workspace = PathBuf::from(owner_workspace.expect("validated owner workspace"));
+    if state == Some("complete") {
+        let completed_all = completed.as_ref().is_some_and(|stages| {
+            stages.len() == crate::INSTALL_STAGES.len()
+                && stages
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::HashSet<_>>()
+                    == expected_stages
+        });
+        if !completed_all {
+            return check(
+                "install_transaction",
+                CheckStatus::Error,
+                format!(
+                    "complete install journal {} is missing stage receipts",
+                    path.display()
+                ),
+            );
+        }
+        return check(
+            "install_transaction",
+            CheckStatus::Pass,
+            format!(
+                "complete global forward-recovery journal at {} (recorded from config {} workspace {})",
+                path.display(),
+                owner_config.display(),
+                owner_workspace.display()
+            ),
+        );
+    }
     let current_config = if config_path.is_absolute() {
         config_path.to_path_buf()
     } else {
@@ -1116,31 +1586,6 @@ fn install_transaction_check(config_path: &Path, config: &Config, workspace: &Pa
                 current_config.display(),
                 current_workspace.display()
             ),
-        );
-    }
-    if state == Some("complete") {
-        let completed_all = completed.as_ref().is_some_and(|stages| {
-            stages.len() == crate::INSTALL_STAGES.len()
-                && stages
-                    .iter()
-                    .copied()
-                    .collect::<std::collections::HashSet<_>>()
-                    == expected_stages
-        });
-        if !completed_all {
-            return check(
-                "install_transaction",
-                CheckStatus::Error,
-                format!(
-                    "complete install journal {} is missing stage receipts",
-                    path.display()
-                ),
-            );
-        }
-        return check(
-            "install_transaction",
-            CheckStatus::Pass,
-            format!("complete forward-recovery journal at {}", path.display()),
         );
     }
     check(
@@ -1623,8 +2068,8 @@ mod tests {
         direct_icm_registration_detail, effective_workspace_mcp_statuses, fidelity_allowance_check,
         fidelity_durability_status_check, fleet_instruction_health_checks, hook_ownership_check,
         index_readiness_check, install_transaction_check, instruction_health_check,
-        integration_layout, reconcile_fleet_contracts, repair_legacy_index,
-        workspace_binding_check, workspace_instruction_health_check,
+        instruction_health_check_with_exemptions, integration_layout, reconcile_fleet_contracts,
+        repair_legacy_index, workspace_binding_check, workspace_instruction_health_check,
     };
 
     #[test]
@@ -1765,10 +2210,48 @@ mod tests {
             "workspace_codex_instructions",
             Surface::Codex,
             &target,
+            &crate::fleet_exemption::FleetExemptions::default(),
         );
         assert_eq!(result.status, CheckStatus::Warning);
         assert!(result.detail.contains("managed project contract is absent"));
         assert!(result.detail.contains("hzr init --if-needed"));
+    }
+
+    #[test]
+    fn current_workspace_honours_auditable_direct_rtk_waiver() {
+        let fixture = tempfile::tempdir().expect("fixture directory");
+        let contract = fixture.path().join("HZR.md");
+        let target = fixture.path().join("AGENTS.md");
+        fs::write(&contract, "contract").expect("contract fixture");
+        fs::write(&target, "Run `rtk cargo test` as the measured baseline.\n")
+            .expect("benchmark instruction");
+        instructions::install(Surface::Codex, &target, &contract, false, true)
+            .expect("managed instruction fixture");
+        let policy_dir = fixture.path().join(".hzr");
+        fs::create_dir_all(&policy_dir).expect("policy directory");
+        fs::write(
+            policy_dir.join("policy.toml"),
+            r#"schema_version = 1
+
+[[exemption]]
+rule = "direct-rtk"
+reason = "benchmark-subject"
+justification = "This repository measures upstream RTK as the explicit benchmark baseline against the HZR-owned fork."
+"#,
+        )
+        .expect("policy fixture");
+        let exemptions = crate::fleet_exemption::load(fixture.path()).expect("valid waiver");
+
+        let result = instruction_health_check_with_exemptions(
+            "workspace_codex_instructions",
+            Surface::Codex,
+            &target,
+            &exemptions,
+        );
+
+        assert_eq!(result.status, CheckStatus::Warning);
+        assert!(result.detail.contains("benchmark-subject"));
+        assert!(result.detail.contains("not silently passed"));
     }
 
     fn index_status(
@@ -1964,8 +2447,8 @@ mod tests {
         assert_eq!(check.status, CheckStatus::Pass);
     }
 
-    #[test]
-    fn a_source_tree_contract_is_never_written_across_the_fleet() {
+    #[tokio::test]
+    async fn a_source_tree_contract_is_never_written_across_the_fleet() {
         let fixture = tempfile::tempdir().expect("fixture");
         let config = Config {
             data_dir: fixture.path().join("data"),
@@ -1980,7 +2463,9 @@ mod tests {
             &checkout_contract,
             fixture.path(),
             /* dry_run */ false,
-        );
+            false,
+        )
+        .await;
         assert!(
             report.refused.is_some(),
             "a checkout-local contract path is unreadable from any other workspace"
@@ -1988,8 +2473,128 @@ mod tests {
         assert!(report.rewritten.is_empty());
 
         // The same request may still be planned: a plan writes nothing.
-        let planned = reconcile_fleet_contracts(&config, &checkout_contract, fixture.path(), true);
+        let planned =
+            reconcile_fleet_contracts(&config, &checkout_contract, fixture.path(), true, false)
+                .await;
         assert!(planned.refused.is_none());
+    }
+
+    #[tokio::test]
+    async fn fleet_reconcile_creates_all_surfaces_only_for_registered_workspaces() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let workspace = fixture.path().join("registered");
+        let unregistered = fixture.path().join("unregistered");
+        fs::create_dir_all(&workspace).expect("registered root");
+        fs::create_dir_all(&unregistered).expect("unregistered root");
+        let contract = fixture.path().join("current/share/hzr/HZR.md");
+        fs::create_dir_all(contract.parent().expect("contract parent")).expect("bundle layout");
+        fs::write(&contract, "contract").expect("contract fixture");
+        let binary = fixture.path().join("bin/hzr");
+        fs::create_dir_all(binary.parent().expect("binary parent")).expect("binary layout");
+        fs::write(&binary, "binary").expect("binary fixture");
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Config::default()
+        };
+        let discovered = Workspace::discover_managed(
+            &workspace,
+            Path::new("git"),
+            &config.data_dir,
+            Deadlines::default().version,
+        )
+        .await
+        .expect("workspace discovery");
+        discovered.register().expect("workspace registration");
+
+        let planned = reconcile_fleet_contracts(&config, &contract, &binary, true, false).await;
+        assert_eq!(planned.workspaces_scanned, 1);
+        assert_eq!(
+            planned.rewritten.iter().filter(|item| item.changed).count(),
+            2
+        );
+        assert_eq!(
+            planned
+                .project_codex_mcp
+                .iter()
+                .filter(|item| item.changed)
+                .count(),
+            1
+        );
+        assert_eq!(planned.completion_check().status, CheckStatus::Error);
+        assert!(!workspace.join("CLAUDE.md").exists());
+        assert!(!workspace.join("AGENTS.md").exists());
+        assert!(!workspace.join(".codex/config.toml").exists());
+
+        let applied = reconcile_fleet_contracts(&config, &contract, &binary, false, false).await;
+        assert!(applied.refused.is_none());
+        assert_eq!(applied.completion_check().status, CheckStatus::Pass);
+        assert!(instructions::is_installed(&workspace.join("CLAUDE.md")).expect("Claude audit"));
+        assert!(instructions::is_installed(&workspace.join("AGENTS.md")).expect("Codex audit"));
+        let mcp =
+            crate::client_config::status(Client::Codex, &workspace.join(".codex/config.toml"))
+                .expect("project MCP status");
+        assert!(mcp.registered);
+        let canonical_workspace = workspace.canonicalize().expect("canonical workspace");
+        assert_eq!(
+            mcp.pinned_workspace.as_deref(),
+            Some(canonical_workspace.to_string_lossy().as_ref())
+        );
+        assert!(!unregistered.join("CLAUDE.md").exists());
+        assert!(!unregistered.join("AGENTS.md").exists());
+        assert!(!unregistered.join(".codex/config.toml").exists());
+    }
+
+    #[tokio::test]
+    async fn fleet_migration_reports_duplicates_without_mutating_them() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let workspace = fixture.path().join("workspace");
+        fs::create_dir_all(&workspace).expect("workspace root");
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Config::default()
+        };
+        let discovered = Workspace::discover_managed(
+            &workspace,
+            Path::new("git"),
+            &config.data_dir,
+            Deadlines::default().version,
+        )
+        .await
+        .expect("workspace discovery");
+        discovered.register().expect("workspace registration");
+        let legacy = workspace.join(".grepai");
+        let duplicate = workspace.join("nested/.grepai");
+        fs::create_dir_all(&legacy).expect("root legacy index");
+        fs::create_dir_all(&duplicate).expect("nested duplicate");
+        fs::write(legacy.join("config.yaml"), "version: 1\n").expect("root config");
+        fs::write(duplicate.join("config.yaml"), "version: 1\n").expect("duplicate config");
+        let contract = fixture.path().join("current/share/hzr/HZR.md");
+        fs::create_dir_all(contract.parent().expect("contract parent")).expect("bundle layout");
+        fs::write(&contract, "contract").expect("contract fixture");
+        let binary = fixture.path().join("bin/hzr");
+        fs::create_dir_all(binary.parent().expect("binary parent")).expect("binary layout");
+        fs::write(&binary, "binary").expect("binary fixture");
+
+        let report = reconcile_fleet_contracts(&config, &contract, &binary, true, true).await;
+        let action = report.legacy_indexes.first().expect("legacy action");
+        assert_eq!(action.state, "blocked_duplicates");
+        assert_eq!(
+            action.required_action,
+            Some("archive_or_remove_confirmed_duplicates")
+        );
+        assert_eq!(
+            action.duplicate_paths,
+            vec![duplicate.canonicalize().expect("canonical duplicate")]
+        );
+        assert!(legacy.is_dir());
+        assert!(duplicate.is_dir());
+        assert_eq!(report.completion_check().status, CheckStatus::Error);
+        assert!(action.resolution_commands.iter().any(|command| {
+            command
+                .arguments
+                .iter()
+                .any(|argument| argument == "archive-index")
+        }));
     }
 
     #[test]
@@ -2111,8 +2716,28 @@ mod tests {
         )
         .expect("wrong owner journal");
         let wrong = install_transaction_check(&config_path, &config, &workspace);
-        assert_eq!(wrong.status, CheckStatus::Error);
-        assert!(wrong.detail.contains("not current config"));
+        assert_eq!(wrong.status, CheckStatus::Pass);
+        assert!(wrong.detail.contains("complete global"));
+        assert!(wrong.detail.contains("other-workspace"));
+
+        let incomplete_wrong_owner = serde_json::json!({
+            "schema_version": crate::INSTALL_JOURNAL_SCHEMA_VERSION,
+            "state": "recovering",
+            "config_path": config_path,
+            "workspace": wrong_workspace,
+            "plan_sha256": "d".repeat(64),
+            "planned_stages": crate::INSTALL_STAGES,
+            "completed_stages": ["config"],
+            "attempt": 2
+        });
+        fs::write(
+            &journal_path,
+            serde_json::to_vec(&incomplete_wrong_owner).expect("journal JSON"),
+        )
+        .expect("incomplete wrong owner journal");
+        let incomplete_wrong = install_transaction_check(&config_path, &config, &workspace);
+        assert_eq!(incomplete_wrong.status, CheckStatus::Error);
+        assert!(incomplete_wrong.detail.contains("not current config"));
     }
 
     /// A client with no `hzr` registration at all is not an unpinned one; reporting it here

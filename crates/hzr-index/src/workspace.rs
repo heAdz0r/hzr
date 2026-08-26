@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -624,6 +624,13 @@ fn find_duplicate_indexes(root: &Path, canonical: &Path) -> Result<Vec<PathBuf>>
                 .unwrap_or_else(|| std::io::Error::other("directory traversal failed")),
         })?;
         let name = entry.file_name().to_string_lossy();
+        if entry.depth() > 0
+            && entry.file_type().is_dir()
+            && fs::symlink_metadata(entry.path().join(".git")).is_ok()
+        {
+            entries.skip_current_dir();
+            continue;
+        }
         if entry.file_type().is_dir()
             && matches!(name.as_ref(), ".git" | "target" | "node_modules" | ".venv")
         {
@@ -644,7 +651,7 @@ fn find_duplicate_indexes(root: &Path, canonical: &Path) -> Result<Vec<PathBuf>>
     Ok(duplicates)
 }
 
-fn active_duplicate_indexes(duplicates: &[PathBuf]) -> Result<Vec<PathBuf>> {
+pub(crate) fn active_duplicate_indexes(duplicates: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut active = Vec::new();
     for duplicate in duplicates {
         let lock_path = duplicate.join("index.gob.lock");

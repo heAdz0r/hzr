@@ -43,7 +43,7 @@ use hzr_core::{
 };
 use hzr_index::{
     Deadlines, GrepAi, IndexPlacement, InitOptions, InitOutcome, Workspace, WorkspaceRegistration,
-    migrate_legacy_index,
+    archive_duplicate_index, migrate_legacy_index,
 };
 use hzr_protocol::{
     AccountingAttribution, AccountingChannel, AccountingMeasurement, AccountingOperationKind,
@@ -71,9 +71,9 @@ use crate::invocation::normalize;
 use crate::migration::scan;
 use crate::output::{
     print_agent, print_context, print_doctor, print_engines, print_execution,
-    print_fleet_reconcile, print_health, print_index_init, print_index_status, print_json,
-    print_memories, print_memory_health, print_migration, print_migration_apply, print_rewrite,
-    print_stats, print_transform, render_search,
+    print_fleet_reconcile, print_health, print_index_archive, print_index_init, print_index_status,
+    print_json, print_memories, print_memory_health, print_migration, print_migration_apply,
+    print_rewrite, print_stats, print_transform, render_search,
 };
 
 #[tokio::main]
@@ -366,6 +366,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             fix,
             reconcile_fleet,
             dry_run,
+            migrate_legacy_indexes,
             resolve_fidelity,
             acknowledge_executed,
             prove_not_executed,
@@ -377,9 +378,17 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 let executable =
                     std::env::current_exe().context("cannot resolve the HZR executable")?;
                 let contract = contract_asset_path(&executable_source_directory(&executable)?);
-                Some(diagnostics::reconcile_fleet_contracts(
-                    &config, &contract, &workspace, dry_run,
-                ))
+                let binary = project_mcp_binary()?;
+                Some(
+                    diagnostics::reconcile_fleet_contracts(
+                        &config,
+                        &contract,
+                        &binary,
+                        dry_run,
+                        migrate_legacy_indexes,
+                    )
+                    .await,
+                )
             } else {
                 None
             };
@@ -412,6 +421,13 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             report.repair = repair;
             report.fidelity_reconcile = fidelity_reconcile;
             report.fleet_reconcile = fleet_reconcile;
+            if let Some(fleet) = &report.fleet_reconcile {
+                let completion = fleet.completion_check();
+                if completion.status == diagnostics::CheckStatus::Error {
+                    report.healthy = false;
+                }
+                report.checks.push(completion);
+            }
             if cli.json {
                 print_json(&report)?;
             } else {
@@ -680,6 +696,34 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     print_json(&outcome)?;
                 } else {
                     print_migration_apply(&outcome)?;
+                }
+                Ok(ExitCode::SUCCESS)
+            }
+            MigrateCommand::ArchiveIndex {
+                workspace,
+                source,
+                dry_run,
+                force,
+            } => {
+                if !dry_run && !force {
+                    bail!(
+                        "index archive requires `--dry-run` for inspection or `--force` to apply"
+                    );
+                }
+                let workspace = canonical_directory(workspace.as_deref())?;
+                let outcome = archive_duplicate_index(
+                    &workspace,
+                    &source,
+                    Path::new("git"),
+                    &config.data_dir,
+                    Deadlines::default().version,
+                    force,
+                )
+                .await?;
+                if cli.json {
+                    print_json(&outcome)?;
+                } else {
+                    print_index_archive(&outcome)?;
                 }
                 Ok(ExitCode::SUCCESS)
             }

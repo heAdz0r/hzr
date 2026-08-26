@@ -55,13 +55,17 @@ pub const DOCTOR_LONG_ABOUT: &str = "\
 Verify current managed instructions, pins, ownership, daemon health, and duplicate indexes for one workspace. \
 Use `--fix` to transactionally migrate one unambiguous legacy index with a retained backup. \
 Duplicate or conflicting indexes remain unchanged and fail with their exact paths. Stale \
-instructions remain read-only here and are repaired by `hzr init --if-needed`.";
+instructions remain read-only by default. `--reconcile-fleet` repairs managed instructions and \
+project Codex pins only for registered workspaces. Add `--migrate-legacy-indexes` to migrate \
+unambiguous root indexes; duplicate archives always require an explicit reported command.";
 
 pub const DOCTOR_AFTER_HELP: &str = "\
 Examples:
   hzr doctor
   hzr doctor --workspace /path/to/project
   hzr doctor --fix --workspace /path/to/project
+  hzr doctor --reconcile-fleet --dry-run
+  hzr doctor --reconcile-fleet --migrate-legacy-indexes --dry-run
   hzr doctor --json
 ";
 

@@ -6,9 +6,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::error::{IndexError, Result};
 use crate::owner::IndexOwner;
+use crate::workspace::active_duplicate_indexes;
 use crate::workspace::{IndexPlacement, IndexPlacementPolicy, Workspace};
 
 use self::support::{
@@ -106,6 +108,258 @@ pub enum IndexMigrationOutcome {
         manifest_path: PathBuf,
         manifest: IndexMigrationManifest,
     },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexArchiveState {
+    Prepared,
+    Applied,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IndexArchiveManifest {
+    pub schema_version: u16,
+    pub archive_id: String,
+    pub state: IndexArchiveState,
+    pub repository_id: String,
+    pub worktree_id: String,
+    pub workspace_root: ManifestPath,
+    pub source: ManifestPath,
+    pub backup: ManifestPath,
+    pub tree_sha256: String,
+    pub entries: Vec<IndexMigrationEntry>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum IndexArchiveOutcome {
+    Planned {
+        manifest_path: PathBuf,
+        manifest: IndexArchiveManifest,
+    },
+    Applied {
+        manifest_path: PathBuf,
+        manifest: IndexArchiveManifest,
+    },
+    AlreadyApplied {
+        manifest_path: PathBuf,
+        manifest: IndexArchiveManifest,
+    },
+}
+
+pub async fn archive_duplicate_index(
+    start: &Path,
+    source: &Path,
+    git_binary: &Path,
+    data_root: &Path,
+    deadline: Duration,
+    apply: bool,
+) -> Result<IndexArchiveOutcome> {
+    let workspace = Workspace::discover_managed(start, git_binary, data_root, deadline).await?;
+    let source = normalize_archive_source(&workspace.identity.root, source)?;
+    let archive_id = hex::encode(Sha256::digest(source.as_os_str().as_encoded_bytes()));
+    let manifest_dir = data_root
+        .join("migrations")
+        .join(&workspace.identity.repository_id)
+        .join(&workspace.identity.worktree_id);
+    let prepared_path = manifest_dir.join(format!("archive-{archive_id}.prepared.json"));
+    let applied_path = manifest_dir.join(format!("archive-{archive_id}.json"));
+
+    if let Some(manifest) = read_manifest::<IndexArchiveManifest>(&applied_path)? {
+        validate_archive_manifest(&workspace, &source, &manifest)?;
+        validate_archive_backup(&source, &manifest)?;
+        return Ok(IndexArchiveOutcome::AlreadyApplied {
+            manifest_path: applied_path,
+            manifest,
+        });
+    }
+
+    let existing_prepared = read_manifest::<IndexArchiveManifest>(&prepared_path)?;
+    let source_present = match fs::symlink_metadata(&source) {
+        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => true,
+        Ok(_) => {
+            return Err(conflict(format!(
+                "duplicate index source is not a real directory: {}",
+                source.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(source_error) => {
+            return Err(IndexError::Io {
+                operation: "inspect duplicate index source",
+                path: source.clone(),
+                source: source_error,
+            });
+        }
+    };
+    if !source_present {
+        let mut manifest = existing_prepared.ok_or_else(|| {
+            conflict(format!(
+                "duplicate index source does not exist and has no recovery manifest: {}",
+                source.display()
+            ))
+        })?;
+        validate_archive_manifest(&workspace, &source, &manifest)?;
+        validate_archive_backup(&source, &manifest)?;
+        if !apply {
+            return Ok(IndexArchiveOutcome::Planned {
+                manifest_path: applied_path,
+                manifest,
+            });
+        }
+        manifest.state = IndexArchiveState::Applied;
+        write_new_manifest(&applied_path, &manifest)?;
+        return Ok(IndexArchiveOutcome::Applied {
+            manifest_path: applied_path,
+            manifest,
+        });
+    }
+    if !workspace
+        .duplicate_index_dirs
+        .iter()
+        .any(|path| path == &source)
+    {
+        return Err(conflict(format!(
+            "{} is not a parent-owned duplicate .grepai for workspace {}",
+            source.display(),
+            workspace.identity.root.display()
+        )));
+    }
+    if !active_duplicate_indexes(std::slice::from_ref(&source))?.is_empty() {
+        return Err(conflict(format!(
+            "duplicate index has an active writer lock: {}",
+            source.display()
+        )));
+    }
+    let source_snapshot = snapshot(&source)?;
+    let suffix = migration_suffix(&source_snapshot.digest)?;
+    let backup = source
+        .parent()
+        .ok_or_else(|| conflict("duplicate index has no parent"))?
+        .join(format!(".grepai.hzr-archive-{suffix}"));
+    let mut manifest = IndexArchiveManifest {
+        schema_version: INDEX_MIGRATION_SCHEMA_VERSION,
+        archive_id,
+        state: IndexArchiveState::Prepared,
+        repository_id: workspace.identity.repository_id.clone(),
+        worktree_id: workspace.identity.worktree_id.clone(),
+        workspace_root: ManifestPath::new(&workspace.identity.root),
+        source: ManifestPath::new(&source),
+        backup: ManifestPath::new(&backup),
+        tree_sha256: source_snapshot.digest,
+        entries: source_snapshot
+            .entries
+            .iter()
+            .map(|entry| entry.manifest.clone())
+            .collect(),
+    };
+    if let Some(prepared) = existing_prepared {
+        if prepared != manifest {
+            return Err(conflict(format!(
+                "prepared archive manifest disagrees with source {}",
+                source.display()
+            )));
+        }
+    } else if apply {
+        create_directory(&manifest_dir, "create index archive manifest directory")?;
+        write_new_manifest(&prepared_path, &manifest)?;
+    }
+    ensure_absent(&backup, "duplicate index archive")?;
+    if !apply {
+        return Ok(IndexArchiveOutcome::Planned {
+            manifest_path: applied_path,
+            manifest,
+        });
+    }
+    fs::rename(&source, &backup).map_err(|source_error| IndexError::Io {
+        operation: "archive duplicate grepai index",
+        path: source.clone(),
+        source: source_error,
+    })?;
+    sync_directory(source.parent().unwrap_or_else(|| Path::new(".")))?;
+    if snapshot(&backup)?.digest != manifest.tree_sha256 {
+        return Err(conflict(format!(
+            "archived duplicate differs from its source manifest: {}",
+            backup.display()
+        )));
+    }
+    manifest.state = IndexArchiveState::Applied;
+    write_new_manifest(&applied_path, &manifest)?;
+    Ok(IndexArchiveOutcome::Applied {
+        manifest_path: applied_path,
+        manifest,
+    })
+}
+
+fn normalize_archive_source(workspace_root: &Path, source: &Path) -> Result<PathBuf> {
+    let requested = if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        workspace_root.join(source)
+    };
+    if requested.file_name().and_then(|name| name.to_str()) != Some(".grepai") {
+        return Err(conflict(
+            "archive source must name an exact .grepai directory",
+        ));
+    }
+    let parent = requested
+        .parent()
+        .ok_or_else(|| conflict("archive source has no parent"))?
+        .canonicalize()
+        .map_err(|source_error| IndexError::Io {
+            operation: "canonicalize duplicate index parent",
+            path: requested.clone(),
+            source: source_error,
+        })?;
+    let normalized = parent.join(".grepai");
+    if normalized == workspace_root.join(".grepai") || !normalized.starts_with(workspace_root) {
+        return Err(conflict(format!(
+            "archive source must be a nested duplicate inside {}",
+            workspace_root.display()
+        )));
+    }
+    Ok(normalized)
+}
+
+fn validate_archive_manifest(
+    workspace: &Workspace,
+    source: &Path,
+    manifest: &IndexArchiveManifest,
+) -> Result<()> {
+    let expected_archive_id = hex::encode(Sha256::digest(source.as_os_str().as_encoded_bytes()));
+    if manifest.schema_version != INDEX_MIGRATION_SCHEMA_VERSION
+        || manifest.archive_id != expected_archive_id
+        || manifest.repository_id != workspace.identity.repository_id
+        || manifest.worktree_id != workspace.identity.worktree_id
+        || !manifest.workspace_root.matches(&workspace.identity.root)
+        || !manifest.source.matches(source)
+    {
+        return Err(conflict(
+            "duplicate index archive manifest does not describe this workspace and source",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_archive_backup(source: &Path, manifest: &IndexArchiveManifest) -> Result<()> {
+    let suffix = migration_suffix(&manifest.tree_sha256)?;
+    let backup = source
+        .parent()
+        .ok_or_else(|| conflict("duplicate index has no parent"))?
+        .join(format!(".grepai.hzr-archive-{suffix}"));
+    if !manifest.backup.matches(&backup) {
+        return Err(conflict(
+            "duplicate index archive manifest names a foreign backup",
+        ));
+    }
+    if snapshot(&backup)?.digest != manifest.tree_sha256 {
+        return Err(conflict(format!(
+            "duplicate index archive no longer matches its manifest: {}",
+            backup.display()
+        )));
+    }
+    Ok(())
 }
 
 pub async fn migrate_legacy_index(
@@ -297,14 +551,14 @@ fn replay_applied(
     prepared_path: &Path,
     applied_path: &Path,
 ) -> Result<IndexMigrationOutcome> {
-    let manifest = read_manifest(applied_path)?.ok_or_else(|| {
+    let manifest = read_manifest::<IndexMigrationManifest>(applied_path)?.ok_or_else(|| {
         conflict(format!(
             "managed index has no applied migration manifest at {}",
             applied_path.display()
         ))
     })?;
     let _canonical_owner = IndexOwner::acquire_path(target, &target.join("hzr-owner.lock"))?;
-    let prepared = read_manifest(prepared_path)?.ok_or_else(|| {
+    let prepared = read_manifest::<IndexMigrationManifest>(prepared_path)?.ok_or_else(|| {
         conflict(format!(
             "applied migration is missing its prepared manifest at {}",
             prepared_path.display()

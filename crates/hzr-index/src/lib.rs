@@ -21,8 +21,9 @@ pub use grepai::{
     SINGLE_WORKTREE_WATCH_FLAG, SUPPORTED_GREPAI_VERSION, StoreBackend,
 };
 pub use migration::{
-    INDEX_MIGRATION_SCHEMA_VERSION, IndexEntryKind, IndexMigrationEntry, IndexMigrationManifest,
-    IndexMigrationOutcome, IndexMigrationState, ManifestPath, migrate_legacy_index,
+    INDEX_MIGRATION_SCHEMA_VERSION, IndexArchiveManifest, IndexArchiveOutcome, IndexArchiveState,
+    IndexEntryKind, IndexMigrationEntry, IndexMigrationManifest, IndexMigrationOutcome,
+    IndexMigrationState, ManifestPath, archive_duplicate_index, migrate_legacy_index,
 };
 pub use registry::{
     WORKSPACE_REGISTRATION_SCHEMA_VERSION, WorkspaceRegistration, WorkspaceRegistrySnapshot,

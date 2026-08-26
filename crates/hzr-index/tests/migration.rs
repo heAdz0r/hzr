@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use fs2::FileExt;
 use hzr_index::{
-    IndexError, IndexMigrationManifest, IndexMigrationOutcome, IndexMigrationState, Workspace,
-    migrate_legacy_index,
+    IndexArchiveOutcome, IndexError, IndexMigrationManifest, IndexMigrationOutcome,
+    IndexMigrationState, Workspace, archive_duplicate_index, migrate_legacy_index,
 };
 use tempfile::TempDir;
 
@@ -80,6 +80,66 @@ async fn test_migrate_legacy_index_refuses_duplicate_indexes_without_mutation() 
     assert!(matches!(result, Err(IndexError::DuplicateIndexes { .. })));
     assert!(fixture.legacy.is_dir());
     assert!(!fixture.data.path().join("workspaces").exists());
+}
+
+#[tokio::test]
+async fn test_archive_duplicate_index_is_explicit_hashed_and_idempotent() {
+    let fixture = MigrationFixture::new();
+    let duplicate = fixture.project.path().join("vendor/module/.grepai");
+    fs::create_dir_all(&duplicate).expect("create duplicate index");
+    fs::write(duplicate.join("config.yaml"), b"version: 1\n").expect("write duplicate config");
+    fs::write(duplicate.join("index.gob"), b"duplicate vectors").expect("write vectors");
+
+    let planned = archive_duplicate_index(
+        fixture.project.path(),
+        &duplicate,
+        Path::new(MISSING_GIT),
+        fixture.data.path(),
+        Duration::from_secs(1),
+        false,
+    )
+    .await
+    .expect("archive dry-run");
+    assert!(matches!(planned, IndexArchiveOutcome::Planned { .. }));
+    assert!(duplicate.is_dir());
+    assert!(!fixture.data.path().join("migrations").exists());
+
+    let applied = archive_duplicate_index(
+        fixture.project.path(),
+        &duplicate,
+        Path::new(MISSING_GIT),
+        fixture.data.path(),
+        Duration::from_secs(1),
+        true,
+    )
+    .await
+    .expect("archive apply");
+    let (manifest_path, backup) = match applied {
+        IndexArchiveOutcome::Applied {
+            manifest_path,
+            manifest,
+        } => Some((manifest_path, PathBuf::from(manifest.backup.display))),
+        _ => None,
+    }
+    .expect("first archive must apply");
+    assert!(manifest_path.is_file());
+    assert!(!duplicate.exists());
+    assert_eq!(
+        fs::read(backup.join("index.gob")).expect("archived vectors"),
+        b"duplicate vectors"
+    );
+
+    let replay = archive_duplicate_index(
+        fixture.project.path(),
+        &duplicate,
+        Path::new(MISSING_GIT),
+        fixture.data.path(),
+        Duration::from_secs(1),
+        true,
+    )
+    .await
+    .expect("archive replay");
+    assert!(matches!(replay, IndexArchiveOutcome::AlreadyApplied { .. }));
 }
 
 #[tokio::test]

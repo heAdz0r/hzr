@@ -335,6 +335,31 @@ pub fn print_stats(report: &StatsReport) -> io::Result<()> {
     crate::stats_output::print(report)
 }
 
+pub fn print_index_archive(outcome: &hzr_index::IndexArchiveOutcome) -> io::Result<()> {
+    let (state, manifest_path, manifest) = match outcome {
+        hzr_index::IndexArchiveOutcome::Planned {
+            manifest_path,
+            manifest,
+        } => ("planned", manifest_path, manifest),
+        hzr_index::IndexArchiveOutcome::Applied {
+            manifest_path,
+            manifest,
+        } => ("applied", manifest_path, manifest),
+        hzr_index::IndexArchiveOutcome::AlreadyApplied {
+            manifest_path,
+            manifest,
+        } => ("already-applied", manifest_path, manifest),
+    };
+    writeln!(
+        io::stdout().lock(),
+        "index archive {state}: source={} backup={} sha256={} manifest={}",
+        manifest.source.display,
+        manifest.backup.display,
+        manifest.tree_sha256,
+        manifest_path.display()
+    )
+}
+
 pub fn print_fleet_reconcile(report: &crate::diagnostics::FleetReconcileReport) -> io::Result<()> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
@@ -363,6 +388,60 @@ pub fn print_fleet_reconcile(report: &crate::diagnostics::FleetReconcileReport) 
         if let Some(error) = &entry.error {
             writeln!(output, "  FAILED {}: {error}", entry.path.display())?;
         }
+    }
+    let mcp_changed = report
+        .project_codex_mcp
+        .iter()
+        .filter(|entry| entry.changed)
+        .count();
+    writeln!(
+        output,
+        "fleet project Codex MCP: {verb} {mcp_changed} pin(s)"
+    )?;
+    for entry in report
+        .project_codex_mcp
+        .iter()
+        .filter(|entry| entry.changed)
+    {
+        writeln!(
+            output,
+            "  codex {} -> {}",
+            entry.workspace.display(),
+            entry.path.display()
+        )?;
+    }
+    for entry in &report.project_codex_mcp {
+        if let Some(error) = &entry.error {
+            writeln!(output, "  FAILED {}: {error}", entry.path.display())?;
+        }
+    }
+    for entry in &report.legacy_indexes {
+        writeln!(
+            output,
+            "  grepai {}: {}{}",
+            entry.workspace.display(),
+            entry.state,
+            entry
+                .error
+                .as_ref()
+                .map(|error| format!(" - {error}"))
+                .unwrap_or_default()
+        )?;
+        for command in &entry.resolution_commands {
+            let argv = std::iter::once(command.program)
+                .chain(command.arguments.iter().map(String::as_str))
+                .collect::<Vec<_>>();
+            let rendered = serde_json::to_string(&argv).map_err(io::Error::other)?;
+            writeln!(output, "    next argv: {}", rendered)?;
+        }
+    }
+    for entry in &report.workspace_errors {
+        writeln!(
+            output,
+            "  FAILED workspace {}: {}",
+            entry.workspace.display(),
+            entry.error
+        )?;
     }
     // A refreshed block next to a surviving user directive is still a finding. Name those
     // files so the refresh cannot read as "this workspace is now clean".

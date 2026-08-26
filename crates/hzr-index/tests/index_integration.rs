@@ -35,6 +35,33 @@ async fn test_workspace_uses_git_root_and_reports_dormant_nested_indexes() {
 }
 
 #[tokio::test]
+async fn test_workspace_does_not_claim_a_nested_git_roots_index() {
+    let repo = git_repo();
+    let nested_repo = repo.path().join("vendor/independent");
+    fs::create_dir_all(&nested_repo).expect("nested repository root");
+    let status = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&nested_repo)
+        .status()
+        .expect("nested git init must execute");
+    assert!(status.success());
+    fs::create_dir_all(nested_repo.join(".grepai")).expect("nested repository index");
+    let parent_duplicate = repo.path().join("packages/package/.grepai");
+    fs::create_dir_all(&parent_duplicate).expect("parent-owned duplicate");
+
+    let workspace = discover(repo.path()).await;
+
+    assert_eq!(
+        workspace.duplicate_index_dirs,
+        vec![
+            parent_duplicate
+                .canonicalize()
+                .expect("canonical parent duplicate")
+        ]
+    );
+}
+
+#[tokio::test]
 async fn test_coordinator_keeps_canonical_index_available_with_dormant_nested_index() {
     let repo = git_repo();
     let data = tempfile::tempdir().expect("managed data root");
