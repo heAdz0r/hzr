@@ -206,7 +206,7 @@ git -C "${HZR_BUILD_TEMP}/icm" apply \
 cargo build \
   --manifest-path "${HZR_BUILD_TEMP}/icm/Cargo.toml" \
   --locked --release --package icm-cli \
-  --no-default-features --features "embeddings-static,backend-sqlite"
+  --no-default-features --features "embeddings-static,http-api,backend-sqlite"
 install -m 0755 "${HZR_BUILD_TEMP}/icm/target/release/icm" "${HZR_ENGINE_OUTPUT}/icm"
 "${HZR_ENGINE_OUTPUT}/icm" --version | grep -F "0.10.61" >/dev/null
 
