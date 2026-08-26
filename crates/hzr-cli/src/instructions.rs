@@ -23,6 +23,12 @@ const LEGACY_RTK_BEGIN: &str = "<!-- rtk-instructions";
 const LEGACY_RTK_END: &str = "<!-- /rtk-instructions -->";
 const AGENT_CAPABILITIES_JSON: &str = include_str!("../../../contracts/agent-capabilities.json");
 
+/// Column at which managed prose wraps. Author-written lines in this block already
+/// respect it; paragraphs that interpolate an installation path or a capability value
+/// are wrapped programmatically, because the value's length is not known here and a
+/// long one would otherwise emit a 200-column line into a user's instruction file.
+const MANAGED_PROSE_WIDTH: usize = 88;
+
 #[derive(Debug, Deserialize)]
 struct AgentCapabilities {
     schema_version: u32,
@@ -155,6 +161,58 @@ pub struct InstructionReport {
     pub after_sha256: String,
 }
 
+/// Wrappable units of managed prose: whitespace separated, except that a `code span`
+/// stays whole. An installation path may contain spaces and has to stay copy-pasteable,
+/// so it keeps its own line instead of being broken in half.
+fn prose_words(text: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    let mut span: Option<String> = None;
+    for token in text.split_whitespace() {
+        let closes = token.matches('`').count() % 2 == 1;
+        match span.as_mut() {
+            Some(open) => {
+                open.push(' ');
+                open.push_str(token);
+                if closes {
+                    words.push(span.take().unwrap_or_default());
+                }
+            }
+            None if closes => span = Some(token.to_string()),
+            None => words.push(token.to_string()),
+        }
+    }
+    if let Some(unterminated) = span.take() {
+        words.push(unterminated);
+    }
+    words
+}
+
+/// Greedy word wrap for one managed prose paragraph, applied *after* interpolation, so
+/// the rendered width never depends on how long a path or capability value happens to be.
+/// A unit wider than `width` owns its line rather than being split.
+fn wrap_prose(text: &str, width: usize) -> String {
+    let words = prose_words(text);
+    let mut wrapped = String::new();
+    let mut line = String::new();
+    for word in words {
+        let fits = line.is_empty() || line.chars().count() + 1 + word.chars().count() <= width;
+        if !fits {
+            wrapped.push_str(&line);
+            wrapped.push('\n');
+            line.clear();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(&word);
+    }
+    if !line.is_empty() {
+        wrapped.push_str(&line);
+        wrapped.push('\n');
+    }
+    wrapped
+}
+
 /// The managed block. `contract_path` is the absolute `HZR.md` shipped with the
 /// installation, referenced rather than inlined so a single file stays canonical.
 fn managed_block(surface: Surface, contract_path: &Path) -> String {
@@ -208,28 +266,35 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
     assert_eq!(codec.coverage, "instructed");
     assert!(!codec.economic_credit);
     let codec_guidance = format!(
-        concat!(
-            "## Response codec coverage\n\n",
-            "This host cannot let HZR replace every final response. Coverage is `{coverage}` via\n",
-            "`{mechanism}`. Before delivering long low- or medium-risk prose where compression\n",
-            "is useful, call `hzr_codec` once and use its returned `content`. If the tool is not\n",
-            "available, keep the response concise and report codec coverage as unavailable.\n",
-            "An explicit tool result is not proof that the host delivered it: HZR grants zero\n",
-            "economic credit unless a trusted host confirms replacement. Shadow results are\n",
-            "counterfactual measurements only.\n\n"
+        "## Response codec coverage\n\n{}\n",
+        wrap_prose(
+            &format!(
+                "This host cannot let HZR replace every final response. Coverage is \
+                 `{coverage}` via `{mechanism}`. Before delivering long low- or medium-risk \
+                 prose where compression is useful, call `hzr_codec` once and use its \
+                 returned `content`. If the tool is not available, keep the response concise \
+                 and report codec coverage as unavailable. An explicit tool result is not \
+                 proof that the host delivered it: HZR grants zero economic credit unless a \
+                 trusted host confirms replacement. Shadow results are counterfactual \
+                 measurements only.",
+                coverage = codec.coverage,
+                mechanism = codec.mechanism,
+            ),
+            MANAGED_PROSE_WIDTH,
         ),
-        coverage = codec.coverage,
-        mechanism = codec.mechanism,
     );
     let contract_pointer = format!(
-        concat!(
-            "Read the full contract at `{0}` only when a bounded lookup cannot resolve ",
-            "HZR-policy ambiguity.\n",
-            "Ordinary tasks must not import or read it in full. Start with ",
-            "`hzr read {0} --outline`, then read only the relevant ",
-            "`--from`/`--to` range.\n\n",
+        "{}\n",
+        wrap_prose(
+            &format!(
+                "Read the full contract at `{0}` only when a bounded lookup cannot resolve \
+                 HZR-policy ambiguity. Ordinary tasks must not import or read it in full. \
+                 Start with `hzr read {0} --outline`, then read only the relevant \
+                 `--from`/`--to` range.",
+                contract_path.display(),
+            ),
+            MANAGED_PROSE_WIDTH,
         ),
-        contract_path.display(),
     );
 
     format!(
@@ -859,12 +924,47 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        BEGIN, END, Surface, compose, migrate_legacy_directives, strip_legacy_imports,
-        strip_managed_block,
+        BEGIN, END, MANAGED_PROSE_WIDTH, Surface, compose, managed_block,
+        migrate_legacy_directives, prose_words, strip_legacy_imports, strip_managed_block,
     };
 
     fn contract() -> &'static Path {
         Path::new("/opt/hzr/share/hzr/HZR.md")
+    }
+
+    #[test]
+    fn test_managed_prose_never_exceeds_the_wrap_width() {
+        // A realistic long installation root: the block must not widen because of it.
+        let long_contract =
+            Path::new("/Users/a-very-long-account-name/.local/share/hzr/current/share/hzr/HZR.md");
+        for surface in [Surface::Claude, Surface::Codex] {
+            for line in managed_block(surface, long_contract).lines() {
+                // Table rows are laid out by column, and a single unbreakable unit
+                // (a path, or a command inside one code span) may own its line.
+                if line.starts_with('|') || prose_words(line).len() <= 1 {
+                    continue;
+                }
+                assert!(
+                    line.chars().count() <= MANAGED_PROSE_WIDTH,
+                    "{} managed line is {} columns: {line}",
+                    surface.as_str(),
+                    line.chars().count()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_managed_prose_keeps_a_path_with_spaces_on_one_line() {
+        let spaced = Path::new("/Users/someone/Library/Application Support/hzr/share/hzr/HZR.md");
+        for surface in [Surface::Claude, Surface::Codex] {
+            let block = managed_block(surface, spaced);
+            assert!(
+                block.contains("`/Users/someone/Library/Application Support/hzr/share/hzr/HZR.md`"),
+                "{} split a code span across lines",
+                surface.as_str()
+            );
+        }
     }
 
     #[test]
@@ -973,9 +1073,12 @@ mod tests {
     #[test]
     fn test_managed_surface_uses_bounded_contract_pointer_not_an_import() {
         let out = compose("", Surface::Codex, contract()).0;
-        assert!(out.contains("Read the full contract at `/opt/hzr/share/hzr/HZR.md` only when"));
-        assert!(out.contains("hzr read /opt/hzr/share/hzr/HZR.md --outline"));
-        assert!(out.contains("relevant `--from`/`--to` range"));
+        // Managed prose is wrapped after interpolation, so assert the sentence, not the
+        // line breaks it happens to land on.
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("Read the full contract at `/opt/hzr/share/hzr/HZR.md` only when"));
+        assert!(flat.contains("hzr read /opt/hzr/share/hzr/HZR.md --outline"));
+        assert!(flat.contains("relevant `--from`/`--to` range"));
         assert!(!out.contains("\n@/opt/hzr"));
         assert!(!out.contains("Bootstrap by reading"));
         assert!(!out.contains("HZR.md --level none` before other tool use"));

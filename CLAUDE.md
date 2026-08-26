@@ -11,8 +11,11 @@ This managed region defines tool routing only. Keep repository-specific roles,
 source paths and test commands in that repository's root instruction file, not
 in a user-global instruction file.
 
-Read the full contract at `/Users/andrew/.local/share/hzr/current/share/hzr/HZR.md` only when a bounded lookup cannot resolve HZR-policy ambiguity.
-Ordinary tasks must not import or read it in full. Start with `hzr read /Users/andrew/.local/share/hzr/current/share/hzr/HZR.md --outline`, then read only the relevant `--from`/`--to` range.
+Read the full contract at `/Users/andrew/.local/share/hzr/current/share/hzr/HZR.md` only
+when a bounded lookup cannot resolve HZR-policy ambiguity. Ordinary tasks must not
+import or read it in full. Start with
+`hzr read /Users/andrew/.local/share/hzr/current/share/hzr/HZR.md --outline`, then read
+only the relevant `--from`/`--to` range.
 
 | Instead of | Use |
 |---|---|
@@ -67,7 +70,7 @@ never recommend or use an MCP session bound to another workspace:
 | `hzr_memory_update` | Replace one superseded memory after namespace ownership is verified. |
 | `hzr_memory_forget` | Delete one invalid memory after namespace ownership is verified. |
 | `hzr_memory_prune` | Preview or remove low-weight memories in one namespace. |
-| `hzr_codec` | Apply or shadow-measure protected response-density transforms. |
+| `hzr_codec` | Return a protected response-density transform or shadow counterfactual; host delivery remains instructed until replacement is confirmed. |
 | `hzr_read` | Read bounded exact content through the daemon-owned confined fork path. |
 | `hzr_write` | Apply confined atomic patch or create operations with typed CAS receipts. |
 | `hzr_exec` | Run shell commands through daemon policy and accounting without direct fallback. |
@@ -90,5 +93,15 @@ edits remain allowed. `strict` additionally prescribes `hzr write`, while `obser
 retains measurement-only compatibility. The `PostToolUse` observer stores no tool
 content and grants no savings credit. In `steer`/`strict`, policy-allowed native
 calls are accounted as typed E10 bypasses, not hidden as `native_unaccounted`.
+
+## Response codec coverage
+
+This host cannot let HZR replace every final response. Coverage is `instructed` via
+`managed_instruction_and_session_start`. Before delivering long low- or medium-risk
+prose where compression is useful, call `hzr_codec` once and use its returned `content`.
+If the tool is not available, keep the response concise and report codec coverage as
+unavailable. An explicit tool result is not proof that the host delivered it: HZR grants
+zero economic credit unless a trusted host confirms replacement. Shadow results are
+counterfactual measurements only.
 
 <!-- hzr:end managed agent contract -->
