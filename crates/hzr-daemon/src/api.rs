@@ -3141,9 +3141,11 @@ async fn record_codec_operation(
     transform: &hzr_codec::Transform,
     elapsed: Duration,
 ) -> bool {
-    // Shadow reports what it *would* have saved; every other profile reports what it did.
+    // The returned tool/CLI payload is observable delivery and may earn estimated codec-token
+    // credit. That does not prove the host replaced a later assistant response, and it never
+    // becomes provider-billed credit without a matching provider receipt.
     let delivered = match &transform.counterfactual {
-        Some(counterfactual) => counterfactual.output_bytes,
+        Some(_) => request.content.len(),
         None => transform.content.len(),
     };
     state

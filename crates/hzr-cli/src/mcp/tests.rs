@@ -396,7 +396,10 @@ fn representative_output(name: &str) -> Option<Value> {
             "content": "unchanged",
             "changed": false,
             "profile": "adaptive",
-            "protected_spans": [{"start": 0, "end": 4, "kind": "code"}]
+            "protected_spans": [{"start": 0, "end": 4, "kind": "code"}],
+            "coverage_state": "applied",
+            "global_response_replacement_confirmed": false,
+            "estimated_token_credit_eligible": false
         }),
         "hzr_read" => json!({
             "content": "line one\n",
@@ -439,7 +442,9 @@ fn representative_output(name: &str) -> Option<Value> {
             "data_dir": "/data",
             "workspace": "/work",
             "healthy": true,
-            "checks": [{"name": "binding", "status": "pass", "detail": "exact"}]
+            "checks": [{"name": "binding", "status": "pass", "detail": "exact"}],
+            "client_workspace_bindings": [],
+            "response_codec_coverage": []
         }),
         _ => return None,
     })
@@ -489,6 +494,16 @@ fn test_the_density_codec_is_reachable_over_mcp() {
     assert!(
         codec["outputSchema"]["properties"]["counterfactual"].is_object(),
         "the codec must report what it would have saved, otherwise it earns no ledger credit"
+    );
+    assert!(
+        codec["outputSchema"]["properties"]["coverage_state"].is_object(),
+        "clients must distinguish applied tool output from instructed global response coverage"
+    );
+    assert!(
+        codec["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("never earns provider-billed credit")),
+        "the tool must not imply that a returned transform replaced the final assistant response"
     );
 }
 
@@ -744,7 +759,11 @@ fn test_the_registration_snippet_pins_the_workspace() {
     let binary = std::path::Path::new("/Users/andrew/.local/bin/hzr");
     let project = std::path::Path::new("/Users/andrew/code/app");
 
-    for client in [McpClientArg::Codex, McpClientArg::ClaudeDesktop] {
+    for client in [
+        McpClientArg::Codex,
+        McpClientArg::ClaudeDesktop,
+        McpClientArg::ClaudeCode,
+    ] {
         let pinned = registration_snippet(client, binary, Some(project));
         assert!(
             pinned.contains("--workspace") && pinned.contains("/Users/andrew/code/app"),
@@ -759,6 +778,9 @@ fn test_the_registration_snippet_pins_the_workspace() {
         unpinned.contains("--workspace"),
         "an unpinned desktop snippet must still name the flag it needs: {unpinned}"
     );
+    let claude_code = registration_snippet(McpClientArg::ClaudeCode, binary, Some(project));
+    assert!(claude_code.contains(".mcp.json"));
+    assert!(claude_code.contains("-s project"));
 }
 
 /// The converse: a real repository path must still bind, including one that has not been

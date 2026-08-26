@@ -364,6 +364,14 @@ fn doctor_schema() -> Value {
                     &["name", "status", "detail"]
                 )
             },
+            "client_workspace_bindings": {
+                "type": "array",
+                "items": {"type": "object"}
+            },
+            "response_codec_coverage": {
+                "type": "array",
+                "items": {"type": "object"}
+            },
             "repair": {"type": ["object", "null"]}
         }),
         &[
@@ -373,6 +381,8 @@ fn doctor_schema() -> Value {
             "workspace",
             "healthy",
             "checks",
+            "client_workspace_bindings",
+            "response_codec_coverage",
         ],
     )
 }
@@ -786,7 +796,10 @@ fn raw_tool_definitions() -> Vec<Value> {
         repeated paragraph comes back byte-identical and that is a correct result, not a \
         failure. Use profile \"shadow\" to measure the counterfactual without changing the \
         text. Protected spans are verified after the transform: if any of them changed, the \
-        call fails rather than returning altered technical content.",
+        call fails rather than returning altered technical content. Claude and Codex do not \
+        expose a global response-replacement hook. The returned tool payload can earn \
+        estimated codec-token credit when it is smaller, but it never proves a later final \
+        response was replaced and never earns provider-billed credit by itself.",
             "inputSchema": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "type": "object",
@@ -826,6 +839,12 @@ fn raw_tool_definitions() -> Vec<Value> {
                     "content": {"type": "string"},
                     "changed": {"type": "boolean"},
                     "profile": {"type": "string"},
+                    "coverage_state": {
+                        "type": "string",
+                        "enum": ["applied", "shadow_measured", "instructed", "unavailable"]
+                    },
+                    "global_response_replacement_confirmed": {"type": "boolean"},
+                    "estimated_token_credit_eligible": {"type": "boolean"},
                     "protected_spans": {
                         "type": "array",
                         "items": strict_object(
@@ -850,7 +869,10 @@ fn raw_tool_definitions() -> Vec<Value> {
                         "required": ["input_bytes", "output_bytes", "saved_bytes", "would_change"],
                     },
                 },
-                "required": ["content", "changed", "profile", "protected_spans"],
+                "required": [
+                    "content", "changed", "profile", "protected_spans", "coverage_state",
+                    "global_response_replacement_confirmed", "estimated_token_credit_eligible"
+                ],
             },
             "annotations": {
                 "readOnlyHint": true,

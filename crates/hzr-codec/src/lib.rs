@@ -72,6 +72,18 @@ pub struct Transform {
     pub protected_spans: Vec<ProtectedSpan>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub counterfactual: Option<CounterfactualSize>,
+    pub coverage_state: ResponseCodecCoverageState,
+    pub global_response_replacement_confirmed: bool,
+    pub estimated_token_credit_eligible: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseCodecCoverageState {
+    Applied,
+    ShadowMeasured,
+    Instructed,
+    Unavailable,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -126,6 +138,9 @@ pub fn transform(
                 saved_bytes: input.len().saturating_sub(candidate.len()),
                 would_change: candidate != input,
             }),
+            coverage_state: ResponseCodecCoverageState::ShadowMeasured,
+            global_response_replacement_confirmed: false,
+            estimated_token_credit_eligible: false,
         });
     }
     if fidelity == FidelityClass::Exact || profile == CodecProfile::Off {
@@ -135,17 +150,24 @@ pub fn transform(
             profile,
             protected_spans: spans,
             counterfactual: None,
+            coverage_state: ResponseCodecCoverageState::Applied,
+            global_response_replacement_confirmed: false,
+            estimated_token_credit_eligible: false,
         });
     }
 
     let content = candidate_transform(input, fidelity);
+    let changed = content != input;
 
     Ok(Transform {
-        changed: content != input,
+        changed,
         content,
         profile,
         protected_spans: spans,
         counterfactual: None,
+        coverage_state: ResponseCodecCoverageState::Applied,
+        global_response_replacement_confirmed: false,
+        estimated_token_credit_eligible: changed,
     })
 }
 
@@ -266,8 +288,8 @@ mod tests {
     use hzr_protocol::{CodecProfile, FidelityClass, RiskClass};
 
     use super::{
-        Density, EconomicInput, choose_density, compact_catalog_description, protected_spans,
-        transform, transform_for_risk,
+        Density, EconomicInput, ResponseCodecCoverageState, choose_density,
+        compact_catalog_description, protected_spans, transform, transform_for_risk,
     };
 
     #[test]
@@ -292,6 +314,9 @@ mod tests {
         assert!(result.content.contains("STARTER/BUSINESS"));
         assert!(result.content.contains("--mode"));
         assert!(result.counterfactual.is_none());
+        assert_eq!(result.coverage_state, ResponseCodecCoverageState::Applied);
+        assert!(!result.global_response_replacement_confirmed);
+        assert!(result.estimated_token_credit_eligible);
     }
 
     #[test]
@@ -306,6 +331,12 @@ mod tests {
 
         assert_eq!(result.content, input);
         assert!(!result.changed);
+        assert_eq!(
+            result.coverage_state,
+            ResponseCodecCoverageState::ShadowMeasured
+        );
+        assert!(!result.global_response_replacement_confirmed);
+        assert!(!result.estimated_token_credit_eligible);
         let counterfactual = result.counterfactual.expect("shadow measurement");
         assert!(counterfactual.would_change);
         assert_eq!(counterfactual.input_bytes, input.len());

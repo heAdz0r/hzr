@@ -1288,6 +1288,21 @@ pub fn registration_snippet(
                  {hint}{{\n  \"mcpServers\": {{\n    \"hzr\": {{\n      \"command\": \"{binary}\",\n      \"args\": {json_args}\n    }}\n  }}\n}}\n"
             )
         }
+        McpClientArg::ClaudeCode => {
+            let hint = if unpinned_warning {
+                "// Claude Code linked worktrees may share a local identity. Re-run with\n\
+                 // `--workspace <dir>` and put the result in that worktree's `.mcp.json`;\n\
+                 // until then use the workspace-pinned HZR CLI.\n"
+            } else {
+                ""
+            };
+            format!(
+                "// .mcp.json — project scope is isolated per worktree. HZR never writes\n\
+                 // Claude Code's user state. Equivalent CLI: `claude mcp add -s project hzr\n\
+                 // -- {binary} mcp serve --workspace <dir>`.\n\
+                 {hint}{{\n  \"mcpServers\": {{\n    \"hzr\": {{\n      \"command\": \"{binary}\",\n      \"args\": {json_args}\n    }}\n  }}\n}}\n"
+            )
+        }
     }
 }
 

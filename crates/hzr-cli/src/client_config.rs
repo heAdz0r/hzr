@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -19,6 +20,62 @@ pub enum Client {
     ClaudeCode,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceBindingCapability {
+    ProjectScoped,
+    SingletonSelectedWorkspace,
+}
+
+impl WorkspaceBindingCapability {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProjectScoped => "project_scoped",
+            Self::SingletonSelectedWorkspace => "singleton_selected_workspace",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationScope {
+    UserFallback,
+    LocalIdentity,
+    Project,
+}
+
+impl RegistrationScope {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::UserFallback => "user_fallback",
+            Self::LocalIdentity => "local_identity",
+            Self::Project => "project",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceAvailability {
+    Available,
+    UnavailableForThisWorkspace,
+    Unregistered,
+    UnsafeUnpinned,
+    MismatchedProjectScope,
+}
+
+impl WorkspaceAvailability {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::UnavailableForThisWorkspace => "unavailable_for_this_workspace",
+            Self::Unregistered => "unregistered",
+            Self::UnsafeUnpinned => "unsafe_unpinned",
+            Self::MismatchedProjectScope => "mismatched_project_scope",
+        }
+    }
+}
+
 impl Client {
     /// How the user removes a direct `icm` server for this client. It differs by client
     /// because HZR rewrites two of these configurations and must never rewrite the third —
@@ -33,7 +90,8 @@ impl Client {
             }
             Self::ClaudeCode => {
                 "HZR never writes this file: remove the server with `claude mcp remove icm`, \
-                 then add HZR with `claude mcp add hzr -- hzr mcp serve --workspace <dir>`"
+                 then add HZR to this worktree with `claude mcp add -s project hzr -- \
+                 hzr mcp serve --workspace <dir>`"
             }
         }
     }
@@ -45,6 +103,13 @@ impl Client {
             Self::Codex => "codex",
             Self::ClaudeDesktop => "claude-desktop",
             Self::ClaudeCode => "claude-code",
+        }
+    }
+
+    pub const fn workspace_binding_capability(self) -> WorkspaceBindingCapability {
+        match self {
+            Self::Codex | Self::ClaudeCode => WorkspaceBindingCapability::ProjectScoped,
+            Self::ClaudeDesktop => WorkspaceBindingCapability::SingletonSelectedWorkspace,
         }
     }
 
@@ -79,8 +144,94 @@ pub struct ClientMcpStatus {
     /// the memory namespace is decided by whatever directory the client launches from, which
     /// is `/` for the Claude desktop app and a per-session directory for Codex.
     pub pinned_workspace: Option<String>,
+    pub workspace_binding_capability: WorkspaceBindingCapability,
+    pub registration_scope: RegistrationScope,
     pub lifecycle: &'static str,
     pub started_by_init: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ClaudeCodeWorkspaceStatus {
+    pub effective: Option<ClientMcpStatus>,
+    pub linked_local_workspaces: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ClientWorkspaceBinding {
+    pub client: Client,
+    pub capability: WorkspaceBindingCapability,
+    pub registration_scope: RegistrationScope,
+    pub availability: WorkspaceAvailability,
+    pub selected_workspace: Option<String>,
+    pub action: String,
+}
+
+pub fn evaluate_workspace_binding(
+    status: &ClientMcpStatus,
+    workspace: &Path,
+) -> ClientWorkspaceBinding {
+    let expected = canonical_or_owned(workspace);
+    let selected = status.pinned_workspace.as_deref().map(PathBuf::from);
+    let selected_canonical = selected.as_deref().map(canonical_or_owned);
+    let availability = if !status.registered {
+        WorkspaceAvailability::Unregistered
+    } else if selected.is_none() {
+        WorkspaceAvailability::UnsafeUnpinned
+    } else if selected_canonical.as_ref() == Some(&expected) {
+        WorkspaceAvailability::Available
+    } else if status.workspace_binding_capability
+        == WorkspaceBindingCapability::SingletonSelectedWorkspace
+    {
+        WorkspaceAvailability::UnavailableForThisWorkspace
+    } else {
+        WorkspaceAvailability::MismatchedProjectScope
+    };
+    let action = match availability {
+        WorkspaceAvailability::Available => "none".to_owned(),
+        WorkspaceAvailability::UnavailableForThisWorkspace => format!(
+            "select this workspace with `hzr mcp config --client {} --workspace {} --apply`, or use the workspace-pinned HZR CLI",
+            status.client.as_str(),
+            expected.display()
+        ),
+        WorkspaceAvailability::Unregistered => match status.client {
+            Client::ClaudeCode => format!(
+                "add a worktree-safe project registration with `claude mcp add -s project hzr -- hzr mcp serve --workspace {}`; until then use the HZR CLI",
+                expected.display()
+            ),
+            _ => format!(
+                "register with `hzr mcp config --client {} --workspace {} --apply`",
+                status.client.as_str(),
+                expected.display()
+            ),
+        },
+        WorkspaceAvailability::UnsafeUnpinned if status.client == Client::ClaudeCode => format!(
+            "replace the unpinned entry with `claude mcp add -s project hzr -- hzr mcp serve --workspace {}`; until then use the workspace-pinned HZR CLI",
+            expected.display()
+        ),
+        WorkspaceAvailability::UnsafeUnpinned => format!(
+            "pin the workspace before using project tools: `hzr mcp config --client {} --workspace {} --apply`",
+            status.client.as_str(),
+            expected.display()
+        ),
+        WorkspaceAvailability::MismatchedProjectScope if status.client == Client::ClaudeCode => {
+            format!(
+                "do not use this MCP session; replace this worktree's `.mcp.json` with `hzr mcp config --client claude-code --workspace {}`, or use the workspace-pinned HZR CLI",
+                expected.display()
+            )
+        }
+        WorkspaceAvailability::MismatchedProjectScope => format!(
+            "do not use this MCP session; run `hzr init` from {} to repair the project-scoped Codex pin, or use the workspace-pinned HZR CLI",
+            expected.display()
+        ),
+    };
+    ClientWorkspaceBinding {
+        client: status.client,
+        capability: status.workspace_binding_capability,
+        registration_scope: status.registration_scope,
+        availability,
+        selected_workspace: status.pinned_workspace.clone(),
+        action,
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -252,6 +403,13 @@ pub fn apply(
     dry_run: bool,
     confirmed: bool,
 ) -> Result<ClientConfigReport> {
+    if client == Client::ClaudeCode {
+        bail!(
+            "HZR never writes Claude Code state; print a worktree-scoped `.mcp.json` with \
+             `hzr mcp config --client claude-code --workspace <dir>`, or run \
+             `claude mcp add -s project hzr -- hzr mcp serve --workspace <dir>`"
+        );
+    }
     let path = default_paths()?
         .into_iter()
         .find(|(candidate, _)| *candidate == client)
@@ -327,7 +485,36 @@ pub fn status_all() -> Result<Vec<ClientMcpStatus>> {
         .collect()
 }
 
+pub fn status_all_for_workspace(workspace: &Path) -> Result<Vec<ClientMcpStatus>> {
+    let mut statuses = status_all()?;
+    let project_codex = project_codex_status(workspace)?;
+    if project_codex.registered {
+        statuses.retain(|status| status.client != Client::Codex);
+        statuses.push(project_codex);
+    }
+    if let Some(project_claude) = claude_code_workspace_status(workspace)?.effective {
+        if project_claude.registered {
+            statuses.retain(|status| status.client != Client::ClaudeCode);
+            statuses.push(project_claude);
+        }
+    }
+    statuses.sort_by_key(|status| match status.client {
+        Client::Codex => 0,
+        Client::ClaudeDesktop => 1,
+        Client::ClaudeCode => 2,
+    });
+    Ok(statuses)
+}
+
 pub fn status(client: Client, path: &Path) -> Result<ClientMcpStatus> {
+    status_with_scope(client, path, RegistrationScope::UserFallback)
+}
+
+fn status_with_scope(
+    client: Client,
+    path: &Path,
+    registration_scope: RegistrationScope,
+) -> Result<ClientMcpStatus> {
     let config_exists = path.is_file();
     let bytes = read_optional(path)?;
     let (registration, direct_icm_registrations) = match client {
@@ -378,9 +565,19 @@ pub fn status(client: Client, path: &Path) -> Result<ClientMcpStatus> {
         args,
         direct_icm_registrations,
         pinned_workspace,
+        workspace_binding_capability: client.workspace_binding_capability(),
+        registration_scope,
         lifecycle: MCP_LIFECYCLE,
         started_by_init: false,
     })
+}
+
+pub fn project_codex_status(workspace: &Path) -> Result<ClientMcpStatus> {
+    status_with_scope(
+        Client::Codex,
+        &project_codex_path(workspace),
+        RegistrationScope::Project,
+    )
 }
 
 pub fn direct_icm_registrations() -> Result<Vec<String>> {
@@ -688,37 +885,121 @@ fn json_project_servers<'a>(
         .as_object()
 }
 
-pub fn claude_code_project_status(workspace: &Path) -> Result<Option<ClientMcpStatus>> {
+pub fn claude_code_workspace_status(workspace: &Path) -> Result<ClaudeCodeWorkspaceStatus> {
     let Some((_, path)) = audit_paths()?
         .into_iter()
         .find(|(client, _)| *client == Client::ClaudeCode)
     else {
-        return Ok(None);
+        return Ok(ClaudeCodeWorkspaceStatus {
+            effective: None,
+            linked_local_workspaces: Vec::new(),
+        });
     };
-    let bytes = read_optional(&path)?;
-    if bytes.is_empty() {
-        return Ok(None);
+    claude_code_workspace_status_at(&path, workspace)
+}
+
+fn claude_code_workspace_status_at(
+    path: &Path,
+    workspace: &Path,
+) -> Result<ClaudeCodeWorkspaceStatus> {
+    let bytes = read_optional(path)?;
+    let document = if bytes.is_empty() {
+        json!({})
+    } else {
+        serde_json::from_slice(&bytes)
+            .with_context(|| format!("failed to parse {}", path.display()))?
+    };
+    let linked_local_workspaces = linked_claude_code_workspaces(&document, workspace);
+    let project_path = workspace.join(".mcp.json");
+    let project = status_with_scope(
+        Client::ClaudeCode,
+        &project_path,
+        RegistrationScope::Project,
+    )?;
+    if project.registered {
+        return Ok(ClaudeCodeWorkspaceStatus {
+            effective: Some(project),
+            linked_local_workspaces,
+        });
     }
-    let document: Value = serde_json::from_slice(&bytes)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
-    let Some(servers) = json_project_servers(&document, workspace) else {
-        return Ok(None);
+    let effective = json_project_servers(&document, workspace)
+        .and_then(json_registration_entry)
+        .map(|registration| ClientMcpStatus {
+            client: Client::ClaudeCode,
+            path: path.to_path_buf(),
+            config_exists: true,
+            registered: registration.is_native_hzr(),
+            pinned_workspace: registration.pinned_workspace(),
+            command: Some(registration.command),
+            args: registration.args,
+            direct_icm_registrations: json_project_servers(&document, workspace)
+                .map(|servers| count_direct_icm(Some(servers)))
+                .unwrap_or_default(),
+            workspace_binding_capability: WorkspaceBindingCapability::ProjectScoped,
+            registration_scope: RegistrationScope::LocalIdentity,
+            lifecycle: MCP_LIFECYCLE,
+            started_by_init: false,
+        });
+    Ok(ClaudeCodeWorkspaceStatus {
+        effective,
+        linked_local_workspaces,
+    })
+}
+
+fn linked_claude_code_workspaces(document: &Value, workspace: &Path) -> Vec<PathBuf> {
+    let Some(expected_common_dir) = repository_common_dir(workspace) else {
+        return Vec::new();
     };
-    let Some(registration) = json_registration_entry(servers) else {
-        return Ok(None);
+    let Some(projects) = document.get("projects").and_then(Value::as_object) else {
+        return Vec::new();
     };
-    Ok(Some(ClientMcpStatus {
-        client: Client::ClaudeCode,
-        path,
-        config_exists: true,
-        registered: registration.is_native_hzr(),
-        pinned_workspace: registration.pinned_workspace(),
-        command: Some(registration.command),
-        args: registration.args,
-        direct_icm_registrations: count_direct_icm(Some(servers)),
-        lifecycle: MCP_LIFECYCLE,
-        started_by_init: false,
-    }))
+    let expected = canonical_or_owned(workspace);
+    let mut linked = projects
+        .iter()
+        .filter_map(|(path, _)| {
+            let candidate = PathBuf::from(path);
+            if canonical_or_owned(&candidate) == expected
+                || repository_common_dir(&candidate).as_ref() != Some(&expected_common_dir)
+            {
+                return None;
+            }
+            Some(candidate)
+        })
+        .collect::<Vec<_>>();
+    linked.sort();
+    linked
+}
+
+fn repository_common_dir(workspace: &Path) -> Option<PathBuf> {
+    let mut cursor = canonical_or_owned(workspace);
+    loop {
+        let dot_git = cursor.join(".git");
+        if dot_git.is_dir() {
+            return Some(canonical_or_owned(&dot_git));
+        }
+        if dot_git.is_file() {
+            let text = fs::read_to_string(&dot_git).ok()?;
+            let git_dir = text.trim().strip_prefix("gitdir:")?.trim();
+            let git_dir = PathBuf::from(git_dir);
+            let git_dir = if git_dir.is_absolute() {
+                git_dir
+            } else {
+                cursor.join(git_dir)
+            };
+            let common = fs::read_to_string(git_dir.join("commondir"))
+                .ok()
+                .map(|value| git_dir.join(value.trim()))
+                .unwrap_or(git_dir);
+            return Some(canonical_or_owned(&common));
+        }
+        if !cursor.pop() {
+            return None;
+        }
+    }
+}
+
+fn canonical_or_owned(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn migrate_claude_desktop(
@@ -812,12 +1093,76 @@ mod tests {
     use toml_edit::DocumentMut;
 
     use super::{
-        Client, MCP_LIFECYCLE, audit_paths, default_paths, install, install_project_codex, status,
-        uninstall,
+        Client, MCP_LIFECYCLE, RegistrationScope, audit_paths, claude_code_workspace_status_at,
+        default_paths, install, install_project_codex, status, uninstall,
     };
 
     fn binary() -> &'static Path {
         Path::new("/opt/hzr/current/bin/hzr")
+    }
+
+    fn linked_worktrees(directory: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+        let common = directory.join("repository/.git");
+        let first_git = common.join("worktrees/first");
+        let second_git = common.join("worktrees/second");
+        fs::create_dir_all(&first_git).expect("first git dir");
+        fs::create_dir_all(&second_git).expect("second git dir");
+        fs::write(first_git.join("commondir"), "../..\n").expect("first common dir");
+        fs::write(second_git.join("commondir"), "../..\n").expect("second common dir");
+        let first = directory.join("first");
+        let second = directory.join("second");
+        fs::create_dir_all(&first).expect("first worktree");
+        fs::create_dir_all(&second).expect("second worktree");
+        fs::write(
+            first.join(".git"),
+            format!("gitdir: {}\n", first_git.display()),
+        )
+        .expect("first git file");
+        fs::write(
+            second.join(".git"),
+            format!("gitdir: {}\n", second_git.display()),
+        )
+        .expect("second git file");
+        (first, second)
+    }
+
+    #[test]
+    fn acceptance_gate_claude_code_project_file_isolates_linked_worktrees() {
+        let directory = tempdir().expect("temporary directory");
+        let (first, second) = linked_worktrees(directory.path());
+        let state_path = directory.path().join(".claude.json");
+        fs::write(
+            &state_path,
+            json!({
+                "projects": {
+                    second.to_string_lossy(): {
+                        "mcpServers": {"hzr": {
+                            "command": "/opt/hzr/current/bin/hzr",
+                            "args": ["mcp", "serve", "--workspace", second]
+                        }}
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("Claude state");
+        fs::write(
+            first.join(".mcp.json"),
+            json!({"mcpServers": {"hzr": {
+                "command": "/opt/hzr/current/bin/hzr",
+                "args": ["mcp", "serve", "--workspace", first]
+            }}})
+            .to_string(),
+        )
+        .expect("project MCP");
+
+        let status = claude_code_workspace_status_at(&state_path, &first)
+            .expect("Claude Code workspace status");
+        let effective = status.effective.expect("project registration");
+
+        assert_eq!(effective.registration_scope, RegistrationScope::Project);
+        assert_eq!(effective.path, first.join(".mcp.json"));
+        assert_eq!(status.linked_local_workspaces, [second]);
     }
 
     /// A registration that pins its workspace is the recommended form, so recognition must

@@ -105,18 +105,21 @@ pub const MCP_CONFIG_LONG_ABOUT: &str = "\
 Print or apply an MCP server registration for an agent configuration. Pin \
 `--workspace` so memory is scoped to the project even when the client launches \
 from `/` or a per-session directory. Pass `--apply` to write the registration \
-instead of printing a paste snippet.";
+instead of printing a paste snippet. Claude Desktop selects one workspace at a \
+time; Codex and Claude Code should use project-scoped registrations.";
 
 pub const MCP_CONFIG_AFTER_HELP: &str = "\
 Examples:
   hzr mcp config --client codex
+  hzr mcp config --client claude-code --workspace /path/to/worktree
   hzr mcp config --client claude-desktop --workspace /path/to/project
   hzr mcp config --apply --workspace /path/to/project
 ";
 
 pub const MCP_STATUS_LONG_ABOUT: &str = "\
-Report native client registrations and whether stdio MCP lifecycle is \
-client-managed. Useful after install to confirm Codex or Claude Desktop wiring.";
+Report native client registrations, workspace-binding capability and whether \
+stdio MCP lifecycle is client-managed. A singleton client selected elsewhere is \
+reported as unavailable for this workspace, never as a safe mismatched server.";
 
 pub const MCP_STATUS_AFTER_HELP: &str = "\
 Examples:

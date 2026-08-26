@@ -194,9 +194,9 @@ pub enum Command {
         /// Native file-tool policy. New installs default to steer; upgrades retain observe.
         #[arg(long, value_enum, value_name = "MODE")]
         native_tool_mode: Option<crate::adoption::NativeToolMode>,
-        /// Pin Codex/Claude Desktop MCP registrations to this project (default: install cwd).
-        /// Those clients keep one global MCP entry, so only one project can be pinned at a time;
-        /// re-run install or `hzr mcp config --apply --workspace <dir>` to retarget.
+        /// Select the global fallback/Claude Desktop workspace (default: install cwd).
+        /// `hzr init` writes an exact project-scoped Codex pin; Claude Desktop remains a
+        /// singleton client and must be explicitly retargeted before another workspace uses it.
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
@@ -428,8 +428,8 @@ pub enum McpCommand {
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
         /// Write the registration into the client's config instead of printing a paste snippet.
-        /// Codex and Claude Desktop store one global MCP entry, so this pins memory to one
-        /// project — re-run with another `--workspace` to retarget.
+        /// Claude Desktop stores one singleton selected workspace. Codex also has a global
+        /// fallback, while `hzr init` writes the preferred exact project-scoped registration.
         #[arg(long)]
         apply: bool,
     },
@@ -457,6 +457,7 @@ pub enum BillingCommand {
 pub enum McpClientArg {
     Codex,
     ClaudeDesktop,
+    ClaudeCode,
 }
 
 impl From<McpClientArg> for crate::client_config::Client {
@@ -464,6 +465,7 @@ impl From<McpClientArg> for crate::client_config::Client {
         match value {
             McpClientArg::Codex => Self::Codex,
             McpClientArg::ClaudeDesktop => Self::ClaudeDesktop,
+            McpClientArg::ClaudeCode => Self::ClaudeCode,
         }
     }
 }

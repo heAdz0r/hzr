@@ -281,10 +281,17 @@ hzr disable --workspace /path/to/project
 Clients without hooks launch the stateless stdio gateway:
 
 ```bash
-hzr mcp config --client codex
-hzr mcp config --client claude-desktop
+hzr init                                                # exact Codex project pin
+hzr mcp config --client claude-code --workspace "$PWD" # worktree .mcp.json
+hzr mcp config --client claude-desktop --workspace "$PWD" --apply
 hzr mcp status
 ```
+
+Codex and Claude Code support exact project scopes. For linked Claude Code worktrees, use the
+generated `.mcp.json`/`-s project` registration; HZR never retargets shared local state. Claude
+Desktop is different: it has one selected workspace. In every other project doctor reports
+`unavailable_for_this_workspace` with a retarget-or-CLI action instead of pretending one global
+pin can serve the whole fleet. Every mismatched MCP session still fails closed.
 
 The gateway exposes 13 schema-validated tools for context, search, confined read/write,
 memory lifecycle, managed execution, observability, doctor, and codec operations. It owns
@@ -298,6 +305,12 @@ same `hzrd` boundary. The executable contract is
 | confined mutation and execution | `hzr_write`, `hzr_exec` |
 | durable memory | `hzr_memory_recall`, `hzr_memory_store`, `hzr_memory_update`, `hzr_memory_forget`, `hzr_memory_prune` |
 | operations | `hzr_observability`, `hzr_doctor`, `hzr_codec` |
+
+`hzr_codec` distinguishes four coverage states: `applied`, `shadow_measured`, `instructed`, and
+`unavailable`. A transformed tool/CLI payload is observable and may receive estimated token
+credit. Claude and Codex cannot let HZR replace every final assistant response, so managed
+instructions and SessionStart expose the action while global-response coverage receives zero
+credit until a trusted host confirms replacement. Provider-billed `$` is never inferred from it.
 
 ## Keeping a fleet of projects current
 

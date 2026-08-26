@@ -18,7 +18,7 @@ post-hoc passing tests are regression coverage, not TDD.
 Register HZR as an MCP server instead of `icm`:
 
 ```bash
-hzr mcp config --client codex   # prints the [mcp_servers.hzr] block
+hzr init                        # writes this project's .codex/config.toml pin
 hzr mcp status                  # audits native registration and lifecycle
 ```
 
@@ -44,7 +44,9 @@ Then prefer these tools — they reach the same single store and index as the CL
 - `hzr_memory_update` — replace one superseded memory after namespace verification.
 - `hzr_memory_forget` — delete one invalid memory after namespace verification.
 - `hzr_memory_prune` — preview or remove low-weight memories in one namespace.
-- `hzr_codec` — apply or shadow-measure protected response-density transforms.
+- `hzr_codec` — return an applied tool-payload transform or a shadow counterfactual. Codex
+  cannot expose global final-response replacement, so instructed global coverage receives zero
+  credit until a trusted host confirms delivery.
 
 Inputs reject invalid types, enums, unknown fields and limits outside 1–50.
 Successful calls return typed `structuredContent` and a text copy for older

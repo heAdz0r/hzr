@@ -67,7 +67,7 @@
     { "name": "hzr_memory_update", "purpose": "Replace one superseded memory after namespace ownership is verified." },
     { "name": "hzr_memory_forget", "purpose": "Delete one invalid memory after namespace ownership is verified." },
     { "name": "hzr_memory_prune", "purpose": "Preview or remove low-weight memories in one namespace." },
-    { "name": "hzr_codec", "purpose": "Apply or shadow-measure protected response-density transforms." },
+    { "name": "hzr_codec", "purpose": "Return a protected response-density transform or shadow counterfactual; host delivery remains instructed until replacement is confirmed." },
     { "name": "hzr_read", "purpose": "Read bounded exact content through the daemon-owned confined fork path." },
     { "name": "hzr_write", "purpose": "Apply confined atomic patch or create operations with typed CAS receipts." },
     { "name": "hzr_exec", "purpose": "Run shell commands through daemon policy and accounting without direct fallback." },
@@ -77,11 +77,23 @@
   "harnesses": {
     "claude": {
       "instruction_file": "CLAUDE.md",
-      "native_hook_routing": true
+      "native_hook_routing": true,
+      "response_codec": {
+        "global_replacement": false,
+        "coverage": "instructed",
+        "mechanism": "managed_instruction_and_session_start",
+        "economic_credit": false
+      }
     },
     "codex": {
       "instruction_file": "AGENTS.md",
-      "native_hook_routing": false
+      "native_hook_routing": false,
+      "response_codec": {
+        "global_replacement": false,
+        "coverage": "instructed",
+        "mechanism": "managed_instruction",
+        "economic_credit": false
+      }
     },
     "managed_agent": {
       "instruction_file": null,

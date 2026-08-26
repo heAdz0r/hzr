@@ -57,6 +57,15 @@ struct AgentHarnesses {
 struct AgentHarness {
     instruction_file: Option<String>,
     native_hook_routing: bool,
+    response_codec: Option<ResponseCodecCapability>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResponseCodecCapability {
+    global_replacement: bool,
+    coverage: String,
+    mechanism: String,
+    economic_credit: bool,
 }
 
 fn agent_capabilities() -> AgentCapabilities {
@@ -191,6 +200,27 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
             "Native operations not routed through HZR are outside HZR accounting.\n"
         )
     };
+    let codec = harness
+        .response_codec
+        .as_ref()
+        .expect("interactive harness must declare response codec coverage");
+    assert!(!codec.global_replacement);
+    assert_eq!(codec.coverage, "instructed");
+    assert!(!codec.economic_credit);
+    let codec_guidance = format!(
+        concat!(
+            "## Response codec coverage\n\n",
+            "This host cannot let HZR replace every final response. Coverage is `{coverage}` via\n",
+            "`{mechanism}`. Before delivering long low- or medium-risk prose where compression\n",
+            "is useful, call `hzr_codec` once and use its returned `content`. If the tool is not\n",
+            "available, keep the response concise and report codec coverage as unavailable.\n",
+            "An explicit tool result is not proof that the host delivered it: HZR grants zero\n",
+            "economic credit unless a trusted host confirms replacement. Shadow results are\n",
+            "counterfactual measurements only.\n\n"
+        ),
+        coverage = codec.coverage,
+        mechanism = codec.mechanism,
+    );
     let contract_pointer = format!(
         concat!(
             "Read the full contract at `{0}` only when a bounded lookup cannot resolve ",
@@ -244,6 +274,7 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          success and no fallback store. Recall before retrying an ambiguously completed write.\n\
          Never register {engines} as separate MCP servers.\n\n\
          {harness_guidance}\n\
+         {codec_guidance}\
          {END}",
         control_plane = capabilities.control_plane,
         product = capabilities.product,

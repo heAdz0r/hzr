@@ -544,26 +544,39 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             }
             McpCommand::Status => {
-                let clients = client_config::status_all()?;
+                let workspace = canonical_directory(None)?;
+                let clients = client_config::status_all_for_workspace(&workspace)?;
+                let bindings = clients
+                    .iter()
+                    .map(|status| client_config::evaluate_workspace_binding(status, &workspace))
+                    .collect::<Vec<_>>();
                 if cli.json {
                     print_json(&serde_json::json!({
                         "lifecycle": mcp::lifecycle_metadata(),
+                        "workspace": workspace,
                         "clients": clients,
+                        "workspace_bindings": bindings,
                     }))?;
                 } else {
                     println!(
-                        "lifecycle={} started-by-init=false launch='MCP client connection'",
-                        client_config::MCP_LIFECYCLE
+                        "lifecycle={} workspace={} started-by-init=false launch='MCP client connection'",
+                        client_config::MCP_LIFECYCLE,
+                        workspace.display()
                     );
-                    for client in clients {
+                    for (client, binding) in clients.into_iter().zip(bindings) {
                         println!(
-                            "{} {} exists={} registered={} direct-icm={} command={}",
+                            "{} {} exists={} registered={} binding={} scope={} availability={} pinned={} direct-icm={} command={} action={}",
                             client.client.as_str(),
                             client.path.display(),
                             client.config_exists,
                             client.registered,
+                            client.workspace_binding_capability.as_str(),
+                            client.registration_scope.as_str(),
+                            binding.availability.as_str(),
+                            client.pinned_workspace.as_deref().unwrap_or("-"),
                             client.direct_icm_registrations,
-                            client.command.as_deref().unwrap_or("-")
+                            client.command.as_deref().unwrap_or("-"),
+                            binding.action
                         );
                     }
                 }
@@ -2607,9 +2620,11 @@ async fn initialize_if_needed(
     if !json {
         let update_notice = update::startup_notice(&config.data_dir).await;
         if session_start_hook {
-            if let Some(payload) =
-                session_start_payload(instruction_alert.as_deref(), update_notice.as_deref())
-            {
+            if let Some(payload) = session_start_payload(
+                instruction_alert.as_deref(),
+                update_notice.as_deref(),
+                Some(response_codec_session_notice()),
+            ) {
                 print_json(&payload)?;
             }
         } else {
@@ -2679,11 +2694,12 @@ fn instruction_drift_alert_for_targets(
 fn session_start_payload(
     instruction_alert: Option<&str>,
     update_notice: Option<&str>,
+    codec_notice: Option<&str>,
 ) -> Option<serde_json::Value> {
-    if instruction_alert.is_none() && update_notice.is_none() {
+    if instruction_alert.is_none() && update_notice.is_none() && codec_notice.is_none() {
         return None;
     }
-    let system_message = [instruction_alert, update_notice]
+    let system_message = [instruction_alert, update_notice, codec_notice]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
@@ -2691,6 +2707,7 @@ fn session_start_payload(
     let additional_context = [
         instruction_alert.map(str::to_owned),
         update_notice.map(update::agent_notice),
+        codec_notice.map(str::to_owned),
     ]
     .into_iter()
     .flatten()
@@ -2703,6 +2720,10 @@ fn session_start_payload(
             "additionalContext": additional_context,
         },
     }))
+}
+
+fn response_codec_session_notice() -> &'static str {
+    "HZR CODEC: Claude Code cannot expose a global final-response replacement hook. For long low- or medium-risk prose where compression is useful, call `hzr_codec` once and use its returned `content`. Otherwise coverage is instructed-only and receives zero economic credit; `shadow` is measurement only."
 }
 
 fn reconcile_session_surfaces(
@@ -3811,8 +3832,8 @@ mod tests {
     use super::{
         bounded_read_arguments, canonical_directory, contract_asset_path,
         executable_source_directory, forwarded_fork_args, instruction_drift_alert_for_targets,
-        payload_limit, reject_direct_fork_bypass, scoped_instruction_targets,
-        session_instruction_drift_alert, session_start_payload,
+        payload_limit, reject_direct_fork_bypass, response_codec_session_notice,
+        scoped_instruction_targets, session_instruction_drift_alert, session_start_payload,
     };
 
     #[test]
@@ -3872,6 +3893,7 @@ mod tests {
         let payload = session_start_payload(
             Some("Run `hzr doctor` before continuing."),
             Some("HZR 0.6.2 is available."),
+            Some(response_codec_session_notice()),
         )
         .expect("session payload");
         let rendered = payload.to_string();
@@ -3880,6 +3902,8 @@ mod tests {
         assert!(rendered.contains("HZR 0.6.2 is available."));
         assert!(rendered.contains("Inform the user once"));
         assert!(rendered.contains("Do not install it without explicit approval."));
+        assert!(rendered.contains("instructed-only"));
+        assert!(rendered.contains("zero economic credit"));
     }
 
     #[test]

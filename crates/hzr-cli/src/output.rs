@@ -717,6 +717,8 @@ mod tests {
                         .into(),
                 },
             ],
+            client_workspace_bindings: Vec::new(),
+            response_codec_coverage: Vec::new(),
             repair: None,
             fidelity_reconcile: None,
             fleet_reconcile: None,

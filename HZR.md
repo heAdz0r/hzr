@@ -49,11 +49,20 @@ request stops work, releases its HTTP request, and emits no late response. Task-
 requests are not advertised because HZR negotiates the stable base protocol rather than an
 experimental task extension.
 
-The MCP process is client-managed stdio. `hzr init` never starts it: Codex or
-Claude Desktop launches `hzr mcp serve` when opening a connection and closes it
-through stdin EOF. Run `hzr install --force` once to install native client
-registrations, then `hzr mcp status` to inspect them. The only persistent
-background process is the single `hzrd` service.
+The MCP process is client-managed stdio. `hzr init` never starts it. Codex uses the exact
+project-scoped `.codex/config.toml` pin written by init. Claude Code should use a per-worktree
+`.mcp.json` project scope; linked worktrees can share a local identity, so HZR audits but never
+retargets Claude's local state. Claude Desktop has one singleton selected workspace. Selecting
+another project makes it explicitly `unavailable_for_this_workspace`; a mismatched server must
+not be used, and the workspace-pinned CLI remains safe. Run `hzr mcp status` in the project to
+inspect capability, effective scope, availability and remediation.
+
+Claude and Codex do not expose a trusted hook that can replace every final assistant response.
+Managed instructions and Claude Code SessionStart tell the agent to call `hzr_codec` for eligible
+long prose. The returned tool/CLI payload is an observable transform and can receive estimated
+codec-token credit. It does not prove that a later final assistant response was replaced:
+global-response coverage stays `instructed` (or `unavailable`), shadow stays counterfactual, and
+neither receives final-response economic credit or provider-billed dollar credit.
 
 When `[activation].mode = "selected"`, project-scoped MCP tools additionally require an
 initialized workspace whose repository/worktree identity appears in `enabled_workspaces`.

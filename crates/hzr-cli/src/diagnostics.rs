@@ -4,6 +4,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use hzr_agent::{IntegrationLayout, preflight};
+use hzr_codec::ResponseCodecCoverageState;
 use hzr_core::{
     Config, DEFAULT_FIDELITY_OPERATION_ALLOWANCE, DEFAULT_FIDELITY_TOKEN_ALLOWANCE, locked_engines,
 };
@@ -47,12 +48,24 @@ pub struct DoctorReport {
     pub workspace: PathBuf,
     pub healthy: bool,
     pub checks: Vec<DoctorCheck>,
+    pub client_workspace_bindings: Vec<client_config::ClientWorkspaceBinding>,
+    pub response_codec_coverage: Vec<ResponseCodecCoverage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repair: Option<IndexMigrationOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fidelity_reconcile: Option<hzr_protocol::FidelityReconcileReceipt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet_reconcile: Option<FleetReconcileReport>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ResponseCodecCoverage {
+    pub client: String,
+    pub state: ResponseCodecCoverageState,
+    pub mechanism: String,
+    pub global_response_replacement_confirmed: bool,
+    pub global_response_token_credit_eligible: bool,
+    pub action: String,
 }
 
 pub async fn repair_legacy_index(
@@ -905,6 +918,7 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
 
 pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> DoctorReport {
     let mut checks = Vec::new();
+    let mut client_workspace_bindings = Vec::new();
     checks.push(install_transaction_check(config_path, config, workspace));
     match adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
         Ok(status) => checks.push(hook_ownership_check(status)),
@@ -1068,7 +1082,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     match client_config::status_all() {
         Ok(mut statuses) => {
             let project_codex_path = client_config::project_codex_path(workspace);
-            match client_config::status(client_config::Client::Codex, &project_codex_path) {
+            match client_config::project_codex_status(workspace) {
                 Ok(project_codex) if project_codex.registered => {
                     // Trusted project configuration has precedence over the user-global Codex
                     // registration. Audit the effective pin instead of reporting a stale global
@@ -1088,10 +1102,20 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             }
             // Claude Code stores its per-project servers inside the same user config. The
             // project scope wins for this workspace; the user-global entry is only a fallback.
-            match client_config::claude_code_project_status(workspace) {
+            match client_config::claude_code_workspace_status(workspace) {
                 Ok(project_claude_code) => {
-                    statuses =
-                        effective_workspace_mcp_statuses(statuses, None, project_claude_code);
+                    if !project_claude_code.linked_local_workspaces.is_empty() {
+                        checks.push(linked_claude_code_worktree_check(
+                            workspace,
+                            &project_claude_code.linked_local_workspaces,
+                            project_claude_code.effective.as_ref(),
+                        ));
+                    }
+                    statuses = effective_workspace_mcp_statuses(
+                        statuses,
+                        None,
+                        project_claude_code.effective,
+                    );
                 }
                 Err(error) => checks.push(check(
                     "project_claude_code_mcp",
@@ -1099,6 +1123,10 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                     format!("invalid project Claude Code MCP scope: {error}"),
                 )),
             }
+            client_workspace_bindings = statuses
+                .iter()
+                .map(|status| client_config::evaluate_workspace_binding(status, workspace))
+                .collect();
             checks.push(workspace_binding_check(&statuses, workspace));
             checks.push(claude_code_mcp_check(&statuses));
         }
@@ -1107,14 +1135,23 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             checks.push(check("claude_code_mcp", CheckStatus::Warning, error));
         }
     }
-    // Neither host exposes a global request/response interception point. Keep that
-    // boundary machine-visible so an MCP/tool migration cannot be mistaken for codec
-    // coverage or credited as delivered token savings.
-    for client in ["claude", "codex"] {
+    let response_codec_coverage = response_codec_coverage(&client_workspace_bindings);
+    for coverage in &response_codec_coverage {
         checks.push(check(
-            format!("{client}_global_codec"),
+            format!("{}_global_codec", coverage.client.replace('-', "_")),
             CheckStatus::Warning,
-            "unintercepted: the host exposes no global request/response hook; HZR records no codec savings for this path",
+            format!(
+                "{}: global response replacement confirmed={} global response token credit={}; {}",
+                match coverage.state {
+                    ResponseCodecCoverageState::Applied => "applied",
+                    ResponseCodecCoverageState::ShadowMeasured => "shadow-measured",
+                    ResponseCodecCoverageState::Instructed => "instructed, not intercepted",
+                    ResponseCodecCoverageState::Unavailable => "unavailable",
+                },
+                coverage.global_response_replacement_confirmed,
+                coverage.global_response_token_credit_eligible,
+                coverage.action
+            ),
         ));
     }
     // Report only. Stopping foreign processes stays an explicit user decision (§11).
@@ -1429,6 +1466,8 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         workspace: workspace.to_path_buf(),
         healthy,
         checks,
+        client_workspace_bindings,
+        response_codec_coverage,
         repair: None,
         fidelity_reconcile: None,
         fleet_reconcile: None,
@@ -1449,6 +1488,87 @@ fn effective_workspace_mcp_statuses(
         global.push(project_claude_code);
     }
     global
+}
+
+fn response_codec_coverage(
+    bindings: &[client_config::ClientWorkspaceBinding],
+) -> Vec<ResponseCodecCoverage> {
+    let desktop_available = bindings.iter().any(|binding| {
+        binding.client == client_config::Client::ClaudeDesktop
+            && binding.availability == client_config::WorkspaceAvailability::Available
+    });
+    vec![
+        ResponseCodecCoverage {
+            client: "claude-code".into(),
+            state: ResponseCodecCoverageState::Instructed,
+            mechanism: "managed_instruction_and_session_start".into(),
+            global_response_replacement_confirmed: false,
+            global_response_token_credit_eligible: false,
+            action: "call `hzr_codec` for eligible long prose and use the returned content; otherwise report instructed-only coverage".into(),
+        },
+        ResponseCodecCoverage {
+            client: "codex".into(),
+            state: ResponseCodecCoverageState::Instructed,
+            mechanism: "managed_instruction".into(),
+            global_response_replacement_confirmed: false,
+            global_response_token_credit_eligible: false,
+            action: "call `hzr_codec` for eligible long prose and use the returned content; otherwise report instructed-only coverage".into(),
+        },
+        ResponseCodecCoverage {
+            client: "claude-desktop".into(),
+            state: if desktop_available {
+                ResponseCodecCoverageState::Instructed
+            } else {
+                ResponseCodecCoverageState::Unavailable
+            },
+            mechanism: if desktop_available {
+                "selected_workspace_mcp_tool".into()
+            } else {
+                "none_for_this_workspace".into()
+            },
+            global_response_replacement_confirmed: false,
+            global_response_token_credit_eligible: false,
+            action: if desktop_available {
+                "call `hzr_codec` and use the returned content; global final-response replacement remains unavailable".into()
+            } else {
+                "select this workspace in Claude Desktop before using `hzr_codec`, or use the workspace-pinned HZR CLI".into()
+            },
+        },
+    ]
+}
+
+fn linked_claude_code_worktree_check(
+    workspace: &Path,
+    linked: &[PathBuf],
+    effective: Option<&client_config::ClientMcpStatus>,
+) -> DoctorCheck {
+    let linked = linked
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if effective.is_some_and(|status| {
+        status.registration_scope == client_config::RegistrationScope::Project
+            && client_config::evaluate_workspace_binding(status, workspace).availability
+                == client_config::WorkspaceAvailability::Available
+    }) {
+        return check(
+            "claude_code_linked_worktrees",
+            CheckStatus::Pass,
+            format!(
+                "linked local identities detected ({linked}); this worktree uses its own `.mcp.json` project scope and does not overwrite them"
+            ),
+        );
+    }
+    check(
+        "claude_code_linked_worktrees",
+        CheckStatus::Warning,
+        format!(
+            "linked worktrees share Claude Code local identity ({linked}); do not retarget the shared local entry for {}. Add a worktree-safe project registration with `claude mcp add -s project hzr -- hzr mcp serve --workspace {}` or use the workspace-pinned HZR CLI",
+            workspace.display(),
+            workspace.display()
+        ),
+    )
 }
 
 fn install_transaction_check(config_path: &Path, config: &Config, workspace: &Path) -> DoctorCheck {
@@ -1943,14 +2063,24 @@ fn workspace_binding_check(
     workspace: &Path,
 ) -> DoctorCheck {
     let expected = std::fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
-    let mismatched = statuses
+    let bindings = statuses
         .iter()
-        .filter(|status| status.registered)
-        .filter_map(|status| {
-            let pinned = status.pinned_workspace.as_deref()?;
-            let pinned_path = PathBuf::from(pinned);
-            let actual = std::fs::canonicalize(&pinned_path).unwrap_or(pinned_path);
-            (actual != expected).then(|| format!("{}={}", status.client.as_str(), actual.display()))
+        .map(|status| client_config::evaluate_workspace_binding(status, workspace))
+        .collect::<Vec<_>>();
+    let mismatched = bindings
+        .iter()
+        .filter(|binding| {
+            binding.availability == client_config::WorkspaceAvailability::MismatchedProjectScope
+        })
+        .map(|binding| {
+            format!(
+                "{}={}",
+                binding.client.as_str(),
+                binding
+                    .selected_workspace
+                    .as_deref()
+                    .unwrap_or("unselected")
+            )
         })
         .collect::<Vec<_>>();
     if !mismatched.is_empty() {
@@ -1964,13 +2094,30 @@ fn workspace_binding_check(
             ),
         );
     }
-    let unpinned: Vec<&str> = statuses
+    let unavailable = bindings
         .iter()
-        .filter(|status| status.registered && status.pinned_workspace.is_none())
-        .map(|status| status.client.as_str())
-        .collect();
+        .filter(|binding| {
+            binding.availability
+                == client_config::WorkspaceAvailability::UnavailableForThisWorkspace
+        })
+        .map(|binding| {
+            format!(
+                "{} selected {} ({})",
+                binding.client.as_str(),
+                binding.selected_workspace.as_deref().unwrap_or("none"),
+                binding.action
+            )
+        })
+        .collect::<Vec<_>>();
+    let unpinned = bindings
+        .iter()
+        .filter(|binding| {
+            binding.availability == client_config::WorkspaceAvailability::UnsafeUnpinned
+        })
+        .map(|binding| format!("{} ({})", binding.client.as_str(), binding.action))
+        .collect::<Vec<_>>();
 
-    if unpinned.is_empty() {
+    if unpinned.is_empty() && unavailable.is_empty() {
         return check(
             "client_mcp_workspace",
             CheckStatus::Pass,
@@ -1978,16 +2125,23 @@ fn workspace_binding_check(
         );
     }
 
+    let mut findings = Vec::new();
+    if !unavailable.is_empty() {
+        findings.push(format!(
+            "unavailable_for_this_workspace: {}. A singleton client may select only one workspace at a time; mismatched MCP must not be used",
+            unavailable.join(", ")
+        ));
+    }
+    if !unpinned.is_empty() {
+        findings.push(format!(
+            "{} registered without `--workspace`, so the memory namespace comes from the client launch directory. Re-register with an exact workspace pin",
+            unpinned.join(", ")
+        ));
+    }
     check(
         "client_mcp_workspace",
         CheckStatus::Warning,
-        format!(
-            "{} registered without `--workspace`, so the memory namespace comes from the \
-             directory the client launches from; the desktop app uses `/` and Codex uses a \
-             per-session directory, and stores made there are unreachable from the project. \
-             Re-register with `hzr mcp config --client <client> --workspace <dir> --apply`",
-            unpinned.join(", ")
-        ),
+        findings.join("; "),
     )
 }
 
@@ -2060,7 +2214,7 @@ mod tests {
     use hzr_index::{Deadlines, IndexMigrationOutcome, IndexPlacement, IndexStatus, Workspace};
     use sha2::{Digest, Sha256};
 
-    use crate::client_config::{Client, ClientMcpStatus};
+    use crate::client_config::{Client, ClientMcpStatus, RegistrationScope};
     use crate::instructions::{self, Surface};
 
     use super::{
@@ -2070,6 +2224,7 @@ mod tests {
         index_readiness_check, install_transaction_check, instruction_health_check,
         instruction_health_check_with_exemptions, integration_layout, reconcile_fleet_contracts,
         repair_legacy_index, workspace_binding_check, workspace_instruction_health_check,
+        response_codec_coverage,
     };
 
     #[test]
@@ -2380,6 +2535,8 @@ justification = "This repository measures upstream RTK as the explicit benchmark
             args: vec!["mcp".into(), "serve".into()],
             direct_icm_registrations: 0,
             pinned_workspace: pinned.map(str::to_owned),
+            workspace_binding_capability: client.workspace_binding_capability(),
+            registration_scope: RegistrationScope::UserFallback,
             lifecycle: "client_managed_stdio",
             started_by_init: false,
         }
@@ -2430,6 +2587,55 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         assert!(check.detail.contains("workspace mismatch"));
         assert!(check.detail.contains("codex=/Users/andrew/code/other"));
         assert!(check.detail.contains("expected /Users/andrew/code/app"));
+    }
+
+    #[test]
+    fn acceptance_gate_desktop_selection_is_unavailable_not_a_project_scope_error() {
+        let workspace = std::path::Path::new("/Users/andrew/code/app");
+        let desktop = registration(
+            Client::ClaudeDesktop,
+            Some("/Users/andrew/code/selected-elsewhere"),
+        );
+        let check = workspace_binding_check(std::slice::from_ref(&desktop), workspace);
+        let binding = crate::client_config::evaluate_workspace_binding(&desktop, workspace);
+
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert!(check.detail.contains("unavailable_for_this_workspace"));
+        assert_eq!(
+            binding.availability,
+            crate::client_config::WorkspaceAvailability::UnavailableForThisWorkspace
+        );
+        assert!(
+            binding
+                .action
+                .contains("or use the workspace-pinned HZR CLI")
+        );
+    }
+
+    #[test]
+    fn acceptance_gate_global_codec_states_never_claim_host_replacement() {
+        let desktop = registration(Client::ClaudeDesktop, Some("/work/app"));
+        let bindings = [crate::client_config::evaluate_workspace_binding(
+            &desktop,
+            std::path::Path::new("/work/app"),
+        )];
+        let coverage = response_codec_coverage(&bindings);
+
+        assert_eq!(coverage.len(), 3);
+        assert!(
+            coverage
+                .iter()
+                .all(|item| !item.global_response_replacement_confirmed)
+        );
+        assert!(
+            coverage
+                .iter()
+                .all(|item| !item.global_response_token_credit_eligible)
+        );
+        assert!(coverage.iter().any(|item| {
+            item.client == "claude-code"
+                && item.state == hzr_codec::ResponseCodecCoverageState::Instructed
+        }));
     }
 
     #[test]
