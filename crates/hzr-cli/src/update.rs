@@ -223,16 +223,6 @@ pub(crate) fn agent_notice(message: &str) -> String {
     )
 }
 
-pub(crate) fn session_start_payload(message: &str) -> serde_json::Value {
-    serde_json::json!({
-        "systemMessage": message,
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": agent_notice(message),
-        },
-    })
-}
-
 async fn fetch_latest_release(
     current: ReleaseVersion,
     platform: &str,
@@ -659,7 +649,7 @@ mod tests {
     use super::{
         AvailableRelease, CacheStatus, CachedRelease, CheckOutcome, check_exit_code, check_json,
         checksum_for_artifact, classify_cache, classify_check, installer_candidates, notice,
-        parse_release_version, select_release, session_start_payload, startup_notice, write_cache,
+        parse_release_version, select_release, startup_notice, write_cache,
     };
     use std::path::{Path, PathBuf};
     use std::process::ExitCode;
@@ -780,24 +770,6 @@ mod tests {
             notice(current, latest),
             "HZR 0.4.0 is available (current 0.3.2). Run `hzr update` to install it."
         );
-    }
-
-    #[test]
-    fn session_start_notice_is_visible_to_both_user_and_agent() {
-        let message = "HZR 0.4.0 is available (current 0.3.2). Run `hzr update` to install it.";
-        let payload = session_start_payload(message);
-
-        assert_eq!(payload["systemMessage"], message);
-        assert_eq!(
-            payload["hookSpecificOutput"]["hookEventName"],
-            "SessionStart"
-        );
-        let context = payload["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .expect("agent context");
-        assert!(context.contains(message));
-        assert!(context.contains("Inform the user once"));
-        assert!(context.contains("Do not install it without explicit approval"));
     }
 
     #[tokio::test]

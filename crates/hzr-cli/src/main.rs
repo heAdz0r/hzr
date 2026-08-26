@@ -26,6 +26,7 @@ mod stats_output;
 mod tdd;
 mod update;
 
+use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -2475,6 +2476,7 @@ async fn initialize_if_needed(
     // while Codex remains globally or cross-workspace bound.
     let (instruction_reports, project_mcp) =
         reconcile_session_surfaces(config_path, &config, &workspace_root)?;
+    let instruction_alert = session_instruction_drift_alert(&workspace_root, &instruction_reports);
     let (workspace, outcome, changed, git_backed, registration) =
         initialize_workspace_at(&config, &workspace_root).await?;
     let dashboard = format!("http://{}", config.daemon.bind);
@@ -2546,15 +2548,108 @@ async fn initialize_if_needed(
         }
     }
     if !json {
-        if let Some(notice) = update::startup_notice(&config.data_dir).await {
-            if session_start_hook {
-                print_json(&update::session_start_payload(&notice))?;
-            } else {
+        let update_notice = update::startup_notice(&config.data_dir).await;
+        if session_start_hook {
+            if let Some(payload) =
+                session_start_payload(instruction_alert.as_deref(), update_notice.as_deref())
+            {
+                print_json(&payload)?;
+            }
+        } else {
+            if let Some(alert) = instruction_alert {
+                println!("{alert}");
+            }
+            if let Some(notice) = update_notice {
                 println!("{notice}");
             }
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn session_instruction_drift_alert(
+    workspace_root: &Path,
+    reports: &[instructions::InstructionReport],
+) -> Option<String> {
+    let mut targets = activation::local_instruction_paths(workspace_root).to_vec();
+    for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
+        if let Ok(path) = surface.default_path() {
+            targets.push((surface, path));
+        }
+    }
+    instruction_drift_alert_for_targets(reports, targets)
+}
+
+fn instruction_drift_alert_for_targets(
+    reports: &[instructions::InstructionReport],
+    targets: Vec<(instructions::Surface, PathBuf)>,
+) -> Option<String> {
+    let reconciled = reports
+        .iter()
+        .filter(|report| report.changed)
+        .map(|report| report.path.clone())
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    let mut unhealthy = BTreeSet::new();
+    for (surface, path) in targets {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        match instructions::audit(surface, &path) {
+            Ok(audit) if audit.healthy() => {}
+            Ok(_) | Err(_) => {
+                unhealthy.insert(path);
+            }
+        }
+    }
+    if reconciled.is_empty() && unhealthy.is_empty() {
+        return None;
+    }
+    let affected = reconciled
+        .union(&unhealthy)
+        .take(4)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "HZR ALERT: instruction drift detected ({} reconciled now, {} still unhealthy; affected: {}). Run `hzr doctor` before continuing and report every remaining instruction or fleet finding. Use `hzr doctor --reconcile-fleet --dry-run` before applying fleet repairs.",
+        reconciled.len(),
+        unhealthy.len(),
+        if affected.is_empty() {
+            "none"
+        } else {
+            &affected
+        },
+    ))
+}
+
+fn session_start_payload(
+    instruction_alert: Option<&str>,
+    update_notice: Option<&str>,
+) -> Option<serde_json::Value> {
+    if instruction_alert.is_none() && update_notice.is_none() {
+        return None;
+    }
+    let system_message = [instruction_alert, update_notice]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let additional_context = [
+        instruction_alert.map(str::to_owned),
+        update_notice.map(update::agent_notice),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n");
+    Some(serde_json::json!({
+        "systemMessage": system_message,
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": additional_context,
+        },
+    }))
 }
 
 fn reconcile_session_surfaces(
@@ -3589,6 +3684,7 @@ fn forwarded_fork_args(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
 
     use hzr_core::Config;
@@ -3596,8 +3692,54 @@ mod tests {
 
     use super::{
         bounded_read_arguments, canonical_directory, contract_asset_path,
-        executable_source_directory, forwarded_fork_args, payload_limit, reject_direct_fork_bypass,
+        executable_source_directory, forwarded_fork_args, instruction_drift_alert_for_targets,
+        payload_limit, reject_direct_fork_bypass, session_start_payload,
     };
+
+    #[test]
+    fn acceptance_gate_session_start_alerts_when_user_instructions_drift() {
+        let directory = tempdir().expect("temporary directory");
+        let contract = directory.path().join("HZR.md");
+        let instructions_path = directory.path().join("AGENTS.md");
+        fs::write(&contract, "canonical contract\n").expect("contract");
+        crate::instructions::install(
+            crate::instructions::Surface::Codex,
+            &instructions_path,
+            &contract,
+            false,
+            true,
+        )
+        .expect("managed instructions");
+        let targets = vec![(
+            crate::instructions::Surface::Codex,
+            instructions_path.clone(),
+        )];
+        assert!(instruction_drift_alert_for_targets(&[], targets.clone()).is_none());
+
+        let mut drifted = fs::read_to_string(&instructions_path).expect("instructions");
+        drifted.push_str("\nAlways use rtk cargo test directly.\n");
+        fs::write(&instructions_path, drifted).expect("drifted instructions");
+
+        let alert = instruction_drift_alert_for_targets(&[], targets).expect("drift alert");
+        assert!(alert.contains("instruction drift detected"));
+        assert!(alert.contains("Run `hzr doctor` before continuing"));
+        assert!(alert.contains("hzr doctor --reconcile-fleet --dry-run"));
+    }
+
+    #[test]
+    fn acceptance_gate_session_start_combines_drift_and_update_without_losing_actions() {
+        let payload = session_start_payload(
+            Some("Run `hzr doctor` before continuing."),
+            Some("HZR 0.6.2 is available."),
+        )
+        .expect("session payload");
+        let rendered = payload.to_string();
+
+        assert!(rendered.contains("Run `hzr doctor` before continuing."));
+        assert!(rendered.contains("HZR 0.6.2 is available."));
+        assert!(rendered.contains("Inform the user once"));
+        assert!(rendered.contains("Do not install it without explicit approval."));
+    }
 
     #[test]
     fn acceptance_gate_test_alias_forwards_argv_without_reconstruction() {

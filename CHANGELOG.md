@@ -2,7 +2,55 @@
 
 All notable HZR changes are documented here. HZR follows semantic versioning while the public API is in `0.x` development.
 
-## [Unreleased]
+## [0.6.2] - 2026-08-26
+
+0.6.2 turns session accounting into visible product value. HZR already had the data to prove that
+an agent used smaller outputs and to identify bypass pressure, but its Stop scorecard led with a
+misleading zero: `recoverable-tokens=0`. That number meant only "no proven avoidable bypass was
+allowed to execute". It did **not** mean that HZR saved zero tokens or prevented nothing.
+
+The result was technically defensible and experientially wrong. An effective control plane
+should make its benefit obvious at the moment the work finishes.
+
+### Added — session ROI
+
+- **The `hzr stats` efficiency model is now session-scoped.** Each session receives the same
+  baseline, delivered, gross avoided, regression, and net avoided token arithmetic as the global
+  report, filtered by HZR's keyed private session identity and current accounting policy.
+- **The Stop card leads with measured value.** It reports estimated net tokens saved, reduction
+  percentage, baseline-to-delivered movement, measured command count, and the three most-used
+  privacy-safe command families.
+- **Session ROI is a clean future billing seam.** Model-priced provider receipts can later join
+  the same private session scope and add dollar savings without relabelling local token estimates
+  as billed usage.
+
+### Fixed — zero no longer hides success
+
+- `ops` is no longer presented as though it were a savings denominator. It was the hook event
+  count; the card now names it `hook events` and reports measured ledger executions separately.
+- `recoverable-tokens=0` is gone. Proven avoidable output that actually escaped the efficient
+  route is named **avoidable leakage**. Zero is explained as the desired outcome: no proven
+  avoidable bypass executed.
+- Prevented commands are shown as policy wins, with native denials and approval asks separated.
+  Their unexecuted output is explicitly `not estimated`; HZR does not manufacture counterfactual
+  savings to make the card look stronger.
+- If the ledger cannot be opened or queried, savings and leakage now read `unknown`, not zero.
+  Missing evidence can no longer masquerade as a clean session.
+- `E10` is rendered as `e10-capability-gap`, so the dominant class is understandable without
+  memorising the evasion taxonomy.
+- **Instruction drift can no longer wait silently for a manual doctor run.** SessionStart audits
+  the current project and user-global Claude/Codex instruction surfaces with the same canonical
+  audit used by doctor. If it repaired a managed block or still finds an unhealthy surface, it
+  tells the agent to run `hzr doctor` before continuing and to preview fleet repair with
+  `hzr doctor --reconcile-fleet --dry-run`.
+
+### Acceptance gate
+
+- The session slice is compared against global `hzr stats` on a one-session ledger, preventing
+  the two token formulas from silently diverging.
+- Regression cases cover non-zero avoidable leakage, zero leakage with prevented work, missing
+  ledger evidence, session attribution, privacy-safe top-command output, and a SessionStart drift
+  alert that remains intact when an update notice is emitted at the same time.
 
 ## [0.6.1] - 2026-08-26
 

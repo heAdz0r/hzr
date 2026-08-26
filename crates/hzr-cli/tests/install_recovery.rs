@@ -57,7 +57,11 @@ fn install_journal_recovers_after_failure_and_preserves_concurrent_user_edit() {
         .output()
         .expect("failing install");
     assert!(!failed.status.success());
-    assert!(String::from_utf8_lossy(&failed.stderr).contains("rerun `hzr install --force`"));
+    let failed_stderr = String::from_utf8_lossy(&failed.stderr);
+    assert!(
+        failed_stderr.contains("rerun `hzr install --force`"),
+        "{failed_stderr}"
+    );
     let journal_path = data.join("runtime/install-transaction.json");
     let incomplete: serde_json::Value =
         serde_json::from_slice(&fs::read(&journal_path).expect("incomplete journal"))

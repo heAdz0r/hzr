@@ -173,6 +173,22 @@ pub struct SessionEvasionSummary {
     pub policy_corrections: u64,
 }
 
+/// The measured efficiency slice for one private session identity.
+///
+/// This deliberately mirrors the token arithmetic used by `hzr stats` while keeping provider
+/// receipts separate. Commands are already reduced to privacy-safe families by the current
+/// accounting policy before they can reach this view.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SessionEfficiencySummary {
+    pub operations: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub gross_avoided_tokens_estimated: u64,
+    pub regression_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub top_commands: Vec<EfficiencyCommandSummary>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EvasionClassSummary {
     pub class: EvasionClass,
@@ -1727,6 +1743,107 @@ impl Ledger {
             exhausted: operations >= allowance.max_operations
                 || delivered_tokens >= allowance.max_delivered_tokens,
         })
+    }
+
+    pub fn session_efficiency_summary(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionEfficiencySummary, LedgerError> {
+        let (session_hash, legacy_session_hash) =
+            session_identity_hashes(&self.connection, session_id)?;
+        let raw_predicate = raw_route_sql_predicate("rtk_cmd");
+        let neutral_predicate = format!("({raw_predicate}) OR rtk_cmd = 'rtk write'");
+        let measured_scope = "session_hash IN (?1, ?2)
+               AND accounting_policy_version = ?3
+               AND measurement = 'estimated'
+               AND COALESCE(route, '') != 'native_unaccounted'
+               AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')";
+        let totals_query = format!(
+            "SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN ({neutral_predicate})
+                                  THEN output_tokens ELSE input_tokens END), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(CASE WHEN NOT ({neutral_predicate}) AND input_tokens > output_tokens
+                                  THEN input_tokens - output_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN NOT ({neutral_predicate}) AND output_tokens > input_tokens
+                                  THEN output_tokens - input_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN ({neutral_predicate})
+                                  THEN 0 ELSE input_tokens - output_tokens END), 0)
+             FROM commands WHERE {measured_scope}"
+        );
+        let mut summary = self
+            .connection
+            .query_row(
+                &totals_query,
+                params![
+                    session_hash,
+                    legacy_session_hash,
+                    CURRENT_ACCOUNTING_POLICY_VERSION
+                ],
+                |row| {
+                    Ok(SessionEfficiencySummary {
+                        operations: row.get(0)?,
+                        baseline_tokens_estimated: row.get(1)?,
+                        delivered_tokens_estimated: row.get(2)?,
+                        gross_avoided_tokens_estimated: row.get(3)?,
+                        regression_tokens_estimated: row.get(4)?,
+                        net_avoided_tokens_estimated: row.get(5)?,
+                        top_commands: Vec::new(),
+                    })
+                },
+            )
+            .map_err(LedgerError::Database)?;
+        let commands_query = format!(
+            "SELECT
+                rtk_cmd,
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN ({neutral_predicate})
+                                  THEN output_tokens ELSE input_tokens END), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(CASE WHEN NOT ({neutral_predicate}) AND input_tokens > output_tokens
+                                  THEN input_tokens - output_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN NOT ({neutral_predicate}) AND output_tokens > input_tokens
+                                  THEN output_tokens - input_tokens ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN ({neutral_predicate})
+                                  THEN 0 ELSE input_tokens - output_tokens END), 0),
+                CAST(COALESCE(AVG(exec_time_ms), 0) AS INTEGER)
+             FROM commands WHERE {measured_scope}
+             GROUP BY rtk_cmd
+             ORDER BY COUNT(*) DESC,
+                      SUM(CASE WHEN ({neutral_predicate})
+                               THEN 0 ELSE input_tokens - output_tokens END) DESC,
+                      rtk_cmd
+             LIMIT 3"
+        );
+        let mut statement = self
+            .connection
+            .prepare_cached(&commands_query)
+            .map_err(LedgerError::Database)?;
+        summary.top_commands = statement
+            .query_map(
+                params![
+                    session_hash,
+                    legacy_session_hash,
+                    CURRENT_ACCOUNTING_POLICY_VERSION
+                ],
+                |row| {
+                    Ok(EfficiencyCommandSummary {
+                        command: row.get(0)?,
+                        executions: row.get(1)?,
+                        baseline_tokens_estimated: row.get(2)?,
+                        delivered_tokens_estimated: row.get(3)?,
+                        gross_avoided_tokens_estimated: row.get(4)?,
+                        regression_tokens_estimated: row.get(5)?,
+                        net_avoided_tokens_estimated: row.get(6)?,
+                        avg_time_ms: row.get(7)?,
+                    })
+                },
+            )
+            .map_err(LedgerError::Database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LedgerError::Database)?;
+        Ok(summary)
     }
 
     pub fn session_evasion_summary(

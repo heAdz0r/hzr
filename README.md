@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="Cargo.toml"><img alt="Version 0.6.1" src="https://img.shields.io/badge/version-0.6.1-e64a19"></a>
+<a href="Cargo.toml"><img alt="Version 0.6.2" src="https://img.shields.io/badge/version-0.6.2-e64a19"></a>
   <a href="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/heAdz0r/hzr/releases"><img alt="Release" src="https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/control_plane-Apache--2.0-37474f"></a>
@@ -103,7 +103,7 @@ and [recorded run](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RES
 
 ## Install
 
-HZR 0.6.1 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
+HZR 0.6.2 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
 Apple Silicon/Intel. System Git is the only engine prerequisite; Node.js, RTK,
 grepai, and ICM are bundled. Windows is not currently published.
 
@@ -111,7 +111,7 @@ Download, inspect, then run the installer:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.6.1/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.6.2/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -185,6 +185,30 @@ hzr stats --evasion --since 7d
 `hzr build` is an inherited fork-core maintenance compatibility command, not a generic
 project build wrapper. Build projects through `hzr exec run '<project build command>'`.
 `hzr release` rebuilds and installs HZR itself.
+
+## Session ROI where the agent can see it
+
+HZR does not wait for someone to open a dashboard. At the end of a session it turns the same
+accounting model behind `hzr stats` into a compact ROI card:
+
+```text
+HZR session ROI
+Saved (estimated net): 8000 tokens (66.7%; gross 8000, regression 0; 12000 -> 4000)
+Measured commands: 7 | Top: hzr read <arguments omitted> x5
+Policy: prevented 5 (1 native denial); asked 0; avoidable leakage 0 ops / 0 tokens
+Evidence: prevented output not estimated | top evasion e10-capability-gap | hook events 464
+Shadow guard: T3 observe-only | limit 40 ops / 250000 tokens
+```
+
+The first line is the measured local reduction from commands that actually ran. The policy line
+is different evidence: a prevented bypass has no output to count, so HZR celebrates the catch
+without inventing savings. Zero leakage therefore reads as the good result it is; an unavailable
+ledger reads `unknown`, never a reassuring fake zero. Top commands are privacy-safe families,
+not paths, queries, or arguments.
+
+This session boundary is also the join point for future cost reporting. A model-priced provider
+receipt can later add `$` savings to the same card without converting today's byte-derived token
+estimate into a billing claim.
 
 ## Make the efficient path the easy path
 
@@ -292,6 +316,11 @@ each file where one survives is named, so a refresh can never be mistaken for a 
 Run it from an installed HZR: a binary started inside a source checkout would hand every other
 project a contract path only that checkout has, so the command refuses instead.
 
+SessionStart uses the same audit for the current project and user-global Claude/Codex surfaces.
+If it repairs drift or finds a conflict it cannot safely rewrite, the agent receives an immediate
+alert to run `hzr doctor` before continuing. A fleet cannot depend on someone remembering to open
+doctor after the instructions have already diverged.
+
 ## When a project genuinely cannot route through HZR
 
 Some repositories have to name an engine directly: a benchmark whose measured subject *is*
@@ -317,7 +346,7 @@ HZR could have replaced at execution time.
 
 ## Honest boundaries
 
-| Guarantee | 0.6.1 posture |
+| Guarantee | 0.6.2 posture |
 |---|---|
 | one versioned control plane and pinned engine bundle | implemented |
 | one canonical index owner per worktree | implemented |

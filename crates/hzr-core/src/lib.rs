@@ -19,8 +19,8 @@ pub use ledger::{
     LegacyEfficiencyMigration, LegacyEfficiencySource, OperationAttribution, OperationContext,
     OperationFamilySummary, OperationModeSummary, PolicyEvent, PolicyEventSummary, PriceTable,
     PrivacyPseudonymizer, PrivacySafeFidelityOperation, ProjectActivitySummary,
-    ProjectOperationRoute, ProjectOperationSummary, ReadPipelineSummary, SessionEvasionSummary,
-    StatsCollection, StatsQuery, StatsSnapshot, discover_legacy_rtk_history,
+    ProjectOperationRoute, ProjectOperationSummary, ReadPipelineSummary, SessionEfficiencySummary,
+    SessionEvasionSummary, StatsCollection, StatsQuery, StatsSnapshot, discover_legacy_rtk_history,
     inspect_legacy_efficiency, privacy_identity_hash, privacy_keyed_identity_hash,
 };
 pub use operation::{

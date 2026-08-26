@@ -8,8 +8,9 @@ use fs2::FileExt;
 use hzr_core::{
     Config, DetailedOperationAttribution, FidelityAllowance, FidelityBudget, FidelityPreflight,
     Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-    PolicyEvent, RawFidelityRequest, efficient_route_replacement, fidelity_preflight_required,
-    first_class_replacement, raw_fidelity_request,
+    PolicyEvent, RawFidelityRequest, SessionEfficiencySummary, SessionEvasionSummary,
+    efficient_route_replacement, fidelity_preflight_required, first_class_replacement,
+    raw_fidelity_request,
 };
 use hzr_exec::{
     CanonicalCommand, ForkRuntimePaths, PinnedRtkAdapter, RewriteDecision, RewriteSource,
@@ -959,6 +960,102 @@ fn read_session(config: &Config, input: &Value) -> Option<SessionFeedback> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
+fn scorecard_message(
+    state: &SessionFeedback,
+    session_summary: Option<&SessionEvasionSummary>,
+    efficiency: Option<&SessionEfficiencySummary>,
+) -> String {
+    let (savings, commands) = match efficiency {
+        Some(summary) if summary.operations > 0 => {
+            let reduction_pct = if summary.baseline_tokens_estimated == 0 {
+                0.0
+            } else {
+                summary.net_avoided_tokens_estimated as f64 * 100.0
+                    / summary.baseline_tokens_estimated as f64
+            };
+            let outcome = if summary.net_avoided_tokens_estimated >= 0 {
+                format!(
+                    "Saved (estimated net): {} tokens ({reduction_pct:.1}%; gross {}, regression {}; {} -> {})",
+                    summary.net_avoided_tokens_estimated,
+                    summary.gross_avoided_tokens_estimated,
+                    summary.regression_tokens_estimated,
+                    summary.baseline_tokens_estimated,
+                    summary.delivered_tokens_estimated
+                )
+            } else {
+                format!(
+                    "Regression (estimated net): {} tokens ({reduction_pct:.1}%; gross saved {}, regression {}; {} -> {})",
+                    summary.net_avoided_tokens_estimated.unsigned_abs(),
+                    summary.gross_avoided_tokens_estimated,
+                    summary.regression_tokens_estimated,
+                    summary.baseline_tokens_estimated,
+                    summary.delivered_tokens_estimated,
+                )
+            };
+            let top_commands = summary
+                .top_commands
+                .iter()
+                .map(|command| format!("{} x{}", command.command, command.executions))
+                .collect::<Vec<_>>()
+                .join(", ");
+            (
+                outcome,
+                format!(
+                    "Measured commands: {} | Top: {}",
+                    summary.operations,
+                    if top_commands.is_empty() {
+                        "none"
+                    } else {
+                        &top_commands
+                    },
+                ),
+            )
+        }
+        Some(_) => (
+            "Savings: not measured yet (no session command executions)".to_owned(),
+            "Measured commands: 0 | Top: none".to_owned(),
+        ),
+        None => (
+            "Savings: unknown (ledger unavailable, not zero)".to_owned(),
+            "Measured commands: unknown | Top: unknown".to_owned(),
+        ),
+    };
+    let policy = match session_summary {
+        Some(summary) => {
+            let top_class = match summary.top_class {
+                Some(EvasionClass::E10CapabilityGap) => "e10-capability-gap",
+                Some(class) => class.as_str(),
+                None => "none",
+            };
+            let leakage_meaning = if summary.avoidable_operations == 0 {
+                "good: no proven avoidable bypass executed"
+            } else {
+                "recoverable output escaped the efficient route"
+            };
+            let prevented = state
+                .corrections
+                .max(summary.policy_corrections + summary.policy_denials);
+            format!(
+                "Policy: prevented {} ({} native denial); asked {}; avoidable leakage {} ops / {} tokens ({leakage_meaning})\nEvidence: prevented output not estimated | top evasion {top_class} | hook events {}",
+                prevented,
+                state.native_denials,
+                summary.policy_asks,
+                summary.avoidable_operations,
+                summary.avoidable_tokens,
+                state.operations,
+            )
+        }
+        None => format!(
+            "Policy: prevented {} ({} native denial); avoidable leakage unknown\nEvidence: ledger unavailable, so leakage is unknown rather than zero | prevented output not estimated | hook events {}",
+            state.corrections, state.native_denials, state.operations,
+        ),
+    };
+    format!(
+        "HZR session ROI\n{savings}\n{commands}\n{policy}\nShadow guard: T3 observe-only | limit {} ops / {} tokens",
+        SESSION_BYPASS_COUNT_BUDGET, SESSION_BYPASS_TOKEN_BUDGET,
+    )
+}
+
 /// Emit bounded feedback for prompt and completion hooks. This hook is deliberately
 /// failure-silent: state is advisory and must never block a user prompt or session stop.
 pub async fn feedback(config: &Config) {
@@ -970,17 +1067,24 @@ pub async fn feedback(config: &Config) {
         .and_then(Value::as_str)
         .unwrap_or_default();
     let state = read_session(config, &input).unwrap_or_default();
-    let session_summary = input
-        .get("session_id")
-        .and_then(Value::as_str)
-        .and_then(|session_id| {
-            Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))
-                .ok()?
-                .session_evasion_summary(session_id, FidelityAllowance::default())
-                .ok()
-        });
+    let session_summaries =
+        input
+            .get("session_id")
+            .and_then(Value::as_str)
+            .and_then(|session_id| {
+                let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite")).ok()?;
+                Some((
+                    ledger
+                        .session_evasion_summary(session_id, FidelityAllowance::default())
+                        .ok(),
+                    ledger.session_efficiency_summary(session_id).ok(),
+                ))
+            });
+    let session_summary = session_summaries
+        .as_ref()
+        .and_then(|(evasion, _)| evasion.as_ref());
     let crosses_threshold = state.corrections >= SESSION_CORRECTION_NUDGE
-        || session_summary.as_ref().is_some_and(|summary| {
+        || session_summary.is_some_and(|summary| {
             summary.avoidable_operations > 0
                 && summary.avoidable_share_pct >= SESSION_AVOIDABLE_SHARE_NUDGE
         });
@@ -1004,42 +1108,11 @@ pub async fn feedback(config: &Config) {
             }));
         }
         "Stop" | "SubagentStop" => {
-            let operations = session_summary
+            let efficiency = session_summaries
                 .as_ref()
-                .map_or(state.operations, |summary| {
-                    summary.operations.max(state.operations)
-                });
-            // Both halves of the shadow budget come from the ledger, which is the only place
-            // that knows what an operation actually delivered. Corrections are reported
-            // separately: a corrected command never ran in its bypassed form, so counting it
-            // against a budget meant to measure leakage would inflate the very number the
-            // shadow window exists to calibrate.
-            let recoverable = session_summary
-                .as_ref()
-                .map_or(0, |summary| summary.recoverable_tokens);
-            let avoidable_operations = session_summary
-                .as_ref()
-                .map_or(0, |summary| summary.avoidable_operations);
-            let avoidable_tokens = session_summary
-                .as_ref()
-                .map_or(0, |summary| summary.avoidable_tokens);
-            let top_class = session_summary
-                .as_ref()
-                .and_then(|summary| summary.top_class)
-                .map_or("none", EvasionClass::as_str);
+                .and_then(|(_, efficiency)| efficiency.as_ref());
             let _ = write_hook_json(json!({
-                "systemMessage": format!(
-                    "HZR scorecard: ops={} corrections={} native-denials={} top={} recoverable-tokens={}; shadow-budget avoidable={}/{} ops, {}/{} tokens (T3 measured, not enforced).",
-                    operations,
-                    state.corrections,
-                    state.native_denials,
-                    top_class,
-                    recoverable,
-                    avoidable_operations,
-                    SESSION_BYPASS_COUNT_BUDGET,
-                    avoidable_tokens,
-                    SESSION_BYPASS_TOKEN_BUDGET,
-                )
+                "systemMessage": scorecard_message(&state, session_summary, efficiency)
             }));
         }
         _ => {}
@@ -1353,7 +1426,7 @@ mod tests {
 
     use hzr_core::{
         Config, FidelityAllowance, Ledger, OperationAttribution, OperationChannel,
-        OperationMeasurement, OperationRoute,
+        OperationMeasurement, OperationRoute, SessionEfficiencySummary, SessionEvasionSummary,
     };
     use hzr_protocol::{
         EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, FidelityValidation,
@@ -1367,12 +1440,12 @@ mod tests {
         ProbeClass, ProbeDecision, ProbeLayer, ProbeNativeMode, ProbeSurface,
     };
     use super::{
-        HookFidelityPreflight, agent_attribution, agent_identity, attach_policy_feedback,
-        attach_session_attribution, clear_reconciled_rewrites, context_brief,
-        degraded_rewrite_coverage, fallback_decision, honor_host_permission_mode,
+        HookFidelityPreflight, SessionFeedback, agent_attribution, agent_identity,
+        attach_policy_feedback, attach_session_attribution, clear_reconciled_rewrites,
+        context_brief, degraded_rewrite_coverage, fallback_decision, honor_host_permission_mode,
         hook_fidelity_preflight, native_observation_policy, native_replacement, observe_input,
         read_session, record_daemon_unavailable_operation, record_degraded_rewrite_at,
-        record_local_policy_decision, record_native_correction, render_command,
+        record_local_policy_decision, record_native_correction, render_command, scorecard_message,
         steer_to_first_class,
     };
 
@@ -1947,7 +2020,136 @@ mod tests {
             summary.recoverable_tokens, 4_096,
             "the scorecard's token figures must move with recorded avoidable bypass"
         );
+        let efficiency = ledger
+            .session_efficiency_summary("shadow-session")
+            .expect("session efficiency");
+        let global = ledger.efficiency_summary().expect("global efficiency");
+        assert_eq!(
+            (
+                efficiency.operations,
+                efficiency.baseline_tokens_estimated,
+                efficiency.delivered_tokens_estimated,
+                efficiency.gross_avoided_tokens_estimated,
+                efficiency.regression_tokens_estimated,
+                efficiency.net_avoided_tokens_estimated,
+            ),
+            (
+                global.operations,
+                global.baseline_tokens_estimated,
+                global.delivered_tokens_estimated,
+                global.gross_avoided_tokens_estimated,
+                global.regression_tokens_estimated,
+                global.net_avoided_tokens_estimated,
+            ),
+            "a one-session ledger must use the same token arithmetic as hzr stats"
+        );
+        assert_eq!(efficiency.top_commands.len(), 1);
+        assert!(
+            !efficiency.top_commands[0].command.contains("cat a"),
+            "session ROI exposed a command payload"
+        );
+        let message = scorecard_message(
+            &SessionFeedback::default(),
+            Some(&summary),
+            Some(&efficiency),
+        );
+        assert!(message.contains("4096 -> 4096"));
+        assert!(message.contains("avoidable leakage 1 ops / 4096 tokens"));
+        assert!(message.contains("recoverable output escaped the efficient route"));
+        ledger
+            .record_operation_attributed_with_detail(
+                "rtk read private-other-session.txt",
+                "rtk read <arguments omitted>",
+                9_000,
+                900,
+                1,
+                hzr_core::DetailedOperationAttribution {
+                    attribution: OperationAttribution {
+                        project_path: "/tmp/project",
+                        agent: Some("claude-code"),
+                        session_id: Some("other-session"),
+                        channel: OperationChannel::HookCli,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Optimized,
+                    },
+                    detail: None,
+                    evasion: None,
+                },
+            )
+            .expect("other session operation");
+        assert_eq!(
+            ledger
+                .session_efficiency_summary("shadow-session")
+                .expect("scoped session efficiency"),
+            efficiency,
+            "another session must not change this session's ROI"
+        );
         assert!(summary.avoidable_tokens <= super::SESSION_BYPASS_TOKEN_BUDGET);
+    }
+
+    #[test]
+    fn acceptance_gate_zero_leakage_explains_prevented_work_and_capability_gaps() {
+        let state = SessionFeedback {
+            operations: 464,
+            corrections: 5,
+            native_denials: 1,
+            nudged: true,
+        };
+        let summary = SessionEvasionSummary {
+            operations: 4,
+            delivered_tokens: 8_813,
+            top_class: Some(EvasionClass::E10CapabilityGap),
+            policy_attempts: 6,
+            policy_denials: 1,
+            policy_corrections: 4,
+            ..SessionEvasionSummary::default()
+        };
+        let efficiency = SessionEfficiencySummary {
+            operations: 7,
+            baseline_tokens_estimated: 12_000,
+            delivered_tokens_estimated: 4_000,
+            gross_avoided_tokens_estimated: 8_000,
+            net_avoided_tokens_estimated: 8_000,
+            top_commands: vec![hzr_core::EfficiencyCommandSummary {
+                command: "hzr read <arguments omitted>".to_owned(),
+                executions: 5,
+                baseline_tokens_estimated: 10_000,
+                delivered_tokens_estimated: 3_000,
+                gross_avoided_tokens_estimated: 7_000,
+                regression_tokens_estimated: 0,
+                net_avoided_tokens_estimated: 7_000,
+                avg_time_ms: 1,
+            }],
+            ..SessionEfficiencySummary::default()
+        };
+
+        let message = scorecard_message(&state, Some(&summary), Some(&efficiency));
+
+        assert!(message.contains("Saved (estimated net): 8000 tokens (66.7%"));
+        assert!(message.contains("12000 -> 4000"));
+        assert!(message.contains("Top: hzr read <arguments omitted> x5"));
+        assert!(message.contains("hook events 464"));
+        assert!(message.contains("Policy: prevented 5 (1 native denial)"));
+        assert!(message.contains("avoidable leakage 0 ops / 0 tokens"));
+        assert!(message.contains("good: no proven avoidable bypass executed"));
+        assert!(message.contains("top evasion e10-capability-gap"));
+        assert!(!message.contains("recoverable-tokens=0"));
+    }
+
+    #[test]
+    fn acceptance_gate_missing_ledger_is_unknown_instead_of_a_false_zero() {
+        let state = SessionFeedback {
+            operations: 12,
+            corrections: 2,
+            native_denials: 0,
+            nudged: false,
+        };
+
+        let message = scorecard_message(&state, None, None);
+
+        assert!(message.contains("Savings: unknown (ledger unavailable, not zero)"));
+        assert!(message.contains("avoidable leakage unknown"));
+        assert!(!message.contains("avoidable leakage 0"));
     }
 
     #[test]

@@ -1,85 +1,66 @@
-# HZR 0.6.1 — the deferred verification, actually run
+# HZR 0.6.2 — make the savings visible
 
-0.6.0 shipped with its full-suite, MSRV, fork-parity and fleet acceptance runs deferred by an
-explicit release decision, recorded in [`docs/TEST_DEBT_0.6.0.md`](docs/TEST_DEBT_0.6.0.md).
-0.6.1 is what happened when those gates were finally executed against the immutable 0.6.0
-source: they found eight real defects, and this release fixes them.
+HZR 0.6.2 is a focused truth-and-clarity hotfix for the session Stop card.
 
-No gate was relaxed and nothing was reclassified as passing. Every failure below was reproduced
-first on the untouched 0.6.0 commit.
+The old card could end a productive session with `recoverable-tokens=0`. That was not a total
+savings counter. It meant that no command output had both escaped the efficient route and been
+proven avoidable. Five corrected commands could therefore sit beside zero "recoverable" tokens,
+making a successful policy outcome look like no benefit at all.
 
-## What was actually broken
+0.6.2 replaces that implementation-shaped message with a session ROI story built from the same
+accounting rules as `hzr stats`:
 
-**The advertised minimum Rust version did not build.** The workspace declares
-`rust-version = 1.85` and the README promises "Rust 1.85+", but twenty conditions across
-`hzr-daemon` and `hzr-cli` used `let` chains, stabilized only in Rust 1.88. Anyone building from
-source on the supported toolchain got a compile error.
-
-**Every MCP read and write was invisible to `hzr stats`.** `hzr_read` and `hzr_write` were
-recorded with `accounting_stage = final_delivery`, a stage the efficiency summary deliberately
-excludes so that the last hop of a multi-stage pipeline is not counted twice. An MCP tool call
-has no earlier stage, so the exclusion removed the only record that existed. Agents working
-through MCP produced a ledger reading of zero operations.
-
-**fork-core could hand back a summary where the caller needed exact bytes.** The never-worse
-guard trimmed its input before testing for git porcelain, removing the two leading status
-columns that define the format. Porcelain was therefore never recognized as a machine protocol
-and lost its exactness guarantee.
-
-**The same guard silently disabled every digest a user explicitly asked for.** Any valid JSON
-counted as an exact machine protocol, so `rtk json` and the `rtk read` CSV/JSON digests always
-fell back to raw. A schema view that never renders is not a bounded read.
-
-**One global MCP pin made every other project permanently wrong.** HZR audited only Claude
-Code's user-global `mcpServers` and ignored the per-project `projects[<path>].mcpServers` scope
-that Claude Code actually launches, so `hzr doctor` reported a workspace mismatch that no
-correct configuration could satisfy.
-
-**The managed agent contract described a surface that does not exist.**
-`harnesses.managed_agent.tool_names` carried the 13-tool MCP inventory instead of the 11 tools
-the Caveman bridge implements, so the managed runtime refused to start against its own contract.
-
-**Doctor's fidelity remediation had lost its safety wording.** An unknown execution may already
-have been billed. The guidance says so again, and names idempotent replay explicitly.
-
-**The suite was flaky under its own parallel load.** ICM liveness gates allowed two seconds for
-a process spawn, which is not enough on a machine running the whole workspace suite.
-
-## Fleet exemptions are now declared, not inferred
-
-A hardcoded path heuristic silently exempted one directory from fleet instruction policy, which
-is indistinguishable from a hidden bypass. A project that genuinely cannot route a directive
-through HZR — a benchmark whose measured subject *is* the engine — now declares that in
-`.hzr/policy.toml`:
-
-```toml
-schema_version = 1
-
-[[exemption]]
-rule = "direct-rtk"
-reason = "benchmark-subject"
-justification = "This checkout is the upstream RTK baseline that HZR measures itself against."
+```text
+HZR session ROI
+Saved (estimated net): 8000 tokens (66.7%; gross 8000, regression 0; 12000 -> 4000)
+Measured commands: 7 | Top: hzr read <arguments omitted> x5
+Policy: prevented 5 (1 native denial); asked 0; avoidable leakage 0 ops / 0 tokens
+Evidence: prevented output not estimated | top evasion e10-capability-gap | hook events 464
+Shadow guard: T3 observe-only | limit 40 ops / 250000 tokens
 ```
 
-`hzr doctor` honours only the rule named, requires an auditable justification, and reports the
-waiver under `fleet_instruction_exemptions` rather than passing it in silence. Execution routes
-are not waivable: no file on disk can buy an exception to replacement-capable bypass.
+## What the card proves
 
-## Compatibility
+**Saved tokens are measured from executed commands.** Baseline, delivered, gross avoided,
+regression, net avoided, and reduction percentage use the same neutral/raw treatment and stage
+exclusions as the global stats report. A one-session acceptance gate compares both views so the
+formulas cannot drift silently.
 
-No protocol, config, ledger or CLI surface changed. `agent-capabilities.json` now lists the
-managed-agent tools the bridge actually implements, so its bundle digest changes with this
-release. Bundles remain native and self-contained for Linux x86_64/ARM64 and macOS Apple
-Silicon/Intel; Windows is not published.
+**Policy wins are reported separately.** A prevented command never produced the bypass output
+that HZR would need for an honest counterfactual. The card shows the prevention, native denial,
+or approval ask, but labels the missing output estimate instead of inventing a larger savings
+number.
 
-## Verification status
+**Zero leakage is good.** `avoidable leakage=0` now says what happened: no proven avoidable
+bypass executed. If the ledger is unavailable, the card reports `unknown`, not a fake zero.
 
-The full CI gate set runs green: `cargo fmt --all --check`, workspace clippy with `-D warnings`,
-the full locked workspace test suite, `cargo +1.85.0 check --locked --workspace --all-targets
---all-features`, the locked fork-core parity and digest gate with its test suite, the Caveman
-bridge tests and npm audit, and the visualizer test, typecheck and build.
+**Top commands are useful without exposing work.** The three most-used command families come
+from the current privacy-typed ledger. Paths, queries, arguments, and raw session identity do not
+enter the card.
 
-`economic_claim_ready` remains **false**. A paired provider-billed benchmark has still not been
-run, so HZR continues to report estimated local reduction and never presents it as billed
-savings. The remaining deferred items — that benchmark and a multi-day engine soak — are tracked
-in [`docs/TEST_DEBT_0.6.1.md`](docs/TEST_DEBT_0.6.1.md).
+**Instruction drift now interrupts the silence.** SessionStart checks the project and user-global
+Claude/Codex instruction surfaces through doctor's canonical audit. If it reconciled a managed
+block or still sees an unhealthy surface, the agent is told to run `hzr doctor` before continuing
+and to preview fleet reconciliation before applying it. The alert and an available-update notice
+share one valid hook payload, so neither can overwrite the other.
+
+## The path to dollar savings
+
+This release establishes the session as the shared scope for efficiency and policy evidence.
+That is the correct join point for future model-priced provider receipts: model, actual input and
+output usage, cache usage, and price-table version can add a billed `$` view later while the
+existing estimated token reduction remains clearly labelled.
+
+0.6.2 does not claim dollar savings today. No provider receipt is currently attributed to this
+session ROI view, and `economic_claim_ready` remains false until paired billed measurements exist.
+
+## Verification
+
+- `cargo check -p hzr-cli` passes.
+- `cargo clippy -p hzr-cli --all-targets --all-features -- -D warnings` passes.
+- Targeted acceptance gates pass for session/global arithmetic parity, non-zero avoidable
+  leakage, explained zero leakage, unavailable-ledger truthfulness, session attribution, and
+  privacy-safe top commands.
+- SessionStart acceptance gates pass for user-instruction drift and combined drift/update alerts.
+
+The full release build and platform bundle smoke gates run before publishing the tag and assets.
