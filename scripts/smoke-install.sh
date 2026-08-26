@@ -240,7 +240,7 @@ run_hzr daemon status --json >/dev/null
       // control plane is supposed to provide. Assert the shape instead: a registered project
       // whose root is redacted, and the fork engine present.
       const pseudonymous = (project) =>
-        typeof project.root === "string" && project.root.startsWith("sha256:");
+        typeof project.root === "string" && project.root.startsWith("hmac-sha256:");
       if (response.status !== 200 ||
           report.projects.length === 0 ||
           !report.projects.every(pseudonymous) ||
