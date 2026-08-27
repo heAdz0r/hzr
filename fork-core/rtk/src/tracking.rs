@@ -906,7 +906,7 @@ impl Tracker {
                 accounting.attribution.and_then(|value| value.to_line),
                 accounting.attribution.and_then(|value| value.source_bytes),
                 concat!("rtk/", env!("CARGO_PKG_VERSION")),
-                "privacy_typed_v1",
+                "privacy_typed_v2",
                 accounting.attribution.map(|value| value.operation.as_str()),
                 replacement_capability,
                 replacement_route,
@@ -2092,6 +2092,15 @@ mod tests {
                 "hzr search".into(),
             )
         );
+        let policy: String = tracker
+            .conn
+            .query_row(
+                "SELECT accounting_policy_version FROM commands",
+                [],
+                |row| row.get(0),
+            )
+            .expect("accounting policy version");
+        assert_eq!(policy, "privacy_typed_v2");
     }
 
     #[test]

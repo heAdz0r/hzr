@@ -696,7 +696,7 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         by_mode,
         read_pipeline: gain.read_pipeline,
         accounting_version_scope: match accounting_version {
-            AccountingVersion::Current => "current_privacy_typed_policy",
+            AccountingVersion::Current => "typed_v2_plus_aggregate_compatible_v1",
             AccountingVersion::All => "all_versions_compatibility_only",
         },
         accounting_policy_version: CURRENT_ACCOUNTING_POLICY_VERSION,

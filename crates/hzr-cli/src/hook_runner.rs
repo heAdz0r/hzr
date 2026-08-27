@@ -237,9 +237,31 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
 }
 
 fn accounting_transition(config: &Config, input: &Value, degraded: bool) -> Option<String> {
+    accounting_transition_at(config, input, degraded, unix_now())
+}
+
+fn accounting_transition_at(
+    config: &Config,
+    input: &Value,
+    degraded: bool,
+    now_unix: u64,
+) -> Option<String> {
     let mut changed = false;
-    update_session(config, input, |state| {
+    update_session_at(config, input, now_unix, |state| {
         changed = state.accounting_degraded != degraded;
+        if degraded {
+            state.accounting_degraded_operations =
+                state.accounting_degraded_operations.saturating_add(1);
+        }
+        if changed && degraded {
+            state.accounting_degraded_started_at_unix = Some(now_unix);
+        } else if changed {
+            if let Some(started) = state.accounting_degraded_started_at_unix.take() {
+                state.accounting_degraded_seconds = state
+                    .accounting_degraded_seconds
+                    .saturating_add(now_unix.saturating_sub(started));
+            }
+        }
         state.accounting_degraded = degraded;
         state.accounting_was_degraded |= degraded;
     })
@@ -1067,6 +1089,10 @@ struct SessionFeedback {
     host_grant_seen: bool,
     accounting_degraded: bool,
     accounting_was_degraded: bool,
+    session_started_at_unix: Option<u64>,
+    accounting_degraded_started_at_unix: Option<u64>,
+    accounting_degraded_seconds: u64,
+    accounting_degraded_operations: u64,
     /// Tool calls seen since the last user prompt.
     ///
     /// The first call of a turn is the only position at which a filter cannot invalidate a request
@@ -1142,6 +1168,15 @@ fn update_session(
     input: &Value,
     update: impl FnOnce(&mut SessionFeedback),
 ) -> Result<SessionFeedback> {
+    update_session_at(config, input, unix_now(), update)
+}
+
+fn update_session_at(
+    config: &Config,
+    input: &Value,
+    now_unix: u64,
+    update: impl FnOnce(&mut SessionFeedback),
+) -> Result<SessionFeedback> {
     let path = session_state_path(config, input).context("hook input has no session identity")?;
     let parent = path.parent().context("session state has no parent")?;
     fs::create_dir_all(parent)?;
@@ -1158,6 +1193,7 @@ fn update_session(
         Err(error) if error.kind() == io::ErrorKind::NotFound => SessionFeedback::default(),
         Err(error) => return Err(error.into()),
     };
+    state.session_started_at_unix.get_or_insert(now_unix);
     update(&mut state);
     let mut bytes = serde_json::to_vec(&state)?;
     bytes.push(b'\n');
@@ -1274,8 +1310,11 @@ fn scorecard_message(
         None if state.accounting_was_degraded => (
             "Savings: unknown (session accounting was degraded; partial ledger totals withheld); potential public-list value unknown".to_owned(),
             format!(
-                "Measured commands: partial and withheld | hook events: {} | ACCOUNTING: DEGRADED DURING SESSION",
-                state.operations
+                "Measured commands: partial and withheld | hook events: {} | ACCOUNTING: DEGRADED DURING SESSION | missing coverage: {}s across {} operation(s) ({}% of observed session)",
+                state.operations,
+                session_degraded_seconds(state, unix_now()),
+                state.accounting_degraded_operations,
+                session_degraded_percent(state, unix_now()),
             ),
         ),
         None => (
@@ -1728,6 +1767,8 @@ pub struct AccountingCoverage {
     pub daemon_unavailable_operations: usize,
     pub complete: bool,
     pub last_degraded_at_unix: Option<u64>,
+    pub gap_started_at_unix: Option<u64>,
+    pub open_gap_seconds: Option<u64>,
 }
 
 #[cfg(test)]
@@ -1873,6 +1914,10 @@ fn read_lifetime_total(config: &Config) -> Result<Option<usize>> {
 }
 
 pub fn degraded_rewrite_coverage(config: &Config) -> Result<AccountingCoverage> {
+    degraded_rewrite_coverage_at(config, unix_now())
+}
+
+fn degraded_rewrite_coverage_at(config: &Config, now_unix: u64) -> Result<AccountingCoverage> {
     let pending = read_degraded_log(config)?;
     // A ledger written by an earlier HZR has no lifetime file; its open log *is* the
     // history, so fall back to it instead of reporting a zero total next to a non-zero gap.
@@ -1884,7 +1929,41 @@ pub fn degraded_rewrite_coverage(config: &Config) -> Result<AccountingCoverage> 
         daemon_unavailable_operations,
         complete: pending.is_empty() && daemon_unavailable_operations == 0,
         last_degraded_at_unix: pending.last().copied(),
+        gap_started_at_unix: pending.first().copied(),
+        open_gap_seconds: pending
+            .first()
+            .map(|started| now_unix.saturating_sub(*started)),
     })
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn session_degraded_seconds(state: &SessionFeedback, now_unix: u64) -> u64 {
+    state.accounting_degraded_seconds.saturating_add(
+        state
+            .accounting_degraded_started_at_unix
+            .map_or(0, |started| now_unix.saturating_sub(started)),
+    )
+}
+
+fn session_degraded_percent(state: &SessionFeedback, now_unix: u64) -> u64 {
+    let elapsed = state
+        .session_started_at_unix
+        .map_or(0, |started| now_unix.saturating_sub(started));
+    if elapsed == 0 {
+        0
+    } else {
+        session_degraded_seconds(state, now_unix)
+            .saturating_mul(100)
+            .checked_div(elapsed)
+            .unwrap_or(0)
+            .min(100)
+    }
 }
 
 #[cfg(test)]
@@ -1911,9 +1990,10 @@ mod tests {
     };
     use super::{
         HookFidelityPreflight, SessionFeedback, accounting_statusline, accounting_transition,
-        agent_attribution, agent_identity, apply_filter_placement, attach_host_grant,
-        attach_policy_feedback, attach_session_attribution, clear_reconciled_rewrites,
-        context_brief, deepest_registered_root, degraded_rewrite_coverage, fallback_decision,
+        accounting_transition_at, agent_attribution, agent_identity, apply_filter_placement,
+        attach_host_grant, attach_policy_feedback, attach_session_attribution,
+        clear_reconciled_rewrites, context_brief, deepest_registered_root,
+        degraded_rewrite_coverage, degraded_rewrite_coverage_at, fallback_decision,
         honor_host_permission_mode, hook_fidelity_preflight, native_observation_policy,
         native_replacement, observe_input, read_session, reconcile_host_grant,
         record_daemon_unavailable_operation, record_degraded_rewrite_at,
@@ -3550,6 +3630,29 @@ exit 64
         let coverage = degraded_rewrite_coverage(&config).expect("coverage");
 
         assert_eq!(coverage.last_degraded_at_unix, Some(1_785_531_432));
+    }
+
+    #[test]
+    fn acceptance_gate_accounting_gap_keeps_first_flip_time_and_duration() {
+        let directory = tempdir().expect("temp directory");
+        let config = config(directory.path());
+        record_degraded_rewrite_at(&config, 1_000).expect("first missing rewrite");
+        record_degraded_rewrite_at(&config, 1_060).expect("later missing rewrite");
+
+        let coverage = degraded_rewrite_coverage_at(&config, 1_720).expect("coverage");
+        assert_eq!(coverage.gap_started_at_unix, Some(1_000));
+        assert_eq!(coverage.last_degraded_at_unix, Some(1_060));
+        assert_eq!(coverage.open_gap_seconds, Some(720));
+
+        let input = serde_json::json!({"session_id": "session-gap"});
+        assert!(accounting_transition_at(&config, &input, true, 1_000).is_some());
+        assert!(accounting_transition_at(&config, &input, true, 1_060).is_none());
+        assert!(accounting_transition_at(&config, &input, false, 1_120).is_some());
+        let state = read_session(&config, &input).expect("session state");
+        assert_eq!(state.session_started_at_unix, Some(1_000));
+        assert_eq!(state.accounting_degraded_started_at_unix, None);
+        assert_eq!(state.accounting_degraded_seconds, 120);
+        assert_eq!(state.accounting_degraded_operations, 2);
     }
 
     /// A log left behind by an earlier HZR contains bare timestamps and no lifetime file.

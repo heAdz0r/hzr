@@ -181,6 +181,24 @@ fn write_evasion(output: &mut impl Write, report: &StatsReport, color: bool) -> 
         style("EVASION", "1;38;5;208", color),
         style("aggregate-only · payloads omitted", "2;37", color)
     )?;
+    if let (Some(started), Some(seconds)) = (
+        report.coverage.gap_started_at_unix,
+        report.coverage.open_gap_seconds,
+    ) {
+        writeln!(
+            output,
+            "   ACCOUNTING GAP OPEN · started unix {} · missing last {}s · {} rewrite(s) absent from ledger",
+            started,
+            seconds,
+            format_count(report.coverage.unreconciled_rewrites as u64),
+        )?;
+    } else if report.coverage.lifetime_rewrites > 0 {
+        writeln!(
+            output,
+            "   accounting gaps closed · {} lifetime degraded rewrite(s)",
+            format_count(report.coverage.lifetime_rewrites as u64),
+        )?;
+    }
     // The taxonomy is closed and small, so every class that occurred is listed.
     // A `take(n)` here would silently drop the lowest-volume class as the
     // taxonomy grows, and a truncated list reads as "these are all of them".
@@ -487,10 +505,7 @@ fn zero_reduction_disclosure(report: &StatsReport) -> Vec<String> {
                 "{} operation(s) were recorded under an earlier accounting",
                 format_count(report.excluded_legacy_operations)
             ),
-            format!(
-                "policy than {} and sit outside this view.",
-                report.accounting_policy_version
-            ),
+            "policy outside the typed v1/v2 aggregate-compatible view.".to_owned(),
             "recover them with: hzr stats --accounting-version all".to_owned(),
         ],
         ZeroReductionCause::OnlyZeroCreditOperations => vec![
@@ -1231,6 +1246,8 @@ mod tests {
                 daemon_unavailable_operations: 0,
                 complete: false,
                 last_degraded_at_unix: Some(1_785_531_432),
+                gap_started_at_unix: Some(1_785_531_400),
+                open_gap_seconds: Some(32),
             },
             runtime_accounting_complete: false,
             economic_claim_ready: false,
@@ -1301,6 +1318,17 @@ mod tests {
         }) {
             assert_eq!(line.chars().count(), 74, "misaligned line: {line}");
         }
+    }
+
+    #[test]
+    fn acceptance_gate_evasion_names_when_the_open_accounting_gap_started() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.evasion = Some(EvasionSummary::default());
+        let rendered = render(&report);
+        assert!(rendered.contains("ACCOUNTING GAP OPEN"));
+        assert!(rendered.contains("started unix 1785531400"));
+        assert!(rendered.contains("missing last 32s"));
+        assert!(rendered.contains("3 rewrite(s) absent from ledger"));
     }
 
     /// The headline ratio is only honest when the bypass share is next to it, so the

@@ -17,6 +17,7 @@ pub struct Config {
     pub policy: PolicyConfig,
     pub privacy: PrivacyConfig,
     pub activation: ActivationConfig,
+    pub instructions: InstructionConfig,
     pub billing: BillingConfig,
 }
 
@@ -31,9 +32,27 @@ impl Default for Config {
             policy: PolicyConfig::default(),
             privacy: PrivacyConfig::default(),
             activation: ActivationConfig::default(),
+            instructions: InstructionConfig::default(),
             billing: BillingConfig::default(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstructionScope {
+    /// Preserve the pre-0.6.5 behavior: shared repository files and, in all-project mode,
+    /// user-global instruction files receive the managed block.
+    #[default]
+    Shared,
+    /// Keep HZR wiring machine-local: CLAUDE.local.md and AGENTS.override.md only.
+    Local,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct InstructionConfig {
+    pub scope: InstructionScope,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -590,8 +609,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ActivationMode, Config, ConfigError, EnabledWorkspace, EngineConfig, PolicyConfig,
-        discover_bundle_engine_directory, sibling_engine_directory, stable_engine_directory,
+        ActivationMode, Config, ConfigError, EnabledWorkspace, EngineConfig, InstructionScope,
+        PolicyConfig, discover_bundle_engine_directory, sibling_engine_directory,
+        stable_engine_directory,
     };
 
     /// Build `<root>/versions/<release>/{bin,engines}` plus a `current` symlink, i.e. the
@@ -780,6 +800,21 @@ mod tests {
 
         assert_eq!(loaded.schema_version, 1);
         assert_eq!(loaded.data_dir, config.data_dir);
+        assert_eq!(loaded.instructions.scope, InstructionScope::Shared);
+    }
+
+    #[test]
+    fn local_instruction_scope_round_trips_without_changing_the_default() {
+        let directory = tempdir().expect("temp directory");
+        let path = directory.path().join("config.toml");
+        let mut config = Config::default();
+        assert_eq!(config.instructions.scope, InstructionScope::Shared);
+        config.instructions.scope = InstructionScope::Local;
+        config.write(&path).expect("config write");
+        assert_eq!(
+            Config::load(&path).expect("config load").instructions.scope,
+            InstructionScope::Local
+        );
     }
 
     #[test]

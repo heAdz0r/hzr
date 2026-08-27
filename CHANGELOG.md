@@ -2,6 +2,30 @@
 
 All notable HZR changes are documented here. HZR follows semantic versioning while the public API is in `0.x` development.
 
+## [0.6.5] - 2026-08-27
+
+### Fixed
+
+- Default stats now include aggregate-compatible typed v1 rows emitted by the current fork, while
+  new fork rows carry `privacy_typed_v2`. The exact production fixture that previously collapsed
+  435 rows and 44,189 avoided tokens to zero now reports 44,189; its 64 read rows report 27,334
+  transform-avoided tokens.
+- A healthy grepai watcher is no longer killed because a large initial index has not emitted its
+  ready marker within 120 seconds. Startup proves process stability; readiness remains separately
+  observable, and the 15-minute idle lifecycle is unchanged.
+- Fail-open accounting records when the open gap first began, how long it has remained open, and
+  how many session operations were affected. The scorecard and `stats --evasion` expose this
+  without adding retry or daemon-supervision behavior.
+
+### Added
+
+- `[instructions] scope = "local"` and `--instruction-scope local` wire HZR through
+  `CLAUDE.local.md` and `AGENTS.override.md`. Shared `CLAUDE.md`, `AGENTS.md`, and `.gitignore`
+  remain byte-identical; `.git/info/exclude` keeps the local surfaces out of commits. The default
+  remains `shared`.
+- Exact acceptance gates cover both public GitHub issues, local instruction isolation, and
+  first-transition accounting-gap telemetry.
+
 ## [0.6.4] - 2026-08-27
 
 0.6.3 made HZR's efficiency measurable. 0.6.4 fixes the part that mattered most and was easiest

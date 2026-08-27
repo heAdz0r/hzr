@@ -19,6 +19,8 @@ use crate::adoption::{atomic_write, commit_with_lock, read_optional, sha256};
 /// handle for idempotent reinstall and for clean removal.
 const BEGIN: &str = "<!-- hzr:begin managed agent contract — do not edit inside -->";
 const END: &str = "<!-- hzr:end managed agent contract -->";
+const LOCAL_CODEX_BRIDGE_BEGIN: &str = "<!-- hzr:begin local Codex bridge -->";
+const LOCAL_CODEX_BRIDGE_END: &str = "<!-- hzr:end local Codex bridge -->";
 const LEGACY_RTK_BEGIN: &str = "<!-- rtk-instructions";
 const LEGACY_RTK_END: &str = "<!-- /rtk-instructions -->";
 const AGENT_CAPABILITIES_JSON: &str = include_str!("../../../contracts/agent-capabilities.json");
@@ -364,6 +366,40 @@ fn strip_managed_block(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+fn strip_local_codex_bridge(text: &str) -> String {
+    let Some(start) = text.find(LOCAL_CODEX_BRIDGE_BEGIN) else {
+        return text.to_owned();
+    };
+    let after = &text[start..];
+    let Some(end_offset) = after.find(LOCAL_CODEX_BRIDGE_END) else {
+        return text.to_owned();
+    };
+    let mut stripped = String::with_capacity(text.len());
+    stripped.push_str(&text[..start]);
+    let mut rest = &after[end_offset + LOCAL_CODEX_BRIDGE_END.len()..];
+    rest = rest.strip_prefix('\n').unwrap_or(rest);
+    rest = rest.strip_prefix('\n').unwrap_or(rest);
+    stripped.push_str(rest);
+    stripped
+}
+
+fn local_codex_bridge(text: String, surface: Surface, path: &Path) -> String {
+    if surface != Surface::Codex
+        || path.file_name().and_then(|name| name.to_str()) != Some("AGENTS.override.md")
+    {
+        return text;
+    }
+    let body = strip_local_codex_bridge(&text);
+    format!(
+        "{LOCAL_CODEX_BRIDGE_BEGIN}\n\
+         This file is machine-local HZR wiring. Before doing repository work, read\n\
+         `./AGENTS.md` completely when it exists and follow its project rules too. This\n\
+         override changes only the HZR routing surface; it does not replace team policy.\n\
+         {LOCAL_CODEX_BRIDGE_END}\n\n{}",
+        body.trim_start()
+    )
 }
 
 /// Remove complete RTK v1/v2 instruction regions left by the predecessor installer.
@@ -806,6 +842,7 @@ pub fn install(
         .with_context(|| format!("{} is not UTF-8; HZR will not rewrite it", path.display()))?;
     let (after, legacy_removed, legacy_blocks_removed, directives_migrated) =
         compose(&existing, surface, contract_path);
+    let after = local_codex_bridge(after, surface, path);
     apply(
         surface,
         path,
@@ -843,7 +880,7 @@ pub fn uninstall(
     }
     let existing = String::from_utf8(before.clone())
         .with_context(|| format!("{} is not UTF-8; HZR will not rewrite it", path.display()))?;
-    let stripped = strip_managed_block(&existing);
+    let stripped = strip_local_codex_bridge(&strip_managed_block(&existing));
     let after = if stripped.trim().is_empty() {
         String::new()
     } else {

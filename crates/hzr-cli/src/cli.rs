@@ -133,6 +133,9 @@ pub enum Command {
         /// Register the workspace without installing or starting the production daemon
         #[arg(long)]
         skip_service: bool,
+        /// Instruction location: shared files (default) or machine-local override files
+        #[arg(long, value_parser = ["shared", "local"], value_name = "SCOPE")]
+        instruction_scope: Option<String>,
     },
     #[command(
         about = "Enable HZR for one workspace",
@@ -199,6 +202,9 @@ pub enum Command {
         /// singleton client and must be explicitly retargeted before another workspace uses it.
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
+        /// Instruction location: shared files (default) or machine-local override files
+        #[arg(long, value_parser = ["shared", "local"], value_name = "SCOPE")]
+        instruction_scope: Option<String>,
     },
     #[command(about = "Remove HZR adoption hooks")]
     Uninstall {

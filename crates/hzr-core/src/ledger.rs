@@ -797,7 +797,14 @@ fn accounting_policy_predicate(include_legacy_versions: bool) -> String {
     if include_legacy_versions {
         "1 = 1".into()
     } else {
-        format!("accounting_policy_version = '{CURRENT_ACCOUNTING_POLICY_VERSION}'")
+        // fork-core 0.44.1-fork.1 wrote fully typed aggregate measurements as v1 even after HZR
+        // moved its own writer to v2. Those rows remain unsuitable for keyed session identity,
+        // but their token and routing dimensions are compatible with aggregate reporting. Do not
+        // erase measured savings merely because the producer lagged the identity-policy label.
+        format!(
+            "accounting_policy_version IN ('{CURRENT_ACCOUNTING_POLICY_VERSION}', \
+             '{LEGACY_ACCOUNTING_POLICY_VERSION_V1}')"
+        )
     }
 }
 
@@ -2832,7 +2839,10 @@ impl Ledger {
             // an operator had no way to prove nothing had been dropped silently.
             let excluded_query = format!(
                 "SELECT COUNT(*) FROM commands
-                  WHERE COALESCE(accounting_policy_version, '') != '{CURRENT_ACCOUNTING_POLICY_VERSION}'
+                  WHERE COALESCE(accounting_policy_version, '') NOT IN (
+                        '{CURRENT_ACCOUNTING_POLICY_VERSION}',
+                        '{LEGACY_ACCOUNTING_POLICY_VERSION_V1}'
+                  )
                     AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                     AND length(?2) = 1
                     AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
@@ -5211,6 +5221,52 @@ mod tests {
     }
 
     #[test]
+    fn acceptance_gate_fork_v1_rows_cannot_collapse_44_189_saved_tokens_to_zero() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        ledger
+            .connection
+            .execute_batch(
+                "WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM seq WHERE n < 64)
+                 INSERT INTO commands (
+                    timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens, saved_tokens,
+                    savings_pct, source_bytes, channel, measurement, route, operation_kind,
+                    operation_mode, accounting_stage, producer_version, accounting_policy_version
+                 )
+                 SELECT datetime('now'), '[redacted]', 'rtk read',
+                        CASE WHEN n = 1 THEN 27272 ELSE 2 END, 1,
+                        CASE WHEN n = 1 THEN 27271 ELSE 1 END, 50.0,
+                        CASE WHEN n = 1 THEN 109088 ELSE 8 END,
+                        'hook_cli', 'estimated', 'optimized', 'read', 'read_smart',
+                        'internal_transport', 'rtk/0.44.1-fork.1', 'privacy_typed_v1'
+                   FROM seq;
+                 WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM seq WHERE n < 371)
+                 INSERT INTO commands (
+                    timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens, saved_tokens,
+                    savings_pct, channel, measurement, route, operation_kind, operation_mode,
+                    accounting_stage, producer_version, accounting_policy_version
+                 )
+                 SELECT datetime('now'), '[redacted]', 'rtk cargo',
+                        CASE WHEN n = 1 THEN 16486 ELSE 2 END, 1,
+                        CASE WHEN n = 1 THEN 16485 ELSE 1 END, 50.0,
+                        'hook_cli', 'estimated', 'optimized', 'exec', 'exec_filtered',
+                        'internal_transport', 'rtk/0.44.1-fork.1', 'privacy_typed_v1'
+                   FROM seq;",
+            )
+            .expect("production-shaped fork rows");
+
+        let summary = ledger.efficiency_summary().expect("efficiency summary");
+        assert_eq!(summary.operations, 435);
+        assert_eq!(summary.net_avoided_tokens_estimated, 44_189);
+        assert_eq!(summary.read_pipeline.operations, 64);
+        assert_eq!(
+            summary.read_pipeline.transform_avoided_tokens_estimated,
+            27_334
+        );
+        assert_eq!(summary.excluded_legacy_operations, 0);
+    }
+
+    #[test]
     fn test_accounting_dimensions_are_migrated_and_reported_without_faking_zero_output() {
         let directory = tempdir().expect("temp directory");
         let path = directory.path().join("usage.sqlite");
@@ -5337,7 +5393,7 @@ mod tests {
             .connection
             .execute(
                 "UPDATE commands SET accounting_policy_version = ?1 WHERE id = (SELECT MAX(id) FROM commands)",
-                [super::LEGACY_ACCOUNTING_POLICY_VERSION_V1],
+                ["privacy_typed_v0"],
             )
             .expect("legacy fixture");
 
@@ -5902,15 +5958,17 @@ mod tests {
             .fidelity_session_usage("session-private-id", super::FidelityAllowance::default())
             .expect("legacy-compatible fidelity usage");
         assert_eq!(migrated_usage.operations, 5);
-        let current = ledger.efficiency_summary().expect("current-only claims");
-        assert_eq!(current.operations, 4);
-        assert_eq!(current.excluded_legacy_operations, 1);
+        let current = ledger
+            .efficiency_summary()
+            .expect("typed aggregate-compatible claims");
+        assert_eq!(current.operations, 5);
+        assert_eq!(current.excluded_legacy_operations, 0);
         let current_stats = ledger
             .stats_collection(StatsQuery::default())
             .expect("current stats");
-        assert_eq!(current_stats.snapshot.efficiency.operations, 4);
-        assert_eq!(current_stats.snapshot.bypass.lifetime.total_operations, 4);
-        assert_eq!(current_stats.snapshot.evasion.fidelity_operations, 4);
+        assert_eq!(current_stats.snapshot.efficiency.operations, 5);
+        assert_eq!(current_stats.snapshot.bypass.lifetime.total_operations, 5);
+        assert_eq!(current_stats.snapshot.evasion.fidelity_operations, 5);
         assert_eq!(
             current_stats
                 .snapshot
@@ -5918,7 +5976,7 @@ mod tests {
                 .iter()
                 .map(|family| family.operations)
                 .sum::<u64>(),
-            4
+            5
         );
         let compatibility_stats = ledger
             .stats_collection(StatsQuery {

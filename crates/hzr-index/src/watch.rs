@@ -59,7 +59,7 @@ pub(crate) async fn start(
         operation: "start watch",
         detail: "spawned watcher has no process id".into(),
     })?;
-    if let Err(error) = wait_until_ready(
+    if let Err(error) = wait_until_started(
         &mut child,
         pid,
         &runtime_dir,
@@ -123,6 +123,10 @@ impl WatchHandle {
                 path: self.binary.clone(),
                 source,
             })
+    }
+
+    pub fn ready_marker_observed(&self) -> Result<bool> {
+        Ok(ready_pid(&self.runtime_dir)? == self.pid())
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
@@ -208,14 +212,19 @@ fn watch_runtime_dir(workspace: &Workspace) -> PathBuf {
     ))
 }
 
-async fn wait_until_ready(
+async fn wait_until_started(
     child: &mut Child,
     pid: u32,
     runtime_dir: &Path,
     log_path: &Path,
     deadline: Duration,
 ) -> Result<()> {
-    let expires = Instant::now() + deadline;
+    // A grepai watch can spend substantially longer than the startup deadline
+    // building its first index. Its ready marker describes index readiness, not
+    // process liveness, so waiting for that marker here kills healthy initial
+    // scans. Keep only a short stability probe that catches immediate exits.
+    let stability_window = deadline.min(Duration::from_millis(250));
+    let expires = Instant::now() + stability_window;
     loop {
         if ready_pid(runtime_dir)? == Some(pid) {
             return Ok(());
@@ -231,10 +240,7 @@ async fn wait_until_ready(
             });
         }
         if Instant::now() >= expires {
-            return Err(IndexError::DeadlineExceeded {
-                operation: "start grepai watch",
-                duration: deadline,
-            });
+            return Ok(());
         }
         sleep(Duration::from_millis(50)).await;
     }

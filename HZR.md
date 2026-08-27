@@ -152,6 +152,13 @@ identity and emits no hook response outside the enabled set. `SessionStart` uses
 Agent instructions live in the enabled project's root `CLAUDE.md` and `AGENTS.md`; the user-global
 managed blocks and HZR-owned global MCP registrations are removed transactionally with backups.
 
+Instruction placement is independently configurable. The default `[instructions] scope =
+"shared"` preserves the behavior above. `scope = "local"` (or `--instruction-scope local` on
+`init`/`install`) writes `CLAUDE.local.md` and `AGENTS.override.md`, keeps them in
+`.git/info/exclude`, and does not modify shared repository instruction files. The Codex override
+requires reading the repository's `AGENTS.md` before work so local HZR routing cannot hide team
+policy.
+
 `hzr enable` adds one initialized workspace and installs its local managed instruction blocks.
 `hzr disable` removes that activation entry and those blocks without deleting the managed index,
 workspace registration, memory, or ledger history. Explicit CLI commands remain available to the
@@ -318,8 +325,10 @@ a second ICM database, or parallel RTK hooks.
 
 ## Reading `hzr stats`
 
-Stats default to the current privacy/accounting policy. Use `--accounting-version all` only for a
-legacy-compatible comparison; legacy rows are excluded from current headline claims. `--all`
+Stats default to typed v2 plus aggregate-compatible typed v1 fork rows. V1 rows retain their
+original label and are not admitted to keyed v2 session identity. Use `--accounting-version all`
+only for an older-version compatibility comparison; incompatible rows are excluded from current
+headline claims. `--all`
 means all aggregate groups, never command payloads. Stored and serialized telemetry contains typed
 families, routes, versions and hashes rather than commands, arguments, queries, paths, sessions,
 environment values, SQL, heredocs, prompts, responses, or stdin. Read metrics separately report

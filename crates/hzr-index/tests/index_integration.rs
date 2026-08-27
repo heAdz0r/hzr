@@ -872,6 +872,44 @@ fn deadlines() -> Deadlines {
     }
 }
 
+#[tokio::test]
+async fn acceptance_gate_initial_scan_survives_without_ready_marker() {
+    let repo = git_repo();
+    let data = tempfile::tempdir().expect("managed data root");
+    write_source(repo.path(), "pub fn slow_initial_scan() {}\n");
+    fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    fs::write(repo.path().join("fake-watch-no-ready"), b"enabled")
+        .expect("slow initial scan marker");
+    let mut production_shape = deadlines();
+    production_shape.watch_start = Duration::from_millis(120);
+    let coordinator = IndexCoordinator::with_watcher_limits(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        fake_grepai(repo.path(), "0.35.0"),
+        production_shape,
+        true,
+        2,
+        Duration::from_secs(900),
+    );
+
+    coordinator
+        .prepare(repo.path())
+        .await
+        .expect("a live initial scan must outlive the readiness deadline");
+    let snapshot = coordinator.status(repo.path()).await.expect("typed status");
+    assert_eq!(snapshot.watcher.state, IndexWatcherState::Live);
+    assert!(!snapshot.watcher.ready_marker_observed);
+    assert_eq!(
+        coordinator
+            .registry_snapshot()
+            .await
+            .expect("registry snapshot")
+            .watcher_idle_ttl_ms,
+        900_000
+    );
+    coordinator.shutdown().await.expect("coordinator shutdown");
+}
+
 fn write_source(root: &Path, content: &str) {
     fs::create_dir_all(root.join("src")).expect("source directory must be created");
     fs::write(root.join("src/lib.rs"), content).expect("source file must be written");
@@ -936,7 +974,9 @@ case "$command_name" in
       : > .grepai/rpg.gob
     fi
     printf '%s\n' "$$" > "$log_dir/fake.pid"
-    printf 'ready\n%s\n' "$$" > "$log_dir/fake.ready"
+    if [ ! -f fake-watch-no-ready ]; then
+      printf 'ready\n%s\n' "$$" > "$log_dir/fake.ready"
+    fi
     cleanup() {{ rm -f "$log_dir/fake.pid" "$log_dir/fake.ready"; exit 0; }}
     trap cleanup INT TERM
     while [ ! -f fake-watch-die ]; do sleep 1; done

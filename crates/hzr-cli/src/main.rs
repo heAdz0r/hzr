@@ -38,9 +38,9 @@ use clap::Parser;
 use fs2::FileExt;
 use hzr_agent::{BearerToken, HzrApi, ManagedAgent, ManagedAgentConfig};
 use hzr_core::{
-    Config, ConfigPaths, Ledger, PolicyEvent, PricingEntry, ProviderEconomicReceipt,
-    discover_legacy_rtk_history, inspect_legacy_efficiency, load_pricing_catalog,
-    read_bounded_regular_file,
+    Config, ConfigPaths, InstructionScope, Ledger, PolicyEvent, PricingEntry,
+    ProviderEconomicReceipt, discover_legacy_rtk_history, inspect_legacy_efficiency,
+    load_pricing_catalog, read_bounded_regular_file,
 };
 use hzr_index::{
     Deadlines, GrepAi, IndexPlacement, InitOptions, InitOutcome, Workspace, WorkspaceRegistration,
@@ -118,6 +118,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             project_only,
             native_tool_mode,
             workspace,
+            instruction_scope,
         } => {
             return run_install(
                 InstallOptions {
@@ -132,6 +133,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     project_only: *project_only,
                     native_tool_mode: *native_tool_mode,
                     workspace: workspace.clone(),
+                    instruction_scope: instruction_scope
+                        .as_deref()
+                        .map(parse_instruction_scope)
+                        .transpose()?,
                 },
                 &config_path,
                 cli.json,
@@ -155,8 +160,11 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 instruction_reports
                     .push(instructions::uninstall(surface, &target, *dry_run, *force)?);
             }
+            let config = Config::load_or_default(&config_path)?;
             let workspace = canonical_directory(None)?;
-            for (surface, target) in activation::local_instruction_paths(&workspace) {
+            for (surface, target) in
+                activation::local_instruction_paths(&workspace, config.instructions.scope)
+            {
                 instruction_reports
                     .push(instructions::uninstall(surface, &target, *dry_run, *force)?);
             }
@@ -180,13 +188,16 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             let config = Config::load_or_default(&config_path)?;
             let project_only = config.activation.mode == hzr_core::ActivationMode::Selected;
             let workspace = canonical_directory(None)?;
-            let claude_md = if project_only {
-                workspace.join("CLAUDE.md")
+            let local_paths =
+                activation::local_instruction_paths(&workspace, config.instructions.scope);
+            let claude_md = if project_only || config.instructions.scope == InstructionScope::Local
+            {
+                local_paths[0].1.clone()
             } else {
                 instructions::Surface::Claude.default_path()?
             };
-            let codex_md = if project_only {
-                workspace.join("AGENTS.md")
+            let codex_md = if project_only || config.instructions.scope == InstructionScope::Local {
+                local_paths[1].1.clone()
             } else {
                 instructions::Surface::Codex.default_path()?
             };
@@ -255,6 +266,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         quiet,
         session_start_hook,
         skip_service,
+        instruction_scope,
         ..
     } = &cli.command
     {
@@ -266,7 +278,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 *force,
                 *reset,
                 true,
-                data_dir.as_deref(),
+                InitOverrides {
+                    data_dir: data_dir.as_deref(),
+                    instruction_scope: instruction_scope.as_deref(),
+                },
                 *skip_service,
                 cli.json,
             )
@@ -299,7 +314,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             *force,
             *reset,
             *dry_run,
-            data_dir.as_deref(),
+            InitOverrides {
+                data_dir: data_dir.as_deref(),
+                instruction_scope: instruction_scope.as_deref(),
+            },
             *skip_service,
             cli.json,
         )
@@ -1042,6 +1060,7 @@ struct InstallOptions {
     project_only: bool,
     native_tool_mode: Option<adoption::NativeToolMode>,
     workspace: Option<PathBuf>,
+    instruction_scope: Option<InstructionScope>,
 }
 
 pub(crate) const INSTALL_JOURNAL_SCHEMA_VERSION: u16 = 2;
@@ -1285,6 +1304,9 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
     let source_dir = executable_source_directory(&executable)?;
     let mut config = Config::load_or_default(&config_path)?;
+    if let Some(scope) = options.instruction_scope {
+        config.instructions.scope = scope;
+    }
     let previously_enabled_roots = config
         .activation
         .enabled_workspaces
@@ -1384,7 +1406,7 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     }
 
     let mut instruction_reports = Vec::new();
-    if options.project_only {
+    if options.project_only || config.instructions.scope == InstructionScope::Local {
         for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
             let target = surface.default_path()?;
             instruction_reports.push(instructions::uninstall(
@@ -1397,8 +1419,10 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     }
     if options.wire_instructions {
         let contract = contract_asset_path(&source_dir);
-        if options.project_only {
-            for (surface, target) in activation::local_instruction_paths(&workspace_root) {
+        if options.project_only || config.instructions.scope == InstructionScope::Local {
+            for (surface, target) in
+                activation::local_instruction_paths(&workspace_root, config.instructions.scope)
+            {
                 instruction_reports.push(instructions::install(
                     surface,
                     &target,
@@ -1413,7 +1437,9 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             roots.sort();
             roots.dedup();
             for root in roots {
-                for (surface, target) in activation::local_instruction_paths(&root) {
+                for (surface, target) in
+                    activation::local_instruction_paths(&root, config.instructions.scope)
+                {
                     instruction_reports.push(instructions::install(
                         surface,
                         &target,
@@ -1434,6 +1460,11 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
                 )?);
             }
         }
+        activation::ensure_local_instruction_excludes(
+            &workspace_root,
+            config.instructions.scope,
+            options.dry_run,
+        )?;
     }
     if let Some(journal) = journal.as_mut() {
         journal.stage(&journal_path, "instructions")?;
@@ -1498,10 +1529,16 @@ fn reconcile_agent_instructions(
     workspace_root: &Path,
 ) -> Result<Vec<instructions::InstructionReport>> {
     let (contract, targets) = agent_instruction_targets(config, workspace_root)?;
-    targets
+    let reports = targets
         .into_iter()
         .map(|(surface, path)| instructions::install(surface, &path, &contract, false, true))
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    activation::ensure_local_instruction_excludes(
+        workspace_root,
+        config.instructions.scope,
+        false,
+    )?;
+    Ok(reports)
 }
 
 fn plan_agent_instructions(
@@ -1509,10 +1546,12 @@ fn plan_agent_instructions(
     workspace_root: &Path,
 ) -> Result<Vec<instructions::InstructionReport>> {
     let (contract, targets) = agent_instruction_targets(config, workspace_root)?;
-    targets
+    let reports = targets
         .into_iter()
         .map(|(surface, path)| instructions::install(surface, &path, &contract, true, true))
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    activation::ensure_local_instruction_excludes(workspace_root, config.instructions.scope, true)?;
+    Ok(reports)
 }
 
 fn agent_instruction_targets(
@@ -1521,14 +1560,22 @@ fn agent_instruction_targets(
 ) -> Result<(PathBuf, Vec<(instructions::Surface, PathBuf)>)> {
     let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
     let contract = contract_asset_path(&executable_source_directory(&executable)?);
-    let targets = scoped_instruction_targets(config.activation.mode, workspace_root)?;
+    let targets = scoped_instruction_targets(
+        config.activation.mode,
+        config.instructions.scope,
+        workspace_root,
+    )?;
     Ok((contract, targets))
 }
 
 fn scoped_instruction_targets(
     activation_mode: hzr_core::ActivationMode,
+    instruction_scope: InstructionScope,
     workspace_root: &Path,
 ) -> Result<Vec<(instructions::Surface, PathBuf)>> {
+    if instruction_scope == InstructionScope::Local {
+        return Ok(activation::local_instruction_paths(workspace_root, instruction_scope).to_vec());
+    }
     let targets = match activation_mode {
         hzr_core::ActivationMode::All => {
             let mut targets = [instructions::Surface::Claude, instructions::Surface::Codex]
@@ -1537,11 +1584,14 @@ fn scoped_instruction_targets(
                 .collect::<Result<Vec<_>>>()?;
             // The local routing pointer keeps policy visible at the point where an agent
             // discovers repository instructions. The managed region preserves all user text.
-            targets.extend(activation::local_instruction_paths(workspace_root));
+            targets.extend(activation::local_instruction_paths(
+                workspace_root,
+                instruction_scope,
+            ));
             targets
         }
         hzr_core::ActivationMode::Selected => {
-            activation::local_instruction_paths(workspace_root).to_vec()
+            activation::local_instruction_paths(workspace_root, instruction_scope).to_vec()
         }
     };
     Ok(targets)
@@ -1769,12 +1819,18 @@ async fn execute_index(config: &Config, command: IndexCommand, json: bool) -> Re
     Ok(ExitCode::SUCCESS)
 }
 
+#[derive(Clone, Copy)]
+struct InitOverrides<'a> {
+    data_dir: Option<&'a Path>,
+    instruction_scope: Option<&'a str>,
+}
+
 async fn initialize(
     path: &Path,
     force: bool,
     reset: bool,
     dry_run: bool,
-    data_dir: Option<&Path>,
+    overrides: InitOverrides<'_>,
     skip_service: bool,
     json: bool,
 ) -> Result<ExitCode> {
@@ -1791,10 +1847,16 @@ async fn initialize(
         Config::default()
     };
     let original_data_dir = config.data_dir.clone();
-    if let Some(data_dir) = data_dir {
+    let original_instruction_scope = config.instructions.scope;
+    if let Some(data_dir) = overrides.data_dir {
         config.data_dir = data_dir.to_path_buf();
     }
+    if let Some(scope) = overrides.instruction_scope {
+        config.instructions.scope = parse_instruction_scope(scope)?;
+    }
     let data_dir_changed = existed && !reset && config.data_dir != original_data_dir;
+    let instruction_scope_changed =
+        existed && !reset && config.instructions.scope != original_instruction_scope;
     let workspace_root = canonical_directory(None)?;
     let instruction_plan = plan_agent_instructions(&config, &workspace_root)?;
     let planned_workspace = Workspace::discover_managed(
@@ -1820,13 +1882,13 @@ async fn initialize(
         } else if reset {
             mutations.push(init_mutation("backup_config", path, Some("before reset")));
             mutations.push(init_mutation("reset_config", path, None));
-        } else if data_dir_changed {
+        } else if data_dir_changed || instruction_scope_changed {
             mutations.push(init_mutation(
                 "backup_config",
                 path,
                 Some("before data_dir update"),
             ));
-            mutations.push(init_mutation("update_data_dir_preserving_toml", path, None));
+            mutations.push(init_mutation("update_config_preserving_toml", path, None));
         }
         for directory in init_layout_directories(&config) {
             if !directory.exists() {
@@ -1883,6 +1945,7 @@ async fn initialize(
         let changes_required = !existed
             || reset
             || data_dir_changed
+            || instruction_scope_changed
             || instruction_plan.iter().any(|report| report.changed)
             || project_mcp_plan.changed
             || init_layout_directories(&config)
@@ -1951,8 +2014,12 @@ async fn initialize(
         if !existed || reset {
             config.write(path)?;
             transaction.mark_written(path)?;
-        } else if data_dir_changed {
-            write_data_dir_preserving_toml(path, &config.data_dir)?;
+        } else if data_dir_changed || instruction_scope_changed {
+            write_init_config_preserving_toml(
+                path,
+                data_dir_changed.then_some(config.data_dir.as_path()),
+                instruction_scope_changed.then_some(config.instructions.scope),
+            )?;
             transaction.mark_written(path)?;
         }
         let instruction_reports = reconcile_agent_instructions(&config, &workspace_root)?;
@@ -2194,13 +2261,25 @@ fn project_mcp_binary() -> Result<PathBuf> {
     }
 }
 
-fn write_data_dir_preserving_toml(path: &Path, data_dir: &Path) -> Result<()> {
+fn write_init_config_preserving_toml(
+    path: &Path,
+    data_dir: Option<&Path>,
+    instruction_scope: Option<InstructionScope>,
+) -> Result<()> {
     let existing = std::fs::read_to_string(path)
         .with_context(|| format!("read configuration {}", path.display()))?;
     let mut document = existing
         .parse::<DocumentMut>()
         .with_context(|| format!("parse configuration {}", path.display()))?;
-    document["data_dir"] = value(data_dir.to_string_lossy().into_owned());
+    if let Some(data_dir) = data_dir {
+        document["data_dir"] = value(data_dir.to_string_lossy().into_owned());
+    }
+    if let Some(scope) = instruction_scope {
+        document["instructions"]["scope"] = value(match scope {
+            InstructionScope::Shared => "shared",
+            InstructionScope::Local => "local",
+        });
+    }
     let rendered = document.to_string();
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut staged = tempfile::NamedTempFile::new_in(parent)
@@ -2215,6 +2294,14 @@ fn write_data_dir_preserving_toml(path: &Path, data_dir: &Path) -> Result<()> {
         .map_err(|error| error.error)
         .with_context(|| format!("replace configuration {}", path.display()))?;
     Ok(())
+}
+
+fn parse_instruction_scope(value: &str) -> Result<InstructionScope> {
+    match value {
+        "shared" => Ok(InstructionScope::Shared),
+        "local" => Ok(InstructionScope::Local),
+        _ => bail!("instruction scope must be `shared` or `local`"),
+    }
 }
 
 #[derive(Debug)]
@@ -2552,6 +2639,7 @@ async fn initialize_if_needed(
         reconcile_session_surfaces(config_path, &config, &workspace_root)?;
     let instruction_alert = session_instruction_drift_alert(
         config.activation.mode,
+        config.instructions.scope,
         &workspace_root,
         &instruction_reports,
     )?;
@@ -2649,10 +2737,11 @@ async fn initialize_if_needed(
 
 fn session_instruction_drift_alert(
     activation_mode: hzr_core::ActivationMode,
+    instruction_scope: InstructionScope,
     workspace_root: &Path,
     reports: &[instructions::InstructionReport],
 ) -> Result<Option<String>> {
-    let targets = scoped_instruction_targets(activation_mode, workspace_root)?;
+    let targets = scoped_instruction_targets(activation_mode, instruction_scope, workspace_root)?;
     Ok(instruction_drift_alert_for_targets(reports, targets))
 }
 
@@ -2909,13 +2998,20 @@ async fn set_workspace_activation(
             },
         )?;
     }
-    for (surface, target) in activation::local_instruction_paths(&workspace.identity.root) {
+    for (surface, target) in
+        activation::local_instruction_paths(&workspace.identity.root, config.instructions.scope)
+    {
         if enabled {
             instructions::install(surface, &target, &contract, false, true)?;
         } else {
             instructions::uninstall(surface, &target, false, true)?;
         }
     }
+    activation::ensure_local_instruction_excludes(
+        &workspace.identity.root,
+        config.instructions.scope,
+        false,
+    )?;
     let project_mcp = if enabled {
         client_config::install_project_codex(
             &project_mcp_binary()?,
@@ -3958,9 +4054,12 @@ mod tests {
         let directory = tempdir().expect("temporary directory");
         let contract = directory.path().join("HZR.md");
         fs::write(&contract, "canonical contract\n").expect("contract");
-        for (surface, path) in
-            scoped_instruction_targets(hzr_core::ActivationMode::Selected, directory.path())
-                .expect("selected targets")
+        for (surface, path) in scoped_instruction_targets(
+            hzr_core::ActivationMode::Selected,
+            hzr_core::InstructionScope::Shared,
+            directory.path(),
+        )
+        .expect("selected targets")
         {
             crate::instructions::install(surface, &path, &contract, false, true)
                 .expect("managed local instructions");
@@ -3968,6 +4067,7 @@ mod tests {
 
         let alert = session_instruction_drift_alert(
             hzr_core::ActivationMode::Selected,
+            hzr_core::InstructionScope::Shared,
             directory.path(),
             &[],
         )

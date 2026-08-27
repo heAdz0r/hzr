@@ -700,7 +700,9 @@ pub async fn reconcile_fleet_contracts(
                 fleet_exemption::FleetExemptions::default()
             }
         };
-        for (surface, path) in activation::local_instruction_paths(&registration.root) {
+        for (surface, path) in
+            activation::local_instruction_paths(&registration.root, config.instructions.scope)
+        {
             if let Err(error) = confined_workspace_target(&registration.root, &path) {
                 report.rewritten.push(FleetContractRewrite {
                     path,
@@ -1006,7 +1008,9 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
                 fleet_exemption::FleetExemptions::default()
             }
         };
-        for (surface, path) in activation::local_instruction_paths(&registration.root) {
+        for (surface, path) in
+            activation::local_instruction_paths(&registration.root, config.instructions.scope)
+        {
             let audit = match instructions::audit(surface, &path) {
                 Ok(audit) => audit,
                 Err(error) => {
@@ -1216,8 +1220,8 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     } else {
         fleet_exemption::FleetExemptions::default()
     };
-    match config.activation.mode {
-        hzr_core::ActivationMode::All => {
+    match (config.activation.mode, config.instructions.scope) {
+        (hzr_core::ActivationMode::All, hzr_core::InstructionScope::Shared) => {
             for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
                 let name = match surface {
                     instructions::Surface::Claude => "claude_instructions",
@@ -1228,7 +1232,9 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                     Err(error) => checks.push(check(name, CheckStatus::Warning, error)),
                 }
             }
-            for (surface, path) in activation::local_instruction_paths(workspace) {
+            for (surface, path) in
+                activation::local_instruction_paths(workspace, config.instructions.scope)
+            {
                 checks.push(workspace_instruction_health_check(
                     match surface {
                         instructions::Surface::Claude => "workspace_claude_instructions",
@@ -1240,8 +1246,10 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 ));
             }
         }
-        hzr_core::ActivationMode::Selected if workspace_enabled => {
-            for (surface, path) in activation::local_instruction_paths(workspace) {
+        (hzr_core::ActivationMode::All, hzr_core::InstructionScope::Local) => {
+            for (surface, path) in
+                activation::local_instruction_paths(workspace, config.instructions.scope)
+            {
                 checks.push(workspace_instruction_health_check(
                     match surface {
                         instructions::Surface::Claude => "workspace_claude_instructions",
@@ -1253,7 +1261,22 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 ));
             }
         }
-        hzr_core::ActivationMode::Selected => checks.push(check(
+        (hzr_core::ActivationMode::Selected, _) if workspace_enabled => {
+            for (surface, path) in
+                activation::local_instruction_paths(workspace, config.instructions.scope)
+            {
+                checks.push(workspace_instruction_health_check(
+                    match surface {
+                        instructions::Surface::Claude => "workspace_claude_instructions",
+                        instructions::Surface::Codex => "workspace_codex_instructions",
+                    },
+                    surface,
+                    &path,
+                    &workspace_exemptions,
+                ));
+            }
+        }
+        (hzr_core::ActivationMode::Selected, _) => checks.push(check(
             "workspace_instructions",
             CheckStatus::Pass,
             "workspace is disabled; no local HZR contract is required",

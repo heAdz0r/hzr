@@ -231,7 +231,7 @@ impl IndexCoordinator {
                         state,
                         pid,
                         uptime_ms: Some(uptime_ms),
-                        ready_marker_observed: true,
+                        ready_marker_observed: entry.handle.ready_marker_observed()?,
                     }
                 }
                 None => IndexWatcherSnapshot {

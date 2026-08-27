@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-<a href="Cargo.toml"><img alt="Version 0.6.4" src="https://img.shields.io/badge/version-0.6.4-e64a19"></a>
+<a href="Cargo.toml"><img alt="Version 0.6.5" src="https://img.shields.io/badge/version-0.6.5-e64a19"></a>
   <a href="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/heAdz0r/hzr/releases"><img alt="Release" src="https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/control_plane-Apache--2.0-37474f"></a>
@@ -109,7 +109,7 @@ and [recorded run](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RES
 
 ## Install
 
-HZR 0.6.4 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
+HZR 0.6.5 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
 Apple Silicon/Intel. System Git is the only engine prerequisite; Node.js, RTK,
 grepai, and ICM are bundled. Windows is not currently published.
 
@@ -117,7 +117,7 @@ Download, inspect, then run the installer:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.6.4/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.6.5/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -363,7 +363,7 @@ policy: no repository file can buy an exception to a bypass HZR could replace at
 
 ## Honest boundaries
 
-| Guarantee | 0.6.4 posture |
+| Guarantee | 0.6.5 posture |
 |---|---|
 | one versioned control plane and pinned engine bundle | implemented |
 | one canonical index owner per worktree | implemented |
@@ -378,15 +378,15 @@ command policy but cannot invent a missing ledger receipt; `doctor` and `stats` 
 accounting gap. Generic semantic equivalence is not inferred merely because output became
 smaller.
 
-Since 0.6.4 those completeness contracts are executable rather than editorial. Every filtered
+Since 0.6.5 those completeness contracts are executable rather than editorial. Every filtered
 route declares what it may never drop — exit status, failure lines, warnings, changed files — and
 `fork-core/rtk/tests/must_keep_contract.rs` proves it by running the real filters against output
 carrying each class. Exact recovery remains available when a proof is absent.
 
 The delivered-byte benchmark above measures output size, not what a provider bills. The paired
-[billed-input benchmark](benchmarks/hzr-billed-input-prefix-cache-v0.6.4/README.md) tests the
+[billed-input benchmark](benchmarks/hzr-billed-input-prefix-cache-v0.6.5/README.md) tests the
 strongest objection to it — that a mid-turn filter invalidates a cached request prefix, so billed
-input can rise while delivered bytes fall. That harness ships in 0.6.4 and **has not been run**;
+input can rise while delivered bytes fall. That harness ships in 0.6.5 and **has not been run**;
 it refuses to report a figure without paired provider receipts.
 
 ## Built from practical RTK experience

@@ -1,8 +1,9 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::Result;
-use hzr_core::{ActivationConfig, ActivationMode, Config, EnabledWorkspace};
+use hzr_core::{ActivationConfig, ActivationMode, Config, EnabledWorkspace, InstructionScope};
 use hzr_index::{Deadlines, Workspace};
 use serde::Serialize;
 
@@ -35,11 +36,74 @@ pub fn record(workspace: &Workspace) -> EnabledWorkspace {
     }
 }
 
-pub fn local_instruction_paths(root: &Path) -> [(crate::instructions::Surface, PathBuf); 2] {
-    [
-        (crate::instructions::Surface::Claude, root.join("CLAUDE.md")),
-        (crate::instructions::Surface::Codex, root.join("AGENTS.md")),
-    ]
+pub fn local_instruction_paths(
+    root: &Path,
+    scope: InstructionScope,
+) -> [(crate::instructions::Surface, PathBuf); 2] {
+    match scope {
+        InstructionScope::Shared => [
+            (crate::instructions::Surface::Claude, root.join("CLAUDE.md")),
+            (crate::instructions::Surface::Codex, root.join("AGENTS.md")),
+        ],
+        InstructionScope::Local => [
+            (
+                crate::instructions::Surface::Claude,
+                root.join("CLAUDE.local.md"),
+            ),
+            (
+                crate::instructions::Surface::Codex,
+                root.join("AGENTS.override.md"),
+            ),
+        ],
+    }
+}
+
+const LOCAL_EXCLUDE_BLOCK: &str = "# hzr:begin local instructions\n/CLAUDE.local.md\n/AGENTS.override.md\n# hzr:end local instructions";
+
+/// Keep machine-local instruction surfaces out of commits without touching the repository's
+/// shared `.gitignore`. Non-Git workspaces have no transmission path and need no exclude file.
+pub fn ensure_local_instruction_excludes(
+    root: &Path,
+    scope: InstructionScope,
+    dry_run: bool,
+) -> Result<bool> {
+    if scope != InstructionScope::Local || !root.join(".git").exists() {
+        return Ok(false);
+    }
+    let output = Command::new("git")
+        .args(["rev-parse", "--git-path", "info/exclude"])
+        .current_dir(root)
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git could not resolve the local exclude file for {}",
+            root.display()
+        );
+    }
+    let raw = String::from_utf8(output.stdout)?;
+    let reported = PathBuf::from(raw.trim());
+    let path = if reported.is_absolute() {
+        reported
+    } else {
+        root.join(reported)
+    };
+    let before = std::fs::read_to_string(&path).unwrap_or_default();
+    if before.contains(LOCAL_EXCLUDE_BLOCK) {
+        return Ok(false);
+    }
+    let mut after = before.trim_end().to_owned();
+    if !after.is_empty() {
+        after.push_str("\n\n");
+    }
+    after.push_str(LOCAL_EXCLUDE_BLOCK);
+    after.push('\n');
+    if !dry_run {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::adoption::atomic_write(&path, after.as_bytes())?;
+    }
+    Ok(true)
 }
 
 /// Снимок режима активации и списка явно включённых workspace.

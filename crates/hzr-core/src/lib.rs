@@ -19,7 +19,8 @@ pub use bounded_file::{BoundedFileError, read_bounded_regular_file};
 pub use budget::{BudgetPlanner, FusionInput};
 pub use config::{
     ActivationConfig, ActivationMode, BillingConfig, Config, ConfigError, ConfigPaths,
-    DaemonConfig, EnabledWorkspace, EngineConfig, PrivacyConfig,
+    DaemonConfig, EnabledWorkspace, EngineConfig, InstructionConfig, InstructionScope,
+    PrivacyConfig,
 };
 pub use engines::{EngineManifest, EnginePin, locked_engines};
 pub use host_grant::{
