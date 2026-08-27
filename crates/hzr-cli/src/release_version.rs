@@ -35,6 +35,12 @@ const VERSION_SURFACES: &[&str] = &[
 const CAVEMAN_PACKAGE_LOCK: &str = "integrations/caveman-code/package-lock.json";
 const CARGO_LOCK: &str = "Cargo.lock";
 
+const CURRENT_VERSION_MARKERS: &[(&str, &str)] = &[
+    ("AGENTS.md", "Product version is "),
+    ("FORK_PARITY.md", "# HZR "),
+    ("README.md", "alt=\"Version "),
+];
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct VersionReport {
     pub previous: String,
@@ -61,6 +67,7 @@ pub fn synchronize(repository: &Path, target: &str, dry_run: bool) -> Result<Ver
     validate_version(target)?;
     let cargo_path = repository.join("Cargo.toml");
     let previous = current_version(repository)?;
+    validate_declared_version_markers(repository, &previous, Some(target))?;
 
     let mut changed_files = Vec::new();
     if previous != target {
@@ -118,6 +125,7 @@ pub fn synchronize(repository: &Path, target: &str, dry_run: bool) -> Result<Ver
         if !cargo_after.contains(&expected) {
             bail!("version synchronization did not update workspace.package.version");
         }
+        validate_declared_version_markers(repository, target, None)?;
     }
 
     Ok(VersionReport {
@@ -126,6 +134,39 @@ pub fn synchronize(repository: &Path, target: &str, dry_run: bool) -> Result<Ver
         changed_files,
         dry_run,
     })
+}
+
+fn validate_declared_version_markers(
+    repository: &Path,
+    expected: &str,
+    also_allowed: Option<&str>,
+) -> Result<()> {
+    for (relative, marker) in CURRENT_VERSION_MARKERS {
+        let path = repository.join(relative);
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(start) = text.find(marker).map(|index| index + marker.len()) else {
+            continue;
+        };
+        let version = text[start..]
+            .split(|character: char| !character.is_ascii_digit() && character != '.')
+            .next()
+            .unwrap_or_default();
+        if validate_version(version).is_err() {
+            bail!(
+                "declared current-version marker in {} is malformed after `{marker}`",
+                path.display()
+            );
+        }
+        if version != expected && also_allowed != Some(version) {
+            bail!(
+                "declared current-version marker in {} is stale: expected {expected}, found {version}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn tracked_version_surfaces(repository: &Path) -> Result<Vec<PathBuf>> {
@@ -418,7 +459,7 @@ mod tests {
     use super::{
         is_version_surface, release_changelog, replace_cargo_lock_versions,
         replace_cargo_manifest_version, replace_caveman_package_lock_versions,
-        synchronize_release_line, validate_version,
+        synchronize_release_line, validate_declared_version_markers, validate_version,
     };
 
     #[test]
@@ -517,6 +558,20 @@ mod tests {
         for invalid in ["v1.2.3", "1.2", "1.02.3", "1.2.3-beta"] {
             assert!(validate_version(invalid).is_err(), "accepted {invalid}");
         }
+    }
+
+    #[test]
+    fn stale_declared_current_version_names_the_surface() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        std::fs::write(
+            directory.path().join("AGENTS.md"),
+            "Product version is 0.6.3;\n",
+        )
+        .expect("stale marker");
+        let error = validate_declared_version_markers(directory.path(), "0.6.5", Some("0.6.6"))
+            .expect_err("stale marker must fail");
+        assert!(error.to_string().contains("AGENTS.md"));
+        assert!(error.to_string().contains("found 0.6.3"));
     }
 
     #[test]

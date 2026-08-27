@@ -27,14 +27,24 @@ const SESSION_ENV_KEYS: [&str; 4] = [
     "CLAUDE_SESSION_ID",
     "CURSOR_TRACE_ID",
 ];
+const MAX_SESSION_ID_CHARS: usize = 128;
+
+#[must_use]
+pub fn normalize_session_id(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.chars().take(MAX_SESSION_ID_CHARS).collect())
+    }
+}
 
 #[must_use]
 pub fn ambient_session_id() -> Option<String> {
     SESSION_ENV_KEYS.into_iter().find_map(|name| {
         std::env::var(name)
             .ok()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
+            .and_then(|value| normalize_session_id(&value))
     })
 }
 

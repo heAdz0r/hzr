@@ -1,27 +1,7 @@
 use crate::discover::registry;
 use crate::permissions::{check_command, PermissionVerdict};
-use serde::Serialize;
+use hzr_engine_contract::{RewritePlan, RewritePlanDecision, RewritePlanReason, BYTE_FIDELITY_ENV};
 use std::io::Write;
-
-#[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
-enum RewritePlanDecision {
-    Rewrite,
-    Proxy,
-    Ask,
-    Deny,
-}
-
-#[derive(Serialize)]
-struct RewritePlan<'a> {
-    decision: RewritePlanDecision,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    proposed: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    attribution: Option<registry::CanonicalAttribution>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<&'a str>,
-}
 
 /// Run the `rtk rewrite` command.
 ///
@@ -48,8 +28,8 @@ pub fn run(cmd: &str) -> anyhow::Result<()> {
         std::process::exit(2);
     }
 
-    let byte_fidelity = std::env::var_os("HZR_INTERNAL_BYTE_FIDELITY").as_deref()
-        == Some(std::ffi::OsStr::new("1"));
+    let byte_fidelity =
+        std::env::var_os(BYTE_FIDELITY_ENV).as_deref() == Some(std::ffi::OsStr::new("1"));
     match registry::rewrite_command_outcome_with_fidelity(
         cmd,
         &excluded,
@@ -95,8 +75,8 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
         })
         .unwrap_or_default();
     let verdict = check_command(cmd);
-    let byte_fidelity = std::env::var_os("HZR_INTERNAL_BYTE_FIDELITY").as_deref()
-        == Some(std::ffi::OsStr::new("1"));
+    let byte_fidelity =
+        std::env::var_os(BYTE_FIDELITY_ENV).as_deref() == Some(std::ffi::OsStr::new("1"));
     let outcome = registry::rewrite_command_outcome_with_fidelity(
         cmd,
         &excluded,
@@ -109,7 +89,7 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
             decision: RewritePlanDecision::Deny,
             proposed: None,
             attribution,
-            reason: Some("permission_policy"),
+            reason: Some(RewritePlanReason::PermissionPolicy),
         },
         (PermissionVerdict::Allow, registry::RewriteOutcome::Rewritten(command)) => RewritePlan {
             decision: RewritePlanDecision::Rewrite,
@@ -124,7 +104,7 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
             decision: RewritePlanDecision::Ask,
             proposed: Some(command.clone()),
             attribution,
-            reason: Some("permission_policy"),
+            reason: Some(RewritePlanReason::PermissionPolicy),
         },
         (PermissionVerdict::Allow, registry::RewriteOutcome::ByteFidelityProxy)
         | (_, registry::RewriteOutcome::NoEquivalent) => RewritePlan {
@@ -139,7 +119,7 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
             decision: RewritePlanDecision::Ask,
             proposed: None,
             attribution,
-            reason: Some("canonical_policy"),
+            reason: Some(RewritePlanReason::CanonicalPolicy),
         },
     };
     serde_json::to_writer(std::io::stdout().lock(), &plan)?;

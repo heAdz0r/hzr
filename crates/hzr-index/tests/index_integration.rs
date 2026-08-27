@@ -547,6 +547,48 @@ async fn test_coordinator_reaps_idle_watcher_after_ttl() {
 }
 
 #[tokio::test]
+async fn live_watcher_status_polling_does_not_extend_idle_ttl() {
+    let repo = git_repo();
+    let data = tempfile::tempdir().expect("managed data root");
+    write_source(repo.path(), "pub fn coordinated() {}\n");
+    fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    let coordinator = IndexCoordinator::with_watcher_limits(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        fake_grepai(repo.path(), "0.35.0"),
+        deadlines(),
+        true,
+        2,
+        Duration::from_millis(80),
+    );
+
+    let prepared = coordinator.prepare(repo.path()).await.expect("prepare");
+    let runtime_root = prepared.workspace.index.directory.join("hzr-runtime");
+    assert!(runtime_root.is_dir(), "watch runtime root");
+    for _ in 0..3 {
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let _ = coordinator.status(repo.path()).await.expect("live status");
+    }
+
+    assert_eq!(
+        coordinator
+            .registry_snapshot()
+            .await
+            .expect("registry snapshot")
+            .active_watchers,
+        0
+    );
+    assert_eq!(
+        fs::read_dir(&runtime_root)
+            .expect("watch runtime root")
+            .count(),
+        0,
+        "reaped watcher runtime directories"
+    );
+    coordinator.shutdown().await.expect("coordinator shutdown");
+}
+
+#[tokio::test]
 async fn failed_watcher_status_polling_does_not_extend_its_tombstone_ttl() {
     let repo = git_repo();
     let data = tempfile::tempdir().expect("managed data root");

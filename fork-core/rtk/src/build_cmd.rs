@@ -372,11 +372,7 @@ fn set_executable(path: &Path) -> io::Result<()> {
 }
 
 fn command_exists(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
+    crate::utils::resolve_binary(cmd).is_ok()
 }
 
 fn verify_binary(path: &Path) -> Result<()> {

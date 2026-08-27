@@ -1,3 +1,4 @@
+mod accounting_coverage;
 mod billing;
 mod bounded_file;
 mod budget;
@@ -7,6 +8,10 @@ mod host_grant;
 mod ledger;
 mod operation;
 
+pub use accounting_coverage::{
+    AccountingCoverageError, AccountingCoverageSnapshot, AccountingCoverageStore,
+    AccountingGapEvent, AccountingGapInterval, AccountingGapSurface,
+};
 pub use billing::{
     BUILTIN_PRICING_CATALOG_IDENTITY, BillingError, EconomicAmount, EconomicScopeSummary,
     PricingCatalog, PricingEntry, ProviderEconomicReceipt, ProviderReceiptRecordResult,
@@ -25,20 +30,21 @@ pub use config::{
 pub use engines::{EngineManifest, EnginePin, locked_engines};
 pub use host_grant::{
     ambient_host_grants_execution, ambient_session_id, inspect_ambient_host_grant,
+    normalize_session_id,
 };
 pub use ledger::{
     BypassSummary, BypassTool, BypassWindow, CURRENT_ACCOUNTING_POLICY_VERSION,
     CURRENT_PRODUCER_VERSION, DEFAULT_FIDELITY_OPERATION_ALLOWANCE,
     DEFAULT_FIDELITY_TOKEN_ALLOWANCE, DetailedOperationAttribution, EfficiencyCommandSummary,
-    EfficiencySummary, EvasionClassSummary, EvasionSummary, FidelityAllowance,
-    FidelitySessionUsage, Ledger, LedgerError, LedgerRecord, LedgerSummary,
+    EfficiencyOperationSummary, EfficiencySummary, EvasionClassSummary, EvasionSummary,
+    FidelityAllowance, FidelitySessionUsage, Ledger, LedgerError, LedgerRecord, LedgerSummary,
     LegacyEfficiencyMigration, LegacyEfficiencySource, OperationAttribution, OperationContext,
     OperationFamilySummary, OperationModeSummary, PolicyEvent, PolicyEventSummary, PriceTable,
-    PrivacyPseudonymizer, PrivacySafeFidelityOperation, ProjectActivitySummary,
-    ProjectOperationRoute, ProjectOperationSummary, RERUN_DETECTION_WINDOW_OPERATIONS,
-    ReadPipelineSummary, SessionEfficiencySummary, SessionEvasionSummary, StatsCollection,
-    StatsQuery, StatsSnapshot, discover_legacy_rtk_history, inspect_legacy_efficiency,
-    privacy_identity_hash, privacy_keyed_identity_hash,
+    PrivacyPseudonymizer, PrivacySafeFidelityOperation, PrivacySafeOperationKey,
+    ProjectActivitySummary, ProjectOperationRoute, ProjectOperationSummary,
+    RERUN_DETECTION_WINDOW_OPERATIONS, ReadPipelineSummary, SessionEfficiencySummary,
+    SessionEvasionSummary, StatsCollection, StatsQuery, StatsSnapshot, discover_legacy_rtk_history,
+    inspect_legacy_efficiency, privacy_identity_hash, privacy_keyed_identity_hash,
 };
 pub use operation::{
     FidelityBudget, FidelityPreflight, OperationChannel, OperationClassification,

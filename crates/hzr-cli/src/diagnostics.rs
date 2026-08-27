@@ -426,8 +426,10 @@ pub struct FleetReconcileReport {
     pub legacy_index_audit: &'static str,
     pub rewritten: Vec<FleetContractRewrite>,
     pub project_codex_mcp: Vec<FleetProjectMcpRewrite>,
+    pub local_excludes: Vec<activation::LocalExcludeReport>,
     pub legacy_indexes: Vec<FleetLegacyIndexAction>,
     pub workspace_errors: Vec<FleetWorkspaceError>,
+    pub skipped_disabled: Vec<PathBuf>,
     /// Files whose managed block is stale *and* which also carry a user-authored directive.
     /// The block is still refreshed; the conflicting line is reported, never rewritten.
     pub conflicts_left_for_the_owner: Vec<PathBuf>,
@@ -451,7 +453,8 @@ impl FleetReconcileReport {
             );
         let pending_preview = self.dry_run
             && (self.rewritten.iter().any(|entry| entry.changed)
-                || self.project_codex_mcp.iter().any(|entry| entry.changed));
+                || self.project_codex_mcp.iter().any(|entry| entry.changed)
+                || self.local_excludes.iter().any(|entry| entry.changed));
         let unresolved_indexes = self
             .legacy_indexes
             .iter()
@@ -632,8 +635,10 @@ pub async fn reconcile_fleet_contracts(
         },
         rewritten: Vec::new(),
         project_codex_mcp: Vec::new(),
+        local_excludes: Vec::new(),
         legacy_indexes: Vec::new(),
         workspace_errors: Vec::new(),
+        skipped_disabled: Vec::new(),
         conflicts_left_for_the_owner: Vec::new(),
         refused: None,
     };
@@ -653,6 +658,13 @@ pub async fn reconcile_fleet_contracts(
         return report;
     }
     for registration in snapshot.registrations {
+        if !config
+            .activation
+            .allows(&registration.repository_id, &registration.worktree_id)
+        {
+            report.skipped_disabled.push(registration.root);
+            continue;
+        }
         if !registration.root.is_dir() {
             report.workspace_errors.push(FleetWorkspaceError {
                 workspace: registration.root,
@@ -700,24 +712,38 @@ pub async fn reconcile_fleet_contracts(
                 fleet_exemption::FleetExemptions::default()
             }
         };
-        for (surface, path) in
-            activation::local_instruction_paths(&registration.root, config.instructions.scope)
-        {
-            if let Err(error) = confined_workspace_target(&registration.root, &path) {
+        let instruction_state = match activation::instruction_desired_state(
+            &registration.root,
+            config.activation.mode,
+            config.instructions.scope,
+        ) {
+            Ok(state) => state,
+            Err(error) => {
+                report.workspace_errors.push(FleetWorkspaceError {
+                    workspace: registration.root.clone(),
+                    error: format!("cannot plan instruction desired state: {error:#}"),
+                });
+                continue;
+            }
+        };
+        for target in &instruction_state.desired {
+            if target.path.starts_with(&registration.root)
+                && let Err(error) = confined_workspace_target(&registration.root, &target.path)
+            {
                 report.rewritten.push(FleetContractRewrite {
-                    path,
-                    surface: surface.as_str(),
+                    path: target.path.clone(),
+                    surface: target.surface.as_str(),
                     changed: false,
                     error: Some(error),
                 });
                 continue;
             }
-            let audit = match instructions::audit(surface, &path) {
+            let audit = match instructions::audit(target.surface, &target.path) {
                 Ok(audit) => audit,
                 Err(error) => {
                     report.rewritten.push(FleetContractRewrite {
-                        path,
-                        surface: surface.as_str(),
+                        path: target.path.clone(),
+                        surface: target.surface.as_str(),
                         changed: false,
                         error: Some(format!("{error:#}")),
                     });
@@ -729,25 +755,68 @@ pub async fn reconcile_fleet_contracts(
                 .iter()
                 .any(|conflict| !exemptions.covers(conflict))
             {
-                report.conflicts_left_for_the_owner.push(path.clone());
+                report
+                    .conflicts_left_for_the_owner
+                    .push(target.path.clone());
             }
             if audit.installed && audit.current && audit.contract_readable {
                 continue;
             }
-            match instructions::install(surface, &path, contract, dry_run, true) {
+            match instructions::install_target(target, contract, dry_run, true) {
                 Ok(installed) => report.rewritten.push(FleetContractRewrite {
-                    path,
-                    surface: surface.as_str(),
+                    path: target.path.clone(),
+                    surface: target.surface.as_str(),
                     changed: installed.changed,
                     error: None,
                 }),
                 Err(error) => report.rewritten.push(FleetContractRewrite {
-                    path,
-                    surface: surface.as_str(),
+                    path: target.path.clone(),
+                    surface: target.surface.as_str(),
                     changed: false,
                     error: Some(format!("{error:#}")),
                 }),
             }
+        }
+        for target in &instruction_state.obsolete {
+            if target.path.starts_with(&registration.root)
+                && let Err(error) = confined_workspace_target(&registration.root, &target.path)
+            {
+                report.rewritten.push(FleetContractRewrite {
+                    path: target.path.clone(),
+                    surface: target.surface.as_str(),
+                    changed: false,
+                    error: Some(error),
+                });
+                continue;
+            }
+            match instructions::uninstall_target(target, dry_run, true) {
+                Ok(uninstalled) if uninstalled.changed => {
+                    report.rewritten.push(FleetContractRewrite {
+                        path: target.path.clone(),
+                        surface: target.surface.as_str(),
+                        changed: true,
+                        error: None,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => report.rewritten.push(FleetContractRewrite {
+                    path: target.path.clone(),
+                    surface: target.surface.as_str(),
+                    changed: false,
+                    error: Some(format!("{error:#}")),
+                }),
+            }
+        }
+        match activation::reconcile_local_instruction_excludes(
+            &registration.root,
+            &instruction_state,
+            dry_run,
+        ) {
+            Ok(exclude) => report.local_excludes.push(exclude),
+            Err(error) => report.workspace_errors.push(FleetWorkspaceError {
+                workspace: registration.root.clone(),
+                error: format!("cannot reconcile local instruction exclude: {error:#}"),
+            }),
         }
         let project_codex_path = client_config::project_codex_path(&registration.root);
         let project_codex = confined_workspace_target(&registration.root, &project_codex_path)
@@ -996,6 +1065,12 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
         if registration.root == current_workspace {
             continue;
         }
+        if !config
+            .activation
+            .allows(&registration.repository_id, &registration.worktree_id)
+        {
+            continue;
+        }
         // A waiver is read once per project and reported, never inferred from the path.
         let exemptions = match fleet_exemption::load(&registration.root) {
             Ok(exemptions) => exemptions,
@@ -1008,9 +1083,28 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
                 fleet_exemption::FleetExemptions::default()
             }
         };
-        for (surface, path) in
-            activation::local_instruction_paths(&registration.root, config.instructions.scope)
+        let state = match activation::instruction_desired_state(
+            &registration.root,
+            config.activation.mode,
+            config.instructions.scope,
+        ) {
+            Ok(state) => state,
+            Err(error) => {
+                checks.push(check(
+                    "fleet_instruction_desired_state",
+                    CheckStatus::Error,
+                    format!("{}: {error:#}", registration.root.display()),
+                ));
+                continue;
+            }
+        };
+        for target in state
+            .desired
+            .iter()
+            .filter(|target| target.path.starts_with(&registration.root))
         {
+            let surface = target.surface;
+            let path = target.path.clone();
             let audit = match instructions::audit(surface, &path) {
                 Ok(audit) => audit,
                 Err(error) => {
@@ -1064,6 +1158,21 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
                 ));
             }
             checks.push(finding);
+        }
+        for target in state
+            .obsolete
+            .iter()
+            .filter(|target| target.path.starts_with(&registration.root))
+        {
+            match instructions::audit(target.surface, &target.path) {
+                Ok(audit) if audit.installed => stale_paths.push(target.path.clone()),
+                Ok(_) => {}
+                Err(error) => checks.push(check(
+                    format!("fleet_obsolete_{}_instructions", target.surface.as_str()),
+                    CheckStatus::Warning,
+                    format!("{}: {error}", target.path.display()),
+                )),
+            }
         }
     }
     if !stale_paths.is_empty() {
@@ -1121,12 +1230,18 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
 pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> DoctorReport {
     let mut checks = Vec::new();
     let mut client_workspace_bindings = Vec::new();
+    let adoption_status =
+        adoption::default_settings_path().and_then(|path| adoption::status(&path));
     checks.push(install_transaction_check(config_path, config, workspace));
-    match adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
-        Ok(status) => checks.push(hook_ownership_check(status)),
-        Err(error) => checks.push(check("hook_ownership", CheckStatus::Warning, error)),
+    match &adoption_status {
+        Ok(status) => checks.push(hook_ownership_check(status.clone())),
+        Err(error) => checks.push(check(
+            "hook_ownership",
+            CheckStatus::Warning,
+            error.to_string(),
+        )),
     }
-    match adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
+    match &adoption_status {
         Ok(status) => checks.push(match status.native_tool_mode {
             Some(adoption::NativeToolMode::Observe) => check(
                 "native_tool_mode",
@@ -1144,13 +1259,17 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 "native tool policy is not installed; run `hzr install --force`",
             ),
         }),
-        Err(error) => checks.push(check("native_tool_mode", CheckStatus::Warning, error)),
+        Err(error) => checks.push(check(
+            "native_tool_mode",
+            CheckStatus::Warning,
+            error.to_string(),
+        )),
     }
     checks.push(fidelity_allowance_check());
     checks.push(fidelity_durability_check(config));
     checks.push(host_permission_grant_propagation_check(config));
     checks.push(billing_pricing_check(config));
-    if let Ok(status) = adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
+    if let Ok(status) = &adoption_status {
         if status.external_icm_entries > 0 {
             // A direct `icm hook` writes to a store HZR does not supervise: that is a
             // second durable memory layer, which §6.5 gives HZR sole ownership of.
@@ -1220,67 +1339,87 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     } else {
         fleet_exemption::FleetExemptions::default()
     };
-    match (config.activation.mode, config.instructions.scope) {
-        (hzr_core::ActivationMode::All, hzr_core::InstructionScope::Shared) => {
-            for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
-                let name = match surface {
-                    instructions::Surface::Claude => "claude_instructions",
-                    instructions::Surface::Codex => "codex_instructions",
-                };
-                match surface.default_path() {
-                    Ok(path) => checks.push(instruction_health_check(name, surface, &path)),
-                    Err(error) => checks.push(check(name, CheckStatus::Warning, error)),
-                }
-            }
-            for (surface, path) in
-                activation::local_instruction_paths(workspace, config.instructions.scope)
-            {
-                checks.push(workspace_instruction_health_check(
-                    match surface {
-                        instructions::Surface::Claude => "workspace_claude_instructions",
-                        instructions::Surface::Codex => "workspace_codex_instructions",
-                    },
-                    surface,
-                    &path,
-                    &workspace_exemptions,
-                ));
-            }
-        }
-        (hzr_core::ActivationMode::All, hzr_core::InstructionScope::Local) => {
-            for (surface, path) in
-                activation::local_instruction_paths(workspace, config.instructions.scope)
-            {
-                checks.push(workspace_instruction_health_check(
-                    match surface {
-                        instructions::Surface::Claude => "workspace_claude_instructions",
-                        instructions::Surface::Codex => "workspace_codex_instructions",
-                    },
-                    surface,
-                    &path,
-                    &workspace_exemptions,
-                ));
-            }
-        }
-        (hzr_core::ActivationMode::Selected, _) if workspace_enabled => {
-            for (surface, path) in
-                activation::local_instruction_paths(workspace, config.instructions.scope)
-            {
-                checks.push(workspace_instruction_health_check(
-                    match surface {
-                        instructions::Surface::Claude => "workspace_claude_instructions",
-                        instructions::Surface::Codex => "workspace_codex_instructions",
-                    },
-                    surface,
-                    &path,
-                    &workspace_exemptions,
-                ));
-            }
-        }
-        (hzr_core::ActivationMode::Selected, _) => checks.push(check(
+    if config.activation.mode == hzr_core::ActivationMode::Selected && !workspace_enabled {
+        checks.push(check(
             "workspace_instructions",
             CheckStatus::Pass,
             "workspace is disabled; no local HZR contract is required",
-        )),
+        ));
+    } else {
+        match activation::instruction_desired_state(
+            workspace,
+            config.activation.mode,
+            config.instructions.scope,
+        ) {
+            Ok(state) => {
+                for target in &state.desired {
+                    let name = match (target.location, target.surface) {
+                        (
+                            activation::InstructionLocation::UserGlobal,
+                            instructions::Surface::Claude,
+                        ) => "claude_instructions",
+                        (
+                            activation::InstructionLocation::UserGlobal,
+                            instructions::Surface::Codex,
+                        ) => "codex_instructions",
+                        (_, instructions::Surface::Claude) => "workspace_claude_instructions",
+                        (_, instructions::Surface::Codex) => "workspace_codex_instructions",
+                    };
+                    let finding = if target.location == activation::InstructionLocation::UserGlobal
+                    {
+                        instruction_health_check(name, target.surface, &target.path)
+                    } else {
+                        workspace_instruction_health_check(
+                            name,
+                            target.surface,
+                            &target.path,
+                            &workspace_exemptions,
+                        )
+                    };
+                    checks.push(finding);
+                }
+                for target in &state.obsolete {
+                    match instructions::audit(target.surface, &target.path) {
+                        Ok(audit) if audit.installed => checks.push(check(
+                            format!("obsolete_{}_instructions", target.surface.as_str()),
+                            CheckStatus::Error,
+                            format!(
+                                "obsolete opposite-scope HZR block remains in {}; rerun `hzr init --force`",
+                                target.path.display()
+                            ),
+                        )),
+                        Ok(_) => {}
+                        Err(error) => checks.push(check(
+                            format!("obsolete_{}_instructions", target.surface.as_str()),
+                            CheckStatus::Warning,
+                            error,
+                        )),
+                    }
+                }
+                match activation::reconcile_local_instruction_excludes(workspace, &state, true) {
+                    Ok(exclude) if exclude.changed => checks.push(check(
+                        "local_instruction_exclude",
+                        CheckStatus::Error,
+                        "local instruction exclude is stale; rerun `hzr init --force`",
+                    )),
+                    Ok(_) => checks.push(check(
+                        "local_instruction_exclude",
+                        CheckStatus::Pass,
+                        "local instruction exclude matches desired scope",
+                    )),
+                    Err(error) => checks.push(check(
+                        "local_instruction_exclude",
+                        CheckStatus::Warning,
+                        error,
+                    )),
+                }
+            }
+            Err(error) => checks.push(check(
+                "instruction_desired_state",
+                CheckStatus::Error,
+                error,
+            )),
+        }
     }
     checks.extend(fleet_instruction_health_checks(config, workspace));
     // Direct client ICM registration is a second memory writer regardless of what the
@@ -2882,12 +3021,15 @@ justification = "This repository measures upstream RTK as the explicit benchmark
     fn test_doctor_accepts_the_dispatch_init_and_observer_hooks() {
         let status = crate::adoption::HookStatus {
             settings_path: "/tmp/settings.json".into(),
-            hzr_entries: 6,
+            hzr_entries: 7,
             rtk_entries: 0,
             external_icm_entries: 0,
             installed: true,
             conflict: false,
             native_tool_mode: Some(crate::adoption::NativeToolMode::Steer),
+            missing_hzr_identities: Vec::new(),
+            duplicate_hzr_identities: Vec::new(),
+            altered_hzr_identities: Vec::new(),
         };
 
         let check = hook_ownership_check(status);

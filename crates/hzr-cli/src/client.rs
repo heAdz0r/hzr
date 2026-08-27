@@ -12,7 +12,8 @@ use hzr_protocol::{
     ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryForgetApiRequest,
     MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
     MemoryStoreApiRequest, MemoryUpdateApiRequest, OperationApiRequest, OperationApiResponse,
-    SearchApiRequest, SearchApiResponse, SemanticReadinessApiRequest, SemanticReadinessApiResponse,
+    PolicyEventApiRequest, PolicyEventApiResponse, SearchApiRequest, SearchApiResponse,
+    SemanticReadinessApiRequest, SemanticReadinessApiResponse,
 };
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
@@ -174,6 +175,13 @@ impl DaemonClient {
         request: &OperationApiRequest,
     ) -> Result<OperationApiResponse, ClientError> {
         self.post("/v1/operations", request).await
+    }
+
+    pub async fn record_policy_event(
+        &self,
+        request: &PolicyEventApiRequest,
+    ) -> Result<PolicyEventApiResponse, ClientError> {
+        self.post("/v1/policy/events", request).await
     }
 
     pub async fn record_provider_receipt(

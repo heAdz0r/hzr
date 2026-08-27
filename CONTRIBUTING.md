@@ -31,6 +31,17 @@ bun --cwd visualizer run typecheck
 bun --cwd visualizer run build
 ```
 
+Before merging or tagging, run the same fail-closed source gate used by CI and the release
+preflight:
+
+```sh
+scripts/complete-gate.sh
+```
+
+It runs the exact locked workspace format, Clippy and test commands, the complete fork parity
+suite, the fork warning ratchet, shell syntax checks and the static release-workflow regression
+gate. Do not replace it with name-filtered acceptance tests.
+
 Changes to `fork-core/rtk` must also pass its complete regression gate and update
 the current-engine identity:
 
@@ -43,8 +54,11 @@ Before proposing a release or installer change, assemble and smoke-test the
 self-contained bundle:
 
 ```sh
-scripts/build-bundle.sh /absolute/path/to/hzr-dist
+scripts/complete-gate.sh --bundle /absolute/path/to/hzr-dist
 ```
+
+The bundle mode delegates to the canonical builder, which verifies the pinned components and
+runs `scripts/smoke-bundle.sh` before returning success.
 
 ## Release notes
 
@@ -83,10 +97,17 @@ git tag -a vX.Y.Z -m "HZR X.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The workflow builds Linux and macOS bundles for x64 and ARM64, attests build provenance, and
-publishes a stable release marked as GitHub Latest whose description is `RELEASE_NOTES.md`
-verbatim. Do not write the
+The workflow builds Linux bundles for x64 and ARM64 plus a macOS ARM64 bundle, attests build
+provenance, and publishes a stable release marked as GitHub Latest whose description is
+`RELEASE_NOTES.md` verbatim. Intel macOS is not a supported release platform. Do not write the
 release description in the GitHub UI: it would immediately disagree with the repository.
+
+The Linux x64 CI bundle and `.github/workflows/bundle-cache.yml` warm release Cargo dependencies
+and verified native component caches on `main`. Tagged releases restore those caches, then re-check
+every cached binary and pinned upstream licence before packaging it. Cache misses remain safe but
+slower: `scripts/build-bundle.sh` rebuilds and verifies the component from its pinned source. Set
+`HZR_WARM_COMPONENT_CACHE_ONLY=1` only for cache-warming jobs; it stops after grepai, ICM, and the
+managed RTK fork have been built and verified.
 
 ## Pull requests
 

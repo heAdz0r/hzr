@@ -70,8 +70,9 @@ pub fn estimate_body_tokens(body: &str) -> usize {
 
 /// Returns `filtered`, or `raw` when `filtered` would emit more tokens.
 pub fn never_worse<'a>(raw: &'a str, filtered: &'a str) -> &'a str {
-    let loses_machine_protocol =
-        exact_machine_protocol(raw) && raw != filtered && !preserves_machine_protocol(raw, filtered);
+    let loses_machine_protocol = exact_machine_protocol(raw)
+        && raw != filtered
+        && !preserves_machine_protocol(raw, filtered);
     if loses_machine_protocol {
         return raw;
     }
@@ -164,8 +165,14 @@ fn porcelain_line(line: &str) -> bool {
     let bytes = line.as_bytes();
     bytes.len() >= 4
         && bytes[2] == b' '
-        && matches!(bytes[0], b' ' | b'?' | b'!' | b'A' | b'C' | b'D' | b'M' | b'R' | b'T' | b'U')
-        && matches!(bytes[1], b' ' | b'?' | b'!' | b'A' | b'C' | b'D' | b'M' | b'R' | b'T' | b'U')
+        && matches!(
+            bytes[0],
+            b' ' | b'?' | b'!' | b'A' | b'C' | b'D' | b'M' | b'R' | b'T' | b'U'
+        )
+        && matches!(
+            bytes[1],
+            b' ' | b'?' | b'!' | b'A' | b'C' | b'D' | b'M' | b'R' | b'T' | b'U'
+        )
 }
 
 /// Fallback rendering for an unparsed non-zero exit: `"<tool>: failed (exit N)"`

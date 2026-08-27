@@ -36,6 +36,7 @@ chrono = "0.4"
 thiserror = "1.0"
 tempfile = "3"
 fs2 = "0.4" # cross-platform flock for concurrent write safety
+hzr-engine-contract = { path = "../../crates/hzr-engine-contract" }
 memchr = "2"
 libc = "0.2"
 which = "8"

@@ -8,8 +8,8 @@ use std::process::Command;
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
-    let mut cmd = if which_command("mypy").is_some() {
-        Command::new("mypy")
+    let mut cmd = if let Ok(binary) = crate::utils::resolve_binary("mypy") {
+        Command::new(binary)
     } else {
         let mut c = Command::new("python3");
         c.arg("-m").arg("mypy");
@@ -54,17 +54,6 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         std::process::exit(exit_code);
     }
     Ok(())
-}
-
-fn which_command(cmd: &str) -> Option<String> {
-    Command::new("which")
-        .arg(cmd)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
 }
 
 const MYPY_CLEAN: &str = "mypy: No issues found";

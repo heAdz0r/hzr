@@ -11,6 +11,9 @@ HZR_CAVEMAN_OUTPUT="${HZR_ENGINE_OUTPUT}/caveman-code"
 HZR_PROVENANCE_OUTPUT="${HZR_OUTPUT_ROOT}/share/hzr"
 HZR_VISUALIZER_OUTPUT="${HZR_PROVENANCE_OUTPUT}/visualizer"
 HZR_BUILD_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-build.XXXXXX")"
+HZR_COMPONENT_CACHE="${HZR_COMPONENT_CACHE:-${HZR_REPOSITORY_ROOT}/target/hzr-component-cache}"
+HZR_DOWNLOAD_CACHE="${HZR_DOWNLOAD_CACHE:-${HZR_COMPONENT_CACHE}/downloads}"
+HZR_WARM_COMPONENT_CACHE_ONLY="${HZR_WARM_COMPONENT_CACHE_ONLY:-0}"
 HZR_BUILD_STAGE=0
 HZR_BUILD_STAGE_TOTAL=9
 
@@ -66,16 +69,77 @@ sha256_file() {
   shasum -a 256 "$1" | awk '{print $1}'
 }
 
+component_cache_key() {
+  printf '%s\n' "$@" | shasum -a 256 | awk '{print $1}'
+}
+
+restore_cached_component() {
+  local component="$1"
+  local key="$2"
+  local binary_destination="$3"
+  local license_destination="$4"
+  local license_sha256="$5"
+  local cache_directory="${HZR_COMPONENT_CACHE}/binaries/${HZR_PLATFORM}/${component}/${key}"
+
+  if [[ -L "${cache_directory}" || -L "${cache_directory}/binary" || \
+    -L "${cache_directory}/binary.sha256" || ! -f "${cache_directory}/binary" || \
+    ! -f "${cache_directory}/binary.sha256" ]]; then
+    return 1
+  fi
+  local expected_binary_sha256
+  expected_binary_sha256="$(sed -n '1p' "${cache_directory}/binary.sha256")"
+  if [[ ! "${expected_binary_sha256}" =~ ^[0-9a-f]{64}$ ]] || \
+    [[ "$(sha256_file "${cache_directory}/binary")" != "${expected_binary_sha256}" ]]; then
+    return 1
+  fi
+  if [[ -n "${license_destination}" ]]; then
+    if [[ -L "${cache_directory}/LICENSE" || ! -f "${cache_directory}/LICENSE" ]] || \
+      [[ "$(sha256_file "${cache_directory}/LICENSE")" != "${license_sha256}" ]]; then
+      return 1
+    fi
+    install -m 0644 "${cache_directory}/LICENSE" "${license_destination}"
+  fi
+  install -m 0755 "${cache_directory}/binary" "${binary_destination}"
+  echo "Reused cached ${component} for ${HZR_PLATFORM}"
+}
+
+store_cached_component() {
+  local component="$1"
+  local key="$2"
+  local binary_source="$3"
+  local license_source="$4"
+  local cache_parent="${HZR_COMPONENT_CACHE}/binaries/${HZR_PLATFORM}/${component}"
+  local cache_directory="${cache_parent}/${key}"
+  local cache_stage
+
+  mkdir -p "${cache_parent}"
+  cache_stage="$(mktemp -d "${cache_parent}/.${key}.XXXXXX")"
+  install -m 0755 "${binary_source}" "${cache_stage}/binary"
+  sha256_file "${cache_stage}/binary" >"${cache_stage}/binary.sha256"
+  if [[ -n "${license_source}" ]]; then
+    install -m 0644 "${license_source}" "${cache_stage}/LICENSE"
+  fi
+  if [[ -e "${cache_directory}" || -L "${cache_directory}" ]]; then
+    local cache_previous="${cache_parent}/.${key}.previous.$$"
+    mv -- "${cache_directory}" "${cache_previous}"
+    mv -- "${cache_stage}" "${cache_directory}"
+    rm -rf -- "${cache_previous}"
+  else
+    mv -- "${cache_stage}" "${cache_directory}"
+  fi
+}
+
 download_cached() {
   local url="$1"
   local expected="$2"
   local name="$3"
   local destination="$4"
-  local cache_root="${HZR_DOWNLOAD_CACHE:-${HZR_REPOSITORY_ROOT}/target/hzr-download-cache}"
+  local cache_root="${HZR_DOWNLOAD_CACHE}"
   local cached="${cache_root}/${name}"
 
   mkdir -p "${cache_root}"
-  if [[ -f "${cached}" && "$(sha256_file "${cached}")" == "${expected}" ]]; then
+  if [[ ! -L "${cached}" && -f "${cached}" && \
+    "$(sha256_file "${cached}")" == "${expected}" ]]; then
     cp -- "${cached}" "${destination}"
     return
   fi
@@ -95,6 +159,7 @@ require_command cargo
 require_command curl
 require_command git
 require_command go
+require_command rustc
 require_command awk
 require_command bun
 require_command cp
@@ -114,6 +179,12 @@ if [[ "$(bun --version)" != "${HZR_BUN_VERSION}" ]]; then
   exit 1
 fi
 
+if [[ "${HZR_WARM_COMPONENT_CACHE_ONLY}" != 0 && \
+  "${HZR_WARM_COMPONENT_CACHE_ONLY}" != 1 ]]; then
+  echo "HZR_WARM_COMPONENT_CACHE_ONLY must be 0 or 1" >&2
+  exit 2
+fi
+
 hzr_build_stage "Verifying fork-core provenance and parity"
 "${HZR_REPOSITORY_ROOT}/scripts/verify-fork-core.sh"
 
@@ -130,18 +201,17 @@ mkdir -p \
 HZR_NODE_VERSION="22.17.1"
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
+    HZR_PLATFORM="darwin-arm64"
     HZR_NODE_PLATFORM="darwin-arm64"
     HZR_NODE_SHA256="a983f4f2a7b71512b78d7935b9ccf6b72120a255810070afd635c4146bca7b31"
     ;;
-  Darwin-x86_64)
-    HZR_NODE_PLATFORM="darwin-x64"
-    HZR_NODE_SHA256="b925103150fac0d23a44a45b2d88a01b73e5fff101e5dcfbae98d32c08d4bee3"
-    ;;
   Linux-aarch64 | Linux-arm64)
+    HZR_PLATFORM="linux-arm64"
     HZR_NODE_PLATFORM="linux-arm64"
     HZR_NODE_SHA256="f53510706998cf044f634190416f0588e7e1937aecea938768952e0f0ac1f41b"
     ;;
   Linux-x86_64)
+    HZR_PLATFORM="linux-x64"
     HZR_NODE_PLATFORM="linux-x64"
     # SHA-256 of node-v22.17.1-linux-x64.tar.gz. The previous value was the .tar.xz
     # digest while HZR_NODE_ARCHIVE downloads .tar.gz, so every linux-x64 bundle build
@@ -162,32 +232,51 @@ download_cached \
   "${HZR_NODE_ARCHIVE}" \
   "${HZR_NODE_DOWNLOAD}"
 verify_sha256 "${HZR_NODE_SHA256}" "${HZR_NODE_DOWNLOAD}"
+HZR_NODE_BUILD_ROOT="${HZR_BUILD_TEMP}/node"
 HZR_NODE_ROOT="${HZR_RUNTIME_OUTPUT}/node"
-mkdir -p "${HZR_NODE_ROOT}"
-tar -xzf "${HZR_NODE_DOWNLOAD}" -C "${HZR_NODE_ROOT}" --strip-components=1
-HZR_NODE_BINARY="${HZR_NODE_ROOT}/bin/node"
-HZR_NPM_BINARY="${HZR_NODE_ROOT}/bin/npm"
+mkdir -p "${HZR_NODE_BUILD_ROOT}"
+tar -xzf "${HZR_NODE_DOWNLOAD}" -C "${HZR_NODE_BUILD_ROOT}" --strip-components=1
+HZR_NODE_BINARY="${HZR_NODE_BUILD_ROOT}/bin/node"
+HZR_NPM_BINARY="${HZR_NODE_BUILD_ROOT}/bin/npm"
 "${HZR_NODE_BINARY}" --version | grep -Fx "v${HZR_NODE_VERSION}" >/dev/null
-ln -s ../runtime/node/bin/node "${HZR_ENGINE_OUTPUT}/node"
 
 verify_sha256 \
   "55535352bc9f4837198c652b8c44ec54a0a7ef82fbd81e11b4ec11f4c4082991" \
   "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
 hzr_build_stage "Building the pinned grepai engine"
-clone_at_commit \
-  "https://github.com/yoanbernabeu/grepai" \
-  "65c345ca32122c17a39a5bbec2780c2eea773a12" \
-  "${HZR_BUILD_TEMP}/grepai"
-git -C "${HZR_BUILD_TEMP}/grepai" apply --check \
-  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
-git -C "${HZR_BUILD_TEMP}/grepai" apply \
-  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
-(
-  cd "${HZR_BUILD_TEMP}/grepai"
-  go test ./cli
-  go build -trimpath -ldflags "-s -w -X main.version=0.35.0" \
-    -o "${HZR_ENGINE_OUTPUT}/grepai" ./cmd/grepai
-)
+HZR_BUILD_SCRIPT_SHA256="$(sha256_file "${BASH_SOURCE[0]}")"
+HZR_GREPAI_LICENSE_SOURCE="${HZR_BUILD_TEMP}/grepai.LICENSE"
+HZR_GREPAI_CACHE_KEY="$(component_cache_key \
+  grepai 0.35.0 65c345ca32122c17a39a5bbec2780c2eea773a12 \
+  55535352bc9f4837198c652b8c44ec54a0a7ef82fbd81e11b4ec11f4c4082991 \
+  "${HZR_PLATFORM}" "$(go version)" "${HZR_BUILD_SCRIPT_SHA256}")"
+if restore_cached_component \
+  grepai "${HZR_GREPAI_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/grepai" \
+  "${HZR_GREPAI_LICENSE_SOURCE}" \
+  "49966552514373129de9faea43a890bf6a8b04f158b2966876a57fdf915980e5" && \
+  "${HZR_ENGINE_OUTPUT}/grepai" version | grep -F "0.35.0" >/dev/null && \
+  "${HZR_ENGINE_OUTPUT}/grepai" watch --help | grep -F -- "--no-worktree-discovery" >/dev/null; then
+  :
+else
+  clone_at_commit \
+    "https://github.com/yoanbernabeu/grepai" \
+    "65c345ca32122c17a39a5bbec2780c2eea773a12" \
+    "${HZR_BUILD_TEMP}/grepai"
+  git -C "${HZR_BUILD_TEMP}/grepai" apply --check \
+    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
+  git -C "${HZR_BUILD_TEMP}/grepai" apply \
+    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
+  (
+    cd "${HZR_BUILD_TEMP}/grepai"
+    go test ./cli
+    go build -trimpath -ldflags "-s -w -X main.version=0.35.0" \
+      -o "${HZR_ENGINE_OUTPUT}/grepai" ./cmd/grepai
+  )
+  install -m 0644 "${HZR_BUILD_TEMP}/grepai/LICENSE" "${HZR_GREPAI_LICENSE_SOURCE}"
+  store_cached_component \
+    grepai "${HZR_GREPAI_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/grepai" \
+    "${HZR_GREPAI_LICENSE_SOURCE}"
+fi
 "${HZR_ENGINE_OUTPUT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_OUTPUT}/grepai" watch --help | grep -F -- "--no-worktree-discovery" >/dev/null
 
@@ -195,28 +284,62 @@ verify_sha256 \
   "cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586" \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
 hzr_build_stage "Building the pinned ICM engine"
-clone_at_commit \
-  "https://github.com/rtk-ai/icm" \
-  "c3a1bac7cfe401b55fd66af16dfc0c774c02167a" \
-  "${HZR_BUILD_TEMP}/icm"
-git -C "${HZR_BUILD_TEMP}/icm" apply --check \
-  "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
-git -C "${HZR_BUILD_TEMP}/icm" apply \
-  "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
-cargo build \
-  --manifest-path "${HZR_BUILD_TEMP}/icm/Cargo.toml" \
-  --locked --release --package icm-cli \
-  --no-default-features --features "embeddings-static,http-api,backend-sqlite"
-install -m 0755 "${HZR_BUILD_TEMP}/icm/target/release/icm" "${HZR_ENGINE_OUTPUT}/icm"
+HZR_RUST_TOOLCHAIN_KEY="$(component_cache_key "$(rustc -Vv)" "$(cargo -V)")"
+HZR_ICM_LICENSE_SOURCE="${HZR_BUILD_TEMP}/icm.LICENSE"
+HZR_ICM_CACHE_KEY="$(component_cache_key \
+  icm 0.10.61 c3a1bac7cfe401b55fd66af16dfc0c774c02167a \
+  cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586 \
+  embeddings-static,http-api,backend-sqlite "${HZR_PLATFORM}" \
+  "${HZR_RUST_TOOLCHAIN_KEY}" "${HZR_BUILD_SCRIPT_SHA256}")"
+if restore_cached_component \
+  icm "${HZR_ICM_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/icm" \
+  "${HZR_ICM_LICENSE_SOURCE}" \
+  "db0693db32ddac486c96656ec8b827467c1d5d7dc7468eaa0051298425edf2cc" && \
+  "${HZR_ENGINE_OUTPUT}/icm" --version | grep -F "0.10.61" >/dev/null; then
+  :
+else
+  clone_at_commit \
+    "https://github.com/rtk-ai/icm" \
+    "c3a1bac7cfe401b55fd66af16dfc0c774c02167a" \
+    "${HZR_BUILD_TEMP}/icm"
+  git -C "${HZR_BUILD_TEMP}/icm" apply --check \
+    "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
+  git -C "${HZR_BUILD_TEMP}/icm" apply \
+    "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
+  cargo build \
+    --manifest-path "${HZR_BUILD_TEMP}/icm/Cargo.toml" \
+    --locked --release --package icm-cli \
+    --no-default-features --features "embeddings-static,http-api,backend-sqlite"
+  install -m 0755 "${HZR_BUILD_TEMP}/icm/target/release/icm" "${HZR_ENGINE_OUTPUT}/icm"
+  install -m 0644 "${HZR_BUILD_TEMP}/icm/LICENSE" "${HZR_ICM_LICENSE_SOURCE}"
+  store_cached_component \
+    icm "${HZR_ICM_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/icm" "${HZR_ICM_LICENSE_SOURCE}"
+fi
 "${HZR_ENGINE_OUTPUT}/icm" --version | grep -F "0.10.61" >/dev/null
 
-HZR_FORK_TARGET="${HZR_BUILD_TEMP}/fork-core-target"
 hzr_build_stage "Building the managed RTK fork-core"
-CARGO_TARGET_DIR="${HZR_FORK_TARGET}" cargo build \
-  --manifest-path "${HZR_REPOSITORY_ROOT}/fork-core/rtk/Cargo.toml" \
-  --locked --release
-install -m 0755 "${HZR_FORK_TARGET}/release/rtk" "${HZR_ENGINE_OUTPUT}/rtk"
+HZR_FORK_CACHE_KEY="$(component_cache_key \
+  rtk 0.44.1-fork.1 "$(sha256_file "${HZR_REPOSITORY_ROOT}/fork-core/CURRENT_ENGINE_V1.tsv")" \
+  "$(sha256_file "${HZR_REPOSITORY_ROOT}/fork-core/rtk/Cargo.lock")" \
+  "${HZR_PLATFORM}" "${HZR_RUST_TOOLCHAIN_KEY}" "${HZR_BUILD_SCRIPT_SHA256}")"
+if restore_cached_component \
+  rtk "${HZR_FORK_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/rtk" "" "" && \
+  "${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null; then
+  :
+else
+  HZR_FORK_TARGET="${HZR_BUILD_TEMP}/rtk-target"
+  CARGO_TARGET_DIR="${HZR_FORK_TARGET}" cargo build \
+    --manifest-path "${HZR_REPOSITORY_ROOT}/fork-core/rtk/Cargo.toml" \
+    --locked --release
+  install -m 0755 "${HZR_FORK_TARGET}/release/rtk" "${HZR_ENGINE_OUTPUT}/rtk"
+  store_cached_component rtk "${HZR_FORK_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/rtk" ""
+fi
 "${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
+
+if [[ "${HZR_WARM_COMPONENT_CACHE_ONLY}" == 1 ]]; then
+  echo "HZR component cache warmed for ${HZR_PLATFORM}"
+  exit 0
+fi
 
 HZR_CAVEMAN_STAGE="${HZR_BUILD_TEMP}/caveman-code"
 hzr_build_stage "Installing the pinned Caveman runtime"
@@ -244,18 +367,51 @@ install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/verify-safe-ex
   cd "${HZR_CAVEMAN_STAGE}"
   shasum -a 256 -c vendor/SHA256SUMS >/dev/null
 )
-PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ci --omit=dev \
+npm_config_cache="${HZR_COMPONENT_CACHE}/npm" \
+  PATH="${HZR_NODE_BUILD_ROOT}/bin:${PATH}" \
+  "${HZR_NPM_BINARY}" ci --omit=dev --omit=optional \
   --prefix "${HZR_CAVEMAN_STAGE}"
-PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" audit \
-  --omit=dev --audit-level=high \
-  --prefix "${HZR_CAVEMAN_STAGE}"
+npm_config_cache="${HZR_COMPONENT_CACHE}/npm" \
+  PATH="${HZR_NODE_BUILD_ROOT}/bin:${PATH}" \
+  "${HZR_NPM_BINARY}" ls --omit=dev --omit=optional --all \
+  --prefix "${HZR_CAVEMAN_STAGE}" >/dev/null
 "${HZR_NODE_BINARY}" "${HZR_CAVEMAN_STAGE}/verify-safe-extract.mjs"
 "${HZR_NODE_BINARY}" --check "${HZR_CAVEMAN_STAGE}/bridge.mjs"
+(
+  cd "${HZR_CAVEMAN_STAGE}"
+  "${HZR_NODE_BINARY}" --input-type=module -e '
+    import {
+      createAgentSession,
+      DefaultResourceLoader,
+      SessionManager,
+      SettingsManager,
+    } from "@juliusbrussee/caveman-code";
+    for (const [name, value] of Object.entries({
+      createAgentSession,
+      DefaultResourceLoader,
+      SessionManager,
+      SettingsManager,
+    })) {
+      if (typeof value !== "function") {
+        throw new Error(`Caveman runtime export is unavailable: ${name}`);
+      }
+    }
+  '
+)
 if [[ -e "${HZR_CAVEMAN_OUTPUT}" ]]; then
   echo "refusing to merge a managed Caveman runtime into existing output: ${HZR_CAVEMAN_OUTPUT}" >&2
   exit 1
 fi
 mv -- "${HZR_CAVEMAN_STAGE}" "${HZR_CAVEMAN_OUTPUT}"
+
+if [[ -e "${HZR_NODE_ROOT}" ]]; then
+  echo "refusing to merge a managed Node.js runtime into existing output: ${HZR_NODE_ROOT}" >&2
+  exit 1
+fi
+mkdir -p "${HZR_NODE_ROOT}/bin"
+install -m 0755 "${HZR_NODE_BINARY}" "${HZR_NODE_ROOT}/bin/node"
+install -m 0644 "${HZR_NODE_BUILD_ROOT}/LICENSE" "${HZR_NODE_ROOT}/LICENSE"
+ln -s ../runtime/node/bin/node "${HZR_ENGINE_OUTPUT}/node"
 
 HZR_VISUALIZER_STAGE="${HZR_BUILD_TEMP}/visualizer"
 hzr_build_stage "Testing and building the visualizer"
@@ -289,9 +445,9 @@ install -m 0644 "${HZR_REPOSITORY_ROOT}/THIRD_PARTY_NOTICES.md" \
   "${HZR_LICENSE_OUTPUT}/THIRD_PARTY_NOTICES.md"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/fork-core/rtk/LICENSE" \
   "${HZR_LICENSE_OUTPUT}/rtk-fork-core-MIT.txt"
-install -m 0644 "${HZR_BUILD_TEMP}/grepai/LICENSE" \
+install -m 0644 "${HZR_GREPAI_LICENSE_SOURCE}" \
   "${HZR_LICENSE_OUTPUT}/grepai-MIT.txt"
-install -m 0644 "${HZR_BUILD_TEMP}/icm/LICENSE" \
+install -m 0644 "${HZR_ICM_LICENSE_SOURCE}" \
   "${HZR_LICENSE_OUTPUT}/ICM-Apache-2.0.txt"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/licenses/caveman-code-MIT.txt" \
   "${HZR_LICENSE_OUTPUT}/caveman-code-MIT.txt"

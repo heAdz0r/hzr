@@ -1,7 +1,8 @@
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use hzr_core::{Config, FidelityAllowance, Ledger};
+use hzr_core::{AccountingCoverageStore, Config, FidelityAllowance, Ledger, privacy_identity_hash};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -126,11 +127,20 @@ fn acceptance_gate_native_pretool_modes_are_fail_open_and_prescriptive() {
     let evasion = ledger
         .session_evasion_summary("session-native-allowed", FidelityAllowance::default())
         .expect("evasion summary");
-    assert_eq!(
-        evasion.top_class,
-        Some(hzr_protocol::EvasionClass::E10CapabilityGap)
-    );
+    assert_eq!(evasion.top_class, None);
     assert_eq!(evasion.avoidable_operations, 0);
+    let coverage = AccountingCoverageStore::new(&config.data_dir)
+        .snapshot_for_context(
+            &privacy_identity_hash("session", "session-native-allowed"),
+            &privacy_identity_hash("workspace", workspace.to_string_lossy().as_ref()),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time")
+                .as_secs(),
+        )
+        .expect("coverage snapshot");
+    assert!(!coverage.live_complete);
+    assert_eq!(coverage.hook_missing_operations, 1);
 
     let malformed = run_hook(&config_path, &workspace, "strict", b"{");
     assert!(

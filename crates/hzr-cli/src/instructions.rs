@@ -385,10 +385,8 @@ fn strip_local_codex_bridge(text: &str) -> String {
     stripped
 }
 
-fn local_codex_bridge(text: String, surface: Surface, path: &Path) -> String {
-    if surface != Surface::Codex
-        || path.file_name().and_then(|name| name.to_str()) != Some("AGENTS.override.md")
-    {
+fn local_codex_bridge(text: String, local_codex: bool) -> String {
+    if !local_codex {
         return text;
     }
     let body = strip_local_codex_bridge(&text);
@@ -830,10 +828,45 @@ pub fn audit(surface: Surface, path: &Path) -> Result<InstructionAudit> {
     })
 }
 
+#[cfg(test)]
 pub fn install(
     surface: Surface,
     path: &Path,
     contract_path: &Path,
+    dry_run: bool,
+    confirmed: bool,
+) -> Result<InstructionReport> {
+    install_inner(
+        surface,
+        path,
+        contract_path,
+        crate::activation::InstructionTarget::path_is_local_codex(surface, path),
+        dry_run,
+        confirmed,
+    )
+}
+
+pub fn install_target(
+    target: &crate::activation::InstructionTarget,
+    contract_path: &Path,
+    dry_run: bool,
+    confirmed: bool,
+) -> Result<InstructionReport> {
+    install_inner(
+        target.surface,
+        &target.path,
+        contract_path,
+        target.is_local_codex(),
+        dry_run,
+        confirmed,
+    )
+}
+
+fn install_inner(
+    surface: Surface,
+    path: &Path,
+    contract_path: &Path,
+    local_codex: bool,
     dry_run: bool,
     confirmed: bool,
 ) -> Result<InstructionReport> {
@@ -842,7 +875,7 @@ pub fn install(
         .with_context(|| format!("{} is not UTF-8; HZR will not rewrite it", path.display()))?;
     let (after, legacy_removed, legacy_blocks_removed, directives_migrated) =
         compose(&existing, surface, contract_path);
-    let after = local_codex_bridge(after, surface, path);
+    let after = local_codex_bridge(after, local_codex);
     apply(
         surface,
         path,
@@ -855,6 +888,14 @@ pub fn install(
         confirmed,
         "installation",
     )
+}
+
+pub fn uninstall_target(
+    target: &crate::activation::InstructionTarget,
+    dry_run: bool,
+    confirmed: bool,
+) -> Result<InstructionReport> {
+    uninstall(target.surface, &target.path, dry_run, confirmed)
 }
 
 pub fn uninstall(

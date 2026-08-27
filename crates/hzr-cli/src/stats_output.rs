@@ -10,8 +10,8 @@
 //!
 //! * every percentage appears next to the absolute numbers it came from, so a ratio can
 //!   never stand alone as a claim;
-//! * commands rank by absolute tokens avoided, never by percentage — ranking by percentage
-//!   just promotes whichever command happens to have the most verbose output;
+//! * privacy-safe routes rank by net tokens avoided, never by percentage — ranking by percentage
+//!   just promotes whichever route happens to have the most verbose output;
 //! * an empty provider ledger is stated as "not measured", never as `$0.000000`, which
 //!   reads as "free".
 
@@ -413,7 +413,7 @@ fn write_local_reduction(
     color: bool,
 ) -> io::Result<()> {
     let savings = &report.direct_savings;
-    let avoided = savings.net_avoided_tokens_estimated.max(0) as u64;
+    let avoided = savings.net_avoided_tokens_estimated;
 
     writeln!(output)?;
     writeln!(
@@ -440,8 +440,31 @@ fn write_local_reduction(
         format_count(savings.operations)
     )?;
     writeln!(output, "│{}│", " ".repeat(WIDTH))?;
-    let avoided_line = format!("{} TOKENS AVOIDED", format_count(avoided));
-    let ratio = format!("{:.1}% of tool output", savings.reduction_pct);
+    let (avoided_line, ratio) = if !report.coverage.complete && savings.operations == 0 {
+        (
+            "ACCOUNTING UNKNOWN".to_owned(),
+            "unknown · incomplete ledger".to_owned(),
+        )
+    } else if !report.coverage.complete {
+        (
+            format!(
+                "{} KNOWN NET TOKENS (PARTIAL)",
+                format_signed_count(avoided)
+            ),
+            format!(
+                "{} of known tool output",
+                format_truthful_percentage(savings.reduction_pct)
+            ),
+        )
+    } else {
+        (
+            format!("{} NET TOKEN CHANGE", format_signed_count(avoided)),
+            format!(
+                "{} of tool output",
+                format_truthful_percentage(savings.reduction_pct)
+            ),
+        )
+    };
     writeln!(output, "│  {avoided_line:<40}{ratio:>28}  │")?;
     writeln!(
         output,
@@ -678,7 +701,7 @@ fn write_subsystems(output: &mut impl Write, report: &StatsReport, color: bool) 
         &[
             "SUBSYSTEM".into(),
             "CALLS".into(),
-            "AVOIDED".into(),
+            "NET".into(),
             "SHARE".into(),
             "DISTRIBUTION".into(),
         ],
@@ -686,8 +709,8 @@ fn write_subsystems(output: &mut impl Write, report: &StatsReport, color: bool) 
     write_rule(output, '├', '┼', '┤', &columns)?;
     for subsystem in &report.by_subsystem {
         let calls = format_count(subsystem.operations);
-        let avoided = format_count(subsystem.net_avoided_tokens_estimated.max(0) as u64);
-        let share = format!("{:.1}%", subsystem.share_pct);
+        let avoided = format_signed_count(subsystem.net_avoided_tokens_estimated);
+        let share = format_truthful_percentage(subsystem.share_pct);
         let bar = style(&progress_bar(subsystem.share_pct, 20), "38;5;208", color);
         write_row(
             output,
@@ -704,16 +727,16 @@ fn write_subsystems(output: &mut impl Write, report: &StatsReport, color: bool) 
     write_rule(output, '╰', '┴', '╯', &columns)
 }
 
-/// Section 2 — the commands that avoided the most tokens in absolute terms.
+/// Section 2 — the privacy-safe operation routes that avoided the most tokens.
 ///
-/// The per-command percentage is deliberately the *last* column and labelled as a ratio,
-/// not a headline: a command can cut 99% of a tiny output and matter far less than one
+/// The per-route percentage is deliberately the *last* column and labelled as a ratio,
+/// not a headline: a route can cut 99% of a tiny output and matter far less than one
 /// that cut 40% of a huge one.
 fn write_hot_paths(output: &mut impl Write, report: &StatsReport, color: bool) -> io::Result<()> {
     if report.by_command.is_empty() {
         return Ok(());
     }
-    // Rank by absolute tokens avoided regardless of how the query ordered them, so the
+    // Rank by net tokens avoided regardless of how the query ordered them, so the
     // ranking claim in the header is always true of what is displayed.
     let mut ranked: Vec<_> = report.by_command.iter().collect();
     ranked.sort_by_key(|command| std::cmp::Reverse(command.net_avoided_tokens_estimated));
@@ -722,8 +745,8 @@ fn write_hot_paths(output: &mut impl Write, report: &StatsReport, color: bool) -
     writeln!(
         output,
         "{}  {}",
-        style("TOP COMMANDS BY TOKENS AVOIDED", "1;38;5;208", color),
-        style("estimated · ranked by absolute, not percent", "2;37", color)
+        style("TOP OPERATION ROUTES BY NET TOKENS", "1;38;5;208", color),
+        style("estimated · privacy-safe aggregates", "2;37", color)
     )?;
     let columns = [
         Column::left(35),
@@ -736,7 +759,7 @@ fn write_hot_paths(output: &mut impl Write, report: &StatsReport, color: bool) -
         output,
         &columns,
         &[
-            "COMMAND".into(),
+            "ROUTE".into(),
             "CALLS".into(),
             "AVOIDED".into(),
             "RATIO".into(),
@@ -745,8 +768,8 @@ fn write_hot_paths(output: &mut impl Write, report: &StatsReport, color: bool) -
     write_rule(output, '├', '┼', '┤', &columns)?;
     for command in ranked.iter().take(12) {
         let calls = format_count(command.executions);
-        let avoided = format_count(command.net_avoided_tokens_estimated.max(0) as u64);
-        let ratio = format!("{:.0}%", command.avg_savings_pct);
+        let avoided = format_signed_count(command.net_avoided_tokens_estimated);
+        let ratio = format_truthful_percentage(command.avg_savings_pct);
         write_row(
             output,
             &columns,
@@ -766,7 +789,7 @@ fn write_hot_paths(output: &mut impl Write, report: &StatsReport, color: bool) -
             "   {}",
             style(
                 &format!(
-                    "{} more commands not shown; exact details: {}",
+                    "{} more privacy-safe route(s) not shown; full aggregates: {}",
                     report.by_command_total - 12,
                     report.by_command_recovery
                 ),
@@ -878,10 +901,18 @@ fn write_provider_usage(
 /// Section 4 — how much of the above HZR actually saw. Degraded rewrites bypass the
 /// ledger, so a reader must be able to tell partial coverage from complete coverage.
 fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -> io::Result<()> {
-    let (label, status_color) = if report.runtime_accounting_complete {
-        ("● COMPLETE FOR OBSERVED CHANNELS", "1;32")
+    let coverage = &report.coverage;
+    let (label, status_color) = if coverage.live_complete && coverage.historical_complete {
+        ("● LIVE AND HISTORICAL COMPLETE", "1;32")
+    } else if coverage.live_complete {
+        ("● LIVE RECOVERED · HISTORICAL PARTIAL", "1;33")
+    } else if coverage.open_intervals > 0
+        || coverage.unreconciled_rewrites > 0
+        || coverage.daemon_unavailable_operations > 0
+    {
+        ("▲ LIVE DEGRADED", "1;33")
     } else {
-        ("▲ INCOMPLETE", "1;33")
+        ("? ACCOUNTING UNKNOWN", "1;33")
     };
     writeln!(output)?;
     writeln!(
@@ -890,7 +921,6 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
         style("ACCOUNTING COVERAGE", "1;38;5;208", color),
         style(label, status_color, color)
     )?;
-    let coverage = &report.coverage;
     let traffic = &report.traffic_coverage;
     writeln!(
         output,
@@ -932,13 +962,7 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
             output,
             "├─ the same session (within {} operations). Net avoided reads {} once that cost is",
             report.rerun_tax.detection_window_operations,
-            format_count(
-                report
-                    .rerun_tax
-                    .net_avoided_after_rerun_tax_estimated
-                    .max(0)
-                    .unsigned_abs()
-            )
+            format_signed_count(report.rerun_tax.net_avoided_after_rerun_tax_estimated)
         )?;
         writeln!(
             output,
@@ -980,6 +1004,36 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
         .collect::<Vec<_>>()
         .join(" ");
     writeln!(output, "├─ channels {channels}")?;
+    if coverage.open_intervals > 0 {
+        let age = coverage.open_gap_seconds.map_or_else(
+            || "unknown duration".to_owned(),
+            |seconds| format!("{seconds}s open"),
+        );
+        let started = coverage.gap_started_at_unix.map_or_else(
+            || "unknown start".to_owned(),
+            |unix| format!("started unix {unix}"),
+        );
+        writeln!(
+            output,
+            "├─ {} accounting gap interval(s) OPEN · {started} · {age}",
+            coverage.open_intervals
+        )?;
+    }
+    if coverage.closed_intervals > 0 {
+        let recovered = coverage.last_recovered_at_unix.map_or_else(
+            || "last recovery unknown".to_owned(),
+            |unix| format!("last recovered unix {unix}"),
+        );
+        writeln!(
+            output,
+            "├─ {} closed gap interval(s) retained · {}s missing · {recovered}",
+            coverage.closed_intervals, coverage.closed_gap_seconds
+        )?;
+        writeln!(
+            output,
+            "├─ recovery restored live writes; absent historical rows were not backfilled"
+        )?;
+    }
     if coverage.unreconciled_rewrites > 0 {
         writeln!(
             output,
@@ -991,18 +1045,33 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
             "├─ start the daemon (`hzr daemon service status`); the next managed rewrite closes this gap"
         )?;
     } else if coverage.lifetime_rewrites > 0 {
-        // Closing a gap must not read as if it never happened.
         writeln!(
             output,
-            "├─ {} daemon-free rewrite(s) occurred historically and are reconciled",
+            "├─ {} daemon-free rewrite(s) remain absent historically",
             coverage.lifetime_rewrites
         )?;
     }
-    if coverage.daemon_unavailable_operations > 0 {
+    let typed_missing = coverage
+        .hook_missing_operations
+        .saturating_add(coverage.cli_missing_operations)
+        .saturating_add(coverage.mcp_missing_operations)
+        .saturating_add(coverage.fork_producer_missing_operations);
+    if typed_missing > 0 {
         writeln!(
             output,
-            "├─ {} successful MCP operation(s) could not write their accounting row",
-            coverage.daemon_unavailable_operations
+            "├─ missing accounting rows by producer: hook={} cli={} mcp={} fork={}",
+            coverage.hook_missing_operations,
+            coverage.cli_missing_operations,
+            coverage.mcp_missing_operations,
+            coverage.fork_producer_missing_operations
+        )?;
+    }
+    let unclassified_missing =
+        (coverage.daemon_unavailable_operations as u64).saturating_sub(typed_missing);
+    if unclassified_missing > 0 {
+        writeln!(
+            output,
+            "├─ {unclassified_missing} migrated missing operation(s) have no producer classification"
         )?;
     }
     for note in &report.notes {
@@ -1153,6 +1222,22 @@ fn format_count(value: u64) -> String {
     }
 }
 
+fn format_signed_count(value: i64) -> String {
+    if value < 0 {
+        format!("-{}", format_count(value.unsigned_abs()))
+    } else {
+        format_count(value as u64)
+    }
+}
+
+fn format_truthful_percentage(value: f64) -> String {
+    if value == 100.0 {
+        "100%".to_owned()
+    } else {
+        format!("{:.1}%", (value * 10.0).trunc() / 10.0)
+    }
+}
+
 fn truncate(value: &str, width: usize) -> String {
     if value.chars().count() <= width {
         return value.to_owned();
@@ -1169,7 +1254,7 @@ mod tests {
     use hzr_core::{
         EvasionClassSummary, EvasionSummary, FidelityAllowance, LedgerSummary,
         OperationFamilySummary, OperationModeSummary, OperationRoute, PolicyEventSummary,
-        ReadPipelineSummary, ReplacementCapability,
+        PrivacySafeOperationKey, ReadPipelineSummary, ReplacementCapability,
     };
     use hzr_protocol::{
         AccountingOperationKind, AccountingOperationMode, AccountingStage, EvasionClass,
@@ -1187,6 +1272,13 @@ mod tests {
 
     fn command(name: &str, avoided: i64, pct: f64) -> CommandSavings {
         CommandSavings {
+            key: PrivacySafeOperationKey {
+                family: name.into(),
+                operation: None,
+                mode: None,
+                stage: AccountingStage::InternalTransport,
+                route: OperationRoute::Optimized,
+            },
             command: name.into(),
             subsystem: "execution",
             executions: 12,
@@ -1248,6 +1340,7 @@ mod tests {
                 last_degraded_at_unix: Some(1_785_531_432),
                 gap_started_at_unix: Some(1_785_531_400),
                 open_gap_seconds: Some(32),
+                ..AccountingCoverage::default()
             },
             runtime_accounting_complete: false,
             economic_claim_ready: false,
@@ -1499,12 +1592,15 @@ mod tests {
 
     #[test]
     fn test_percentage_is_always_accompanied_by_its_absolutes() {
-        let rendered = render(&report(LedgerSummary::default(), Vec::new()));
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.coverage = AccountingCoverage::default_complete();
+        report.runtime_accounting_complete = true;
+        let rendered = render(&report);
         let ratio_line = rendered
             .lines()
             .find(|line| line.contains("% of tool output"))
             .expect("ratio line");
-        assert!(ratio_line.contains("TOKENS AVOIDED"));
+        assert!(ratio_line.contains("NET TOKEN CHANGE"));
         // And the inputs it derives from appear above it.
         assert!(rendered.contains("TOOL OUTPUT BEFORE"));
         assert!(rendered.contains("DELIVERED TO MODEL"));
@@ -1513,7 +1609,7 @@ mod tests {
     #[test]
     fn test_incomplete_coverage_is_reported_with_remediation() {
         let rendered = render(&report(LedgerSummary::default(), Vec::new()));
-        assert!(rendered.contains("▲ INCOMPLETE"));
+        assert!(rendered.contains("▲ LIVE DEGRADED"));
         assert!(rendered.contains("absent from the ledger"));
         assert!(rendered.contains("never summed"));
     }
@@ -1524,7 +1620,39 @@ mod tests {
         report.coverage = AccountingCoverage::default_complete();
         report.runtime_accounting_complete = true;
         let rendered = render(&report);
-        assert!(rendered.contains("COMPLETE FOR OBSERVED CHANNELS"));
+        assert!(rendered.contains("LIVE AND HISTORICAL COMPLETE"));
+    }
+
+    #[test]
+    fn recovered_live_coverage_keeps_history_and_producer_breakdown_visible() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.coverage = AccountingCoverage {
+            lifetime_rewrites: 3,
+            daemon_unavailable_operations: 10,
+            live_complete: true,
+            historical_complete: false,
+            closed_intervals: 1,
+            last_recovered_at_unix: Some(1_785_531_500),
+            closed_gap_seconds: 720,
+            hook_missing_operations: 4,
+            cli_missing_operations: 2,
+            mcp_missing_operations: 3,
+            fork_producer_missing_operations: 1,
+            ..AccountingCoverage::default()
+        };
+
+        let rendered = render(&report);
+        assert!(rendered.contains("LIVE RECOVERED · HISTORICAL PARTIAL"));
+        assert!(rendered.contains("1 closed gap interval(s) retained · 720s missing"));
+        assert!(rendered.contains("absent historical rows were not backfilled"));
+        assert!(rendered.contains("hook=4 cli=2 mcp=3 fork=1"));
+        assert!(!rendered.contains("successful MCP operation"));
+        assert!(!rendered.contains("reconciled"));
+        let json = serde_json::to_value(&report).expect("stats JSON");
+        assert_eq!(json["coverage"]["live_complete"], true);
+        assert_eq!(json["coverage"]["historical_complete"], false);
+        assert_eq!(json["coverage"]["closed_gap_seconds"], 720);
+        assert_eq!(json["coverage"]["mcp_missing_operations"], 3);
     }
 
     /// A missing MCP key looks like the channel is unaccounted; the split must show mcp=0.
@@ -1648,9 +1776,37 @@ mod tests {
             .collect();
         let rendered = render(&report(LedgerSummary::default(), many));
         assert!(
-            rendered.contains("3 more commands not shown"),
+            rendered.contains("3 more privacy-safe route(s) not shown"),
             "a truncated table must not read as the whole picture"
         );
+    }
+
+    #[test]
+    fn acceptance_gate_stats_does_not_hide_regression_or_round_up_evidence() {
+        let rendered = render(&report(
+            LedgerSummary::default(),
+            vec![
+                command("opt search:auto/int", -673, -11.324),
+                command("opt read:range/int", 9_999, 99.99),
+                command("opt read:outline/int", 10_000, 100.0),
+            ],
+        ));
+
+        assert!(rendered.contains("-673"));
+        assert!(rendered.contains("99.9%"));
+        assert!(rendered.contains("100%"));
+        assert!(!rendered.contains("99.99"));
+        assert!(rendered.contains("PARTIAL"));
+
+        let mut unknown_report = report(LedgerSummary::default(), Vec::new());
+        unknown_report.direct_savings.operations = 0;
+        unknown_report.direct_savings.input_tokens_estimated = 0;
+        unknown_report.direct_savings.delivered_tokens_estimated = 0;
+        unknown_report.direct_savings.net_avoided_tokens_estimated = 0;
+        unknown_report.direct_savings.reduction_pct = 0.0;
+        let unknown = render(&unknown_report);
+        assert!(unknown.contains("ACCOUNTING UNKNOWN"));
+        assert!(!unknown.contains("0 NET TOKEN CHANGE"));
     }
 
     #[test]

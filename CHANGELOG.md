@@ -2,6 +2,38 @@
 
 All notable HZR changes are documented here. HZR follows semantic versioning while the public API is in `0.x` development.
 
+## [Unreleased]
+
+## [0.6.6] - 2026-08-28
+
+### Fixed
+
+- Fork-core accounting now crosses one typed, payload-free receipt contract and is committed
+  idempotently by HZR's daemon-owned ledger writer. Producer failures become durable live coverage
+  gaps; bypassed and unmeasured operations cannot claim savings.
+- Public stats aggregate by the privacy-safe typed operation key before ranking and rendering, so
+  different private commands no longer appear as duplicate public rows. Totals, negative results
+  and ratios below 100% remain truthful.
+- Instruction-scope changes, local excludes, activation, hooks, project MCP state and uninstall are
+  serialized desired-state transactions with rollback. Local mode keeps HZR instructions out of
+  repository-shared `AGENTS.md` and `CLAUDE.md`; shared mode remains the default.
+- Hook feedback, observation and statusline use the authoritative workspace from hook input.
+  Accounting state cannot leak between enabled and disabled workspaces sharing a host session.
+- Watcher status reads no longer refresh leases, daemon-owned runtime directories are reclaimed,
+  and executable lookup no longer depends on an external `which` binary.
+- CI and release publishing now share one complete fail-closed source gate.
+
+### Changed
+
+- Intel macOS (`darwin-x64`) is no longer supported. Native release assets are exactly
+  `linux-x64`, `linux-arm64` and `darwin-arm64`.
+- Bundle builds reuse content-addressed, checksum-verified component outputs. The measured
+  same-machine component build improved from 372.92 seconds cold to 16.27 seconds warm (22.9x).
+- Bundled Node contains only the executable and license; Caveman installs omit optional packages.
+  The measured macOS arm64 bundle is 354204 KiB and its archive is 101056087 bytes.
+- Bundle preflight runs independent checks in parallel, CI warms/restores verified component
+  caches, and the smoke matrix keeps OS-specific coverage without repeating every full install.
+
 ## [0.6.5] - 2026-08-27
 
 ### Fixed
@@ -1453,3 +1485,4 @@ First public HZR release.
 [0.6.2]: https://github.com/heAdz0r/hzr/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/heAdz0r/hzr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0
+[0.6.6]: https://github.com/heAdz0r/hzr/compare/v0.6.5...v0.6.6

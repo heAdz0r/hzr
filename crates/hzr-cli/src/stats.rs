@@ -7,10 +7,11 @@ use hzr_core::{
     BypassSummary, CURRENT_ACCOUNTING_POLICY_VERSION, Config, EconomicScopeSummary,
     EfficiencySummary, EvasionSummary, Ledger, LedgerSummary, OperationChannel,
     OperationFamilySummary, OperationModeSummary, OperationRoute, PricingCatalog,
-    RawPublicEstimate, RawPublicEstimateRequest, ReadPipelineSummary, ReplacementCapability,
-    StatsQuery, classify_operation, load_pricing_catalog, price_avoided_input_tokens,
+    PrivacySafeOperationKey, RawPublicEstimate, RawPublicEstimateRequest, ReadPipelineSummary,
+    ReplacementCapability, StatsQuery, load_pricing_catalog, price_avoided_input_tokens,
     privacy_identity_hash,
 };
+use hzr_protocol::{AccountingOperationKind, AccountingOperationMode, AccountingStage};
 use serde::Serialize;
 
 use crate::cli::{AccountingVersion, StatsDuration};
@@ -255,6 +256,7 @@ pub struct SubsystemSavings {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CommandSavings {
+    pub key: PrivacySafeOperationKey,
     pub command: String,
     pub subsystem: &'static str,
     pub executions: u64,
@@ -566,7 +568,6 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
     // summary the headline is derived from rather than from whatever survives the moves.
     let zero_reduction_cause = classify_zero_reduction(&gain);
     let by_mode = gain.by_mode.clone();
-    let reveal_command_details = false;
     let traffic_complete = coverage.complete
         && gain.total_observed_operations > 0
         && gain.native_unaccounted_operations == 0
@@ -598,12 +599,43 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         },
         by_channel: with_explicit_mcp_channel(gain.by_channel.clone()),
     };
-    let mut commands = gain
-        .by_command
+    let mut public_operations = Vec::<hzr_core::EfficiencyOperationSummary>::new();
+    for stats in gain.by_command {
+        if let Some(aggregate) = public_operations
+            .iter_mut()
+            .find(|aggregate| aggregate.key == stats.key)
+        {
+            let total_execution_ms = aggregate
+                .avg_time_ms
+                .saturating_mul(aggregate.executions)
+                .saturating_add(stats.avg_time_ms.saturating_mul(stats.executions));
+            aggregate.executions = aggregate.executions.saturating_add(stats.executions);
+            aggregate.baseline_tokens_estimated = aggregate
+                .baseline_tokens_estimated
+                .saturating_add(stats.baseline_tokens_estimated);
+            aggregate.delivered_tokens_estimated = aggregate
+                .delivered_tokens_estimated
+                .saturating_add(stats.delivered_tokens_estimated);
+            aggregate.gross_avoided_tokens_estimated = aggregate
+                .gross_avoided_tokens_estimated
+                .saturating_add(stats.gross_avoided_tokens_estimated);
+            aggregate.regression_tokens_estimated = aggregate
+                .regression_tokens_estimated
+                .saturating_add(stats.regression_tokens_estimated);
+            aggregate.net_avoided_tokens_estimated = aggregate
+                .net_avoided_tokens_estimated
+                .saturating_add(stats.net_avoided_tokens_estimated);
+            aggregate.avg_time_ms = total_execution_ms / aggregate.executions.max(1);
+        } else {
+            public_operations.push(stats);
+        }
+    }
+    let mut commands = public_operations
         .into_iter()
         .map(|stats| CommandSavings {
-            subsystem: classify_command(&stats.command),
-            command: command_label(&stats.command, reveal_command_details),
+            subsystem: operation_subsystem(&stats.key),
+            command: operation_label(&stats.key),
+            key: stats.key,
             executions: stats.executions,
             baseline_tokens_estimated: stats.baseline_tokens_estimated,
             delivered_tokens_estimated: stats.delivered_tokens_estimated,
@@ -648,7 +680,7 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
                 net_avoided_tokens_estimated,
                 share_pct: signed_percentage(
                     net_avoided_tokens_estimated,
-                    gain.net_avoided_tokens_estimated.max(0) as u64,
+                    gain.net_avoided_tokens_estimated.unsigned_abs(),
                 ),
             },
         )
@@ -723,7 +755,7 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         by_command_recovery: by_command_recovery.clone(),
         observed_model_usage,
         observed_model_usage_scope,
-        bypass: bypass_report(bypass, reveal_command_details, by_command_recovery.clone()),
+        bypass: bypass_report(bypass, false, by_command_recovery.clone()),
         traffic_coverage,
         degraded_rewrites: coverage.unreconciled_rewrites,
         coverage,
@@ -893,45 +925,51 @@ fn safe_replacement_route(route: &str) -> Option<String> {
     valid.then(|| route.to_owned())
 }
 
-/// Route one recorded command to its subsystem through the shared classifier.
-fn classify_command(command: &str) -> &'static str {
-    classify_operation(command).subsystem.as_str()
+fn operation_subsystem(key: &PrivacySafeOperationKey) -> &'static str {
+    if key.route == OperationRoute::Bypassed {
+        return "bypass";
+    }
+    match key.operation {
+        Some(AccountingOperationKind::Read) => "read",
+        Some(AccountingOperationKind::Search) => "search",
+        Some(AccountingOperationKind::Write) => "write",
+        Some(AccountingOperationKind::Memory) => "memory",
+        Some(AccountingOperationKind::Codec) => "codec",
+        Some(
+            AccountingOperationKind::Context
+            | AccountingOperationKind::Exec
+            | AccountingOperationKind::Observability
+            | AccountingOperationKind::Doctor,
+        )
+        | None => "execution",
+    }
 }
 
-fn command_label(command: &str, reveal_command_details: bool) -> String {
-    let classification = classify_operation(command);
-    if classification.route == OperationRoute::Bypassed {
-        return format!(
-            "hzr raw {} <arguments omitted>",
-            privacy_safe_tool(&classification.operation)
-        );
-    }
-    let _ = reveal_command_details;
-    format!(
-        "hzr {} <arguments omitted>",
-        classification.subsystem.as_str()
-    )
-}
-
-fn privacy_safe_tool(tool: &str) -> &'static str {
-    match tool {
-        "read" => "read",
-        "search" | "rgai" | "rg" | "grep" => "search",
-        "write" => "write",
-        "memory" => "memory",
-        "codec" => "codec",
-        "git" => "git",
-        "cargo" | "rustc" | "rustup" => "rust",
-        "sed" | "cat" | "find" | "fd" | "awk" => "file",
-        "python" | "python3" => "python",
-        "sh" | "bash" | "zsh" => "shell",
-        "ssh" => "ssh",
-        "gh" => "gh",
-        "bun" | "npm" | "pnpm" | "yarn" | "node" | "deno" => "javascript",
-        "docker" | "podman" => "container",
-        "curl" | "wget" => "http",
-        _ => "other",
-    }
+fn operation_label(key: &PrivacySafeOperationKey) -> String {
+    let route = match key.route {
+        OperationRoute::Optimized => "opt",
+        OperationRoute::Bypassed => "raw",
+        OperationRoute::NativeUnaccounted => "native",
+    };
+    let operation = key.operation.map(AccountingOperationKind::as_str);
+    let identity = match operation {
+        Some(operation) if operation != key.family => format!("{}>{operation}", key.family),
+        _ => key.family.clone(),
+    };
+    let mode = key.mode.map_or("legacy", |mode: AccountingOperationMode| {
+        let full = mode.as_str();
+        operation
+            .and_then(|operation| full.strip_prefix(operation))
+            .and_then(|suffix| suffix.strip_prefix('_'))
+            .unwrap_or(full)
+    });
+    let stage = match key.stage {
+        AccountingStage::InternalTransport => "int",
+        AccountingStage::FinalDelivery => "final",
+        AccountingStage::StandaloneDelivery => "direct",
+        AccountingStage::ControlPlane => "control",
+    };
+    format!("{route} {identity}:{mode}/{stage}")
 }
 
 fn signed_percentage(part: i64, total: u64) -> f64 {
@@ -960,12 +998,13 @@ mod tests {
 
     use super::{
         AccountingVersion, DEFAULT_BYPASS_TOOL_LIMIT, DEFAULT_COMMAND_LIMIT, ReportInputs,
-        ReportOptions, build_report, build_report_with_command_limit, classify_command,
+        ReportOptions, build_report, build_report_with_command_limit, operation_label,
+        operation_subsystem,
     };
     use crate::hook_runner::AccountingCoverage;
     use hzr_core::{
-        BypassSummary, BypassTool, BypassWindow, EfficiencyCommandSummary, EfficiencySummary,
-        OperationModeSummary, ReplacementCapability,
+        BypassSummary, BypassTool, BypassWindow, EfficiencyOperationSummary, EfficiencySummary,
+        OperationModeSummary, OperationRoute, PrivacySafeOperationKey, ReplacementCapability,
     };
     use hzr_protocol::{AccountingOperationKind, AccountingOperationMode, AccountingStage};
 
@@ -981,8 +1020,14 @@ mod tests {
             net_avoided_tokens_estimated: 730,
             total_execution_ms: 42,
             by_command: vec![
-                EfficiencyCommandSummary {
-                    command: "rtk write".into(),
+                EfficiencyOperationSummary {
+                    key: PrivacySafeOperationKey {
+                        family: "write".into(),
+                        operation: Some(AccountingOperationKind::Write),
+                        mode: Some(AccountingOperationMode::Write),
+                        stage: AccountingStage::InternalTransport,
+                        route: OperationRoute::Optimized,
+                    },
                     executions: 1,
                     baseline_tokens_estimated: 400,
                     delivered_tokens_estimated: 100,
@@ -991,8 +1036,14 @@ mod tests {
                     net_avoided_tokens_estimated: 300,
                     avg_time_ms: 4,
                 },
-                EfficiencyCommandSummary {
-                    command: "rtk rgai".into(),
+                EfficiencyOperationSummary {
+                    key: PrivacySafeOperationKey {
+                        family: "search".into(),
+                        operation: Some(AccountingOperationKind::Search),
+                        mode: Some(AccountingOperationMode::SearchAuto),
+                        stage: AccountingStage::InternalTransport,
+                        route: OperationRoute::Optimized,
+                    },
                     executions: 2,
                     baseline_tokens_estimated: 600,
                     delivered_tokens_estimated: 170,
@@ -1084,25 +1135,70 @@ mod tests {
     }
 
     #[test]
-    fn test_command_classification_covers_new_hzr_surfaces() {
-        assert_eq!(classify_command("rtk read"), "read");
-        assert_eq!(classify_command("rtk write"), "write");
-        assert_eq!(classify_command("rtk rgai"), "search");
-        assert_eq!(classify_command("rtk memory (hook)"), "memory");
-        assert_eq!(classify_command("rtk cargo test"), "execution");
+    fn typed_public_key_controls_label_and_subsystem() {
+        let key = PrivacySafeOperationKey {
+            family: "search".into(),
+            operation: Some(AccountingOperationKind::Search),
+            mode: Some(AccountingOperationMode::SearchExact),
+            stage: AccountingStage::InternalTransport,
+            route: OperationRoute::Bypassed,
+        };
+
+        assert_eq!(operation_subsystem(&key), "bypass");
+        assert_eq!(operation_label(&key), "raw search:exact/int");
     }
 
-    /// A bypassed command must never be counted as an optimized execution: that is exactly
-    /// how thousands of `sed`/`rg` invocations hid inside the `execution` subsystem while
-    /// contributing zero savings.
     #[test]
-    fn test_bypassed_commands_leave_the_execution_bucket() {
-        assert_eq!(
-            classify_command("rtk proxy sed -n 1,80p src/lib.rs"),
-            "bypass"
+    fn public_key_is_coalesced_before_report_limit_and_render() {
+        let key = PrivacySafeOperationKey {
+            family: "search".into(),
+            operation: Some(AccountingOperationKind::Search),
+            mode: Some(AccountingOperationMode::SearchAuto),
+            stage: AccountingStage::InternalTransport,
+            route: OperationRoute::Optimized,
+        };
+        let report = build_report(
+            EfficiencySummary {
+                by_command: vec![
+                    EfficiencyOperationSummary {
+                        key: key.clone(),
+                        executions: 1,
+                        baseline_tokens_estimated: 100,
+                        delivered_tokens_estimated: 20,
+                        gross_avoided_tokens_estimated: 80,
+                        regression_tokens_estimated: 0,
+                        net_avoided_tokens_estimated: 80,
+                        avg_time_ms: 10,
+                    },
+                    EfficiencyOperationSummary {
+                        key,
+                        executions: 3,
+                        baseline_tokens_estimated: 300,
+                        delivered_tokens_estimated: 90,
+                        gross_avoided_tokens_estimated: 210,
+                        regression_tokens_estimated: 0,
+                        net_avoided_tokens_estimated: 210,
+                        avg_time_ms: 30,
+                    },
+                ],
+                ..EfficiencySummary::default()
+            },
+            LedgerSummary::default(),
+            "global_lifetime",
+            AccountingCoverage::default_complete(),
+            BypassSummary::default(),
+            "global lifetime".into(),
         );
-        assert_eq!(classify_command("rtk proxy cargo test"), "bypass");
-        assert_eq!(classify_command("rtk fallback: grep -rn needle"), "bypass");
+
+        assert_eq!(report.by_command_total, 1);
+        assert_eq!(report.by_command[0].executions, 4);
+        assert_eq!(report.by_command[0].baseline_tokens_estimated, 400);
+        assert_eq!(report.by_command[0].delivered_tokens_estimated, 110);
+        assert_eq!(report.by_command[0].net_avoided_tokens_estimated, 290);
+        assert_eq!(report.by_command[0].avg_time_ms, 25);
+        assert_eq!(report.by_command[0].command, "opt search:auto/int");
+        let json = serde_json::to_value(&report).expect("stats JSON");
+        assert_eq!(json["by_command"][0]["key"]["mode"], "search_auto");
     }
 
     #[test]
@@ -1258,8 +1354,14 @@ mod tests {
     fn test_default_report_redacts_unbounded_command_details() {
         let sensitive_payload = "secret=value\n".repeat(40);
         let gain = EfficiencySummary {
-            by_command: vec![EfficiencyCommandSummary {
-                command: format!("rtk rgai {sensitive_payload}"),
+            by_command: vec![EfficiencyOperationSummary {
+                key: PrivacySafeOperationKey {
+                    family: "search".into(),
+                    operation: Some(AccountingOperationKind::Search),
+                    mode: Some(AccountingOperationMode::SearchAuto),
+                    stage: AccountingStage::InternalTransport,
+                    route: OperationRoute::Optimized,
+                },
                 executions: 1,
                 baseline_tokens_estimated: 10,
                 delivered_tokens_estimated: 5,
@@ -1297,10 +1399,7 @@ mod tests {
             "global lifetime".into(),
         );
 
-        assert_eq!(
-            report.by_command[0].command,
-            "hzr search <arguments omitted>"
-        );
+        assert_eq!(report.by_command[0].command, "opt search:auto/int");
         assert_eq!(
             report.bypass.by_tool[0].example_command,
             "bypassed sed <arguments omitted>"
@@ -1321,8 +1420,14 @@ mod tests {
             let report = build_report_with_command_limit(
                 ReportInputs {
                     gain: EfficiencySummary {
-                        by_command: vec![EfficiencyCommandSummary {
-                            command: format!("rtk raw python3 {sentinel}"),
+                        by_command: vec![EfficiencyOperationSummary {
+                            key: PrivacySafeOperationKey {
+                                family: "python".into(),
+                                operation: None,
+                                mode: None,
+                                stage: AccountingStage::InternalTransport,
+                                route: OperationRoute::Bypassed,
+                            },
                             executions: 1,
                             baseline_tokens_estimated: 4,
                             delivered_tokens_estimated: 4,
@@ -1450,8 +1555,14 @@ mod tests {
     #[test]
     fn test_default_report_bounds_command_history_and_names_recovery() {
         let by_command = (0..75)
-            .map(|index| EfficiencyCommandSummary {
-                command: format!("rtk command-{index}"),
+            .map(|index| EfficiencyOperationSummary {
+                key: PrivacySafeOperationKey {
+                    family: format!("route-{index}"),
+                    operation: None,
+                    mode: None,
+                    stage: AccountingStage::InternalTransport,
+                    route: OperationRoute::Optimized,
+                },
                 executions: 1,
                 baseline_tokens_estimated: 10,
                 delivered_tokens_estimated: 5,

@@ -35,26 +35,28 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use directories::BaseDirs;
 use fs2::FileExt;
 use hzr_agent::{BearerToken, HzrApi, ManagedAgent, ManagedAgentConfig};
 use hzr_core::{
-    Config, ConfigPaths, InstructionScope, Ledger, PolicyEvent, PricingEntry,
-    ProviderEconomicReceipt, discover_legacy_rtk_history, inspect_legacy_efficiency,
+    Config, ConfigPaths, InstructionScope, Ledger, PricingEntry, ProviderEconomicReceipt,
+    ambient_session_id, discover_legacy_rtk_history, inspect_legacy_efficiency,
     load_pricing_catalog, read_bounded_regular_file,
 };
 use hzr_index::{
     Deadlines, GrepAi, IndexPlacement, InitOptions, InitOutcome, Workspace, WorkspaceRegistration,
-    archive_duplicate_index, migrate_legacy_index,
+    archive_duplicate_index, migrate_legacy_index, registered_workspaces,
 };
 use hzr_protocol::{
     AccountingAttribution, AccountingChannel, AccountingMeasurement, AccountingOperationKind,
-    AccountingOperationMode, AccountingRoute, AccountingSearchStrategy, AccountingStage,
-    CodecApiRequest, ContextPlanApiRequest, EnforcementTier, EvasionAttribution, EvasionClass,
-    EvasionPathForm, ExecApiRequest, ExecApprovalApiRequest, FidelityReason,
-    FidelityReconcileApiRequest, FidelityUnknownResolution, FidelityValidation,
-    MemoryForgetApiRequest, MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryStoreApiRequest,
-    MemoryUpdateApiRequest, OperationApiRequest, PROTOCOL_VERSION, PolicyDecision,
-    SearchApiRequest, SearchApiResponse, SearchMode, SearchStrategy, SessionId,
+    AccountingOperationMode, AccountingRoute, AccountingStage, CodecApiRequest,
+    ContextPlanApiRequest, EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm,
+    ExecApiRequest, ExecApprovalApiRequest, FidelityReason, FidelityReconcileApiRequest,
+    FidelityUnknownResolution, FidelityValidation, MemoryForgetApiRequest, MemoryPruneApiRequest,
+    MemoryRecallApiRequest, MemoryStoreApiRequest, MemoryUpdateApiRequest, OperationApiRequest,
+    PROTOCOL_VERSION, PolicyDecision, PolicyEventApiRequest, SearchAccountingMetadata,
+    SearchApiRequest, SearchApiResponse, SearchMode, SessionId,
+    build_search_accounting_attribution,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -144,38 +146,80 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             .await;
         }
         Command::Uninstall {
-            keep_data,
+            purge_data,
             dry_run,
             force,
         } => {
-            let _ = keep_data;
-            let path = adoption::default_settings_path()?;
-            let report = adoption::uninstall(&path, *dry_run, *force)?;
-            // Instruction blocks are removed too: leaving them would keep telling the
-            // agent to call `hzr` after its hooks are gone. Binaries on PATH stay —
-            // deleting a binary the user may invoke directly is not ours to decide.
-            let mut instruction_reports = Vec::new();
-            for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
-                let target = surface.default_path()?;
-                instruction_reports
-                    .push(instructions::uninstall(surface, &target, *dry_run, *force)?);
+            if !*dry_run && !*force {
+                bail!(
+                    "uninstallation changes user configuration; inspect `hzr uninstall --dry-run`, then rerun with `--force` to confirm"
+                );
             }
+            let _adoption_lock = acquire_install_lock()?;
+            let path = adoption::default_settings_path()?;
             let config = Config::load_or_default(&config_path)?;
             let workspace = canonical_directory(None)?;
-            for (surface, target) in
-                activation::local_instruction_paths(&workspace, config.instructions.scope)
-            {
-                instruction_reports
-                    .push(instructions::uninstall(surface, &target, *dry_run, *force)?);
+            let mut roots = config
+                .activation
+                .enabled_workspaces
+                .iter()
+                .map(|enabled| enabled.root.clone())
+                .collect::<BTreeSet<_>>();
+            let registry = registered_workspaces(&config.data_dir);
+            if let Some(warning) = registry.warnings.first() {
+                bail!(
+                    "cannot enumerate every initialized workspace for uninstall: {}: {}",
+                    warning.path.display(),
+                    warning.detail
+                );
+            }
+            roots.extend(
+                registry
+                    .registrations
+                    .into_iter()
+                    .map(|registration| registration.root),
+            );
+            roots.insert(workspace);
+            let report = adoption::uninstall(&path, *dry_run, *force)?;
+            let mut instruction_reports = Vec::new();
+            let mut instruction_paths = BTreeSet::new();
+            let mut project_reports = Vec::new();
+            for root in roots {
+                let state = activation::instruction_desired_state(
+                    &root,
+                    config.activation.mode,
+                    config.instructions.scope,
+                )?;
+                for target in state.desired.iter().chain(state.obsolete.iter()) {
+                    if instruction_paths.insert(target.path.clone()) {
+                        instruction_reports
+                            .push(instructions::uninstall_target(target, *dry_run, *force)?);
+                    }
+                }
+                let exclude_state = activation::instruction_desired_state(
+                    &root,
+                    hzr_core::ActivationMode::Selected,
+                    InstructionScope::Shared,
+                )?;
+                activation::reconcile_local_instruction_excludes(&root, &exclude_state, *dry_run)?;
+                project_reports.push(client_config::uninstall_project_codex(
+                    &root, *dry_run, *force,
+                )?);
             }
             let client_reports = client_config::uninstall_all(*dry_run, *force)?;
+            let mut client_reports = client_reports;
+            client_reports.extend(project_reports);
+            let service_report = service::uninstall_owned(*dry_run, *force)?;
+            if *purge_data && !*dry_run {
+                purge_data_dir(&config.data_dir)?;
+            }
             return print_adoption_bundle(
                 &report,
                 None,
                 &instruction_reports,
                 &client_reports,
                 None,
-                None,
+                service_report.as_ref(),
                 cli.json,
             );
         }
@@ -879,14 +923,50 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             }
         },
         Command::Rtk(arguments) => {
-            reject_direct_fork_bypass(&config, &arguments.args)?;
+            reject_direct_fork_bypass(&config, &arguments.args).await?;
             let args = bounded_read_arguments(&arguments.args, exact_read_fidelity_requested());
             fork::passthrough(&config, &args).await
         }
     }
 }
 
-fn reject_direct_fork_bypass(config: &Config, args: &[std::ffi::OsString]) -> Result<()> {
+fn purge_data_dir(path: &Path) -> Result<()> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).with_context(|| format!("inspect {}", path.display())),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!(
+            "refusing to purge non-directory or symlink data root: {}",
+            path.display()
+        );
+    }
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("canonicalize data root {}", path.display()))?;
+    let home = BaseDirs::new()
+        .context("cannot determine the user home directory")?
+        .home_dir()
+        .canonicalize()
+        .context("cannot canonicalize the user home directory")?;
+    if canonical.parent().is_none() || canonical == home {
+        bail!("refusing to purge broad data root: {}", canonical.display());
+    }
+    let owns_layout = ["ledger", "memory", "runtime", "workspaces"]
+        .iter()
+        .any(|name| canonical.join(name).exists());
+    if !owns_layout {
+        bail!(
+            "refusing to purge {} because it has no recognizable HZR data layout",
+            canonical.display()
+        );
+    }
+    std::fs::remove_dir_all(&canonical)
+        .with_context(|| format!("purge HZR data root {}", canonical.display()))
+}
+
+async fn reject_direct_fork_bypass(config: &Config, args: &[std::ffi::OsString]) -> Result<()> {
     let Some(bypass) = args.first().and_then(|arg| arg.to_str()) else {
         return Ok(());
     };
@@ -899,10 +979,7 @@ fn reject_direct_fork_bypass(config: &Config, args: &[std::ffi::OsString]) -> Re
         .to_string_lossy()
         .into_owned();
     let agent = std::env::var("HZR_CLIENT").ok();
-    let session_id = std::env::var("HZR_SESSION_ID")
-        .ok()
-        .or_else(|| std::env::var("CODEX_THREAD_ID").ok())
-        .or_else(|| std::env::var("CLAUDE_SESSION_ID").ok());
+    let session_id = ambient_session_id();
     let hatch_marker =
         std::env::var_os("HZR_RAW_FIDELITY").as_deref() == Some(std::ffi::OsStr::new("1"));
     let (fidelity_reason, fidelity_validation) = if bypass != "raw" || !hatch_marker {
@@ -925,32 +1002,38 @@ fn reject_direct_fork_bypass(config: &Config, args: &[std::ffi::OsString]) -> Re
             None => (None, FidelityValidation::MissingReason),
         }
     };
-    let accounting = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite")).and_then(|ledger| {
-        ledger.record_policy_event(PolicyEvent {
-            project_path: &project_path,
-            agent: agent.as_deref(),
-            session_id: session_id.as_deref(),
-            evasion: EvasionAttribution {
-                class: if bypass == "raw" {
-                    EvasionClass::E7FidelityHatch
-                } else {
-                    EvasionClass::E9DiagnosticBypass
-                },
-                wrapper_depth: 0,
-                interpreter: None,
-                path_form: EvasionPathForm::Bare,
-                stage_count: 1,
-                hatch_marker,
-                avoidable: true,
-                tier: EnforcementTier::T2DenyWithPrescription,
-                fidelity_reason,
-                fidelity_validation,
+    let request = PolicyEventApiRequest {
+        project_path: project_path.clone(),
+        agent,
+        session_id,
+        evasion: EvasionAttribution {
+            class: if bypass == "raw" {
+                EvasionClass::E7FidelityHatch
+            } else {
+                EvasionClass::E9DiagnosticBypass
             },
-            decision: PolicyDecision::Deny,
-            replacement_family: Some("hzr-exec"),
-            command_identity: None,
-        })
-    });
+            wrapper_depth: 0,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 1,
+            hatch_marker,
+            avoidable: true,
+            tier: EnforcementTier::T2DenyWithPrescription,
+            fidelity_reason,
+            fidelity_validation,
+        },
+        decision: PolicyDecision::Deny,
+        replacement_family: Some("hzr-exec".into()),
+        command_identity: None,
+    };
+    let accounting = match DaemonClient::from_config(config) {
+        Ok(client) => client
+            .record_policy_event(&request)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string()),
+        Err(error) => Err(error.to_string()),
+    };
     if let Err(error) = accounting {
         bail!(
             "direct managed raw execution is disabled; use `hzr exec run <command>` so fidelity policy, session budget, and E7 accounting are enforced; denial accounting failed: {error}"
@@ -1255,6 +1338,7 @@ fn install_plan_sha256(
         "start_service": options.start_service,
         "project_only": options.project_only,
         "native_tool_mode": options.native_tool_mode,
+        "instruction_scope": options.instruction_scope,
     });
     Ok(hex::encode(Sha256::digest(serde_json::to_vec(&value)?)))
 }
@@ -1300,6 +1384,7 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     } else {
         std::env::current_dir()?.join(config_path)
     };
+    adoption::validate_lifecycle_target(&config_path)?;
     let config_before = std::fs::read(&config_path).ok();
     let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
     let source_dir = executable_source_directory(&executable)?;
@@ -1339,6 +1424,55 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             &plan_sha256,
         )?)
     };
+    let mut adoption_transaction = if options.dry_run {
+        None
+    } else {
+        let mut transaction =
+            InitTransaction::acquire(&config_path, &workspace_root, &config.data_dir)?;
+        adoption::validate_lifecycle_target(&config_path)?;
+        transaction.capture(&config_path)?;
+        let settings_path = adoption::default_settings_path()?;
+        adoption::validate_lifecycle_target(&settings_path)?;
+        transaction.capture(&settings_path)?;
+        let mut settings_before = adoption::read_optional(&settings_path)?;
+        if settings_before.is_empty() && !settings_path.exists() {
+            settings_before.extend_from_slice(b"{}\n");
+        }
+        transaction.capture(&adoption::backup_path(&settings_path, &settings_before))?;
+        let mut roots = previously_enabled_roots.clone();
+        roots.push(workspace_root.clone());
+        roots.sort();
+        roots.dedup();
+        if options.wire_instructions {
+            let contract = contract_asset_path(&source_dir);
+            for root in roots {
+                let preview = apply_agent_instruction_state(&config, &root, &contract, true, true)?;
+                for report in preview.reports {
+                    adoption::validate_lifecycle_target(&report.path)?;
+                    transaction.capture(&report.path)?;
+                    if let Some(backup) = report.backup_path {
+                        transaction.capture(&backup)?;
+                    }
+                }
+                if let Some(path) = preview.exclude.path {
+                    adoption::validate_lifecycle_target(&path)?;
+                    transaction.capture(&path)?;
+                    if let Some(backup) = preview.exclude.backup_path {
+                        transaction.capture(&backup)?;
+                    }
+                }
+            }
+        }
+        for path in client_config::mutation_paths(&workspace_root)? {
+            adoption::validate_lifecycle_target(&path)?;
+            transaction.capture(&path)?;
+        }
+        if let Some(path) = service::owned_definition_path()? {
+            adoption::validate_lifecycle_target(&path)?;
+            transaction.capture(&path)?;
+        }
+        Some(transaction)
+    };
     if !options.dry_run {
         if std::fs::read(&config_path).ok() != config_before {
             bail!(
@@ -1347,6 +1481,10 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             );
         }
         config.write(&config_path)?;
+        adoption_transaction
+            .as_mut()
+            .context("adoption transaction")?
+            .mark_written(&config_path)?;
         journal
             .as_mut()
             .context("install journal")?
@@ -1400,71 +1538,56 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             confirmed: options.force,
         },
     )?;
+    if hooks.changed {
+        let transaction = adoption_transaction
+            .as_mut()
+            .context("adoption transaction")?;
+        transaction.mark_written(&hooks.settings_path)?;
+        if let Some(backup) = &hooks.backup_path {
+            transaction.mark_written(backup)?;
+        }
+    }
     if let Some(journal) = journal.as_mut() {
         journal.stage(&journal_path, "hooks")?;
         inject_install_failure("hooks")?;
     }
 
     let mut instruction_reports = Vec::new();
-    if options.project_only || config.instructions.scope == InstructionScope::Local {
-        for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
-            let target = surface.default_path()?;
-            instruction_reports.push(instructions::uninstall(
-                surface,
-                &target,
-                options.dry_run,
-                options.force,
-            )?);
-        }
-    }
     if options.wire_instructions {
         let contract = contract_asset_path(&source_dir);
-        if options.project_only || config.instructions.scope == InstructionScope::Local {
-            for (surface, target) in
-                activation::local_instruction_paths(&workspace_root, config.instructions.scope)
+        let mut roots = previously_enabled_roots;
+        roots.push(workspace_root.clone());
+        roots.sort();
+        roots.dedup();
+        for root in roots {
+            let applied = apply_agent_instruction_state(
+                &config,
+                &root,
+                &contract,
+                options.dry_run,
+                options.force,
+            )?;
+            instruction_reports.extend(applied.reports);
+            if applied.exclude.changed
+                && let Some(path) = applied.exclude.path
             {
-                instruction_reports.push(instructions::install(
-                    surface,
-                    &target,
-                    &contract,
-                    options.dry_run,
-                    options.force,
-                )?);
-            }
-        } else {
-            let mut roots = previously_enabled_roots;
-            roots.push(workspace_root.clone());
-            roots.sort();
-            roots.dedup();
-            for root in roots {
-                for (surface, target) in
-                    activation::local_instruction_paths(&root, config.instructions.scope)
-                {
-                    instruction_reports.push(instructions::install(
-                        surface,
-                        &target,
-                        &contract,
-                        options.dry_run,
-                        options.force,
-                    )?);
+                let transaction = adoption_transaction
+                    .as_mut()
+                    .context("adoption transaction")?;
+                transaction.mark_written(&path)?;
+                if let Some(backup) = applied.exclude.backup_path {
+                    transaction.mark_written(&backup)?;
                 }
             }
-            for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
-                let target = surface.default_path()?;
-                instruction_reports.push(instructions::install(
-                    surface,
-                    &target,
-                    &contract,
-                    options.dry_run,
-                    options.force,
-                )?);
+        }
+    }
+    if let Some(transaction) = adoption_transaction.as_mut() {
+        for report in instruction_reports.iter().filter(|report| report.changed) {
+            transaction.mark_written(&report.path)?;
+            if let Some(backup) = &report.backup_path {
+                transaction.mark_written(backup)?;
             }
         }
-        activation::ensure_local_instruction_excludes(
-            &workspace_root,
-            config.instructions.scope,
-            options.dry_run,
-        )?;
     }
     if let Some(journal) = journal.as_mut() {
         journal.stage(&journal_path, "instructions")?;
@@ -1481,6 +1604,11 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             options.force,
         )?
     };
+    if let Some(transaction) = adoption_transaction.as_mut() {
+        for report in client_reports.iter().filter(|report| report.changed) {
+            transaction.mark_written(&report.path)?;
+        }
+    }
     if let Some(journal) = journal.as_mut() {
         journal.stage(&journal_path, "client_configs")?;
         inject_install_failure("client_configs")?;
@@ -1493,6 +1621,12 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
         options.force,
     )?;
     client_reports.push(project_mcp);
+    if let Some(transaction) = adoption_transaction.as_mut()
+        && let Some(report) = client_reports.last()
+        && report.changed
+    {
+        transaction.mark_written(&report.path)?;
+    }
     if let Some(journal) = journal.as_mut() {
         journal.stage(&journal_path, "project_mcp")?;
         inject_install_failure("project_mcp")?;
@@ -1504,10 +1638,19 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     } else {
         None
     };
+    if let (Some(transaction), Some(report)) =
+        (adoption_transaction.as_mut(), service_report.as_ref())
+        && report.changed
+    {
+        transaction.mark_written(&report.definition)?;
+    }
     if let Some(journal) = journal.as_mut() {
         journal.stage(&journal_path, "service")?;
         inject_install_failure("service")?;
         journal.complete(&journal_path)?;
+    }
+    if let Some(transaction) = adoption_transaction.as_mut() {
+        transaction.commit();
     }
 
     print_adoption_bundle(
@@ -1524,77 +1667,61 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
 /// Reconcile the instruction scope selected by activation policy. SessionStart calls
 /// `init --if-needed`, so upgrades repair stale managed blocks without duplicating them.
 /// Only HZR's delimited region is changed; repository and user-authored rules remain intact.
+struct AgentInstructionApplication {
+    reports: Vec<instructions::InstructionReport>,
+    exclude: activation::LocalExcludeReport,
+}
+
+fn apply_agent_instruction_state(
+    config: &Config,
+    workspace_root: &Path,
+    contract: &Path,
+    dry_run: bool,
+    confirmed: bool,
+) -> Result<AgentInstructionApplication> {
+    let state = activation::instruction_desired_state(
+        workspace_root,
+        config.activation.mode,
+        config.instructions.scope,
+    )?;
+    let mut reports = state
+        .desired
+        .iter()
+        .map(|target| instructions::install_target(target, contract, dry_run, confirmed))
+        .collect::<Result<Vec<_>>>()?;
+    reports.extend(
+        state
+            .obsolete
+            .iter()
+            .map(|target| instructions::uninstall_target(target, dry_run, confirmed))
+            .collect::<Result<Vec<_>>>()?,
+    );
+    let exclude =
+        activation::reconcile_local_instruction_excludes(workspace_root, &state, dry_run)?;
+    Ok(AgentInstructionApplication { reports, exclude })
+}
+
 fn reconcile_agent_instructions(
     config: &Config,
     workspace_root: &Path,
-) -> Result<Vec<instructions::InstructionReport>> {
-    let (contract, targets) = agent_instruction_targets(config, workspace_root)?;
-    let reports = targets
-        .into_iter()
-        .map(|(surface, path)| instructions::install(surface, &path, &contract, false, true))
-        .collect::<Result<Vec<_>>>()?;
-    activation::ensure_local_instruction_excludes(
-        workspace_root,
-        config.instructions.scope,
-        false,
-    )?;
-    Ok(reports)
+) -> Result<AgentInstructionApplication> {
+    let contract = agent_instruction_contract()?;
+    apply_agent_instruction_state(config, workspace_root, &contract, false, true)
 }
 
 fn plan_agent_instructions(
     config: &Config,
     workspace_root: &Path,
-) -> Result<Vec<instructions::InstructionReport>> {
-    let (contract, targets) = agent_instruction_targets(config, workspace_root)?;
-    let reports = targets
-        .into_iter()
-        .map(|(surface, path)| instructions::install(surface, &path, &contract, true, true))
-        .collect::<Result<Vec<_>>>()?;
-    activation::ensure_local_instruction_excludes(workspace_root, config.instructions.scope, true)?;
-    Ok(reports)
+) -> Result<AgentInstructionApplication> {
+    let contract = agent_instruction_contract()?;
+    apply_agent_instruction_state(config, workspace_root, &contract, true, true)
 }
 
-fn agent_instruction_targets(
-    config: &Config,
-    workspace_root: &Path,
-) -> Result<(PathBuf, Vec<(instructions::Surface, PathBuf)>)> {
+fn agent_instruction_contract() -> Result<PathBuf> {
     let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
-    let contract = contract_asset_path(&executable_source_directory(&executable)?);
-    let targets = scoped_instruction_targets(
-        config.activation.mode,
-        config.instructions.scope,
-        workspace_root,
-    )?;
-    Ok((contract, targets))
-}
-
-fn scoped_instruction_targets(
-    activation_mode: hzr_core::ActivationMode,
-    instruction_scope: InstructionScope,
-    workspace_root: &Path,
-) -> Result<Vec<(instructions::Surface, PathBuf)>> {
-    if instruction_scope == InstructionScope::Local {
-        return Ok(activation::local_instruction_paths(workspace_root, instruction_scope).to_vec());
-    }
-    let targets = match activation_mode {
-        hzr_core::ActivationMode::All => {
-            let mut targets = [instructions::Surface::Claude, instructions::Surface::Codex]
-                .into_iter()
-                .map(|surface| surface.default_path().map(|path| (surface, path)))
-                .collect::<Result<Vec<_>>>()?;
-            // The local routing pointer keeps policy visible at the point where an agent
-            // discovers repository instructions. The managed region preserves all user text.
-            targets.extend(activation::local_instruction_paths(
-                workspace_root,
-                instruction_scope,
-            ));
-            targets
-        }
-        hzr_core::ActivationMode::Selected => {
-            activation::local_instruction_paths(workspace_root, instruction_scope).to_vec()
-        }
-    };
-    Ok(targets)
+    Ok(contract_asset_path(&executable_source_directory(
+        &executable,
+    )?))
 }
 
 /// Locate `HZR.md`. An assembled bundle ships it under `share/hzr/`; a development
@@ -1834,6 +1961,8 @@ async fn initialize(
     skip_service: bool,
     json: bool,
 ) -> Result<ExitCode> {
+    let _adoption_lock = acquire_install_lock()?;
+    adoption::validate_lifecycle_target(path)?;
     let existed = path.exists();
     if existed && !force && !dry_run {
         bail!(
@@ -1895,7 +2024,11 @@ async fn initialize(
                 mutations.push(init_mutation("create_directory", &directory, None));
             }
         }
-        for report in instruction_plan.iter().filter(|report| report.changed) {
+        for report in instruction_plan
+            .reports
+            .iter()
+            .filter(|report| report.changed)
+        {
             mutations.push(serde_json::json!({
                 "action": "reconcile_instruction",
                 "path": report.path,
@@ -1903,6 +2036,15 @@ async fn initialize(
                 "before_sha256": report.before_sha256,
                 "after_sha256": report.after_sha256,
                 "backup": report.backup_path,
+            }));
+        }
+        if instruction_plan.exclude.changed {
+            mutations.push(serde_json::json!({
+                "action": "reconcile_local_instruction_exclude",
+                "path": instruction_plan.exclude.path,
+                "before_sha256": instruction_plan.exclude.before_sha256,
+                "after_sha256": instruction_plan.exclude.after_sha256,
+                "installed": instruction_plan.exclude.installed,
             }));
         }
         if project_mcp_plan.changed {
@@ -1946,7 +2088,8 @@ async fn initialize(
             || reset
             || data_dir_changed
             || instruction_scope_changed
-            || instruction_plan.iter().any(|report| report.changed)
+            || instruction_plan.reports.iter().any(|report| report.changed)
+            || instruction_plan.exclude.changed
             || project_mcp_plan.changed
             || init_layout_directories(&config)
                 .iter()
@@ -1961,7 +2104,8 @@ async fn initialize(
             "workspace": workspace_root,
             "skip_service": skip_service,
             "mutations": mutations,
-            "instructions": instruction_plan,
+            "instructions": instruction_plan.reports,
+            "instruction_exclude": instruction_plan.exclude,
             "project_codex_mcp": project_mcp_plan,
             "index_placement": planned_workspace.placement()?,
         });
@@ -1978,12 +2122,21 @@ async fn initialize(
     for directory in init_transaction_directories(&config, &planned_workspace) {
         transaction.capture(&directory)?;
     }
-    for report in &instruction_plan {
+    for report in &instruction_plan.reports {
         if let Some(parent) = report.path.parent() {
             transaction.capture(parent)?;
         }
         transaction.capture(&report.path)?;
         if let Some(backup) = &report.backup_path {
+            transaction.capture(backup)?;
+        }
+    }
+    if let Some(exclude) = instruction_plan.exclude.path.as_ref() {
+        if let Some(parent) = exclude.parent() {
+            transaction.capture(parent)?;
+        }
+        transaction.capture(exclude)?;
+        if let Some(backup) = instruction_plan.exclude.backup_path.as_ref() {
             transaction.capture(backup)?;
         }
     }
@@ -1999,7 +2152,7 @@ async fn initialize(
     transaction.capture(&registration_path)?;
 
     let applied = async {
-        let backup = if existed && (reset || data_dir_changed) {
+        let backup = if existed && (reset || data_dir_changed || instruction_scope_changed) {
             let backup = backup_config(path)?;
             transaction.remove_on_rollback(&backup.path);
             Some(backup)
@@ -2022,10 +2175,22 @@ async fn initialize(
             )?;
             transaction.mark_written(path)?;
         }
-        let instruction_reports = reconcile_agent_instructions(&config, &workspace_root)?;
-        for report in instruction_reports.iter().filter(|report| report.changed) {
+        let instruction_application = reconcile_agent_instructions(&config, &workspace_root)?;
+        for report in instruction_application
+            .reports
+            .iter()
+            .filter(|report| report.changed)
+        {
             transaction.mark_written(&report.path)?;
             if let Some(backup) = &report.backup_path {
+                transaction.mark_written(backup)?;
+            }
+        }
+        if instruction_application.exclude.changed {
+            if let Some(path) = instruction_application.exclude.path.as_ref() {
+                transaction.mark_written(path)?;
+            }
+            if let Some(backup) = instruction_application.exclude.backup_path.as_ref() {
                 transaction.mark_written(backup)?;
             }
         }
@@ -2049,7 +2214,12 @@ async fn initialize(
         transaction.mark_written(&planned_workspace.index.project_entry)?;
         transaction.mark_written(&registration_path)?;
         inject_init_failure("after_workspace")?;
-        Ok::<_, anyhow::Error>((backup, instruction_reports, project_mcp, initialized))
+        Ok::<_, anyhow::Error>((
+            backup,
+            instruction_application.reports,
+            project_mcp,
+            initialized,
+        ))
     }
     .await;
     let (backup, instruction_reports, project_mcp, initialized) = match applied {
@@ -2444,6 +2614,9 @@ impl InitTransaction {
     fn rollback_inner(&mut self) -> Result<()> {
         let mut first_error = None;
         for snapshot in self.snapshots.iter().rev() {
+            if snapshot.written_fingerprint.is_none() {
+                continue;
+            }
             if let Err(error) = restore_init_path(snapshot) {
                 if first_error.is_none() {
                     first_error = Some(error);
@@ -2741,7 +2914,12 @@ fn session_instruction_drift_alert(
     workspace_root: &Path,
     reports: &[instructions::InstructionReport],
 ) -> Result<Option<String>> {
-    let targets = scoped_instruction_targets(activation_mode, instruction_scope, workspace_root)?;
+    let targets =
+        activation::instruction_desired_state(workspace_root, activation_mode, instruction_scope)?
+            .desired
+            .into_iter()
+            .map(|target| (target.surface, target.path))
+            .collect();
     Ok(instruction_drift_alert_for_targets(reports, targets))
 }
 
@@ -2835,7 +3013,7 @@ fn reconcile_session_surfaces(
     let binary = project_mcp_binary()?;
     let mcp_plan = client_config::install_project_codex(&binary, workspace_root, true, true)?;
     let mut transaction = InitTransaction::acquire(config_path, workspace_root, &config.data_dir)?;
-    for report in &instruction_plan {
+    for report in &instruction_plan.reports {
         if let Some(parent) = report.path.parent() {
             transaction.capture(parent)?;
         }
@@ -2843,6 +3021,12 @@ fn reconcile_session_surfaces(
         if let Some(backup) = &report.backup_path {
             transaction.capture(backup)?;
         }
+    }
+    if let Some(exclude) = instruction_plan.exclude.path.as_ref() {
+        if let Some(parent) = exclude.parent() {
+            transaction.capture(parent)?;
+        }
+        transaction.capture(exclude)?;
     }
     if let Some(parent) = mcp_plan.path.parent() {
         transaction.capture(parent)?;
@@ -2853,11 +3037,20 @@ fn reconcile_session_surfaces(
     }
 
     let applied = (|| {
-        let instructions = reconcile_agent_instructions(config, workspace_root)?;
-        for report in instructions.iter().filter(|report| report.changed) {
+        let instruction_application = reconcile_agent_instructions(config, workspace_root)?;
+        for report in instruction_application
+            .reports
+            .iter()
+            .filter(|report| report.changed)
+        {
             transaction.mark_written(&report.path)?;
             if let Some(backup) = &report.backup_path {
                 transaction.mark_written(backup)?;
+            }
+        }
+        if instruction_application.exclude.changed {
+            if let Some(path) = instruction_application.exclude.path.as_ref() {
+                transaction.mark_written(path)?;
             }
         }
         inject_init_failure("after_session_instructions")?;
@@ -2869,7 +3062,7 @@ fn reconcile_session_surfaces(
             }
         }
         inject_init_failure("after_session_mcp")?;
-        Ok::<_, anyhow::Error>((instructions, mcp))
+        Ok::<_, anyhow::Error>((instruction_application.reports, mcp))
     })();
     match applied {
         Ok(applied) => {
@@ -2947,15 +3140,18 @@ async fn set_workspace_activation(
     enabled: bool,
     json: bool,
 ) -> Result<ExitCode> {
+    let _adoption_lock = acquire_install_lock()?;
+    adoption::validate_lifecycle_target(config_path)?;
     let root = canonical_directory(workspace_path)?;
     let mut config = Config::load_or_default(config_path)?;
-    config.ensure_layout()?;
     config.activation.mode = hzr_core::ActivationMode::Selected;
-    let workspace = if enabled {
-        initialize_workspace_at(&config, &root).await?.0
-    } else {
-        activation::discover(&config, &root).await?
-    };
+    let workspace = Workspace::discover_managed(
+        &root,
+        Path::new("git"),
+        &config.data_dir,
+        Deadlines::default().version,
+    )
+    .await?;
     let changed = if enabled {
         let already_enabled = config.activation.allows(
             &workspace.identity.repository_id,
@@ -2969,58 +3165,274 @@ async fn set_workspace_activation(
             &workspace.identity.worktree_id,
         )
     };
-    config.write(config_path)?;
-
     let executable = std::env::current_exe().context("cannot resolve the HZR executable")?;
     let contract = contract_asset_path(&executable_source_directory(&executable)?);
-    for surface in [instructions::Surface::Claude, instructions::Surface::Codex] {
-        instructions::uninstall(surface, &surface.default_path()?, false, true)?;
-    }
-    client_config::uninstall_all(false, true)?;
+    let client_plan = client_config::uninstall_all(true, true)?;
     let hook_status = adoption::status(&adoption::default_settings_path()?)?;
-    if hook_status.installed {
+    let hook_binary = if hook_status.installed {
         let prefix_binary = prefix::default_prefix()?.join("hzr");
-        let hook_binary = if prefix_binary.is_file() {
+        Some(if prefix_binary.is_file() {
             prefix_binary
         } else {
             adoption::resolve_hook_binary(Some(&executable), false, false)?
-        };
-        adoption::install(
-            &adoption::default_settings_path()?,
-            &hook_binary,
-            true,
-            true,
-            true,
-            adoption::HookInstallPolicy {
-                native_tool_mode: hook_status.native_tool_mode,
-                dry_run: false,
-                confirmed: true,
-            },
-        )?;
-    }
-    for (surface, target) in
-        activation::local_instruction_paths(&workspace.identity.root, config.instructions.scope)
-    {
-        if enabled {
-            instructions::install(surface, &target, &contract, false, true)?;
-        } else {
-            instructions::uninstall(surface, &target, false, true)?;
-        }
-    }
-    activation::ensure_local_instruction_excludes(
+        })
+    } else {
+        None
+    };
+    let hook_plan = hook_binary
+        .as_ref()
+        .map(|binary| {
+            adoption::install(
+                &adoption::default_settings_path()?,
+                binary,
+                true,
+                true,
+                true,
+                adoption::HookInstallPolicy {
+                    native_tool_mode: hook_status.native_tool_mode,
+                    dry_run: true,
+                    confirmed: true,
+                },
+            )
+        })
+        .transpose()?;
+    let state = activation::instruction_desired_state(
         &workspace.identity.root,
+        config.activation.mode,
         config.instructions.scope,
-        false,
     )?;
-    let project_mcp = if enabled {
+    let instruction_plan = if enabled {
+        apply_agent_instruction_state(&config, &workspace.identity.root, &contract, true, true)?
+    } else {
+        let reports = state
+            .desired
+            .iter()
+            .chain(state.obsolete.iter())
+            .map(|target| instructions::uninstall_target(target, true, true))
+            .collect::<Result<Vec<_>>>()?;
+        let exclude_state = activation::instruction_desired_state(
+            &workspace.identity.root,
+            hzr_core::ActivationMode::Selected,
+            InstructionScope::Shared,
+        )?;
+        AgentInstructionApplication {
+            reports,
+            exclude: activation::reconcile_local_instruction_excludes(
+                &workspace.identity.root,
+                &exclude_state,
+                true,
+            )?,
+        }
+    };
+    let project_mcp_plan = if enabled {
         client_config::install_project_codex(
             &project_mcp_binary()?,
             &workspace.identity.root,
-            false,
+            true,
             true,
         )?
     } else {
-        client_config::uninstall_project_codex(&workspace.identity.root, false, true)?
+        client_config::uninstall_project_codex(&workspace.identity.root, true, true)?
+    };
+    let registration_path = config
+        .data_dir
+        .join("workspaces")
+        .join(&workspace.identity.repository_id)
+        .join(&workspace.identity.worktree_id)
+        .join("workspace.json");
+    let mut transaction = InitTransaction::acquire(config_path, &root, &config.data_dir)?;
+    if let Some(parent) = config_path.parent() {
+        transaction.capture(parent)?;
+    }
+    transaction.capture(config_path)?;
+    let mut layout_directories = init_layout_directories(&config).to_vec();
+    layout_directories.push(config.data_dir.join("memory"));
+    layout_directories.sort_by_key(|path| path.components().count());
+    layout_directories.dedup();
+    for directory in layout_directories {
+        transaction.capture(&directory)?;
+    }
+    if enabled {
+        for directory in init_transaction_directories(&config, &workspace) {
+            transaction.capture(&directory)?;
+        }
+        transaction.capture(&workspace.index.project_entry)?;
+        transaction.capture(&workspace.index.directory)?;
+        transaction.capture(&registration_path)?;
+    }
+    for report in &client_plan {
+        capture_activation_mutation(
+            &mut transaction,
+            &report.path,
+            report.backup_path.as_deref(),
+        )?;
+    }
+    if let Some(report) = hook_plan.as_ref() {
+        capture_activation_mutation(
+            &mut transaction,
+            &report.settings_path,
+            report.backup_path.as_deref(),
+        )?;
+    }
+    for report in &instruction_plan.reports {
+        capture_activation_mutation(
+            &mut transaction,
+            &report.path,
+            report.backup_path.as_deref(),
+        )?;
+    }
+    if let Some(path) = instruction_plan.exclude.path.as_ref() {
+        capture_activation_mutation(
+            &mut transaction,
+            path,
+            instruction_plan.exclude.backup_path.as_deref(),
+        )?;
+    }
+    capture_activation_mutation(
+        &mut transaction,
+        &project_mcp_plan.path,
+        project_mcp_plan.backup_path.as_deref(),
+    )?;
+
+    let applied = async {
+        config.ensure_layout()?;
+        for directory in init_layout_directories(&config) {
+            transaction.mark_written(&directory)?;
+        }
+        transaction.mark_written(&config.data_dir.join("memory"))?;
+        if enabled {
+            initialize_workspace_at_inner(&config, &root, false).await?;
+            for directory in init_transaction_directories(&config, &workspace) {
+                transaction.mark_written(&directory)?;
+            }
+            transaction.mark_written(&workspace.index.project_entry)?;
+            transaction.mark_written(&workspace.index.directory)?;
+            transaction.mark_written(&registration_path)?;
+        }
+        inject_activation_failure("workspace")?;
+        config.write(config_path)?;
+        if let Some(parent) = config_path.parent() {
+            transaction.mark_written(parent)?;
+        }
+        transaction.mark_written(config_path)?;
+        inject_activation_failure("config")?;
+
+        let client_reports = client_config::uninstall_all(false, true)?;
+        for report in client_reports.iter().filter(|report| report.changed) {
+            mark_activation_mutation(
+                &mut transaction,
+                &report.path,
+                report.backup_path.as_deref(),
+            )?;
+        }
+        inject_activation_failure("global_clients")?;
+
+        if let Some(binary) = hook_binary.as_ref() {
+            let report = adoption::install(
+                &adoption::default_settings_path()?,
+                binary,
+                true,
+                true,
+                true,
+                adoption::HookInstallPolicy {
+                    native_tool_mode: hook_status.native_tool_mode,
+                    dry_run: false,
+                    confirmed: true,
+                },
+            )?;
+            if report.changed {
+                mark_activation_mutation(
+                    &mut transaction,
+                    &report.settings_path,
+                    report.backup_path.as_deref(),
+                )?;
+            }
+        }
+        inject_activation_failure("hooks")?;
+
+        let instruction_application = if enabled {
+            apply_agent_instruction_state(
+                &config,
+                &workspace.identity.root,
+                &contract,
+                false,
+                true,
+            )?
+        } else {
+            let reports = state
+                .desired
+                .iter()
+                .chain(state.obsolete.iter())
+                .map(|target| instructions::uninstall_target(target, false, true))
+                .collect::<Result<Vec<_>>>()?;
+            let exclude_state = activation::instruction_desired_state(
+                &workspace.identity.root,
+                hzr_core::ActivationMode::Selected,
+                InstructionScope::Shared,
+            )?;
+            AgentInstructionApplication {
+                reports,
+                exclude: activation::reconcile_local_instruction_excludes(
+                    &workspace.identity.root,
+                    &exclude_state,
+                    false,
+                )?,
+            }
+        };
+        for report in instruction_application
+            .reports
+            .iter()
+            .filter(|report| report.changed)
+        {
+            mark_activation_mutation(
+                &mut transaction,
+                &report.path,
+                report.backup_path.as_deref(),
+            )?;
+        }
+        if instruction_application.exclude.changed
+            && let Some(path) = instruction_application.exclude.path.as_ref()
+        {
+            mark_activation_mutation(
+                &mut transaction,
+                path,
+                instruction_application.exclude.backup_path.as_deref(),
+            )?;
+        }
+        inject_activation_failure("instructions")?;
+
+        let project_mcp = if enabled {
+            client_config::install_project_codex(
+                &project_mcp_binary()?,
+                &workspace.identity.root,
+                false,
+                true,
+            )?
+        } else {
+            client_config::uninstall_project_codex(&workspace.identity.root, false, true)?
+        };
+        if project_mcp.changed {
+            mark_activation_mutation(
+                &mut transaction,
+                &project_mcp.path,
+                project_mcp.backup_path.as_deref(),
+            )?;
+        }
+        inject_activation_failure("project_mcp")?;
+        Ok::<_, anyhow::Error>(project_mcp)
+    }
+    .await;
+    let project_mcp = match applied {
+        Ok(report) => {
+            transaction.commit();
+            report
+        }
+        Err(error) => {
+            transaction
+                .rollback()
+                .context("activation failed and rollback did not fully restore filesystem state")?;
+            return Err(error);
+        }
     };
 
     if json {
@@ -3041,6 +3453,50 @@ async fn set_workspace_activation(
         );
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn capture_activation_mutation(
+    transaction: &mut InitTransaction,
+    path: &Path,
+    backup: Option<&Path>,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        transaction.capture(parent)?;
+    }
+    transaction.capture(path)?;
+    if let Some(backup) = backup {
+        if let Some(parent) = backup.parent() {
+            transaction.capture(parent)?;
+        }
+        transaction.capture(backup)?;
+    }
+    Ok(())
+}
+
+fn mark_activation_mutation(
+    transaction: &mut InitTransaction,
+    path: &Path,
+    backup: Option<&Path>,
+) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        transaction.mark_written(parent)?;
+    }
+    transaction.mark_written(path)?;
+    if let Some(backup) = backup {
+        if let Some(parent) = backup.parent() {
+            transaction.mark_written(parent)?;
+        }
+        transaction.mark_written(backup)?;
+    }
+    Ok(())
+}
+
+fn inject_activation_failure(_point: &str) -> Result<()> {
+    #[cfg(debug_assertions)]
+    if std::env::var("HZR_TEST_ACTIVATION_FAIL_AFTER").as_deref() == Ok(_point) {
+        bail!("injected activation failure after {_point}");
+    }
+    Ok(())
 }
 
 async fn initialize_workspace_at(
@@ -3236,97 +3692,79 @@ async fn execute_search(
     record_search_delivery(
         config,
         &client,
-        &workspace,
-        mode,
-        arguments.include_content,
-        arguments.limit,
-        path_scope_count,
-        &response,
-        output.len(),
+        CliSearchDelivery {
+            workspace: &workspace,
+            requested_mode: mode,
+            include_content: arguments.include_content,
+            limit: arguments.limit,
+            path_scope_count,
+            response: &response,
+            output_bytes: output.len(),
+        },
     )
     .await;
     Ok(ExitCode::SUCCESS)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn record_search_delivery(
-    config: &Config,
-    client: &DaemonClient,
-    workspace: &Path,
+struct CliSearchDelivery<'a> {
+    workspace: &'a Path,
     requested_mode: SearchMode,
     include_content: bool,
     limit: usize,
     path_scope_count: usize,
-    response: &SearchApiResponse,
+    response: &'a SearchApiResponse,
     output_bytes: usize,
+}
+
+async fn record_search_delivery(
+    config: &Config,
+    client: &DaemonClient,
+    delivery: CliSearchDelivery<'_>,
 ) {
-    let delivered = u64::try_from(output_bytes / 4).unwrap_or(u64::MAX).max(1);
-    let effective_mode = accounting_effective_search_mode(response);
+    let delivered = u64::try_from(delivery.output_bytes / 4)
+        .unwrap_or(u64::MAX)
+        .max(1);
+    let session = ambient_session_id();
+    let workspace = delivery.workspace.to_string_lossy();
     let request = OperationApiRequest {
         original_command: "hzr search".to_owned(),
         recorded_command: "hzr search".to_owned(),
         baseline_tokens_estimated: delivered,
         delivered_tokens_estimated: delivered,
         execution_ms: 0,
-        project_path: workspace.to_string_lossy().into_owned(),
+        project_path: workspace.clone().into_owned(),
         channel: AccountingChannel::HookCli,
         measurement: AccountingMeasurement::Estimated,
         route: AccountingRoute::Optimized,
         agent: Some("cli".to_owned()),
-        session_id: ["CODEX_THREAD_ID", "CLAUDE_SESSION_ID"]
-            .into_iter()
-            .find_map(|name| {
-                std::env::var(name)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            }),
-        attribution: Some(AccountingAttribution {
-            operation: AccountingOperationKind::Search,
-            mode: effective_mode,
-            stage: AccountingStage::FinalDelivery,
-            requested_mode: Some(accounting_search_mode(requested_mode)),
-            effective_mode: Some(effective_mode),
-            search_strategy: Some(match response.strategy {
-                SearchStrategy::ForkRgaiAdaptive => AccountingSearchStrategy::ForkRgaiAdaptive,
-                SearchStrategy::ForkRgaiBuiltin => AccountingSearchStrategy::ForkRgaiBuiltin,
-                SearchStrategy::ForkRgaiGrepai => AccountingSearchStrategy::ForkRgaiGrepai,
-                SearchStrategy::ForkRgaiRipgrep => AccountingSearchStrategy::ForkRgaiRipgrep,
-                SearchStrategy::ForkRgaiFiles => AccountingSearchStrategy::ForkRgaiFiles,
-            }),
-            search_fallback_code: response.fallback_code,
-            include_content: Some(include_content),
-            limit: Some(u64::try_from(limit).unwrap_or(u64::MAX)),
-            path_scope_count: Some(u64::try_from(path_scope_count).unwrap_or(u64::MAX)),
-            filter_level: None,
-            from_line: None,
-            to_line: None,
-            source_bytes: None,
-            evasion: None,
-        }),
+        session_id: session.clone(),
+        attribution: Some(build_search_accounting_attribution(
+            delivery.requested_mode,
+            delivery.response,
+            SearchAccountingMetadata {
+                stage: AccountingStage::FinalDelivery,
+                include_content: delivery.include_content,
+                limit: u64::try_from(delivery.limit).unwrap_or(u64::MAX),
+                path_scope_count: u64::try_from(delivery.path_scope_count).unwrap_or(u64::MAX),
+            },
+        )),
     };
     if client.record_operation(&request).await.is_err() {
-        let _ = hook_runner::record_daemon_unavailable_operation(config);
-    }
-}
-
-const fn accounting_effective_search_mode(response: &SearchApiResponse) -> AccountingOperationMode {
-    match response.strategy {
-        SearchStrategy::ForkRgaiBuiltin if matches!(response.effective_mode, SearchMode::Exact) => {
-            AccountingOperationMode::SearchExact
-        }
-        SearchStrategy::ForkRgaiBuiltin => AccountingOperationMode::SearchBuiltin,
-        SearchStrategy::ForkRgaiAdaptive => accounting_search_mode(response.effective_mode),
-        SearchStrategy::ForkRgaiGrepai
-        | SearchStrategy::ForkRgaiRipgrep
-        | SearchStrategy::ForkRgaiFiles => AccountingOperationMode::SearchSemantic,
-    }
-}
-
-const fn accounting_search_mode(mode: SearchMode) -> AccountingOperationMode {
-    match mode {
-        SearchMode::Auto => AccountingOperationMode::SearchAuto,
-        SearchMode::Semantic => AccountingOperationMode::SearchSemantic,
-        SearchMode::Exact => AccountingOperationMode::SearchExact,
+        let _ = hook_runner::record_accounting_gap_now(
+            config,
+            hzr_core::AccountingGapSurface::Cli,
+            Some(workspace.as_ref()),
+            session.as_deref(),
+            Some("search"),
+        );
+    } else {
+        let _ = hook_runner::recover_accounting_gap_now(
+            config,
+            hzr_core::AccountingGapSurface::Cli,
+            Some(workspace.as_ref()),
+            session.as_deref(),
+            Some("search"),
+        );
     }
 }
 
@@ -3409,6 +3847,7 @@ async fn record_cli_standalone_delivery(
         .and_then(|bytes| u64::try_from(bytes.len() / 4).ok())
         .unwrap_or(1)
         .max(1);
+    let session = ambient_session_id();
     let request = OperationApiRequest {
         original_command: command.to_owned(),
         recorded_command: command.to_owned(),
@@ -3420,13 +3859,7 @@ async fn record_cli_standalone_delivery(
         measurement: AccountingMeasurement::Estimated,
         route: AccountingRoute::Optimized,
         agent: Some("cli".to_owned()),
-        session_id: ["CODEX_THREAD_ID", "CLAUDE_SESSION_ID"]
-            .into_iter()
-            .find_map(|name| {
-                std::env::var(name)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            }),
+        session_id: session.clone(),
         attribution: Some(AccountingAttribution {
             operation,
             mode,
@@ -3446,7 +3879,21 @@ async fn record_cli_standalone_delivery(
         }),
     };
     if client.record_operation(&request).await.is_err() {
-        let _ = hook_runner::record_daemon_unavailable_operation(config);
+        let _ = hook_runner::record_accounting_gap_now(
+            config,
+            hzr_core::AccountingGapSurface::Cli,
+            Some(workspace),
+            session.as_deref(),
+            Some(command),
+        );
+    } else {
+        let _ = hook_runner::recover_accounting_gap_now(
+            config,
+            hzr_core::AccountingGapSurface::Cli,
+            Some(workspace),
+            session.as_deref(),
+            Some(command),
+        );
     }
 }
 
@@ -3974,7 +4421,7 @@ mod tests {
         contract_asset_path, executable_source_directory, format_pricing_entry,
         forwarded_fork_args, instruction_drift_alert_for_targets, parse_provider_receipt_import,
         payload_limit, reject_direct_fork_bypass, response_codec_session_notice,
-        scoped_instruction_targets, session_instruction_drift_alert, session_start_payload,
+        session_instruction_drift_alert, session_start_payload,
     };
 
     #[test]
@@ -4054,14 +4501,15 @@ mod tests {
         let directory = tempdir().expect("temporary directory");
         let contract = directory.path().join("HZR.md");
         fs::write(&contract, "canonical contract\n").expect("contract");
-        for (surface, path) in scoped_instruction_targets(
+        for target in crate::activation::instruction_desired_state(
+            directory.path(),
             hzr_core::ActivationMode::Selected,
             hzr_core::InstructionScope::Shared,
-            directory.path(),
         )
         .expect("selected targets")
+        .desired
         {
-            crate::instructions::install(surface, &path, &contract, false, true)
+            crate::instructions::install_target(&target, &contract, false, true)
                 .expect("managed local instructions");
         }
 
@@ -4178,8 +4626,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn acceptance_gate_direct_managed_raw_and_proxy_are_refused() {
+    #[tokio::test]
+    async fn acceptance_gate_direct_managed_raw_and_proxy_are_refused() {
         let directory = tempdir().expect("temporary directory");
         let config = Config {
             data_dir: directory.path().join("data"),
@@ -4191,12 +4639,17 @@ mod tests {
                 .map(std::ffi::OsString::from)
                 .collect::<Vec<_>>();
             let error = reject_direct_fork_bypass(&config, &args)
+                .await
                 .expect_err("direct managed bypass must be refused")
                 .to_string();
             assert!(error.contains("hzr exec run"));
             assert!(error.contains("session budget"));
         }
-        assert!(reject_direct_fork_bypass(&config, &[std::ffi::OsString::from("git")]).is_ok());
+        assert!(
+            reject_direct_fork_bypass(&config, &[std::ffi::OsString::from("git")])
+                .await
+                .is_ok()
+        );
     }
 
     #[test]

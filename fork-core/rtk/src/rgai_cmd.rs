@@ -115,12 +115,13 @@ fn search_attribution(
         search_strategy: Some(strategy),
         search_fallback_code: fallback_code,
         include_content: None,
-        limit: Some(max_results),
+        limit: Some(max_results as u64),
         path_scope_count: Some(1),
         filter_level: None,
         from_line: None,
         to_line: None,
         source_bytes: None,
+        evasion: None,
     }
 }
 
@@ -187,7 +188,7 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
                 search_attribution(
                     requested_mode,
                     tracking::OperationMode::SearchSemantic,
-                    tracking::SearchStrategy::Grepai,
+                    tracking::SearchStrategy::ForkRgaiGrepai,
                     None,
                     max_results,
                 ),
@@ -277,12 +278,12 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
     let (effective_mode, strategy, fallback_code) = match backend {
         "rg" => (
             tracking::OperationMode::SearchSemantic,
-            tracking::SearchStrategy::Ripgrep,
+            tracking::SearchStrategy::ForkRgaiRipgrep,
             Some(tracking::SearchFallbackCode::GrepaiUnavailable),
         ),
         "rg-files" => (
             tracking::OperationMode::SearchSemantic,
-            tracking::SearchStrategy::Files,
+            tracking::SearchStrategy::ForkRgaiFiles,
             None,
         ),
         _ => (
@@ -291,7 +292,7 @@ pub fn run(query: &str, options: RgaiOptions<'_>) -> Result<()> {
             } else {
                 tracking::OperationMode::SearchBuiltin
             },
-            tracking::SearchStrategy::Builtin,
+            tracking::SearchStrategy::ForkRgaiBuiltin,
             (!builtin && files.is_none())
                 .then_some(tracking::SearchFallbackCode::RipgrepUnavailable),
         ),
@@ -1767,7 +1768,7 @@ mod tests {
         let exact = search_attribution(
             tracking::OperationMode::SearchSemantic,
             tracking::OperationMode::SearchExact,
-            tracking::SearchStrategy::Builtin,
+            tracking::SearchStrategy::ForkRgaiBuiltin,
             Some(tracking::SearchFallbackCode::GrepaiUnavailable),
             7,
         );
@@ -1782,7 +1783,7 @@ mod tests {
         );
         assert_eq!(
             exact.search_strategy,
-            Some(tracking::SearchStrategy::Builtin)
+            Some(tracking::SearchStrategy::ForkRgaiBuiltin)
         );
         assert_eq!(exact.limit, Some(7));
         assert_eq!(exact.path_scope_count, Some(1));

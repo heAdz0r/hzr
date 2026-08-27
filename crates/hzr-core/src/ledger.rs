@@ -4,9 +4,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use directories::BaseDirs;
 use hzr_protocol::{
-    AccountingAttribution, AccountingOperationKind, AccountingOperationMode, AccountingStage,
-    EnforcementTier, EvasionAttribution, EvasionClass, EvasionInterpreter, EvasionPathForm,
-    FidelityReason, FidelityValidation, PolicyDecision, TraceId, Usage,
+    AccountingAttribution, AccountingChannel as EngineAccountingChannel,
+    AccountingMeasurement as EngineAccountingMeasurement, AccountingOperationKind,
+    AccountingOperationMode, AccountingRoute as EngineAccountingRoute, AccountingStage,
+    EnforcementTier, EngineAccountingReceipt, EvasionAttribution, EvasionClass, EvasionInterpreter,
+    EvasionPathForm, FidelityReason, FidelityValidation, PolicyDecision, TraceId, Usage,
 };
 
 use crate::operation::{
@@ -101,7 +103,7 @@ pub struct EfficiencySummary {
     pub stage_excluded_delivered_tokens_estimated: u64,
     pub by_channel: BTreeMap<String, u64>,
     pub by_mode: Vec<OperationModeSummary>,
-    pub by_command: Vec<EfficiencyCommandSummary>,
+    pub by_command: Vec<EfficiencyOperationSummary>,
     pub read_pipeline: ReadPipelineSummary,
     pub excluded_legacy_operations: u64,
 }
@@ -295,6 +297,29 @@ pub struct EfficiencyCommandSummary {
     pub avg_time_ms: u64,
 }
 
+/// Stable public identity for an aggregate stats row. The family is already scrubbed before
+/// persistence; the remaining dimensions are closed accounting enums rather than command text.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PrivacySafeOperationKey {
+    pub family: String,
+    pub operation: Option<AccountingOperationKind>,
+    pub mode: Option<AccountingOperationMode>,
+    pub stage: AccountingStage,
+    pub route: OperationRoute,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EfficiencyOperationSummary {
+    pub key: PrivacySafeOperationKey,
+    pub executions: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub gross_avoided_tokens_estimated: u64,
+    pub regression_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub avg_time_ms: u64,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProjectActivitySummary {
     pub operations: u64,
@@ -477,6 +502,42 @@ fn parse_accounting_stage(value: &str) -> Option<AccountingStage> {
         "standalone_delivery" => Some(AccountingStage::StandaloneDelivery),
         "control_plane" => Some(AccountingStage::ControlPlane),
         _ => None,
+    }
+}
+
+fn parse_operation_route(value: &str) -> Option<OperationRoute> {
+    match value {
+        "optimized" => Some(OperationRoute::Optimized),
+        "bypassed" | "raw" => Some(OperationRoute::Bypassed),
+        "native_unaccounted" => Some(OperationRoute::NativeUnaccounted),
+        _ => None,
+    }
+}
+
+fn savings_neutral_sql_predicate(command_column: &str) -> String {
+    let legacy_raw = raw_route_sql_predicate(command_column);
+    format!(
+        "(route IN ('bypassed', 'raw')
+          OR (route IS NULL AND ({legacy_raw}))
+          OR COALESCE(operation_kind, operation_family, '') = 'write')"
+    )
+}
+
+fn privacy_safe_operation_key(
+    family: String,
+    operation: Option<&str>,
+    mode: Option<&str>,
+    stage: &str,
+    route: &str,
+) -> PrivacySafeOperationKey {
+    PrivacySafeOperationKey {
+        operation: operation
+            .and_then(parse_operation_kind)
+            .or_else(|| parse_operation_kind(&family)),
+        mode: mode.and_then(parse_operation_mode),
+        stage: parse_accounting_stage(stage).unwrap_or(AccountingStage::InternalTransport),
+        route: parse_operation_route(route).unwrap_or(OperationRoute::Optimized),
+        family,
     }
 }
 
@@ -1399,6 +1460,15 @@ impl Ledger {
                  CREATE INDEX IF NOT EXISTS idx_timestamp ON commands(timestamp);
                  CREATE INDEX IF NOT EXISTS idx_project_path_timestamp
                     ON commands(project_path, timestamp);
+                 CREATE TABLE IF NOT EXISTS engine_accounting_receipts (
+                    correlation_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    occurred_at_ms INTEGER NOT NULL,
+                    engine_version TEXT NOT NULL,
+                    manifest_sha256 TEXT NOT NULL,
+                    content_manifest_sha256 TEXT NOT NULL,
+                    PRIMARY KEY (correlation_id, sequence)
+                 );
                  CREATE TABLE IF NOT EXISTS parse_failures (
                     id INTEGER PRIMARY KEY,
                     timestamp TEXT NOT NULL,
@@ -2191,8 +2261,7 @@ impl Ledger {
         legacy_session_hash: &str,
         project_hash: Option<&str>,
     ) -> Result<SessionEfficiencySummary, LedgerError> {
-        let raw_predicate = raw_route_sql_predicate("rtk_cmd");
-        let neutral_predicate = format!("({raw_predicate}) OR rtk_cmd = 'rtk write'");
+        let neutral_predicate = savings_neutral_sql_predicate("rtk_cmd");
         let measured_scope = "session_hash IN (?1, ?2)
                AND accounting_policy_version = ?3
                AND measurement = 'estimated'
@@ -2543,8 +2612,7 @@ impl Ledger {
         since_unix_seconds: Option<i64>,
         include_legacy_versions: bool,
     ) -> Result<i64, LedgerError> {
-        let raw_predicate = raw_route_sql_predicate("rtk_cmd");
-        let neutral_predicate = format!("({raw_predicate}) OR rtk_cmd = 'rtk write'");
+        let neutral_predicate = savings_neutral_sql_predicate("rtk_cmd");
         let version_predicate = accounting_policy_predicate(include_legacy_versions);
         let query = format!(
             "SELECT COALESCE(SUM(CASE WHEN ({neutral_predicate})
@@ -2577,8 +2645,7 @@ impl Ledger {
         since_unix_seconds: Option<i64>,
         include_legacy_versions: bool,
     ) -> Result<EfficiencySummary, LedgerError> {
-        let raw_predicate = raw_route_sql_predicate("rtk_cmd");
-        let neutral_predicate = format!("({raw_predicate}) OR rtk_cmd = 'rtk write'");
+        let neutral_predicate = savings_neutral_sql_predicate("rtk_cmd");
         let version_predicate = accounting_policy_predicate(include_legacy_versions);
         let totals_query = format!(
             "SELECT
@@ -2637,31 +2704,70 @@ impl Ledger {
                 },
             )
             .map_err(LedgerError::Database)?;
+        let legacy_raw_predicate = raw_route_sql_predicate("rtk_cmd");
         let by_command_query = format!(
-            "SELECT
-                rtk_cmd,
-                COUNT(*),
-                COALESCE(SUM(CASE WHEN ({neutral_predicate})
-                                  THEN output_tokens ELSE input_tokens END), 0),
-                COALESCE(SUM(output_tokens), 0),
-                COALESCE(SUM(CASE WHEN NOT ({neutral_predicate}) AND input_tokens > output_tokens
-                                  THEN input_tokens - output_tokens ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN NOT ({neutral_predicate}) AND output_tokens > input_tokens
-                                  THEN output_tokens - input_tokens ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN ({neutral_predicate})
-                                  THEN 0 ELSE input_tokens - output_tokens END), 0),
-                COALESCE(AVG(exec_time_ms), 0)
-             FROM commands
-             WHERE measurement = 'estimated'
-               AND COALESCE(route, '') != 'native_unaccounted'
-               AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
-               AND ({version_predicate})
-               AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
-               AND length(?2) = 1
-               AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
-             GROUP BY rtk_cmd
-             ORDER BY SUM(CASE WHEN ({neutral_predicate})
-                               THEN 0 ELSE input_tokens - output_tokens END) DESC"
+            "WITH public_rows AS (
+                SELECT
+                    COALESCE(NULLIF(operation_family, ''), NULLIF(operation_kind, ''), 'other') AS family,
+                    CASE
+                        WHEN operation_kind IN ('search', 'read', 'write', 'context', 'memory',
+                                                'codec', 'exec', 'observability', 'doctor')
+                            THEN operation_kind
+                        WHEN operation_family IN ('search', 'read', 'write', 'context', 'memory',
+                                                  'codec', 'exec', 'observability', 'doctor')
+                            THEN operation_family
+                        WHEN operation_family IN ('rgai', 'rg', 'grep') THEN 'search'
+                        ELSE NULL
+                    END AS public_operation,
+                    CASE
+                        WHEN operation_mode IN (
+                            'search_auto', 'search_semantic', 'search_exact', 'search_builtin',
+                            'read_full', 'read_filtered', 'read_range', 'read_head', 'read_tail',
+                            'read_outline', 'read_symbols', 'read_changed', 'read_since', 'write',
+                            'context_plan', 'memory_recall', 'memory_store', 'memory_forget',
+                            'memory_update', 'memory_prune', 'codec_compile', 'exec_run',
+                            'observability_snapshot', 'doctor_check'
+                        ) THEN operation_mode
+                        ELSE NULL
+                    END AS public_mode,
+                    CASE accounting_stage
+                        WHEN 'final_delivery' THEN 'final_delivery'
+                        WHEN 'standalone_delivery' THEN 'standalone_delivery'
+                        WHEN 'control_plane' THEN 'control_plane'
+                        ELSE 'internal_transport'
+                    END AS public_stage,
+                    CASE
+                        WHEN route IN ('bypassed', 'raw') THEN 'bypassed'
+                        WHEN route = 'native_unaccounted' THEN 'native_unaccounted'
+                        WHEN route = 'optimized' THEN 'optimized'
+                        WHEN ({legacy_raw_predicate}) THEN 'bypassed'
+                        ELSE 'optimized'
+                    END AS public_route,
+                    CASE WHEN ({neutral_predicate}) THEN output_tokens ELSE input_tokens END AS baseline,
+                    output_tokens AS delivered,
+                    CASE WHEN NOT ({neutral_predicate}) AND input_tokens > output_tokens
+                         THEN input_tokens - output_tokens ELSE 0 END AS gross,
+                    CASE WHEN NOT ({neutral_predicate}) AND output_tokens > input_tokens
+                         THEN output_tokens - input_tokens ELSE 0 END AS regression,
+                    CASE WHEN ({neutral_predicate}) THEN 0 ELSE input_tokens - output_tokens END AS net,
+                    exec_time_ms
+                FROM commands
+                WHERE measurement = 'estimated'
+                  AND COALESCE(route, '') != 'native_unaccounted'
+                  AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                  AND ({version_predicate})
+                  AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
+                  AND length(?2) = 1
+                  AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
+            )
+            SELECT family, public_operation, public_mode, public_stage, public_route,
+                   COUNT(*), COALESCE(SUM(baseline), 0), COALESCE(SUM(delivered), 0),
+                   COALESCE(SUM(gross), 0), COALESCE(SUM(regression), 0),
+                   COALESCE(SUM(net), 0), COALESCE(SUM(exec_time_ms) / COUNT(*), 0)
+              FROM public_rows
+             GROUP BY family, public_operation, public_mode, public_stage, public_route
+             ORDER BY SUM(net) DESC, family, public_operation, public_mode,
+                      public_stage, public_route"
         );
         let mut statement = self
             .connection
@@ -2675,15 +2781,26 @@ impl Ledger {
                     since_unix_seconds
                 ],
                 |row| {
-                    Ok(EfficiencyCommandSummary {
-                        command: row.get(0)?,
-                        executions: row.get(1)?,
-                        baseline_tokens_estimated: row.get(2)?,
-                        delivered_tokens_estimated: row.get(3)?,
-                        gross_avoided_tokens_estimated: row.get(4)?,
-                        regression_tokens_estimated: row.get(5)?,
-                        net_avoided_tokens_estimated: row.get(6)?,
-                        avg_time_ms: row.get::<_, f64>(7)? as u64,
+                    let family = row.get(0)?;
+                    let operation = row.get::<_, Option<String>>(1)?;
+                    let mode = row.get::<_, Option<String>>(2)?;
+                    let stage = row.get::<_, String>(3)?;
+                    let route = row.get::<_, String>(4)?;
+                    Ok(EfficiencyOperationSummary {
+                        key: privacy_safe_operation_key(
+                            family,
+                            operation.as_deref(),
+                            mode.as_deref(),
+                            &stage,
+                            &route,
+                        ),
+                        executions: row.get(5)?,
+                        baseline_tokens_estimated: row.get(6)?,
+                        delivered_tokens_estimated: row.get(7)?,
+                        gross_avoided_tokens_estimated: row.get(8)?,
+                        regression_tokens_estimated: row.get(9)?,
+                        net_avoided_tokens_estimated: row.get(10)?,
+                        avg_time_ms: row.get(11)?,
                     })
                 },
             )
@@ -3177,6 +3294,94 @@ impl Ledger {
             )
             .map_err(LedgerError::Database)?;
         Ok(())
+    }
+
+    pub fn record_engine_accounting_receipt(
+        &self,
+        receipt: &EngineAccountingReceipt,
+        project_path: &str,
+        agent: Option<&str>,
+        session_id: Option<&str>,
+        channel: EngineAccountingChannel,
+    ) -> Result<bool, LedgerError> {
+        let measurement = match receipt.measurement {
+            EngineAccountingMeasurement::Estimated => OperationMeasurement::Estimated,
+            EngineAccountingMeasurement::Unmeasured => OperationMeasurement::Unmeasured,
+        };
+        let route = match receipt.route {
+            EngineAccountingRoute::Optimized => OperationRoute::Optimized,
+            EngineAccountingRoute::Bypassed => OperationRoute::Bypassed,
+            EngineAccountingRoute::NativeUnaccounted => OperationRoute::NativeUnaccounted,
+        };
+        let channel = match channel {
+            EngineAccountingChannel::HookCli => OperationChannel::HookCli,
+            EngineAccountingChannel::Mcp => OperationChannel::Mcp,
+            EngineAccountingChannel::NativeHost => OperationChannel::NativeHost,
+        };
+        if matches!(measurement, OperationMeasurement::Unmeasured)
+            && (receipt.baseline_tokens != 0 || receipt.delivered_tokens != 0)
+        {
+            return Err(LedgerError::InvalidOperation(
+                "unmeasured engine receipts cannot carry token counts".into(),
+            ));
+        }
+        if !matches!(route, OperationRoute::Optimized)
+            && receipt.baseline_tokens != receipt.delivered_tokens
+        {
+            return Err(LedgerError::InvalidOperation(
+                "bypassed engine receipts cannot claim token savings".into(),
+            ));
+        }
+        let sequence = i64::try_from(receipt.sequence).map_err(|_| {
+            LedgerError::InvalidOperation("engine receipt sequence exceeds SQLite range".into())
+        })?;
+
+        let transaction = self
+            .connection
+            .unchecked_transaction()
+            .map_err(LedgerError::Database)?;
+        let inserted = transaction
+            .execute(
+                "INSERT OR IGNORE INTO engine_accounting_receipts (
+                    correlation_id, sequence, occurred_at_ms, engine_version,
+                    manifest_sha256, content_manifest_sha256
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    receipt.correlation_id.as_str(),
+                    sequence,
+                    receipt.occurred_at_unix_ms,
+                    receipt.engine.engine_version.as_str(),
+                    receipt.engine.manifest_sha256.as_str(),
+                    receipt.engine.content_manifest_sha256.as_str(),
+                ],
+            )
+            .map_err(LedgerError::Database)?;
+        if inserted == 0 {
+            return Ok(false);
+        }
+        let recorded_command = format!("hzr {}", receipt.attribution.mode.as_str());
+        self.record_operation_attributed_with_detail(
+            "[engine receipt]",
+            &recorded_command,
+            receipt.baseline_tokens,
+            receipt.delivered_tokens,
+            receipt.execution_ms,
+            DetailedOperationAttribution {
+                attribution: OperationAttribution {
+                    project_path,
+                    agent,
+                    session_id,
+                    channel,
+                    measurement,
+                    route,
+                },
+                detail: Some(&receipt.attribution),
+                evasion: receipt.attribution.evasion.as_ref(),
+                host_grant_applied: receipt.host_grant_applied,
+            },
+        )?;
+        transaction.commit().map_err(LedgerError::Database)?;
+        Ok(true)
     }
 
     pub fn record_privacy_safe_fidelity_operation(
@@ -4944,20 +5149,20 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_gate_final_delivery_is_stage_visible_but_not_double_counted() {
+    fn acceptance_gate_mcp_read_delivery_is_visible_but_not_double_counted() {
         let directory = tempdir().expect("temporary directory");
         let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
         let internal = AccountingAttribution {
-            operation: AccountingOperationKind::Search,
-            mode: AccountingOperationMode::SearchSemantic,
+            operation: AccountingOperationKind::Read,
+            mode: AccountingOperationMode::ReadFiltered,
             stage: AccountingStage::InternalTransport,
-            requested_mode: Some(AccountingOperationMode::SearchAuto),
-            effective_mode: Some(AccountingOperationMode::SearchSemantic),
-            search_strategy: Some(AccountingSearchStrategy::ForkRgaiAdaptive),
+            requested_mode: Some(AccountingOperationMode::ReadFull),
+            effective_mode: Some(AccountingOperationMode::ReadFiltered),
+            search_strategy: None,
             search_fallback_code: None,
-            include_content: Some(false),
-            limit: Some(10),
-            path_scope_count: Some(1),
+            include_content: None,
+            limit: None,
+            path_scope_count: None,
             filter_level: None,
             from_line: None,
             to_line: None,
@@ -4966,13 +5171,13 @@ mod tests {
         };
         let final_delivery = AccountingAttribution {
             stage: AccountingStage::FinalDelivery,
-            ..internal.clone()
+            ..internal
         };
         for (baseline, delivered, detail) in [(100, 20, &internal), (20, 20, &final_delivery)] {
             ledger
                 .record_operation_attributed_with_detail(
-                    "hzr search",
-                    "hzr search",
+                    "hzr read",
+                    "hzr read",
                     baseline,
                     delivered,
                     1,
@@ -4981,7 +5186,7 @@ mod tests {
                             project_path: "/work",
                             agent: Some("cli"),
                             session_id: Some("session"),
-                            channel: OperationChannel::HookCli,
+                            channel: OperationChannel::Mcp,
                             measurement: OperationMeasurement::Estimated,
                             route: OperationRoute::Optimized,
                         },
@@ -5037,6 +5242,7 @@ mod tests {
         assert_eq!(summary.baseline_tokens_estimated, 100);
         assert_eq!(summary.delivered_tokens_estimated, 20);
         assert_eq!(summary.total_observed_operations, 1);
+        assert_eq!(summary.by_channel.get("mcp"), Some(&1));
         assert_eq!(summary.by_mode.len(), 3);
         assert!(
             summary
@@ -5154,7 +5360,7 @@ mod tests {
         };
         let measured = AccountingAttribution {
             stage: AccountingStage::InternalTransport,
-            ..delivery.clone()
+            ..delivery
         };
         for detail in [&measured, &delivery] {
             ledger
@@ -5363,6 +5569,150 @@ mod tests {
         assert_eq!(summary.net_avoided_tokens_estimated, 0);
         assert_eq!(summary.by_command.len(), 1);
         assert_eq!(summary.by_command[0].baseline_tokens_estimated, 10);
+        assert_eq!(summary.by_command[0].net_avoided_tokens_estimated, 0);
+    }
+
+    #[test]
+    fn public_stats_key_coalesces_private_commands_and_compatible_versions() {
+        let directory = tempdir().expect("temp directory");
+        let ledger = Ledger::open(&directory.path().join("usage.sqlite")).expect("ledger");
+        let detail = AccountingAttribution {
+            operation: AccountingOperationKind::Search,
+            mode: AccountingOperationMode::SearchAuto,
+            stage: AccountingStage::InternalTransport,
+            requested_mode: Some(AccountingOperationMode::SearchAuto),
+            effective_mode: Some(AccountingOperationMode::SearchAuto),
+            search_strategy: Some(AccountingSearchStrategy::ForkRgaiAdaptive),
+            search_fallback_code: None,
+            include_content: None,
+            limit: None,
+            path_scope_count: None,
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: None,
+            evasion: None,
+        };
+        for (command, input, output, execution_ms) in
+            [("private-a", 100, 20, 10), ("private-b", 50, 10, 30)]
+        {
+            ledger
+                .record_operation_attributed_with_detail(
+                    command,
+                    "rtk search",
+                    input,
+                    output,
+                    execution_ms,
+                    DetailedOperationAttribution {
+                        attribution: OperationAttribution {
+                            project_path: "/work",
+                            agent: Some("test"),
+                            session_id: None,
+                            channel: OperationChannel::HookCli,
+                            measurement: OperationMeasurement::Estimated,
+                            route: OperationRoute::Optimized,
+                        },
+                        detail: Some(&detail),
+                        evasion: None,
+                        host_grant_applied: false,
+                    },
+                )
+                .expect("search operation");
+        }
+        ledger
+            .connection
+            .execute(
+                "UPDATE commands
+                    SET rtk_cmd = CASE id WHEN 1 THEN 'rtk search private-a'
+                                             ELSE 'rtk search private-b' END,
+                        accounting_policy_version = CASE id WHEN 1 THEN ?1 ELSE ?2 END",
+                params![
+                    CURRENT_ACCOUNTING_POLICY_VERSION,
+                    super::LEGACY_ACCOUNTING_POLICY_VERSION_V1
+                ],
+            )
+            .expect("distinct private compatibility fixtures");
+
+        let summary = ledger.efficiency_summary().expect("efficiency summary");
+        assert_eq!(summary.by_command.len(), 1);
+        assert_eq!(summary.operations, 2);
+        assert_eq!(summary.baseline_tokens_estimated, 150);
+        assert_eq!(summary.delivered_tokens_estimated, 30);
+        assert_eq!(summary.gross_avoided_tokens_estimated, 120);
+        assert_eq!(summary.regression_tokens_estimated, 0);
+        assert_eq!(summary.net_avoided_tokens_estimated, 120);
+        let aggregate = &summary.by_command[0];
+        assert_eq!(aggregate.executions, 2);
+        assert_eq!(aggregate.baseline_tokens_estimated, 150);
+        assert_eq!(aggregate.delivered_tokens_estimated, 30);
+        assert_eq!(aggregate.gross_avoided_tokens_estimated, 120);
+        assert_eq!(aggregate.regression_tokens_estimated, 0);
+        assert_eq!(aggregate.net_avoided_tokens_estimated, 120);
+        assert_eq!(aggregate.avg_time_ms, 20);
+        assert_eq!(
+            aggregate.key.operation,
+            Some(AccountingOperationKind::Search)
+        );
+        assert_eq!(
+            aggregate.key.mode,
+            Some(AccountingOperationMode::SearchAuto)
+        );
+    }
+
+    #[test]
+    fn typed_bypass_route_is_neutral_even_when_command_text_looks_optimized() {
+        let directory = tempdir().expect("temp directory");
+        let ledger = Ledger::open(&directory.path().join("usage.sqlite")).expect("ledger");
+        let detail = AccountingAttribution {
+            operation: AccountingOperationKind::Search,
+            mode: AccountingOperationMode::SearchExact,
+            stage: AccountingStage::InternalTransport,
+            requested_mode: Some(AccountingOperationMode::SearchExact),
+            effective_mode: Some(AccountingOperationMode::SearchExact),
+            search_strategy: Some(AccountingSearchStrategy::ForkRgaiRipgrep),
+            search_fallback_code: None,
+            include_content: None,
+            limit: None,
+            path_scope_count: None,
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: None,
+            evasion: None,
+        };
+        ledger
+            .record_operation_attributed_with_detail(
+                "private search",
+                "rtk raw search",
+                100,
+                20,
+                5,
+                DetailedOperationAttribution {
+                    attribution: OperationAttribution {
+                        project_path: "/work",
+                        agent: Some("test"),
+                        session_id: None,
+                        channel: OperationChannel::HookCli,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Bypassed,
+                    },
+                    detail: Some(&detail),
+                    evasion: None,
+                    host_grant_applied: false,
+                },
+            )
+            .expect("bypassed search");
+        ledger
+            .connection
+            .execute("UPDATE commands SET rtk_cmd = 'rtk search'", [])
+            .expect("contradictory legacy text fixture");
+
+        let summary = ledger.efficiency_summary().expect("efficiency summary");
+        assert_eq!(summary.baseline_tokens_estimated, 20);
+        assert_eq!(summary.delivered_tokens_estimated, 20);
+        assert_eq!(summary.gross_avoided_tokens_estimated, 0);
+        assert_eq!(summary.net_avoided_tokens_estimated, 0);
+        assert_eq!(summary.by_command[0].key.route, OperationRoute::Bypassed);
         assert_eq!(summary.by_command[0].net_avoided_tokens_estimated, 0);
     }
 

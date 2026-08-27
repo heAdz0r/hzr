@@ -159,7 +159,7 @@ pub const GRANT_APPLIED_REASON: &str =
     "host permission mode grants execution, so HZR recorded it instead of prompting";
 
 /// Private process marker consumed by the ledger writer before it can reach child processes.
-pub const HOST_GRANT_APPLIED_ENV: &str = "HZR_INTERNAL_HOST_GRANT_APPLIED";
+pub use hzr_engine_contract::HOST_GRANT_APPLIED_ENV;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Environment {

@@ -1,0 +1,71 @@
+name: bundle component cache
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - engines.lock.toml
+      - patches/grepai/**
+      - patches/icm/**
+      - fork-core/CURRENT_ENGINE_V1.tsv
+      - fork-core/rtk/Cargo.lock
+      - Cargo.lock
+      - Cargo.toml
+      - crates/**/Cargo.toml
+      - scripts/build-bundle.sh
+      - .github/workflows/bundle-cache.yml
+
+permissions:
+  contents: read
+
+jobs:
+  warm-native-components:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04-arm
+            platform: linux-arm64
+          - runner: macos-15
+            platform: darwin-arm64
+    concurrency:
+      group: bundle-component-cache-${{ matrix.platform }}
+      cancel-in-progress: true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.24.2
+          cache: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.19
+      - name: Restore or save release Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target/release
+          key: hzr-release-rust-${{ matrix.platform }}-1.92.0-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/**/Cargo.toml') }}
+          restore-keys: |
+            hzr-release-rust-${{ matrix.platform }}-1.92.0-
+      - name: Restore or save verified component build cache
+        uses: actions/cache@v4
+        with:
+          path: target/hzr-component-cache
+          key: hzr-components-${{ matrix.platform }}-${{ hashFiles('engines.lock.toml', 'patches/grepai/**', 'patches/icm/**', 'fork-core/CURRENT_ENGINE_V1.tsv', 'fork-core/rtk/Cargo.lock', 'scripts/build-bundle.sh') }}
+          restore-keys: |
+            hzr-components-${{ matrix.platform }}-
+      - name: Build and verify reusable native components
+        env:
+          HZR_WARM_COMPONENT_CACHE_ONLY: "1"
+        run: scripts/build-bundle.sh "$RUNNER_TEMP/hzr-cache-warm"
+      - name: Warm the release Cargo dependency graph
+        run: cargo build --locked --release --workspace

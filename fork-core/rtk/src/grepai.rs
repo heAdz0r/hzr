@@ -64,17 +64,7 @@ pub fn detect_grepai(project_path: &Path) -> GrepaiState {
 }
 
 fn find_grepai_binary_from_path() -> Option<PathBuf> {
-    let output = Command::new("which").arg("grepai").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path_str.is_empty() {
-        return None;
-    }
-
-    Some(PathBuf::from(path_str))
+    crate::utils::resolve_binary("grepai").ok()
 }
 
 fn find_grepai_binary_with_candidates(

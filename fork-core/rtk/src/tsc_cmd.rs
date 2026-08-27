@@ -3,17 +3,15 @@ use crate::utils::truncate;
 use anyhow::{Context, Result};
 use regex::Regex;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Command;
 
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
     // Try tsc directly first, fallback to npx if not found
-    let tsc_exists = Command::new("which")
-        .arg("tsc")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let tsc = crate::utils::resolve_binary("tsc").ok();
+    let tsc_exists = tsc.is_some();
 
-    let mut cmd = command_for_tsc(tsc_exists);
+    let mut cmd = command_for_tsc(tsc);
 
     for arg in args {
         cmd.arg(arg);
@@ -51,9 +49,9 @@ pub fn run_vue_tsc(args: &[String], verbose: u8, skip_env: bool) -> Result<()> {
     )
 }
 
-fn command_for_tsc(tsc_exists: bool) -> Command {
-    if tsc_exists {
-        Command::new("tsc")
+fn command_for_tsc(tsc: Option<PathBuf>) -> Command {
+    if let Some(binary) = tsc {
+        Command::new(binary)
     } else {
         let mut c = Command::new("npx");
         c.arg("tsc");

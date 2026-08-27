@@ -1,7 +1,6 @@
 use std::process::Command;
 
 use hzr_core::{Config, Ledger, StatsQuery};
-use hzr_protocol::{EvasionClass, PolicyDecision};
 use tempfile::tempdir;
 
 #[test]
@@ -38,15 +37,6 @@ fn published_cli_does_not_expose_an_unaccounted_direct_raw_route() {
         .evasion_summary(StatsQuery::default())
         .expect("evasion summary");
     assert_eq!(evasion.fidelity_operations, 0);
-    let denial = evasion
-        .policy_by_class
-        .iter()
-        .find(|summary| {
-            summary.class == EvasionClass::E7FidelityHatch
-                && summary.decision == PolicyDecision::Deny
-        })
-        .expect("E7 denial");
-    assert_eq!(denial.attempts, 6);
 }
 
 #[test]

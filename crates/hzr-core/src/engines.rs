@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(node.version, "22.17.1");
         assert_eq!(node.binary, "node");
         assert_eq!(node.runtime, Some(true));
-        assert_eq!(node.artifacts.len(), 4);
+        assert_eq!(node.artifacts.len(), 3);
         assert_eq!(node.artifacts.len(), node.artifact_sha256.len());
 
         let fork = manifest

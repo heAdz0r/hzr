@@ -1,0 +1,555 @@
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use fs2::FileExt;
+use serde::{Deserialize, Serialize};
+use tempfile::NamedTempFile;
+use thiserror::Error;
+
+const COVERAGE_SCHEMA_VERSION: u32 = 1;
+const MAX_IDENTITY_BYTES: usize = 256;
+const MAX_INTERVALS: usize = 100_000;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountingGapSurface {
+    RewriteDaemon,
+    Hook,
+    Cli,
+    Mcp,
+    ForkProducer,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AccountingGapEvent {
+    pub surface: AccountingGapSurface,
+    pub workspace_hash: Option<String>,
+    pub session_hash: Option<String>,
+    pub operation_family: Option<String>,
+    pub at_unix: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AccountingGapInterval {
+    pub surface: AccountingGapSurface,
+    #[serde(default)]
+    pub workspace_hash: Option<String>,
+    pub session_hash: Option<String>,
+    pub operation_family: Option<String>,
+    pub started_at_unix: u64,
+    pub last_failure_at_unix: u64,
+    pub recovered_at_unix: Option<u64>,
+    pub missing_operations: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct AccountingCoverageSnapshot {
+    pub open_intervals: usize,
+    pub closed_intervals: usize,
+    pub open_missing_operations: u64,
+    pub lifetime_missing_operations: u64,
+    pub legacy_missing_operations: u64,
+    pub rewrite_missing_operations: u64,
+    pub hook_missing_operations: u64,
+    pub cli_missing_operations: u64,
+    pub mcp_missing_operations: u64,
+    pub fork_producer_missing_operations: u64,
+    pub live_complete: bool,
+    pub historical_complete: bool,
+    pub gap_started_at_unix: Option<u64>,
+    pub last_failure_at_unix: Option<u64>,
+    pub last_recovered_at_unix: Option<u64>,
+    pub open_gap_seconds: Option<u64>,
+    pub closed_gap_seconds: u64,
+}
+
+#[derive(Debug, Error)]
+pub enum AccountingCoverageError {
+    #[error("accounting coverage I/O failed for {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("accounting coverage state is invalid: {0}")]
+    Invalid(String),
+    #[error("accounting coverage serialization failed: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AccountingCoverageState {
+    schema_version: u32,
+    #[serde(default)]
+    legacy_missing_operations: u64,
+    intervals: Vec<AccountingGapInterval>,
+}
+
+impl Default for AccountingCoverageState {
+    fn default() -> Self {
+        Self {
+            schema_version: COVERAGE_SCHEMA_VERSION,
+            legacy_missing_operations: 0,
+            intervals: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountingCoverageStore {
+    state_path: PathBuf,
+    lock_path: PathBuf,
+}
+
+impl AccountingCoverageStore {
+    #[must_use]
+    pub fn new(data_root: &Path) -> Self {
+        let ledger = data_root.join("ledger");
+        Self {
+            state_path: ledger.join("accounting-coverage.json"),
+            lock_path: ledger.join("accounting-coverage.lock"),
+        }
+    }
+
+    #[must_use]
+    pub fn exists(&self) -> bool {
+        self.state_path.is_file()
+    }
+
+    pub fn record_missing(
+        &self,
+        event: AccountingGapEvent,
+    ) -> Result<AccountingCoverageSnapshot, AccountingCoverageError> {
+        validate_event(&event)?;
+        self.with_exclusive_state(|state| {
+            let interval = state.intervals.iter_mut().rev().find(|interval| {
+                interval.recovered_at_unix.is_none()
+                    && interval.surface == event.surface
+                    && interval.workspace_hash == event.workspace_hash
+                    && interval.session_hash == event.session_hash
+                    && interval.operation_family == event.operation_family
+            });
+            match interval {
+                Some(interval) => {
+                    interval.last_failure_at_unix =
+                        interval.last_failure_at_unix.max(event.at_unix);
+                    interval.missing_operations = interval.missing_operations.saturating_add(1);
+                }
+                None => {
+                    if state.intervals.len() >= MAX_INTERVALS {
+                        return Err(AccountingCoverageError::Invalid(format!(
+                            "interval limit {MAX_INTERVALS} exceeded"
+                        )));
+                    }
+                    state.intervals.push(AccountingGapInterval {
+                        surface: event.surface,
+                        workspace_hash: event.workspace_hash,
+                        session_hash: event.session_hash,
+                        operation_family: event.operation_family,
+                        started_at_unix: event.at_unix,
+                        last_failure_at_unix: event.at_unix,
+                        recovered_at_unix: None,
+                        missing_operations: 1,
+                    });
+                }
+            }
+            Ok(())
+        })?;
+        self.snapshot(event.at_unix)
+    }
+
+    pub fn recover(&self, event: AccountingGapEvent) -> Result<usize, AccountingCoverageError> {
+        validate_event(&event)?;
+        if !self.exists() {
+            return Ok(0);
+        }
+        let mut recovered = 0;
+        self.with_exclusive_state(|state| {
+            for interval in &mut state.intervals {
+                if interval.recovered_at_unix.is_none()
+                    && interval.surface == event.surface
+                    && interval.workspace_hash == event.workspace_hash
+                    && interval.session_hash == event.session_hash
+                    && interval.operation_family == event.operation_family
+                {
+                    interval.recovered_at_unix =
+                        Some(event.at_unix.max(interval.last_failure_at_unix));
+                    recovered += 1;
+                }
+            }
+            Ok(())
+        })?;
+        Ok(recovered)
+    }
+
+    pub fn import_legacy(
+        &self,
+        legacy_missing_operations: u64,
+    ) -> Result<(), AccountingCoverageError> {
+        if legacy_missing_operations == 0 || self.exists() {
+            return Ok(());
+        }
+        self.with_exclusive_state(|state| {
+            state.legacy_missing_operations = legacy_missing_operations;
+            Ok(())
+        })
+    }
+
+    pub fn snapshot(
+        &self,
+        now_unix: u64,
+    ) -> Result<AccountingCoverageSnapshot, AccountingCoverageError> {
+        self.snapshot_filtered(None, now_unix)
+    }
+
+    pub fn snapshot_for_context(
+        &self,
+        session_hash: &str,
+        workspace_hash: &str,
+        now_unix: u64,
+    ) -> Result<AccountingCoverageSnapshot, AccountingCoverageError> {
+        for (field, value) in [
+            ("session_hash", session_hash),
+            ("workspace_hash", workspace_hash),
+        ] {
+            if value.is_empty() || value.len() > MAX_IDENTITY_BYTES {
+                return Err(AccountingCoverageError::Invalid(format!(
+                    "{field} must contain 1..={MAX_IDENTITY_BYTES} bytes"
+                )));
+            }
+        }
+        self.snapshot_filtered(Some((session_hash, workspace_hash)), now_unix)
+    }
+
+    fn snapshot_filtered(
+        &self,
+        context: Option<(&str, &str)>,
+        now_unix: u64,
+    ) -> Result<AccountingCoverageSnapshot, AccountingCoverageError> {
+        let lock = self.open_lock()?;
+        FileExt::lock_shared(&lock).map_err(|source| self.io(source))?;
+        let state = self.read_state()?;
+        FileExt::unlock(&lock).map_err(|source| self.io(source))?;
+        Ok(snapshot(&state, context, now_unix))
+    }
+
+    fn with_exclusive_state(
+        &self,
+        update: impl FnOnce(&mut AccountingCoverageState) -> Result<(), AccountingCoverageError>,
+    ) -> Result<(), AccountingCoverageError> {
+        let lock = self.open_lock()?;
+        lock.lock_exclusive().map_err(|source| self.io(source))?;
+        let mut state = self.read_state()?;
+        update(&mut state)?;
+        self.write_state(&state)?;
+        FileExt::unlock(&lock).map_err(|source| self.io(source))
+    }
+
+    fn open_lock(&self) -> Result<std::fs::File, AccountingCoverageError> {
+        let parent = self
+            .state_path
+            .parent()
+            .ok_or_else(|| AccountingCoverageError::Invalid("state path has no parent".into()))?;
+        fs::create_dir_all(parent).map_err(|source| self.io(source))?;
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&self.lock_path)
+            .map_err(|source| self.io(source))
+    }
+
+    fn read_state(&self) -> Result<AccountingCoverageState, AccountingCoverageError> {
+        let bytes = match fs::read(&self.state_path) {
+            Ok(bytes) => bytes,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(AccountingCoverageState::default());
+            }
+            Err(source) => return Err(self.io(source)),
+        };
+        let state: AccountingCoverageState = serde_json::from_slice(&bytes)?;
+        validate_state(&state)?;
+        Ok(state)
+    }
+
+    fn write_state(&self, state: &AccountingCoverageState) -> Result<(), AccountingCoverageError> {
+        validate_state(state)?;
+        let parent = self
+            .state_path
+            .parent()
+            .ok_or_else(|| AccountingCoverageError::Invalid("state path has no parent".into()))?;
+        let mut temporary = NamedTempFile::new_in(parent).map_err(|source| self.io(source))?;
+        serde_json::to_writer(&mut temporary, state)?;
+        temporary
+            .write_all(b"\n")
+            .map_err(|source| self.io(source))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|source| self.io(source))?;
+        temporary
+            .persist(&self.state_path)
+            .map_err(|error| self.io(error.error))?;
+        Ok(())
+    }
+
+    fn io(&self, source: std::io::Error) -> AccountingCoverageError {
+        AccountingCoverageError::Io {
+            path: self.state_path.clone(),
+            source,
+        }
+    }
+}
+
+fn validate_event(event: &AccountingGapEvent) -> Result<(), AccountingCoverageError> {
+    if event.at_unix == 0 {
+        return Err(AccountingCoverageError::Invalid(
+            "accounting event timestamp must be non-zero".into(),
+        ));
+    }
+    for (field, value) in [
+        ("workspace_hash", event.workspace_hash.as_deref()),
+        ("session_hash", event.session_hash.as_deref()),
+        ("operation_family", event.operation_family.as_deref()),
+    ] {
+        if value.is_some_and(|value| value.is_empty() || value.len() > MAX_IDENTITY_BYTES) {
+            return Err(AccountingCoverageError::Invalid(format!(
+                "{field} must contain 1..={MAX_IDENTITY_BYTES} bytes"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_state(state: &AccountingCoverageState) -> Result<(), AccountingCoverageError> {
+    if state.schema_version != COVERAGE_SCHEMA_VERSION {
+        return Err(AccountingCoverageError::Invalid(format!(
+            "unsupported schema version {}",
+            state.schema_version
+        )));
+    }
+    if state.intervals.len() > MAX_INTERVALS {
+        return Err(AccountingCoverageError::Invalid(format!(
+            "interval limit {MAX_INTERVALS} exceeded"
+        )));
+    }
+    if state.intervals.iter().any(|interval| {
+        interval.missing_operations == 0
+            || interval.started_at_unix == 0
+            || interval.last_failure_at_unix < interval.started_at_unix
+            || interval
+                .recovered_at_unix
+                .is_some_and(|recovered| recovered < interval.last_failure_at_unix)
+    }) {
+        return Err(AccountingCoverageError::Invalid(
+            "interval ordering or count is invalid".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn snapshot(
+    state: &AccountingCoverageState,
+    context: Option<(&str, &str)>,
+    now_unix: u64,
+) -> AccountingCoverageSnapshot {
+    let legacy_missing_operations = if context.is_none() {
+        state.legacy_missing_operations
+    } else {
+        0
+    };
+    let mut result = AccountingCoverageSnapshot {
+        legacy_missing_operations,
+        lifetime_missing_operations: legacy_missing_operations,
+        historical_complete: legacy_missing_operations == 0,
+        ..AccountingCoverageSnapshot::default()
+    };
+    for interval in &state.intervals {
+        if let Some((session, workspace)) = context {
+            if interval.workspace_hash.as_deref() != Some(workspace)
+                || interval
+                    .session_hash
+                    .as_deref()
+                    .is_some_and(|value| value != session)
+            {
+                continue;
+            }
+        }
+        result.historical_complete = false;
+        result.lifetime_missing_operations = result
+            .lifetime_missing_operations
+            .saturating_add(interval.missing_operations);
+        result.last_failure_at_unix = Some(
+            result
+                .last_failure_at_unix
+                .unwrap_or_default()
+                .max(interval.last_failure_at_unix),
+        );
+        let surface_total = match interval.surface {
+            AccountingGapSurface::RewriteDaemon => &mut result.rewrite_missing_operations,
+            AccountingGapSurface::Hook => &mut result.hook_missing_operations,
+            AccountingGapSurface::Cli => &mut result.cli_missing_operations,
+            AccountingGapSurface::Mcp => &mut result.mcp_missing_operations,
+            AccountingGapSurface::ForkProducer => &mut result.fork_producer_missing_operations,
+        };
+        *surface_total = surface_total.saturating_add(interval.missing_operations);
+        match interval.recovered_at_unix {
+            Some(recovered) => {
+                result.closed_intervals = result.closed_intervals.saturating_add(1);
+                result.last_recovered_at_unix = Some(
+                    result
+                        .last_recovered_at_unix
+                        .unwrap_or_default()
+                        .max(recovered),
+                );
+                result.closed_gap_seconds = result
+                    .closed_gap_seconds
+                    .saturating_add(recovered.saturating_sub(interval.started_at_unix));
+            }
+            None => {
+                result.open_intervals = result.open_intervals.saturating_add(1);
+                result.open_missing_operations = result
+                    .open_missing_operations
+                    .saturating_add(interval.missing_operations);
+                result.gap_started_at_unix = Some(
+                    result
+                        .gap_started_at_unix
+                        .map_or(interval.started_at_unix, |started| {
+                            started.min(interval.started_at_unix)
+                        }),
+                );
+            }
+        }
+    }
+    result.live_complete = result.open_intervals == 0;
+    result.open_gap_seconds = result
+        .gap_started_at_unix
+        .map(|started| now_unix.saturating_sub(started));
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    use tempfile::tempdir;
+
+    use super::{AccountingCoverageStore, AccountingGapEvent, AccountingGapSurface};
+
+    fn event(at_unix: u64) -> AccountingGapEvent {
+        AccountingGapEvent {
+            surface: AccountingGapSurface::ForkProducer,
+            workspace_hash: Some("workspace-hash".into()),
+            session_hash: Some("session-hash".into()),
+            operation_family: Some("read".into()),
+            at_unix,
+        }
+    }
+
+    #[test]
+    fn gap_recovery_preserves_closed_duration_and_history() {
+        let directory = tempdir().expect("coverage root");
+        let store = AccountingCoverageStore::new(directory.path());
+        store.record_missing(event(10)).expect("first failure");
+        store.record_missing(event(15)).expect("second failure");
+
+        assert_eq!(store.recover(event(22)).expect("recover"), 1);
+        assert_eq!(store.recover(event(30)).expect("idempotent"), 0);
+        let snapshot = store.snapshot(40).expect("snapshot");
+        assert!(snapshot.live_complete);
+        assert!(!snapshot.historical_complete);
+        assert_eq!(snapshot.lifetime_missing_operations, 2);
+        assert_eq!(snapshot.closed_intervals, 1);
+        assert_eq!(snapshot.closed_gap_seconds, 12);
+        assert_eq!(snapshot.last_recovered_at_unix, Some(22));
+    }
+
+    #[test]
+    fn concurrent_failure_and_recovery_never_erase_an_event() {
+        let directory = tempdir().expect("coverage root");
+        let store = Arc::new(AccountingCoverageStore::new(directory.path()));
+        store.record_missing(event(10)).expect("initial failure");
+        let barrier = Arc::new(Barrier::new(3));
+        let writer = {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                store.record_missing(event(20)).expect("racing failure");
+            })
+        };
+        let recovery = {
+            let store = Arc::clone(&store);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                store.recover(event(30)).expect("racing recovery");
+            })
+        };
+        barrier.wait();
+        writer.join().expect("writer thread");
+        recovery.join().expect("recovery thread");
+
+        let snapshot = store.snapshot(40).expect("snapshot");
+        assert_eq!(snapshot.lifetime_missing_operations, 2);
+        assert!(snapshot.open_intervals <= 1);
+        assert!(snapshot.closed_intervals <= 1);
+        assert!((1..=2).contains(&(snapshot.open_intervals + snapshot.closed_intervals)));
+    }
+
+    #[test]
+    fn corrupt_state_is_unknown_instead_of_defaulting_to_complete() {
+        let directory = tempdir().expect("coverage root");
+        let store = AccountingCoverageStore::new(directory.path());
+        store.record_missing(event(10)).expect("failure");
+        std::fs::write(
+            directory.path().join("ledger/accounting-coverage.json"),
+            b"{not-json",
+        )
+        .expect("corrupt state");
+        assert!(store.snapshot(20).is_err());
+        assert!(store.record_missing(event(20)).is_err());
+    }
+
+    #[test]
+    fn context_snapshot_excludes_other_sessions_and_workspaces() {
+        let directory = tempdir().expect("coverage root");
+        let store = AccountingCoverageStore::new(directory.path());
+        store.record_missing(event(10)).expect("failure");
+
+        let matching = store
+            .snapshot_for_context("session-hash", "workspace-hash", 20)
+            .expect("matching session");
+        let other = store
+            .snapshot_for_context("other-session", "workspace-hash", 20)
+            .expect("other session");
+        let other_workspace = store
+            .snapshot_for_context("session-hash", "other-workspace", 20)
+            .expect("other workspace");
+        assert!(!matching.live_complete);
+        assert!(other.live_complete);
+        assert!(other.historical_complete);
+        assert!(other_workspace.live_complete);
+        assert!(other_workspace.historical_complete);
+    }
+
+    #[test]
+    fn recovery_closes_only_the_exact_surface_and_operation_family() {
+        let directory = tempdir().expect("coverage root");
+        let store = AccountingCoverageStore::new(directory.path());
+        store.record_missing(event(10)).expect("fork failure");
+        let mut mcp = event(11);
+        mcp.surface = AccountingGapSurface::Mcp;
+        mcp.operation_family = Some("search".into());
+        store.record_missing(mcp.clone()).expect("MCP failure");
+
+        assert_eq!(store.recover(mcp).expect("MCP recovery"), 1);
+        let snapshot = store.snapshot(20).expect("snapshot");
+        assert_eq!(snapshot.open_intervals, 1);
+        assert_eq!(snapshot.fork_producer_missing_operations, 1);
+        assert_eq!(snapshot.mcp_missing_operations, 1);
+    }
+}

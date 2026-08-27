@@ -127,7 +127,7 @@ fn acceptance_gate_every_non_dedicated_mcp_tool_has_typed_accounting() {
             json!({"path": "private/source", "outline": true}),
             AccountingOperationKind::Read,
             AccountingOperationMode::ReadOutline,
-            AccountingStage::StandaloneDelivery,
+            AccountingStage::FinalDelivery,
         ),
         (
             ToolKind::Write,
@@ -135,7 +135,7 @@ fn acceptance_gate_every_non_dedicated_mcp_tool_has_typed_accounting() {
             json!({}),
             AccountingOperationKind::Write,
             AccountingOperationMode::Write,
-            AccountingStage::StandaloneDelivery,
+            AccountingStage::FinalDelivery,
         ),
         (
             ToolKind::ContextPlan,
@@ -287,7 +287,7 @@ fn test_initialize_requires_a_protocol_version() {
 #[test]
 fn test_every_tool_has_model_guidance_and_typed_schemas() {
     let tools = tool_definitions();
-    assert_eq!(tools.len(), super::tools::TOOL_CONTRACTS.len());
+    assert_eq!(tools.len(), super::tools::tool_definitions().len());
     for tool in &tools {
         let name = tool["name"].as_str().expect("tool name");
         assert!(

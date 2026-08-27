@@ -1,61 +1,50 @@
-+# HZR 0.6.5 — the zero was real evidence hidden by the producer boundary
+# HZR 0.6.6
 
-0.6.4 taught `hzr stats` to explain why a narrowed view could say zero. 0.6.5 fixes the case that
-should not have been narrowed at all: the current fork was still labelling its typed rows
-`privacy_typed_v1`, while the default aggregate selected only v2.
+HZR 0.6.6 makes the orchestrator's accounting and lifecycle decisions single-owned and
+release-gated. It also ships the approved bundle-build workstream.
 
-The production-shaped release gate now inserts 435 rows from `rtk/0.44.1-fork.1` with exactly
-44,189 avoided tokens. Default stats must report 44,189, and the 64 read rows must report 27,334
-transform-avoided tokens. New fork rows are v2. Existing typed v1 rows remain honestly labelled
-and are accepted only for compatible aggregate metrics; keyed session identity is not weakened.
+## Accounting and stats
 
-## Large repositories finish their first index
+- Fork-core emits invocation-scoped, privacy-safe accounting receipts with exact engine identity,
+  correlation and sequence. HZR commits them idempotently through the daemon ledger writer and
+  acknowledges their journals only after the durable write.
+- Producer failures remain fail-open for command execution but open a durable accounting gap.
+  Live status becomes degraded; historical incompleteness remains visible after recovery.
+- Bypassed and unmeasured receipts cannot carry positive savings credit.
+- Stats aggregate on one typed public key before sorting or limiting. Private commands that share
+  a public family/mode/route/stage now form one row instead of duplicate-looking labels.
+- MCP delivery stages, search attribution, session precedence and daemon-down evasion attribution
+  use shared typed owners.
 
-The grepai ready marker means the index is ready to query. It does not mean the watcher process
-has merely started. HZR treated those as the same signal and killed a healthy first scan at the
-120-second startup deadline, long before the separate 15-minute idle TTL.
+## Lifecycle and local instructions
 
-Startup now checks that the child remains alive through a short stability window. Readiness is
-reported independently and can stay false throughout a long first scan. Immediate process exits
-still fail, and idle eviction is unchanged.
+- Shared instruction files remain the default.
+- Local instruction mode uses repository-local ignored surfaces and never modifies shared
+  `AGENTS.md` or `CLAUDE.md` for HZR users who opted into local scope.
+- Scope changes, local excludes, activation state, hooks, project MCP registration and uninstall
+  run as one serialized desired-state transaction with rollback and no-follow writes.
+- Hook dispatch, observation, feedback and statusline use the workspace carried by hook input, so
+  one host session cannot leak HZR state into a disabled workspace.
 
-## HZR instructions can stay on one machine
+## Bundle and platform contract
 
-The default remains the existing shared behavior. Operators who do not want HZR's managed block
-in repository instruction files can choose:
+Intel macOS (`darwin-x64`) is no longer supported. HZR 0.6.6 publishes exactly three native
+platform archives:
 
-```toml
-[instructions]
-scope = "local"
-```
+- `linux-x64`;
+- `linux-arm64`;
+- `darwin-arm64`.
 
-or pass `--instruction-scope local` to `hzr init` or `hzr install`.
+Component builds are cached by their semantic inputs and verified by version, license and hashes
+before reuse. On the measured machine, the reusable component stage changed from 372.92 seconds
+cold to 16.27 seconds warm (22.9x). The measured macOS arm64 bundle is 354204 KiB and the archive
+is 101056087 bytes.
 
-Local mode writes `CLAUDE.local.md` and `AGENTS.override.md`, registers both in
-`.git/info/exclude`, and leaves `CLAUDE.md`, `AGENTS.md`, and `.gitignore` untouched. The Codex
-override explicitly preserves the shared project contract by requiring the agent to read
-`./AGENTS.md` first.
+The bundled Node runtime contains the executable and license only. Caveman production packages
+omit optional dependencies. Independent preflight branches run in parallel, CI warms the same
+verified cache, and the reduced smoke matrix retains OS-specific and per-archive proof.
 
-Existing configuration is not silently migrated: `shared` stays the default until the operator
-selects `local`. Switching scope moves only HZR's managed region; user-authored text is retained
-by the existing backup and compare-and-swap path.
+## Release safety
 
-## An accounting gap now has a beginning
-
-The live transition warning and persistent `ACCOUNTING: DEGRADED` status remain. In addition, HZR
-now stamps the first degraded rewrite instead of only the latest one. The session card reports
-missing duration, affected operations, and share of observed session time. `hzr stats --evasion`
-reports the open gap's start and age, so an operator can distinguish “lost the last 12 minutes”
-from “this session was almost entirely untracked.”
-
-This is visibility, not fault tolerance: 0.6.5 does not add hzrd retries, restarts, or a new
-supervision layer.
-
-## Upgrade
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/heAdz0r/hzr/v0.6.5/install.sh | sh
-```
-
-After upgrading, `hzr doctor` verifies the configured instruction scope, watcher ownership, and
-daemon/accounting state.
+CI and release publishing invoke the same complete source gate. Native bundle and publish jobs
+cannot run after an ordinary test, Clippy, fork provenance or source-gate failure.

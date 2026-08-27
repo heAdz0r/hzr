@@ -13,7 +13,6 @@ HZR_ENGINE_ROOT="${HZR_BUNDLE_ROOT}/engines"
 HZR_CAVEMAN_ROOT="${HZR_ENGINE_ROOT}/caveman-code"
 HZR_NODE_ROOT="${HZR_BUNDLE_ROOT}/runtime/node"
 HZR_NODE_BINARY="${HZR_NODE_ROOT}/bin/node"
-HZR_NPM_BINARY="${HZR_NODE_ROOT}/bin/npm"
 HZR_PROVENANCE_ROOT="${HZR_BUNDLE_ROOT}/share/hzr"
 HZR_VISUALIZER_ROOT="${HZR_PROVENANCE_ROOT}/visualizer"
 
@@ -229,10 +228,29 @@ verify_matches_repository \
   const manifest = require(process.argv[1]);
   if (manifest.version !== "0.65.2") process.exit(1);
 ' "${HZR_CAVEMAN_ROOT}/node_modules/@juliusbrussee/caveman-code/package.json"
-PATH="${HZR_NODE_ROOT}/bin:${PATH}" "${HZR_NPM_BINARY}" ls \
-  --omit=dev --all --prefix "${HZR_CAVEMAN_ROOT}" >/dev/null
+(
+  cd "${HZR_CAVEMAN_ROOT}"
+  "${HZR_NODE_BINARY}" --input-type=module -e '
+    import {
+      createAgentSession,
+      DefaultResourceLoader,
+      SessionManager,
+      SettingsManager,
+    } from "@juliusbrussee/caveman-code";
+    for (const [name, value] of Object.entries({
+      createAgentSession,
+      DefaultResourceLoader,
+      SessionManager,
+      SettingsManager,
+    })) {
+      if (typeof value !== "function") {
+        throw new Error(`Caveman runtime export is unavailable: ${name}`);
+      }
+    }
+  '
+)
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.6.5" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.6.6" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
@@ -378,7 +396,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-  if (report.protocol_version !== 1 || report.hzr_version !== "0.6.5") {
+if (report.protocol_version !== 1 || report.hzr_version !== "0.6.6") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -418,7 +436,7 @@ fi
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
       const ids = new Set(report.services.map((service) => service.id));
-      if (response.status !== 200 || report.hzr_version !== "0.6.5" ||
+if (response.status !== 200 || report.hzr_version !== "0.6.6" ||
           !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
         throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
       }

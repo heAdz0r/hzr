@@ -56,6 +56,8 @@ pub enum ExecError {
     PrepareForkRuntime { path: PathBuf, source: io::Error },
     #[error("managed fork-core is unavailable: {reason}")]
     ForkCoreUnavailable { reason: String },
+    #[error("accounting batch changed before acknowledgement")]
+    AccountingBatchMismatch,
     #[error("failed to join {task} task: {source}")]
     Join {
         task: &'static str,

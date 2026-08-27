@@ -64,6 +64,9 @@ pub struct HookStatus {
     pub installed: bool,
     pub conflict: bool,
     pub native_tool_mode: Option<NativeToolMode>,
+    pub missing_hzr_identities: Vec<&'static str>,
+    pub duplicate_hzr_identities: Vec<&'static str>,
+    pub altered_hzr_identities: Vec<&'static str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -226,6 +229,7 @@ fn report(parts: ReportParts<'_>) -> AdoptionReport {
 }
 
 fn read_settings(path: &Path) -> Result<Vec<u8>> {
+    validate_lifecycle_target(path)?;
     match fs::read(path) {
         Ok(bytes) => Ok(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(b"{}\n".to_vec()),
@@ -236,6 +240,7 @@ fn read_settings(path: &Path) -> Result<Vec<u8>> {
 /// Read a file that may legitimately not exist yet, returning empty bytes instead
 /// of a JSON stub. Used for instruction files, which have no default document.
 pub(crate) fn read_optional(path: &Path) -> Result<Vec<u8>> {
+    validate_lifecycle_target(path)?;
     match fs::read(path) {
         Ok(bytes) => Ok(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -264,6 +269,75 @@ enum HookOwner {
     Rtk,
     Icm,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum HookIdentity {
+    SessionStart,
+    PreToolUse,
+    PostToolUse,
+    UserPromptSubmit,
+    Stop,
+    SubagentStop,
+    StatusLine,
+}
+
+const EXPECTED_HOOK_IDENTITIES: [HookIdentity; 7] = [
+    HookIdentity::SessionStart,
+    HookIdentity::PreToolUse,
+    HookIdentity::PostToolUse,
+    HookIdentity::UserPromptSubmit,
+    HookIdentity::Stop,
+    HookIdentity::SubagentStop,
+    HookIdentity::StatusLine,
+];
+
+impl HookIdentity {
+    fn name(self) -> &'static str {
+        match self {
+            Self::SessionStart => "session_start",
+            Self::PreToolUse => "pre_tool_use",
+            Self::PostToolUse => "post_tool_use",
+            Self::UserPromptSubmit => "user_prompt_submit",
+            Self::Stop => "stop",
+            Self::SubagentStop => "subagent_stop",
+            Self::StatusLine => "status_line",
+        }
+    }
+
+    fn event(self) -> Option<&'static str> {
+        match self {
+            Self::SessionStart => Some("SessionStart"),
+            Self::PreToolUse => Some("PreToolUse"),
+            Self::PostToolUse => Some("PostToolUse"),
+            Self::UserPromptSubmit => Some("UserPromptSubmit"),
+            Self::Stop => Some("Stop"),
+            Self::SubagentStop => Some("SubagentStop"),
+            Self::StatusLine => None,
+        }
+    }
+
+    fn matches(self, command: &str) -> bool {
+        match self {
+            Self::SessionStart => {
+                let command = command.trim_end();
+                [
+                    HZR_INIT_SUFFIX,
+                    HZR_INIT_SKIP_SERVICE_SUFFIX,
+                    HZR_INIT_ENABLED_SUFFIX,
+                    HZR_INIT_ENABLED_SKIP_SERVICE_SUFFIX,
+                ]
+                .iter()
+                .any(|suffix| command.ends_with(suffix))
+            }
+            Self::PreToolUse => hzr_dispatch_mode(command).is_some(),
+            Self::PostToolUse => hzr_observe_mode(command).is_some(),
+            Self::UserPromptSubmit | Self::Stop | Self::SubagentStop => {
+                command.trim_end().ends_with(HZR_FEEDBACK_SUFFIX)
+            }
+            Self::StatusLine => command.contains(HZR_STATUSLINE_SUFFIX),
+        }
+    }
 }
 
 fn owner(command: &str) -> HookOwner {
@@ -302,15 +376,66 @@ fn classify(path: &Path, document: &Value) -> HookStatus {
         HookOwner::Icm => external_icm_entries += 1,
         HookOwner::Other => {}
     });
+    let mut missing_hzr_identities = Vec::new();
+    let mut duplicate_hzr_identities = Vec::new();
+    let mut altered_hzr_identities = Vec::new();
+    for identity in EXPECTED_HOOK_IDENTITIES {
+        let commands = identity_commands(document, identity);
+        let matching = commands
+            .iter()
+            .filter(|command| identity.matches(command))
+            .count();
+        if matching == 0 {
+            missing_hzr_identities.push(identity.name());
+        } else if matching > 1 {
+            duplicate_hzr_identities.push(identity.name());
+        }
+        if commands
+            .iter()
+            .any(|command| owner(command) == HookOwner::Hzr && !identity.matches(command))
+        {
+            altered_hzr_identities.push(identity.name());
+        }
+    }
+    let identity_set_current = missing_hzr_identities.is_empty()
+        && duplicate_hzr_identities.is_empty()
+        && altered_hzr_identities.is_empty();
     HookStatus {
         settings_path: path.to_path_buf(),
         hzr_entries,
         rtk_entries,
         external_icm_entries,
-        installed: hzr_entries == 7 && rtk_entries == 0,
+        installed: identity_set_current && rtk_entries == 0,
         conflict: hzr_entries > 0 && rtk_entries > 0,
         native_tool_mode: installed_native_tool_mode(document),
+        missing_hzr_identities,
+        duplicate_hzr_identities,
+        altered_hzr_identities,
     }
+}
+
+fn identity_commands(document: &Value, identity: HookIdentity) -> Vec<&str> {
+    if identity == HookIdentity::StatusLine {
+        return document
+            .get("statusLine")
+            .and_then(|value| value.get("command"))
+            .and_then(Value::as_str)
+            .into_iter()
+            .collect();
+    }
+    let Some(event) = identity.event() else {
+        return Vec::new();
+    };
+    document
+        .get("hooks")
+        .and_then(|hooks| hooks.get(event))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("hooks").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+        .collect()
 }
 
 fn installed_native_tool_mode(document: &Value) -> Option<NativeToolMode> {
@@ -618,6 +743,7 @@ pub(crate) fn backup_path(path: &Path, bytes: &[u8]) -> PathBuf {
 }
 
 fn retain_backup(path: &Path, bytes: &[u8]) -> Result<()> {
+    validate_lifecycle_target(path)?;
     if path.exists() {
         let retained = fs::read(path)
             .with_context(|| format!("failed to verify retained backup {}", path.display()))?;
@@ -675,6 +801,8 @@ pub(crate) fn commit_with_lock(
     missing_default: &[u8],
     lock_path: &Path,
 ) -> Result<()> {
+    validate_lifecycle_target(path)?;
+    validate_lifecycle_target(lock_path)?;
     let parent = path
         .parent()
         .with_context(|| format!("settings path has no parent: {}", path.display()))?;
@@ -725,10 +853,12 @@ pub(crate) fn commit_with_lock(
 }
 
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    validate_lifecycle_target(path)?;
     let parent = path
         .parent()
         .with_context(|| format!("settings path has no parent: {}", path.display()))?;
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    validate_lifecycle_target(path)?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
         format!(
             "failed to create temporary settings in {}",
@@ -754,6 +884,57 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn validate_lifecycle_target(path: &Path) -> Result<()> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("cannot resolve lifecycle target against the current directory")?
+            .join(path)
+    };
+    #[cfg(target_os = "macos")]
+    let absolute = if let Ok(suffix) = absolute.strip_prefix("/var") {
+        Path::new("/private/var").join(suffix)
+    } else if let Ok(suffix) = absolute.strip_prefix("/tmp") {
+        Path::new("/private/tmp").join(suffix)
+    } else {
+        absolute
+    };
+    let components = absolute.components().collect::<Vec<_>>();
+    let mut current = PathBuf::new();
+    for (index, component) in components.iter().enumerate() {
+        current.push(component);
+        let final_component = index + 1 == components.len();
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "lifecycle target contains a symlink component: {}",
+                    current.display()
+                );
+            }
+            Ok(metadata) if !final_component && !metadata.is_dir() => {
+                bail!(
+                    "lifecycle target parent is not a directory: {}",
+                    current.display()
+                );
+            }
+            Ok(metadata) if final_component && !metadata.is_file() => {
+                bail!(
+                    "lifecycle target is not a regular file: {}",
+                    current.display()
+                );
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("inspect lifecycle target {}", current.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -768,7 +949,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        HookInstallPolicy, NativeToolMode, install, resolve_hook_binary, status, uninstall,
+        HookInstallPolicy, NativeToolMode, atomic_write, install, resolve_hook_binary, status,
+        uninstall,
     };
 
     /// Stable stand-in for the durable installed binary.
@@ -905,6 +1087,54 @@ mod tests {
         let removed = uninstall(&path, false, true).expect("confirmed uninstall");
         assert!(removed.changed);
         assert_eq!(status(&path).expect("hook status").hzr_entries, 0);
+    }
+
+    #[test]
+    fn hook_status_reports_duplicate_identity_by_name() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("settings.json");
+        install(&path, binary(), true, true, false, policy(false, true)).expect("install hooks");
+        let mut document: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("settings bytes"))
+                .expect("settings JSON");
+        let duplicate = document["hooks"]["Stop"][0].clone();
+        document["hooks"]["Stop"]
+            .as_array_mut()
+            .expect("Stop entries")
+            .push(duplicate);
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&document).expect("duplicate JSON"),
+        )
+        .expect("duplicate settings");
+
+        let current = status(&path).expect("hook status");
+        assert!(!current.installed);
+        assert_eq!(current.duplicate_hzr_identities, vec!["stop"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lifecycle_write_rejects_final_and_parent_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().expect("temporary directory");
+        let target = directory.path().join("target");
+        fs::write(&target, b"user bytes\n").expect("target bytes");
+        let final_link = directory.path().join("settings.json");
+        symlink(&target, &final_link).expect("final symlink");
+        assert!(atomic_write(&final_link, b"replacement\n").is_err());
+        assert_eq!(
+            fs::read(&target).expect("target unchanged"),
+            b"user bytes\n"
+        );
+
+        let real_parent = directory.path().join("real-parent");
+        fs::create_dir(&real_parent).expect("real parent");
+        let parent_link = directory.path().join("linked-parent");
+        symlink(&real_parent, &parent_link).expect("parent symlink");
+        assert!(atomic_write(&parent_link.join("config.toml"), b"new\n").is_err());
+        assert!(!real_parent.join("config.toml").exists());
     }
 
     #[test]

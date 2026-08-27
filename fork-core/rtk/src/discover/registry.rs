@@ -1,8 +1,11 @@
 //! Matches shell commands against known RTK rewrite rules to decide how to handle them.
 
+use hzr_engine_contract::{
+    EnforcementTier, EvasionAttribution, EvasionClass, EvasionInterpreter, EvasionPathForm,
+    FidelityReason, FidelityValidation,
+};
 use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
-use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use super::lexer::{
@@ -228,7 +231,7 @@ pub fn existing_route(cmd: &str) -> Option<(&'static str, &'static str)> {
             ..
         } => Some((rtk_equivalent, category)),
         _ => None,
-        }
+    }
 }
 
 /// Extract the base command (first word, or first two if it looks like a subcommand pattern).
@@ -551,23 +554,6 @@ pub enum RewriteOutcome {
     PolicyAsk,
 }
 
-/// Payload-free normalization evidence emitted by the typed rewrite-plan interface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct CanonicalAttribution {
-    pub class: &'static str,
-    pub wrapper_depth: u8,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub interpreter: Option<&'static str>,
-    pub path_form: &'static str,
-    pub stage_count: u16,
-    pub hatch_marker: bool,
-    pub avoidable: bool,
-    pub tier: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fidelity_reason: Option<&'static str>,
-    pub fidelity_validation: &'static str,
-}
-
 /// Leading privilege-elevation word, if the command starts with one.
 ///
 /// The user granted elevation to exactly one binary. Re-attaching the prefix in
@@ -608,7 +594,7 @@ pub fn privilege_prefix(cmd: &str) -> Option<&'static str> {
 pub fn canonical_attribution(
     command: &str,
     outcome: &RewriteOutcome,
-) -> Option<CanonicalAttribution> {
+) -> Option<EvasionAttribution> {
     let wrapper_depth = wrapper_depth(command, 0);
     let tokens = tokenize(command);
     let stage_count = tokens
@@ -634,28 +620,31 @@ pub fn canonical_attribution(
     let diagnostic = ledger_sqlite_requires_ask(command);
 
     let class = if privilege_prefix(command).is_some() {
-        "e11_privileged_prefix"
+        EvasionClass::E11PrivilegedPrefix
     } else if hatch.requested {
-        "e7_fidelity_hatch"
+        EvasionClass::E7FidelityHatch
     } else if diagnostic {
-        "e9_diagnostic_bypass"
+        EvasionClass::E9DiagnosticBypass
     } else if nested_dump {
-        "e6_nested_unbounded_reader"
+        EvasionClass::E6NestedUnboundedReader
     } else if interpreter.is_some() && interpreter_read_requires_ask(command) {
-        "e3_interpreter_read"
+        EvasionClass::E3InterpreterRead
     } else if wrapper_depth > 0 {
-        "e2_shell_wrapper"
+        EvasionClass::E2ShellWrapper
     } else if pipeline {
-        "e5_pipeline_or_redirect"
-    } else if matches!(path_form, "absolute_system" | "resolved_alias") {
-        "e4_executable_path"
+        EvasionClass::E5PipelineOrRedirect
+    } else if matches!(
+        path_form,
+        EvasionPathForm::AbsoluteSystem | EvasionPathForm::ResolvedAlias
+    ) {
+        EvasionClass::E4ExecutablePath
     } else if quoted && matches!(outcome, RewriteOutcome::Rewritten(_)) {
-        "e1_quoted_covered_command"
+        EvasionClass::E1QuotedCoveredCommand
     } else if matches!(
         outcome,
         RewriteOutcome::NoEquivalent | RewriteOutcome::PolicyAsk | RewriteOutcome::AmbiguousShell
     ) {
-        "e10_capability_gap"
+        EvasionClass::E10CapabilityGap
     } else {
         return None;
     };
@@ -664,21 +653,23 @@ pub fn canonical_attribution(
     // agent could have phrased better, so it is not counted as avoidable.
     let avoidable = !matches!(
         class,
-        "e7_fidelity_hatch" | "e10_capability_gap" | "e11_privileged_prefix"
+        EvasionClass::E7FidelityHatch
+            | EvasionClass::E10CapabilityGap
+            | EvasionClass::E11PrivilegedPrefix
     );
-    let tier = if class == "e7_fidelity_hatch" {
-        "t4_hatch_quarantine"
+    let tier = if class == EvasionClass::E7FidelityHatch {
+        EnforcementTier::T4HatchQuarantine
     } else if matches!(
         outcome,
         RewriteOutcome::PolicyAsk | RewriteOutcome::AmbiguousShell
     ) {
-        "t2_deny_with_prescription"
+        EnforcementTier::T2DenyWithPrescription
     } else if avoidable && matches!(outcome, RewriteOutcome::Rewritten(_)) {
-        "t1_named_correction"
+        EnforcementTier::T1NamedCorrection
     } else {
-        "t0_transparent_rewrite"
+        EnforcementTier::T0TransparentRewrite
     };
-    Some(CanonicalAttribution {
+    Some(EvasionAttribution {
         class,
         wrapper_depth,
         interpreter,
@@ -695,8 +686,8 @@ pub fn canonical_attribution(
 #[derive(Clone, Copy)]
 struct FidelitySignal {
     requested: bool,
-    reason: Option<&'static str>,
-    validation: &'static str,
+    reason: Option<FidelityReason>,
+    validation: FidelityValidation,
 }
 
 fn fidelity_signal(command: &str) -> FidelitySignal {
@@ -707,30 +698,23 @@ fn fidelity_signal(command: &str) -> FidelitySignal {
         if word == "HZR_RAW_FIDELITY=1" {
             requested = true;
         } else if let Some(value) = word.strip_prefix("HZR_RAW_FIDELITY_REASON=") {
-            let parsed = match value {
-                "binary" => Some("binary"),
-                "checksum" => Some("checksum"),
-                "machine_protocol" => Some("machine_protocol"),
-                "complete_log" => Some("complete_log"),
-                "full_patch" => Some("full_patch"),
-                "verbatim_source" => Some("verbatim_source"),
-                _ => None,
-            };
-            if parsed.is_none() || reason.replace(parsed.unwrap_or_default()).is_some() {
-                invalid = true;
+            let parsed = FidelityReason::parse(value);
+            match parsed {
+                Some(parsed) if reason.replace(parsed).is_none() => {}
+                Some(_) | None => invalid = true,
             }
         } else if !word.contains('=') {
             break;
         }
     }
     let validation = if !requested {
-        "not_requested"
+        FidelityValidation::NotRequested
     } else if invalid {
-        "invalid_reason"
+        FidelityValidation::InvalidReason
     } else if reason.is_none() {
-        "missing_reason"
+        FidelityValidation::MissingReason
     } else {
-        "valid"
+        FidelityValidation::Valid
     };
     FidelitySignal {
         requested,
@@ -751,38 +735,38 @@ fn wrapper_depth(command: &str, depth: u8) -> u8 {
     }
 }
 
-fn interpreter_signal(command: &str) -> Option<&'static str> {
+fn interpreter_signal(command: &str) -> Option<EvasionInterpreter> {
     shell_split(command)
         .iter()
         .find_map(|word| match executable_name(word) {
-            "sh" | "bash" | "dash" | "ksh" | "zsh" => Some("shell"),
-            "python" => Some("python"),
-            name if name.starts_with("python3") => Some("python"),
-            "node" => Some("javascript"),
-            "ruby" => Some("ruby"),
-            "perl" => Some("perl"),
-            "awk" => Some("awk"),
-            "sed" => Some("sed"),
+            "sh" | "bash" | "dash" | "ksh" | "zsh" => Some(EvasionInterpreter::Shell),
+            "python" => Some(EvasionInterpreter::Python),
+            name if name.starts_with("python3") => Some(EvasionInterpreter::Python),
+            "node" => Some(EvasionInterpreter::Javascript),
+            "ruby" => Some(EvasionInterpreter::Ruby),
+            "perl" => Some(EvasionInterpreter::Perl),
+            "awk" => Some(EvasionInterpreter::Awk),
+            "sed" => Some(EvasionInterpreter::Sed),
             _ => None,
         })
 }
 
-fn path_form(command: &str) -> &'static str {
+fn path_form(command: &str) -> EvasionPathForm {
     let (environment, _) = strip_disabled_prefix(command.trim());
     if path_override_resolves_rtk(environment).is_some() {
-        return "resolved_alias";
+        return EvasionPathForm::ResolvedAlias;
     }
     let words = shell_split(command);
     let Some(program) = words.first() else {
-        return "bare";
+        return EvasionPathForm::Bare;
     };
     let path = Path::new(program);
     if path.is_absolute() && executable_name(program) != program {
-        "absolute_system"
+        EvasionPathForm::AbsoluteSystem
     } else if path.components().count() > 1 {
-        "relative"
+        EvasionPathForm::Relative
     } else {
-        "bare"
+        EvasionPathForm::Bare
     }
 }
 
@@ -2560,8 +2544,8 @@ mod tests {
         );
         let attribution =
             canonical_attribution(&shadowed, &shadowed_outcome).expect("PATH attribution");
-        assert_eq!(attribution.class, "e4_executable_path");
-        assert_eq!(attribution.path_form, "resolved_alias");
+        assert_eq!(attribution.class, EvasionClass::E4ExecutablePath);
+        assert_eq!(attribution.path_form, EvasionPathForm::ResolvedAlias);
 
         for command in [
             "PATH=/definitely/not/a/managed/path git status --short",
@@ -2599,33 +2583,39 @@ mod tests {
     #[test]
     fn canonical_plan_attribution_is_closed_and_payload_free() {
         for (command, class) in [
-            ("sed -n '1,3p' README.md", "e1_quoted_covered_command"),
-            ("sh -c 'cat README.md'", "e2_shell_wrapper"),
+            (
+                "sed -n '1,3p' README.md",
+                EvasionClass::E1QuotedCoveredCommand,
+            ),
+            ("sh -c 'cat README.md'", EvasionClass::E2ShellWrapper),
             (
                 "python3 -c 'print(open(\"README.md\").read())'",
-                "e3_interpreter_read",
+                EvasionClass::E3InterpreterRead,
             ),
-            ("/bin/cat README.md", "e4_executable_path"),
+            ("/bin/cat README.md", EvasionClass::E4ExecutablePath),
             (
                 "PATH=/definitely/not/a/managed/path git status --short",
-                "e4_executable_path",
+                EvasionClass::E4ExecutablePath,
             ),
-            ("cat README.md | head -5", "e5_pipeline_or_redirect"),
+            (
+                "cat README.md | head -5",
+                EvasionClass::E5PipelineOrRedirect,
+            ),
             (
                 "find . -name '*.rs' -exec cat {} +",
-                "e6_nested_unbounded_reader",
+                EvasionClass::E6NestedUnboundedReader,
             ),
             (
                 "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=verbatim_source cat README.md",
-                "e7_fidelity_hatch",
+                EvasionClass::E7FidelityHatch,
             ),
             (
                 "sqlite3 /tmp/ledger/hzr.sqlite 'SELECT 1'",
-                "e9_diagnostic_bypass",
+                EvasionClass::E9DiagnosticBypass,
             ),
             (
                 "sqlite3 /tmp/x.db 'UPDATE users SET active=1'",
-                "e10_capability_gap",
+                EvasionClass::E10CapabilityGap,
             ),
         ] {
             let outcome = rewrite_command_outcome(command, &[], &[]);
@@ -2643,7 +2633,10 @@ mod tests {
         let outcome = rewrite_command_outcome(&command, &[], &[]);
         let attribution = canonical_attribution(&command, &outcome).expect("fidelity attribution");
         let serialized = serde_json::to_string(&attribution).expect("serialize attribution");
-        assert_eq!(attribution.fidelity_validation, "invalid_reason");
+        assert_eq!(
+            attribution.fidelity_validation,
+            FidelityValidation::InvalidReason
+        );
         assert!(!serialized.contains(secret));
 
         let bare = rewrite_command_outcome("cat README.md", &[], &[]);
@@ -5524,7 +5517,7 @@ mod tests {
         let attribution =
             super::canonical_attribution("sudo docker ps", &RewriteOutcome::NoEquivalent)
                 .expect("privileged prefix must be attributed");
-        assert_eq!(attribution.class, "e11_privileged_prefix");
+        assert_eq!(attribution.class, EvasionClass::E11PrivilegedPrefix);
         assert!(!attribution.avoidable);
     }
 

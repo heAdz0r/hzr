@@ -208,9 +208,9 @@ pub enum Command {
     },
     #[command(about = "Remove HZR adoption hooks")]
     Uninstall {
-        /// Leave indexes and memory on disk after removing hooks
+        /// Delete the configured HZR data directory after removing adoption state
         #[arg(long)]
-        keep_data: bool,
+        purge_data: bool,
         /// Show the uninstall plan without changing the system
         #[arg(long)]
         dry_run: bool,
@@ -1212,7 +1212,7 @@ mod tests {
             "limit",
             "mode",
             "include-content",
-            "keep-data",
+            "purge-data",
             "file",
             "keyword",
             "raw",

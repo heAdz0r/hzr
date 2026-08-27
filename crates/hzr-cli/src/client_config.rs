@@ -430,6 +430,17 @@ pub fn uninstall_all(dry_run: bool, confirmed: bool) -> Result<Vec<ClientConfigR
         .collect()
 }
 
+pub fn mutation_paths(workspace: &Path) -> Result<Vec<PathBuf>> {
+    let mut paths = default_paths()?
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect::<Vec<_>>();
+    paths.push(project_codex_path(workspace));
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 fn uninstall(
     client: Client,
     path: &Path,

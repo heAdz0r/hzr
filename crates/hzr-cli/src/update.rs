@@ -437,9 +437,12 @@ fn infer_bin_dir(executable: &Path) -> Option<PathBuf> {
 }
 
 fn current_platform() -> Result<&'static str> {
-    match (std::env::consts::OS, std::env::consts::ARCH) {
+    platform_for(std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn platform_for(os: &str, architecture: &str) -> Result<&'static str> {
+    match (os, architecture) {
         ("macos", "aarch64") => Ok("darwin-arm64"),
-        ("macos", "x86_64") => Ok("darwin-x64"),
         ("linux", "aarch64") => Ok("linux-arm64"),
         ("linux", "x86_64") => Ok("linux-x64"),
         (os, architecture) => bail!("unsupported update platform: {os}-{architecture}"),
@@ -649,7 +652,7 @@ mod tests {
     use super::{
         AvailableRelease, CacheStatus, CachedRelease, CheckOutcome, check_exit_code, check_json,
         checksum_for_artifact, classify_cache, classify_check, installer_candidates, notice,
-        parse_release_version, select_release, startup_notice, write_cache,
+        parse_release_version, platform_for, select_release, startup_notice, write_cache,
     };
     use std::path::{Path, PathBuf};
     use std::process::ExitCode;
@@ -682,6 +685,12 @@ mod tests {
             candidates,
             vec![PathBuf::from("/opt/hzr/share/hzr/install.sh")]
         );
+    }
+
+    #[test]
+    fn intel_macos_cannot_select_an_update_asset() {
+        let error = platform_for("macos", "x86_64").expect_err("Intel macOS is unsupported");
+        assert!(error.to_string().contains("unsupported update platform"));
     }
 
     #[test]

@@ -31,94 +31,30 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use fs2::FileExt;
+use hzr_engine_contract::{
+    AccountingFailureEvent, AccountingFailureKind, AccountingMeasurement, AccountingRoute,
+    AccountingWriteStatus, EngineAccountingReceipt, EngineContractIdentity, EvasionAttribution,
+    ACCOUNTING_CORRELATION_ENV, ACCOUNTING_FAILURE_JOURNAL_ENV, ACCOUNTING_POLICY_VERSION,
+    ACCOUNTING_RECEIPT_JOURNAL_ENV, ENGINE_CONTRACT_VERSION, HOST_GRANT_APPLIED_ENV,
+    INTERNAL_EVASION_ENV,
+};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::cell::RefCell;
 use std::ffi::{OsStr, OsString};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock; // H4: project_path cache
 use std::time::Instant;
 
-const INTERNAL_EVASION_ENV: &str = "HZR_INTERNAL_EVASION_JSON";
-const HOST_GRANT_APPLIED_ENV: &str = "HZR_INTERNAL_HOST_GRANT_APPLIED";
 const MAX_INTERNAL_EVASION_BYTES: usize = 1_024;
-static INTERNAL_EVASION: OnceLock<Option<InternalEvasionAttribution>> = OnceLock::new();
+const MAX_ACCOUNTING_FAILURE_JOURNAL_BYTES: u64 = 1024 * 1024;
+const MAX_ACCOUNTING_RECEIPT_JOURNAL_BYTES: u64 = 4 * 1024 * 1024;
+static INTERNAL_EVASION: OnceLock<Option<EvasionAttribution>> = OnceLock::new();
 static HOST_GRANT_APPLIED: OnceLock<bool> = OnceLock::new();
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct InternalEvasionAttribution {
-    class: String,
-    wrapper_depth: u8,
-    interpreter: Option<String>,
-    path_form: String,
-    stage_count: u16,
-    hatch_marker: bool,
-    avoidable: bool,
-    tier: String,
-    fidelity_reason: Option<String>,
-    fidelity_validation: String,
-}
-
-impl InternalEvasionAttribution {
-    fn valid(&self) -> bool {
-        matches!(
-            self.class.as_str(),
-            "e1_quoted_covered_command"
-                | "e2_shell_wrapper"
-                | "e3_interpreter_read"
-                | "e4_executable_path"
-                | "e5_pipeline_or_redirect"
-                | "e6_nested_unbounded_reader"
-                | "e7_fidelity_hatch"
-                | "e8_native_tool"
-                | "e9_diagnostic_bypass"
-                | "e10_capability_gap"
-        ) && self.wrapper_depth <= 3
-            && self.stage_count > 0
-            && self.interpreter.as_deref().is_none_or(|value| {
-                matches!(
-                    value,
-                    "shell" | "python" | "javascript" | "ruby" | "perl" | "awk" | "sed"
-                )
-            })
-            && matches!(
-                self.path_form.as_str(),
-                "bare" | "absolute_system" | "relative" | "resolved_alias"
-            )
-            && matches!(
-                self.tier.as_str(),
-                "t0_transparent_rewrite"
-                    | "t1_named_correction"
-                    | "t2_deny_with_prescription"
-                    | "t3_budget_exhaustion"
-                    | "t4_hatch_quarantine"
-            )
-            && self.fidelity_reason.as_deref().is_none_or(|value| {
-                matches!(
-                    value,
-                    "binary"
-                        | "checksum"
-                        | "machine_protocol"
-                        | "complete_log"
-                        | "full_patch"
-                        | "verbatim_source"
-                )
-            })
-            && matches!(
-                self.fidelity_validation.as_str(),
-                "not_requested"
-                    | "valid"
-                    | "missing_reason"
-                    | "invalid_reason"
-                    | "contradicted"
-                    | "proven_equivalent"
-                    | "budget_exhausted"
-            )
-            && (self.hatch_marker || self.fidelity_reason.is_none())
-            && (self.hatch_marker || self.fidelity_validation == "not_requested")
-    }
-}
+static ACCOUNTING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Consume internal policy metadata before any thread or child process can inherit it.
 pub fn initialize_internal_evasion() {
@@ -136,7 +72,7 @@ pub fn initialize_internal_evasion() {
     });
 }
 
-fn current_evasion_attribution() -> Option<&'static InternalEvasionAttribution> {
+fn current_evasion_attribution() -> Option<&'static EvasionAttribution> {
     initialize_internal_evasion();
     INTERNAL_EVASION.get().and_then(Option::as_ref)
 }
@@ -146,13 +82,119 @@ fn current_host_grant_applied() -> bool {
     *HOST_GRANT_APPLIED.get().unwrap_or(&false)
 }
 
-fn parse_internal_evasion(value: &str) -> Option<InternalEvasionAttribution> {
+fn parse_internal_evasion(value: &str) -> Option<EvasionAttribution> {
     if value.len() > MAX_INTERNAL_EVASION_BYTES || value.contains('\0') {
         return None;
     }
-    serde_json::from_str::<InternalEvasionAttribution>(value)
+    serde_json::from_str::<EvasionAttribution>(value)
         .ok()
-        .filter(InternalEvasionAttribution::valid)
+        .filter(|attribution| attribution.is_valid())
+}
+
+fn signal_accounting_failure(kind: AccountingFailureKind) {
+    let Some(path) = std::env::var_os(ACCOUNTING_FAILURE_JOURNAL_ENV).map(PathBuf::from) else {
+        return;
+    };
+    append_accounting_failure(&path, kind);
+}
+
+fn append_accounting_failure(path: &Path, kind: AccountingFailureKind) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if crate::utils::create_private_dir(parent).is_err() {
+        return;
+    }
+    let Ok(lock) = open_accounting_journal_lock(path) else {
+        return;
+    };
+    if lock.try_lock_exclusive().is_err() {
+        return;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true).read(true);
+    let Ok(mut file) = crate::utils::open_private(&mut options, path) else {
+        let _ = lock.unlock();
+        return;
+    };
+    if file
+        .metadata()
+        .is_ok_and(|metadata| metadata.len() >= MAX_ACCOUNTING_FAILURE_JOURNAL_BYTES)
+    {
+        let _ = lock.unlock();
+        return;
+    }
+    let event = AccountingFailureEvent {
+        contract_version: ENGINE_CONTRACT_VERSION,
+        engine: embedded_engine_identity(),
+        correlation_id: current_correlation_id(),
+        occurred_at_unix_ms: Utc::now().timestamp_millis(),
+        kind,
+    };
+    let _ = serde_json::to_writer(&mut file, &event)
+        .and_then(|()| file.write_all(b"\n").map_err(serde_json::Error::io));
+    let _ = lock.unlock();
+}
+
+fn current_correlation_id() -> String {
+    std::env::var(ACCOUNTING_CORRELATION_ENV)
+        .ok()
+        .filter(|value| hzr_engine_contract::valid_correlation_id(value))
+        .unwrap_or_else(|| "00000000000000000000000000000000".to_owned())
+}
+
+#[must_use]
+pub fn embedded_engine_identity() -> EngineContractIdentity {
+    EngineContractIdentity {
+        contract_version: ENGINE_CONTRACT_VERSION,
+        engine_version: env!("CARGO_PKG_VERSION").to_owned(),
+        manifest_sha256: env!("HZR_ENGINE_MANIFEST_SHA256").to_owned(),
+        content_manifest_sha256: env!("HZR_ENGINE_CONTENT_MANIFEST_SHA256").to_owned(),
+    }
+}
+
+fn append_accounting_receipt(receipt: &EngineAccountingReceipt) -> Result<()> {
+    let path = std::env::var_os(ACCOUNTING_RECEIPT_JOURNAL_ENV)
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("accounting receipt journal is not configured"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("accounting receipt journal has no parent"))?;
+    crate::utils::create_private_dir(parent)?;
+    let lock = open_accounting_journal_lock(&path)?;
+    lock.lock_exclusive()?;
+    let result = (|| -> Result<()> {
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true).read(true);
+        let mut file = crate::utils::open_private(&mut options, &path)?;
+        let encoded = serde_json::to_vec(receipt)?;
+        let next_len = file
+            .metadata()?
+            .len()
+            .saturating_add(encoded.len() as u64)
+            .saturating_add(1);
+        anyhow::ensure!(
+            next_len <= MAX_ACCOUNTING_RECEIPT_JOURNAL_BYTES,
+            "accounting receipt journal reached its bounded capacity"
+        );
+        file.write_all(&encoded)?;
+        file.write_all(b"\n")?;
+        file.sync_data()?;
+        Ok(())
+    })();
+    let _ = lock.unlock();
+    result
+}
+
+fn open_accounting_journal_lock(path: &Path) -> Result<std::fs::File> {
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).read(true).write(true);
+    Ok(crate::utils::open_private(
+        &mut options,
+        Path::new(&lock_path),
+    )?)
 }
 
 // ── Project path helpers ── // added: project-scoped tracking support
@@ -294,141 +336,12 @@ struct RecordAccounting<'a> {
 
 /// Non-sensitive dimensions shared with HZR's ledger schema. This intentionally cannot carry
 /// query text, paths, file contents, or arbitrary metadata.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OperationKind {
-    Search,
-    Read,
-}
+pub use hzr_engine_contract::{
+    AccountingAttribution as OperationAttribution, AccountingFilterLevel as ReadFilterLevel,
+    AccountingOperationKind as OperationKind, AccountingOperationMode as OperationMode,
+    AccountingSearchStrategy as SearchStrategy, AccountingStage, SearchFallbackCode,
+};
 
-impl OperationKind {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Search => "search",
-            Self::Read => "read",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OperationMode {
-    SearchSemantic,
-    SearchExact,
-    SearchBuiltin,
-    ReadFull,
-    ReadFiltered,
-    ReadRange,
-    ReadHead,
-    ReadTail,
-    ReadOutline,
-    ReadSymbols,
-    ReadChanged,
-    ReadSince,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SearchStrategy {
-    Grepai,
-    Ripgrep,
-    Files,
-    Builtin,
-}
-
-impl SearchStrategy {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Grepai => "fork_rgai_grepai",
-            Self::Ripgrep => "fork_rgai_ripgrep",
-            Self::Files => "fork_rgai_files",
-            Self::Builtin => "fork_rgai_builtin",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SearchFallbackCode {
-    GrepaiUnavailable,
-    RipgrepUnavailable,
-}
-
-impl SearchFallbackCode {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::GrepaiUnavailable => "grepai_unavailable",
-            Self::RipgrepUnavailable => "ripgrep_unavailable",
-        }
-    }
-}
-
-impl OperationMode {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::SearchSemantic => "search_semantic",
-            Self::SearchExact => "search_exact",
-            Self::SearchBuiltin => "search_builtin",
-            Self::ReadFull => "read_full",
-            Self::ReadFiltered => "read_filtered",
-            Self::ReadRange => "read_range",
-            Self::ReadHead => "read_head",
-            Self::ReadTail => "read_tail",
-            Self::ReadOutline => "read_outline",
-            Self::ReadSymbols => "read_symbols",
-            Self::ReadChanged => "read_changed",
-            Self::ReadSince => "read_since",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AccountingStage {
-    InternalTransport,
-}
-
-impl AccountingStage {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::InternalTransport => "internal_transport",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReadFilterLevel {
-    None,
-    Minimal,
-    Aggressive,
-}
-
-impl ReadFilterLevel {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Minimal => "minimal",
-            Self::Aggressive => "aggressive",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct OperationAttribution {
-    pub operation: OperationKind,
-    pub mode: OperationMode,
-    pub stage: AccountingStage,
-    pub requested_mode: Option<OperationMode>,
-    pub effective_mode: Option<OperationMode>,
-    pub search_strategy: Option<SearchStrategy>,
-    pub search_fallback_code: Option<SearchFallbackCode>,
-    pub include_content: Option<bool>,
-    pub limit: Option<usize>,
-    pub path_scope_count: Option<usize>,
-    pub filter_level: Option<ReadFilterLevel>,
-    pub from_line: Option<usize>,
-    pub to_line: Option<usize>,
-    pub source_bytes: Option<u64>,
-}
-
-/// Individual command record from tracking history.
-///
-/// Contains timestamp, command name, and savings metrics for a single execution.
 #[derive(Debug)]
 pub struct CommandRecord {
     /// UTC timestamp when command was executed
@@ -817,25 +730,41 @@ impl Tracker {
 
         let project_path = current_project_path_string(); // added: record cwd
         let (agent, session_id) = current_agent_context();
-        let evasion = current_evasion_attribution();
-        let registry_replacement = crate::discover::registry::existing_route(original_cmd);
-        let typed_replacement = accounting.attribution.map(|attribution| match attribution.operation {
-            OperationKind::Search => ("hzr search", "typed HZR search route"),
-            OperationKind::Read => ("hzr read", "typed HZR read route"),
-        });
-        let replacement_capability = if typed_replacement.is_some() || registry_replacement.is_some() {
-            "available"
-        } else {
-            "unavailable"
+        let attributed_evasion = accounting.attribution.and_then(|value| value.evasion);
+        let evasion = match attributed_evasion.as_ref() {
+            Some(attribution) => Some(attribution),
+            None => current_evasion_attribution(),
         };
+        let registry_replacement = crate::discover::registry::existing_route(original_cmd);
+        let typed_replacement =
+            accounting
+                .attribution
+                .map(|attribution| match attribution.operation {
+                    OperationKind::Search => ("hzr search", "typed HZR search route"),
+                    OperationKind::Read => ("hzr read", "typed HZR read route"),
+                    OperationKind::Write => ("hzr write", "typed HZR write route"),
+                    OperationKind::Context => ("hzr context", "typed HZR context route"),
+                    OperationKind::Memory => ("hzr memory", "typed HZR memory route"),
+                    OperationKind::Codec => ("hzr codec", "typed HZR codec route"),
+                    OperationKind::Exec => ("hzr exec", "typed HZR exec route"),
+                    OperationKind::Observability => {
+                        ("hzr observability", "typed HZR observability route")
+                    }
+                    OperationKind::Doctor => ("hzr doctor", "typed HZR doctor route"),
+                });
+        let replacement_capability =
+            if typed_replacement.is_some() || registry_replacement.is_some() {
+                "available"
+            } else {
+                "unavailable"
+            };
         let replacement_route = typed_replacement
             .map(|(route, _)| route.to_owned())
             .or_else(|| {
                 registry_replacement.map(|(route, _)| {
-                    route.strip_prefix("rtk ").map_or_else(
-                        || route.to_owned(),
-                        |route| format!("hzr rtk -- {route}"),
-                    )
+                    route
+                        .strip_prefix("rtk ")
+                        .map_or_else(|| route.to_owned(), |route| format!("hzr rtk -- {route}"))
                 })
             });
         let replacement_reason = typed_replacement
@@ -906,21 +835,21 @@ impl Tracker {
                 accounting.attribution.and_then(|value| value.to_line),
                 accounting.attribution.and_then(|value| value.source_bytes),
                 concat!("rtk/", env!("CARGO_PKG_VERSION")),
-                "privacy_typed_v2",
+                ACCOUNTING_POLICY_VERSION,
                 accounting.attribution.map(|value| value.operation.as_str()),
                 replacement_capability,
                 replacement_route,
                 replacement_reason,
-                evasion.map(|value| value.class.as_str()),
+                evasion.map(|value| value.class.ledger_str()),
                 evasion.map(|value| value.wrapper_depth),
-                evasion.and_then(|value| value.interpreter.as_deref()),
+                evasion.and_then(|value| value.interpreter.map(|kind| kind.as_str())),
                 evasion.map(|value| value.path_form.as_str()),
                 evasion.map(|value| value.stage_count),
                 evasion.map(|value| value.hatch_marker),
                 evasion.map(|value| value.avoidable),
                 current_host_grant_applied(),
-                evasion.map(|value| value.tier.as_str()),
-                evasion.and_then(|value| value.fidelity_reason.as_deref()),
+                evasion.map(|value| value.tier.ledger_str()),
+                evasion.and_then(|value| value.fidelity_reason.map(|reason| reason.as_str())),
                 evasion.map(|value| value.fidelity_validation.as_str()),
             ],
         )?;
@@ -1720,13 +1649,22 @@ impl TimedExecution {
     /// let output = "short output";
     /// timer.track("ls -la", "rtk ls", input, output);
     /// ```
-    pub fn track(&self, original_cmd: &str, rtk_cmd: &str, input: &str, output: &str) {
+    pub fn track(
+        &self,
+        original_cmd: &str,
+        rtk_cmd: &str,
+        input: &str,
+        output: &str,
+    ) -> AccountingWriteStatus {
         if tracking_disabled() {
-            return;
+            return AccountingWriteStatus::Disabled;
+        }
+        if receipt_mode() {
+            return self.record_receipt(input, output, AccountingMeasurement::Estimated, None);
         }
         with_cached_tracker(|tracker| {
-            let _ = self.track_with(tracker, original_cmd, rtk_cmd, input, output);
-        });
+            self.track_with(tracker, original_cmd, rtk_cmd, input, output)
+        })
     }
 
     pub fn track_attributed(
@@ -1736,20 +1674,28 @@ impl TimedExecution {
         input: &str,
         output: &str,
         attribution: OperationAttribution,
-    ) {
+    ) -> AccountingWriteStatus {
         if tracking_disabled() {
-            return;
+            return AccountingWriteStatus::Disabled;
+        }
+        if receipt_mode() {
+            return self.record_receipt(
+                input,
+                output,
+                AccountingMeasurement::Estimated,
+                Some(attribution),
+            );
         }
         with_cached_tracker(|tracker| {
-            let _ = tracker.record_attributed(
+            tracker.record_attributed(
                 original_cmd,
                 rtk_cmd,
                 estimate_tokens(input),
                 estimate_tokens(output),
                 self.start.elapsed().as_millis() as u64,
                 attribution,
-            );
-        });
+            )
+        })
     }
 
     fn track_with(
@@ -1790,13 +1736,58 @@ impl TimedExecution {
     /// // ... execute streaming command ...
     /// timer.track_passthrough("git tag", "rtk git tag");
     /// ```
-    pub fn track_passthrough(&self, original_cmd: &str, rtk_cmd: &str) {
+    pub fn track_passthrough(&self, original_cmd: &str, rtk_cmd: &str) -> AccountingWriteStatus {
         if tracking_disabled() {
-            return;
+            return AccountingWriteStatus::Disabled;
         }
-        with_cached_tracker(|tracker| {
-            let _ = self.track_passthrough_with(tracker, original_cmd, rtk_cmd);
-        });
+        if receipt_mode() {
+            return self.record_receipt("", "", AccountingMeasurement::Unmeasured, None);
+        }
+        with_cached_tracker(|tracker| self.track_passthrough_with(tracker, original_cmd, rtk_cmd))
+    }
+
+    fn record_receipt(
+        &self,
+        input: &str,
+        output: &str,
+        measurement: AccountingMeasurement,
+        attribution: Option<OperationAttribution>,
+    ) -> AccountingWriteStatus {
+        let attribution = receipt_attribution(attribution);
+        let route =
+            if attribution.evasion.is_some() || measurement == AccountingMeasurement::Unmeasured {
+                AccountingRoute::Bypassed
+            } else {
+                AccountingRoute::Optimized
+            };
+        let baseline_tokens = estimate_tokens(input) as u64;
+        let delivered_tokens = match route {
+            AccountingRoute::Optimized => estimate_tokens(output) as u64,
+            AccountingRoute::Bypassed | AccountingRoute::NativeUnaccounted => baseline_tokens,
+        };
+        let receipt = EngineAccountingReceipt {
+            contract_version: ENGINE_CONTRACT_VERSION,
+            engine: embedded_engine_identity(),
+            correlation_id: current_correlation_id(),
+            sequence: ACCOUNTING_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            occurred_at_unix_ms: Utc::now().timestamp_millis(),
+            baseline_tokens,
+            delivered_tokens,
+            execution_ms: self.start.elapsed().as_millis() as u64,
+            measurement,
+            route,
+            attribution,
+            host_grant_applied: current_host_grant_applied(),
+        };
+        match append_accounting_receipt(&receipt) {
+            Ok(()) => AccountingWriteStatus::Recorded,
+            Err(_) => {
+                signal_accounting_failure(AccountingFailureKind::ReceiptAppend);
+                AccountingWriteStatus::Failed {
+                    kind: AccountingFailureKind::ReceiptAppend,
+                }
+            }
+        }
     }
 
     fn track_passthrough_with(
@@ -1820,23 +1811,64 @@ impl TimedExecution {
     }
 }
 
-fn with_cached_tracker<F>(f: F)
+fn receipt_mode() -> bool {
+    std::env::var_os(ACCOUNTING_RECEIPT_JOURNAL_ENV).is_some()
+}
+
+fn receipt_attribution(attribution: Option<OperationAttribution>) -> OperationAttribution {
+    let mut attribution = attribution.unwrap_or(OperationAttribution {
+        operation: OperationKind::Exec,
+        mode: OperationMode::ExecRun,
+        stage: AccountingStage::InternalTransport,
+        requested_mode: None,
+        effective_mode: None,
+        search_strategy: None,
+        search_fallback_code: None,
+        include_content: None,
+        limit: None,
+        path_scope_count: None,
+        filter_level: None,
+        from_line: None,
+        to_line: None,
+        source_bytes: None,
+        evasion: None,
+    });
+    if attribution.evasion.is_none() {
+        attribution.evasion = current_evasion_attribution().copied();
+    }
+    attribution
+}
+
+fn with_cached_tracker<F>(f: F) -> AccountingWriteStatus
 where
-    F: FnOnce(&Tracker),
+    F: FnOnce(&Tracker) -> Result<()>,
 {
     TRACKER_CACHE.with(|slot| {
         let mut cache = slot.borrow_mut();
         if cache.is_none() {
-            if let Ok(tracker) = Tracker::new() {
-                *cache = Some(tracker);
-            } else {
-                return;
+            match Tracker::new() {
+                Ok(tracker) => *cache = Some(tracker),
+                Err(_) => {
+                    signal_accounting_failure(AccountingFailureKind::TrackerOpen);
+                    return AccountingWriteStatus::Failed {
+                        kind: AccountingFailureKind::TrackerOpen,
+                    };
+                }
             }
         }
-        if let Some(tracker) = cache.as_ref() {
-            f(tracker);
+        match cache.as_ref().map(f) {
+            Some(Ok(())) => AccountingWriteStatus::Recorded,
+            Some(Err(_)) => {
+                signal_accounting_failure(AccountingFailureKind::OperationRecord);
+                AccountingWriteStatus::Failed {
+                    kind: AccountingFailureKind::OperationRecord,
+                }
+            }
+            None => AccountingWriteStatus::Failed {
+                kind: AccountingFailureKind::TrackerOpen,
+            },
         }
-    });
+    })
 }
 
 fn configure_connection(conn: &Connection) {
@@ -1887,7 +1919,18 @@ mod tests {
     fn internal_evasion_metadata_accepts_only_closed_payload_free_json() {
         let valid = r#"{"class":"e2_shell_wrapper","wrapper_depth":1,"interpreter":"shell","path_form":"bare","stage_count":1,"hatch_marker":false,"avoidable":true,"tier":"t1_named_correction","fidelity_validation":"not_requested"}"#;
         let parsed = parse_internal_evasion(valid).expect("closed attribution");
-        assert_eq!(parsed.class, "e2_shell_wrapper");
+        assert_eq!(
+            parsed.class,
+            hzr_engine_contract::EvasionClass::E2ShellWrapper
+        );
+
+        let e11 = r#"{"class":"e11_privileged_prefix","wrapper_depth":0,"path_form":"bare","stage_count":1,"hatch_marker":false,"avoidable":false,"tier":"t0_transparent_rewrite","fidelity_validation":"not_requested"}"#;
+        let parsed = parse_internal_evasion(e11).expect("E11 attribution");
+        assert_eq!(
+            parsed.class,
+            hzr_engine_contract::EvasionClass::E11PrivilegedPrefix
+        );
+        assert!(!parsed.avoidable);
 
         for invalid in [
             r#"{"class":"e2_shell_wrapper","wrapper_depth":1,"interpreter":"shell","path_form":"bare","stage_count":1,"hatch_marker":false,"avoidable":true,"tier":"t1_named_correction","fidelity_validation":"not_requested","command":"cat private.txt"}"#,
@@ -1896,6 +1939,25 @@ mod tests {
         ] {
             assert!(parse_internal_evasion(invalid).is_none());
         }
+    }
+
+    #[test]
+    fn accounting_failure_journal_is_typed_bounded_and_payload_free() {
+        let temp = tempfile::tempdir().expect("failure journal directory");
+        let path = temp.path().join("accounting-failures.jsonl");
+        append_accounting_failure(&path, AccountingFailureKind::OperationRecord);
+        let bytes = std::fs::read(&path).expect("failure journal");
+        let event: AccountingFailureEvent =
+            serde_json::from_slice(bytes.strip_suffix(b"\n").expect("line terminator"))
+                .expect("typed failure event");
+        assert_eq!(event.contract_version, ENGINE_CONTRACT_VERSION);
+        assert_eq!(event.kind, AccountingFailureKind::OperationRecord);
+        assert_eq!(event.engine, embedded_engine_identity());
+        let rendered = String::from_utf8(bytes).expect("JSON is UTF-8");
+        assert!(!rendered.contains("command"));
+        assert!(!rendered.contains("project"));
+        assert!(!rendered.contains("session"));
+        assert!(rendered.len() < 512);
     }
 
     // 2. args_display — format OsString vec
@@ -2023,7 +2085,7 @@ mod tests {
                     stage: AccountingStage::InternalTransport,
                     requested_mode: Some(OperationMode::SearchSemantic),
                     effective_mode: Some(OperationMode::SearchExact),
-                    search_strategy: Some(SearchStrategy::Builtin),
+                    search_strategy: Some(SearchStrategy::ForkRgaiBuiltin),
                     search_fallback_code: Some(SearchFallbackCode::GrepaiUnavailable),
                     include_content: None,
                     limit: Some(7),
@@ -2032,6 +2094,18 @@ mod tests {
                     from_line: None,
                     to_line: None,
                     source_bytes: None,
+                    evasion: Some(EvasionAttribution {
+                        class: hzr_engine_contract::EvasionClass::E11PrivilegedPrefix,
+                        wrapper_depth: 0,
+                        interpreter: None,
+                        path_form: hzr_engine_contract::EvasionPathForm::Bare,
+                        stage_count: 1,
+                        hatch_marker: false,
+                        avoidable: false,
+                        tier: hzr_engine_contract::EnforcementTier::T0TransparentRewrite,
+                        fidelity_reason: None,
+                        fidelity_validation: hzr_engine_contract::FidelityValidation::NotRequested,
+                    }),
                 },
             )
             .expect("attributed record");
@@ -2100,7 +2174,23 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("accounting policy version");
-        assert_eq!(policy, "privacy_typed_v2");
+        assert_eq!(policy, ACCOUNTING_POLICY_VERSION);
+        let evasion: (String, bool, String) = tracker
+            .conn
+            .query_row(
+                "SELECT evasion_class, avoidable, enforcement_tier FROM commands",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("E11 dimensions");
+        assert_eq!(
+            evasion,
+            (
+                "e11_privileged_prefix".to_owned(),
+                false,
+                "t0_transparent_rewrite".to_owned(),
+            )
+        );
     }
 
     #[test]

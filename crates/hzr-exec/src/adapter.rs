@@ -4,7 +4,11 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
 
-use hzr_protocol::EvasionAttribution;
+use hzr_engine_contract::{
+    ACCOUNTING_CORRELATION_ENV, ACCOUNTING_FAILURE_JOURNAL_ENV, ACCOUNTING_RECEIPT_JOURNAL_ENV,
+    BYTE_FIDELITY_ENV, ENGINE_CONTRACT_VERSION, EngineContractIdentity, EvasionAttribution,
+    RewritePlan, RewritePlanDecision, RewritePlanReason,
+};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -12,14 +16,29 @@ use tokio::process::Command;
 use crate::{CanonicalCommand, ExecError, RewriteDecision, RewriteSource};
 
 pub const PINNED_RTK_VERSION: &str = "0.44.1-fork.1";
-pub const INTERNAL_EVASION_ENV: &str = "HZR_INTERNAL_EVASION_JSON";
+pub use hzr_engine_contract::INTERNAL_EVASION_ENV;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ForkRuntimePaths {
     pub memory_db: PathBuf,
-    pub history_db: PathBuf,
     pub tee_dir: PathBuf,
     pub audit_dir: PathBuf,
+    pub accounting_receipt_journal: PathBuf,
+    pub accounting_failure_journal: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForkAccountingHandle {
+    pub(crate) correlation_id: String,
+    pub(crate) receipt_journal: PathBuf,
+    pub(crate) failure_journal: PathBuf,
+}
+
+impl ForkAccountingHandle {
+    #[must_use]
+    pub fn correlation_id(&self) -> &str {
+        &self.correlation_id
+    }
 }
 
 impl ForkRuntimePaths {
@@ -28,18 +47,19 @@ impl ForkRuntimePaths {
         let root = data_root.join("fork");
         Self {
             memory_db: root.join("mem.db"),
-            history_db: data_root.join("ledger/hzr.sqlite"),
             tee_dir: root.join("tee"),
             audit_dir: root.join("audit"),
+            accounting_receipt_journal: root.join("accounting-receipts.jsonl"),
+            accounting_failure_journal: root.join("accounting-failures.jsonl"),
         }
     }
 
     pub fn ensure_layout(&self) -> Result<(), ExecError> {
         let memory_parent = parent_or_error(&self.memory_db)?;
-        let history_parent = parent_or_error(&self.history_db)?;
+        let receipt_parent = parent_or_error(&self.accounting_receipt_journal)?;
         for directory in [
             memory_parent,
-            history_parent,
+            receipt_parent,
             self.tee_dir.as_path(),
             self.audit_dir.as_path(),
         ] {
@@ -55,9 +75,10 @@ impl ForkRuntimePaths {
     fn validate_shell_paths(&self) -> Result<(), ExecError> {
         for path in [
             &self.memory_db,
-            &self.history_db,
             &self.tee_dir,
             &self.audit_dir,
+            &self.accounting_receipt_journal,
+            &self.accounting_failure_journal,
         ] {
             if path.to_str().is_none() {
                 return Err(ExecError::NonUtf8ForkRuntimePath { path: path.clone() });
@@ -67,6 +88,7 @@ impl ForkRuntimePaths {
     }
 
     fn apply_to_command(&self, command: &mut Command, binary: &Path) -> Result<(), ExecError> {
+        let accounting = self.new_accounting_context()?;
         let binary_directory = binary
             .parent()
             .ok_or_else(|| ExecError::InvalidForkBinaryPath {
@@ -74,9 +96,12 @@ impl ForkRuntimePaths {
             })?;
         command
             .env("RTK_MEM_DB_PATH", &self.memory_db)
-            .env("RTK_DB_PATH", &self.history_db)
+            .env_remove("RTK_DB_PATH")
             .env("RTK_TEE_DIR", &self.tee_dir)
             .env("RTK_AUDIT_DIR", &self.audit_dir)
+            .env(ACCOUNTING_RECEIPT_JOURNAL_ENV, &accounting.receipt_journal)
+            .env(ACCOUNTING_FAILURE_JOURNAL_ENV, &accounting.failure_journal)
+            .env(ACCOUNTING_CORRELATION_ENV, &accounting.correlation_id)
             .env("RTK_TEE", "0")
             .env("RTK_HISTORY_DAYS", "0")
             .env("RTK_TRACKING_DISABLED", "0")
@@ -89,6 +114,7 @@ impl ForkRuntimePaths {
         &self,
         environment: &mut crate::Environment,
         binary: &Path,
+        accounting: &ForkAccountingHandle,
     ) -> Result<(), ExecError> {
         let binary_directory = binary
             .parent()
@@ -97,15 +123,31 @@ impl ForkRuntimePaths {
             })?;
         for (key, value) in [
             ("RTK_MEM_DB_PATH", path_text(&self.memory_db)?),
-            ("RTK_DB_PATH", path_text(&self.history_db)?),
             ("RTK_TEE_DIR", path_text(&self.tee_dir)?),
             ("RTK_AUDIT_DIR", path_text(&self.audit_dir)?),
+            (
+                ACCOUNTING_RECEIPT_JOURNAL_ENV,
+                path_text(&accounting.receipt_journal)?,
+            ),
+            (
+                ACCOUNTING_FAILURE_JOURNAL_ENV,
+                path_text(&accounting.failure_journal)?,
+            ),
+            (ACCOUNTING_CORRELATION_ENV, &accounting.correlation_id),
             ("RTK_TEE", "0"),
             ("RTK_HISTORY_DAYS", "0"),
             ("RTK_TRACKING_DISABLED", "0"),
             ("RTK_TELEMETRY_DISABLED", "1"),
         ] {
             environment.set.insert(key.to_owned(), value.to_owned());
+        }
+        environment.set.remove("RTK_DB_PATH");
+        if !environment
+            .remove
+            .iter()
+            .any(|variable| variable == "RTK_DB_PATH")
+        {
+            environment.remove.push("RTK_DB_PATH".to_owned());
         }
         let path = prefixed_path(binary_directory)?;
         let path = path
@@ -121,6 +163,7 @@ impl ForkRuntimePaths {
         &self,
         command: &mut std::process::Command,
         binary: &Path,
+        accounting: &ForkAccountingHandle,
     ) -> Result<(), ExecError> {
         let binary_directory = binary
             .parent()
@@ -129,9 +172,12 @@ impl ForkRuntimePaths {
             })?;
         command
             .env("RTK_MEM_DB_PATH", &self.memory_db)
-            .env("RTK_DB_PATH", &self.history_db)
+            .env_remove("RTK_DB_PATH")
             .env("RTK_TEE_DIR", &self.tee_dir)
             .env("RTK_AUDIT_DIR", &self.audit_dir)
+            .env(ACCOUNTING_RECEIPT_JOURNAL_ENV, &accounting.receipt_journal)
+            .env(ACCOUNTING_FAILURE_JOURNAL_ENV, &accounting.failure_journal)
+            .env(ACCOUNTING_CORRELATION_ENV, &accounting.correlation_id)
             .env("RTK_TEE", "0")
             .env("RTK_HISTORY_DAYS", "0")
             .env("RTK_TRACKING_DISABLED", "0")
@@ -142,6 +188,7 @@ impl ForkRuntimePaths {
 
     fn shell_exports(&self, binary_directory: &Path) -> Result<String, ExecError> {
         self.validate_shell_paths()?;
+        let accounting = self.new_accounting_context()?;
         let binary_directory =
             binary_directory
                 .to_str()
@@ -149,14 +196,47 @@ impl ForkRuntimePaths {
                     path: binary_directory.to_owned(),
                 })?;
         Ok(format!(
-            "RTK_MEM_DB_PATH={}\nRTK_DB_PATH={}\nRTK_TEE_DIR={}\nRTK_AUDIT_DIR={}\nRTK_TEE=0\nRTK_HISTORY_DAYS=0\nRTK_TRACKING_DISABLED=0\nRTK_TELEMETRY_DISABLED=1\nPATH={}${{PATH:+\":$PATH\"}}\nexport RTK_MEM_DB_PATH RTK_DB_PATH RTK_TEE_DIR RTK_AUDIT_DIR RTK_TEE RTK_HISTORY_DAYS RTK_TRACKING_DISABLED RTK_TELEMETRY_DISABLED PATH\n",
+            "unset RTK_DB_PATH\nRTK_MEM_DB_PATH={}\nRTK_TEE_DIR={}\nRTK_AUDIT_DIR={}\n{ACCOUNTING_RECEIPT_JOURNAL_ENV}={}\n{ACCOUNTING_FAILURE_JOURNAL_ENV}={}\n{ACCOUNTING_CORRELATION_ENV}={}\nRTK_TEE=0\nRTK_HISTORY_DAYS=0\nRTK_TRACKING_DISABLED=0\nRTK_TELEMETRY_DISABLED=1\nPATH={}${{PATH:+\":$PATH\"}}\nexport RTK_MEM_DB_PATH RTK_TEE_DIR RTK_AUDIT_DIR {ACCOUNTING_RECEIPT_JOURNAL_ENV} {ACCOUNTING_FAILURE_JOURNAL_ENV} {ACCOUNTING_CORRELATION_ENV} RTK_TEE RTK_HISTORY_DAYS RTK_TRACKING_DISABLED RTK_TELEMETRY_DISABLED PATH\n",
             shell_quote(path_text(&self.memory_db)?),
-            shell_quote(path_text(&self.history_db)?),
             shell_quote(path_text(&self.tee_dir)?),
             shell_quote(path_text(&self.audit_dir)?),
+            shell_quote(path_text(&accounting.receipt_journal)?),
+            shell_quote(path_text(&accounting.failure_journal)?),
+            shell_quote(&accounting.correlation_id),
             shell_quote(binary_directory),
         ))
     }
+
+    fn new_accounting_context(&self) -> Result<ForkAccountingHandle, ExecError> {
+        self.accounting_context(uuid::Uuid::new_v4().simple().to_string())
+    }
+
+    fn accounting_context(
+        &self,
+        correlation_id: String,
+    ) -> Result<ForkAccountingHandle, ExecError> {
+        Ok(ForkAccountingHandle {
+            receipt_journal: correlated_journal_path(
+                &self.accounting_receipt_journal,
+                &correlation_id,
+            )?,
+            failure_journal: correlated_journal_path(
+                &self.accounting_failure_journal,
+                &correlation_id,
+            )?,
+            correlation_id,
+        })
+    }
+}
+
+fn correlated_journal_path(base: &Path, correlation_id: &str) -> Result<PathBuf, ExecError> {
+    let parent = parent_or_error(base)?;
+    let stem = base.file_stem().and_then(OsStr::to_str).ok_or_else(|| {
+        ExecError::NonUtf8ForkRuntimePath {
+            path: base.to_owned(),
+        }
+    })?;
+    Ok(parent.join(format!("{stem}-{correlation_id}.jsonl")))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -191,8 +271,28 @@ pub enum RtkRewriteInterface {
 pub struct RtkCapabilities {
     pub binary: PathBuf,
     pub detected_version: Option<String>,
+    pub contract: Option<EngineContractIdentity>,
     pub rewrite: RtkRewriteInterface,
     pub proxy: bool,
+}
+
+#[derive(Deserialize)]
+struct CurrentEngineMetadata {
+    engine_version: String,
+    manifest_sha256: String,
+    content_manifest_sha256: String,
+}
+
+pub fn expected_engine_identity() -> Result<EngineContractIdentity, String> {
+    let metadata: CurrentEngineMetadata =
+        toml::from_str(include_str!("../../../fork-core/CURRENT_ENGINE.toml"))
+            .map_err(|error| format!("embedded current-engine metadata is invalid: {error}"))?;
+    Ok(EngineContractIdentity {
+        contract_version: ENGINE_CONTRACT_VERSION,
+        engine_version: metadata.engine_version,
+        manifest_sha256: metadata.manifest_sha256,
+        content_manifest_sha256: metadata.content_manifest_sha256,
+    })
 }
 
 #[derive(Serialize)]
@@ -239,31 +339,6 @@ impl RtkRewriteOutcome {
         }
         Ok(())
     }
-}
-
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RewritePlanDecision {
-    Rewrite,
-    Proxy,
-    Ask,
-    Deny,
-}
-
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum RewritePlanReason {
-    PermissionPolicy,
-    CanonicalPolicy,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RewritePlanResponse {
-    decision: RewritePlanDecision,
-    proposed: Option<String>,
-    attribution: Option<EvasionAttribution>,
-    reason: Option<RewritePlanReason>,
 }
 
 /// Render an agent-facing reason for an Ask or Deny decision.
@@ -335,6 +410,7 @@ pub struct ForkCoreInvocation {
     pub capture: crate::CaptureConfig,
     pub stdin: crate::StdinSpec,
     account_usage: bool,
+    accounting_correlation_id: String,
 }
 
 impl ForkCoreInvocation {
@@ -347,6 +423,7 @@ impl ForkCoreInvocation {
             capture: crate::CaptureConfig::default(),
             stdin: crate::StdinSpec::default(),
             account_usage: true,
+            accounting_correlation_id: uuid::Uuid::new_v4().simple().to_string(),
         }
     }
 
@@ -355,6 +432,17 @@ impl ForkCoreInvocation {
         self.account_usage = false;
         self
     }
+
+    #[must_use]
+    pub fn accounting_correlation_id(&self) -> &str {
+        &self.accounting_correlation_id
+    }
+}
+
+#[derive(Debug)]
+pub struct AccountedForkExecution {
+    pub outcome: crate::ExecutionOutcome,
+    pub accounting: ForkAccountingHandle,
 }
 
 impl ForkCoreRunner {
@@ -380,6 +468,15 @@ impl ForkCoreRunner {
     }
 
     pub fn envelope(&self, args: &[String]) -> Result<crate::ExecutionEnvelope, ExecError> {
+        let accounting = self.runtime_paths.new_accounting_context()?;
+        self.envelope_with_accounting(args, &accounting)
+    }
+
+    fn envelope_with_accounting(
+        &self,
+        args: &[String],
+        accounting: &ForkAccountingHandle,
+    ) -> Result<crate::ExecutionEnvelope, ExecError> {
         let command = self.managed_command(args)?;
         let mut envelope = crate::ExecutionEnvelope::allow_raw(command.clone());
         envelope.decision = RewriteDecision::AllowRewrite {
@@ -390,37 +487,69 @@ impl ForkCoreRunner {
             },
             reason: "direct managed fork-core invocation".to_owned(),
         };
-        self.runtime_paths
-            .apply_to_environment(&mut envelope.environment, &self.binary)?;
+        self.runtime_paths.apply_to_environment(
+            &mut envelope.environment,
+            &self.binary,
+            accounting,
+        )?;
         Ok(envelope)
     }
 
     pub fn std_command(&self, args: &[String]) -> Result<std::process::Command, ExecError> {
-        self.std_command_inner(args)
+        self.accounted_std_command(args).map(|(command, _)| command)
+    }
+
+    pub fn accounted_std_command(
+        &self,
+        args: &[String],
+    ) -> Result<(std::process::Command, ForkAccountingHandle), ExecError> {
+        self.accounted_std_command_inner(args)
     }
 
     pub fn std_command_os(&self, args: &[OsString]) -> Result<std::process::Command, ExecError> {
-        self.std_command_inner(args)
+        self.accounted_std_command_os(args)
+            .map(|(command, _)| command)
     }
 
-    fn std_command_inner<I, S>(&self, args: I) -> Result<std::process::Command, ExecError>
+    pub fn accounted_std_command_os(
+        &self,
+        args: &[OsString],
+    ) -> Result<(std::process::Command, ForkAccountingHandle), ExecError> {
+        self.accounted_std_command_inner(args)
+    }
+
+    fn accounted_std_command_inner<I, S>(
+        &self,
+        args: I,
+    ) -> Result<(std::process::Command, ForkAccountingHandle), ExecError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
         self.runtime_paths.ensure_layout()?;
+        let accounting = self.runtime_paths.new_accounting_context()?;
         let mut command = std::process::Command::new(&self.binary);
         command.args(args);
         self.runtime_paths
-            .apply_to_std_command(&mut command, &self.binary)?;
-        Ok(command)
+            .apply_to_std_command(&mut command, &self.binary, &accounting)?;
+        Ok((command, accounting))
     }
 
     pub async fn execute(
         &self,
         invocation: ForkCoreInvocation,
     ) -> Result<crate::ExecutionOutcome, ExecError> {
-        let mut envelope = self.envelope(&invocation.args)?;
+        Ok(self.execute_accounted(invocation).await?.outcome)
+    }
+
+    pub async fn execute_accounted(
+        &self,
+        invocation: ForkCoreInvocation,
+    ) -> Result<AccountedForkExecution, ExecError> {
+        let accounting = self
+            .runtime_paths
+            .accounting_context(invocation.accounting_correlation_id.clone())?;
+        let mut envelope = self.envelope_with_accounting(&invocation.args, &accounting)?;
         if !invocation.account_usage {
             envelope
                 .environment
@@ -431,7 +560,11 @@ impl ForkCoreRunner {
         envelope.timeout_ms = invocation.timeout_ms;
         envelope.capture = invocation.capture;
         envelope.stdin = invocation.stdin;
-        crate::ExecutionPipeline.execute(envelope).await
+        let outcome = crate::ExecutionPipeline.execute(envelope).await?;
+        Ok(AccountedForkExecution {
+            outcome,
+            accounting,
+        })
     }
 }
 
@@ -603,9 +736,9 @@ impl PinnedRtkAdapter {
         let mut rewrite = Command::new(&self.config.binary);
         rewrite.arg("rewrite-plan").arg(&raw);
         if byte_fidelity {
-            rewrite.env("HZR_INTERNAL_BYTE_FIDELITY", "1");
+            rewrite.env(BYTE_FIDELITY_ENV, "1");
         } else {
-            rewrite.env_remove("HZR_INTERNAL_BYTE_FIDELITY");
+            rewrite.env_remove(BYTE_FIDELITY_ENV);
         }
         if let Err(error) = runtime_paths.apply_to_command(&mut rewrite, &self.config.binary) {
             return outcome_without_evasion(RewriteDecision::Deny {
@@ -636,7 +769,7 @@ impl PinnedRtkAdapter {
                 ),
             });
         }
-        let plan: RewritePlanResponse = match serde_json::from_slice(&output.stdout) {
+        let plan: RewritePlan = match serde_json::from_slice(&output.stdout) {
             Ok(plan) => plan,
             Err(error) => {
                 return outcome_without_evasion(RewriteDecision::Deny {
@@ -644,17 +777,7 @@ impl PinnedRtkAdapter {
                 });
             }
         };
-        let reason_is_consistent = match plan.decision {
-            RewritePlanDecision::Rewrite | RewritePlanDecision::Proxy => plan.reason.is_none(),
-            RewritePlanDecision::Ask => matches!(
-                plan.reason,
-                Some(RewritePlanReason::PermissionPolicy | RewritePlanReason::CanonicalPolicy)
-            ),
-            RewritePlanDecision::Deny => {
-                matches!(plan.reason, Some(RewritePlanReason::PermissionPolicy))
-            }
-        };
-        if !reason_is_consistent {
+        if !plan.is_consistent() {
             return outcome_without_evasion(RewriteDecision::Deny {
                 reason: "managed fork-core rewrite plan had inconsistent policy metadata"
                     .to_owned(),
@@ -869,6 +992,40 @@ async fn probe(config: &RtkAdapterConfig) -> RtkCapabilities {
         );
     }
 
+    let expected_contract = match expected_engine_identity() {
+        Ok(identity) => identity,
+        Err(reason) => return unavailable(binary, detected_version, &reason),
+    };
+    let contract_output = run_probe(&binary, &["contract", "--json"], runtime_paths, config).await;
+    let contract_output = match contract_output {
+        Ok(output) if output.status.success() => output,
+        Ok(_) => return unavailable(binary, detected_version, "contract probe returned failure"),
+        Err(reason) => {
+            return unavailable(
+                binary,
+                detected_version,
+                &format!("contract probe {reason}"),
+            );
+        }
+    };
+    let contract: EngineContractIdentity = match serde_json::from_slice(&contract_output.stdout) {
+        Ok(identity) => identity,
+        Err(error) => {
+            return unavailable(
+                binary,
+                detected_version,
+                &format!("contract probe returned invalid JSON: {error}"),
+            );
+        }
+    };
+    if contract != expected_contract {
+        return unavailable(
+            binary,
+            detected_version,
+            "fork contract identity did not match CURRENT_ENGINE.toml",
+        );
+    }
+
     let rewrite_help = run_probe(&binary, &["rewrite", "--help"], runtime_paths, config).await;
     let rewrite_help = match rewrite_help {
         Ok(output) if output.status.success() => output,
@@ -910,6 +1067,7 @@ async fn probe(config: &RtkAdapterConfig) -> RtkCapabilities {
     RtkCapabilities {
         binary,
         detected_version,
+        contract: Some(contract),
         rewrite: RtkRewriteInterface::ForkCli,
         proxy: true,
     }
@@ -933,6 +1091,7 @@ fn unavailable(binary: PathBuf, detected_version: Option<String>, reason: &str) 
     RtkCapabilities {
         binary,
         detected_version,
+        contract: None,
         rewrite: RtkRewriteInterface::Unavailable {
             reason: reason.to_owned(),
         },

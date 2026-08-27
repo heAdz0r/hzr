@@ -4,8 +4,13 @@ set -euo pipefail
 HZR_REPOSITORY_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 HZR_ARCHIVE="${1:-}"
 HZR_CHECKSUMS="${2:-}"
+HZR_SMOKE_MODE="${3:-full}"
 if [[ ! -f "${HZR_ARCHIVE}" || ! -f "${HZR_CHECKSUMS}" ]]; then
-  echo "usage: scripts/smoke-install.sh /path/to/hzr.tar.gz /path/to/SHA256SUMS" >&2
+  echo "usage: scripts/smoke-install.sh /path/to/hzr.tar.gz /path/to/SHA256SUMS [full|clean-only]" >&2
+  exit 2
+fi
+if [[ "${HZR_SMOKE_MODE}" != "full" && "${HZR_SMOKE_MODE}" != "clean-only" ]]; then
+  echo "unsupported install smoke mode: ${HZR_SMOKE_MODE}" >&2
   exit 2
 fi
 
@@ -67,7 +72,7 @@ for HZR_INSTALL_OUTPUT in \
   '[3/5] Unpacking and checking the bundle contents' \
   '[4/5] Placing the files and command-line entry points' \
   '[5/5] Registering this project and starting the background service' \
-  'HZR v0.6.5 is installed.' \
+  'HZR v0.6.6 is installed.' \
   'What went where' \
   'Next steps' \
   'hzr doctor --workspace .'; do
@@ -117,7 +122,7 @@ run_hzr() {
   PATH="${HZR_INSTALLED_BIN}:${HZR_SMOKE_TEMP}/tools:/usr/bin:/bin" \
     "${HZR_INSTALLED_BIN}/hzr" "$@"
 }
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.6.5" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.6.6" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/grepai" version | grep -F "0.35.0" >/dev/null
@@ -348,6 +353,10 @@ fi
 
 echo "HZR clean-install smoke passed without external Node.js, RTK, grepai, or ICM"
 
+if [[ "${HZR_SMOKE_MODE}" == "clean-only" ]]; then
+  exit 0
+fi
+
 # Same-version reuse is allowed only after re-attesting the existing root against the
 # freshly verified archive manifest. A clean root is a byte-for-byte idempotent install.
 HZR_CURRENT_BEFORE="$(readlink "${HZR_SMOKE_TEMP}/home/.local/share/hzr/current")"
@@ -443,12 +452,11 @@ HZR_FIRST_TARGET="$(readlink "${HZR_CURRENT_LINK}")"
 # function with `sed | source` is not portable across BSD and GNU userlands.
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) HZR_SMOKE_PLATFORM="darwin-arm64" ;;
-  Darwin-x86_64) HZR_SMOKE_PLATFORM="darwin-x64" ;;
   Linux-aarch64 | Linux-arm64) HZR_SMOKE_PLATFORM="linux-arm64" ;;
   Linux-x86_64) HZR_SMOKE_PLATFORM="linux-x64" ;;
   *) echo "unsupported upgrade-smoke platform" >&2; exit 1 ;;
 esac
-HZR_UPGRADE_VERSION="0.6.5-upgrade-smoke"
+HZR_UPGRADE_VERSION="0.6.6-upgrade-smoke"
 HZR_UPGRADE_ARTIFACT="hzr-v${HZR_UPGRADE_VERSION}-${HZR_SMOKE_PLATFORM}.tar.gz"
 HZR_UPGRADE_CHECKSUMS="${HZR_SMOKE_TEMP}/SHA256SUMS.upgrade"
 awk -v artifact="${HZR_UPGRADE_ARTIFACT}" \
@@ -472,6 +480,16 @@ if [[ "${HZR_SECOND_TARGET}" == "${HZR_FIRST_TARGET}" ]]; then
   echo "upgrade did not repoint current: still ${HZR_SECOND_TARGET}" >&2
   exit 1
 fi
+if [[ -e "${HZR_FIRST_TARGET}" || -L "${HZR_FIRST_TARGET}" ]]; then
+  echo "upgrade retained the inactive release: ${HZR_FIRST_TARGET}" >&2
+  exit 1
+fi
+HZR_INSTALLED_RELEASE_COUNT="$(find "${HZR_HOME}/.local/share/hzr/versions" \
+  -mindepth 1 -maxdepth 1 -print | wc -l | tr -d ' ')"
+if [[ "${HZR_INSTALLED_RELEASE_COUNT}" != "1" ]]; then
+  echo "upgrade retained ${HZR_INSTALLED_RELEASE_COUNT} version roots; expected exactly one" >&2
+  exit 1
+fi
 # The whole point: every engine must now come from the NEW release. Checking
 # `hzr --version` alone would pass even when all four engines are stale.
 HZR_RESOLVED_ENGINES="$(cd -- "${HZR_CURRENT_LINK}/engines" && pwd -P)"
@@ -481,7 +499,7 @@ if [[ "${HZR_RESOLVED_ENGINES}" != "${HZR_EXPECTED_ENGINES}" ]]; then
   exit 1
 fi
 
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.6.5" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.6.6" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_CURRENT_LINK}/engines/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
@@ -503,4 +521,4 @@ if [[ "${HZR_REPORTED_ENGINES}" == *"/versions/"* ]]; then
   exit 1
 fi
 
-echo "HZR upgrade smoke passed: current repointed and all four engines follow it"
+echo "HZR upgrade smoke passed: current repointed, inactive releases pruned, and all four engines follow it"

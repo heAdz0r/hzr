@@ -53,9 +53,10 @@ fn read_attribution(
         limit: None,
         path_scope_count: None,
         filter_level: Some(tracked_filter_level(level)),
-        from_line: from,
-        to_line: to,
+        from_line: from.map(|line| line as u64),
+        to_line: to.map(|line| line as u64),
         source_bytes,
+        evasion: None,
     }
 }
 
@@ -606,6 +607,7 @@ pub fn run_changed(file: &Path, revision: Option<&str>, context: usize, verbose:
             from_line: None,
             to_line: None,
             source_bytes: Some(content.len() as u64),
+            evasion: None,
         },
     );
     Ok(())
@@ -692,6 +694,7 @@ pub fn run_symbols(file: &Path, mode: &ReadMode, verbose: u8) -> Result<()> {
             from_line: None,
             to_line: None,
             source_bytes: Some(content.len() as u64),
+            evasion: None,
         },
     );
     Ok(())

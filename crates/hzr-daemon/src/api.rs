@@ -6,17 +6,19 @@ use axum::Json;
 use axum::extract::{Path as AxumPath, Query, State};
 use hzr_context::{ContextError, PlanRequest, SearchRequest};
 use hzr_core::{
-    FidelityAllowance, FidelityBudget, FidelityPreflight, Ledger, LedgerRecord,
-    ProjectOperationRoute, ProjectOperationSummary, ProviderEconomicReceipt,
-    ProviderReceiptRecordResult, RawFidelityReason, RawFidelityRequest, RawPublicEstimateRequest,
-    efficient_route_replacement, first_class_replacement, load_pricing_catalog, locked_engines,
-    price_avoided_input_tokens, raw_fidelity_request, validate_receipt,
+    AccountingCoverageStore, AccountingGapEvent, AccountingGapSurface, FidelityAllowance,
+    FidelityBudget, FidelityPreflight, Ledger, LedgerRecord, ProjectOperationRoute,
+    ProjectOperationSummary, ProviderEconomicReceipt, ProviderReceiptRecordResult,
+    RawFidelityReason, RawFidelityRequest, RawPublicEstimateRequest, efficient_route_replacement,
+    first_class_replacement, load_pricing_catalog, locked_engines, price_avoided_input_tokens,
+    privacy_identity_hash, raw_fidelity_request, validate_receipt,
 };
 use hzr_exec::{
-    AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent,
-    ExecutionEnvelope, ExecutionOutcome, ForkCoreInvocation, HOST_GRANT_APPLIED_ENV, NotStarted,
-    PINNED_RTK_VERSION, PinnedRtkAdapter, RewriteDecision, RewriteSource, RtkRewriteOutcome,
-    StdinSpec, TerminationCause, host_grant_applied, reconcile_host_grant,
+    AccountingDrainStatus, AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow,
+    CapturedContent, ExecutionEnvelope, ExecutionOutcome, ForkAccountingHandle, ForkCoreInvocation,
+    HOST_GRANT_APPLIED_ENV, NotStarted, PINNED_RTK_VERSION, PinnedRtkAdapter, RewriteDecision,
+    RewriteSource, RtkRewriteOutcome, StdinSpec, TerminationCause, acknowledge_accounting,
+    drain_accounting, host_grant_applied, reconcile_host_grant,
 };
 use hzr_index::{
     Deadlines, IndexCoordinatorSnapshot, IndexWatcherState, Workspace, WorkspaceRegistration,
@@ -2646,6 +2648,15 @@ pub async fn fork_run(
     validate_fork_run(&request)?;
     let budget = ManagedExecutionBudget::new(&state, request.timeout_ms)?;
     let cwd = canonical_workspace(&request.cwd)?;
+    let project_path = cwd.to_string_lossy().into_owned();
+    let agent = request.agent.clone();
+    let session_id = request.session_id.clone();
+    let operation_family = request
+        .managed_write
+        .as_ref()
+        .map(|_| "write".to_owned())
+        .or_else(|| request.args.first().cloned())
+        .unwrap_or_else(|| "fork".to_owned());
     let (args, stdin, _managed_write_files): (
         Vec<String>,
         Option<String>,
@@ -2671,10 +2682,20 @@ pub async fn fork_run(
         overflow: CaptureOverflow::Truncate,
         event_buffer: 16,
     };
-    let outcome = runner
-        .execute(invocation)
+    let executed = runner
+        .execute_accounted(invocation)
         .await
         .map_err(|error| ApiError::service("fork_core_failed", error.to_string(), true))?;
+    commit_fork_accounting(
+        &state,
+        &executed.accounting,
+        &project_path,
+        agent,
+        session_id,
+        &operation_family,
+    )
+    .await?;
+    let outcome = executed.outcome;
     let result = match outcome {
         ExecutionOutcome::Completed { result } => result,
         ExecutionOutcome::ExecutedAccountingIncomplete { accounting, .. } => {
@@ -2707,6 +2728,93 @@ pub async fn fork_run(
         stdout_truncated: result.stdout.truncated,
         stderr_truncated: result.stderr.truncated,
     }))
+}
+
+async fn commit_fork_accounting(
+    state: &AppState,
+    handle: &ForkAccountingHandle,
+    project_path: &str,
+    agent: Option<String>,
+    session_id: Option<String>,
+    operation_family: &str,
+) -> Result<(), ApiError> {
+    let workspace_hash = privacy_identity_hash("workspace", project_path);
+    let session_hash = session_id
+        .as_deref()
+        .map(|value| privacy_identity_hash("session", value));
+    let event = || AccountingGapEvent {
+        surface: AccountingGapSurface::ForkProducer,
+        workspace_hash: Some(workspace_hash.clone()),
+        session_hash: session_hash.clone(),
+        operation_family: Some(operation_family.to_owned()),
+        at_unix: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    };
+    let coverage = AccountingCoverageStore::new(&state.config.data_dir);
+    let drained = drain_accounting(handle).map_err(|error| {
+        let _ = coverage.record_missing(event());
+        ApiError::internal(format!(
+            "fork-core executed but accounting drain failed; do not retry: {error}"
+        ))
+    })?;
+    let batch_id = match &drained.status {
+        AccountingDrainStatus::Ready { batch_id } => batch_id,
+        AccountingDrainStatus::Empty => {
+            coverage
+                .record_missing(event())
+                .map_err(|error| ApiError::internal(error.to_string()))?;
+            return Err(ApiError::internal(
+                "fork-core executed without an accounting receipt; do not retry",
+            ));
+        }
+        AccountingDrainStatus::Rejected { issue } => {
+            coverage
+                .record_missing(event())
+                .map_err(|error| ApiError::internal(error.to_string()))?;
+            return Err(ApiError::internal(format!(
+                "fork-core accounting receipt was rejected; do not retry: {issue:?}"
+            )));
+        }
+    };
+
+    for receipt in drained.receipts {
+        state
+            .ledger
+            .record_engine_receipt(
+                receipt,
+                project_path.to_owned(),
+                agent.clone(),
+                session_id.clone(),
+                hzr_protocol::AccountingChannel::Mcp,
+            )
+            .await
+            .map_err(|error| {
+                let _ = coverage.record_missing(event());
+                ApiError::internal(format!(
+                    "fork-core executed but receipt commit failed; do not retry: {error}"
+                ))
+            })?;
+    }
+    if !drained.failures.is_empty() {
+        coverage
+            .record_missing(event())
+            .map_err(|error| ApiError::internal(error.to_string()))?;
+        return Err(ApiError::internal(format!(
+            "fork-core reported {} accounting failure(s); do not retry",
+            drained.failures.len()
+        )));
+    }
+    coverage
+        .recover(event())
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    acknowledge_accounting(handle, batch_id).map_err(|error| {
+        ApiError::internal(format!(
+            "fork-core receipt committed but acknowledgement failed; do not retry: {error}"
+        ))
+    })?;
+    Ok(())
 }
 
 /// Fork argv, optional stdin payload, and the staging directory that must outlive the spawn.
@@ -2933,6 +3041,30 @@ pub async fn operation(
     outcome
         .map_err(|error| ApiError::internal(format!("operation ledger write failed: {error}")))?;
     Ok(Json(hzr_protocol::OperationApiResponse { recorded: true }))
+}
+
+pub async fn policy_event(
+    State(state): State<AppState>,
+    Json(request): Json<hzr_protocol::PolicyEventApiRequest>,
+) -> Result<Json<hzr_protocol::PolicyEventApiResponse>, ApiError> {
+    state
+        .ledger
+        .record_policy_event(crate::ledger_writer::PolicyEventRecord {
+            project_path: request.project_path,
+            agent: request.agent,
+            session_id: request.session_id,
+            evasion: request.evasion,
+            decision: request.decision,
+            replacement_family: request.replacement_family,
+            command_identity: request.command_identity,
+        })
+        .await
+        .map_err(|error| {
+            ApiError::internal(format!("policy event ledger write failed: {error}"))
+        })?;
+    Ok(Json(hzr_protocol::PolicyEventApiResponse {
+        recorded: true,
+    }))
 }
 
 pub async fn exec_rewrite(
@@ -3902,7 +4034,7 @@ mod tests {
     use hzr_exec::{
         CanonicalCommand, CapturedContent, ExecutionEnvelope, ExecutionOutcome, ExecutionPipeline,
         ForkRuntimePaths, NotStarted, PINNED_RTK_VERSION, PinnedRtkAdapter, RewriteDecision,
-        RewriteSource, RtkAdapterConfig, RtkRewriteOutcome,
+        RewriteSource, RtkAdapterConfig, RtkRewriteOutcome, expected_engine_identity,
     };
     use hzr_index::{IndexWatcherState, WorkspaceRegistration};
     use hzr_memory::{Importance, MemoryRecord, MemoryScope, MemorySource, ProjectMemoryDetail};
@@ -4305,10 +4437,18 @@ mod tests {
                 serde_json::to_vec(&plan).expect("rewrite plan JSON"),
             )
             .expect("rewrite plan fixture");
+            let contract = serde_json::to_string(
+                &expected_engine_identity().expect("current engine identity"),
+            )
+            .expect("contract JSON");
             let script = format!(
                 r#"#!/bin/sh
 if test "${{1:-}}" = --version; then
   printf 'rtk %s\n' '{PINNED_RTK_VERSION}'
+  exit 0
+fi
+if test "${{1:-}}" = contract && test "${{2:-}}" = --json; then
+  printf '%s\n' '{contract}'
   exit 0
 fi
 if test "${{1:-}}" = rewrite && test "${{2:-}}" = --help; then
@@ -4325,7 +4465,8 @@ if test "${{1:-}}" = rewrite-plan; then
 fi
 exit 64
 "#,
-                plan_path.display()
+                plan_path.display(),
+                contract = contract,
             );
             fs::write(&binary, script).expect("fake fork-core");
             fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))

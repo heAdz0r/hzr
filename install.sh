@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-HZR_VERSION="${HZR_VERSION:-0.6.5}"
+HZR_VERSION="${HZR_VERSION:-0.6.6}"
 HZR_REPOSITORY="${HZR_REPOSITORY:-heAdz0r/hzr}"
 HZR_INSTALL_ROOT="${HZR_INSTALL_ROOT:-${HOME}/.local/share/hzr}"
 HZR_BIN_DIR="${HZR_BIN_DIR:-${HOME}/.local/bin}"
@@ -12,7 +12,6 @@ HZR_FORCE="${HZR_FORCE:-0}"
 
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) HZR_PLATFORM="darwin-arm64" ;;
-  Darwin-x86_64) HZR_PLATFORM="darwin-x64" ;;
   Linux-aarch64 | Linux-arm64) HZR_PLATFORM="linux-arm64" ;;
   Linux-x86_64) HZR_PLATFORM="linux-x64" ;;
   *)
@@ -97,6 +96,42 @@ replace_hzr_symlink() {
   fi
   echo "hzr: refusing to replace real directory ${HZR_SYMLINK_TARGET}" >&2
   exit 1
+}
+
+# Keep exactly one installed bundle. Version-scoped staging makes the switch atomic;
+# retaining every inactive root after that switch only consumes disk and is not rollback.
+prune_hzr_versions() {
+  HZR_VERSIONS_DIRECTORY="$1"
+  HZR_ACTIVE_VERSION_ROOT="$2"
+
+  if [ -L "${HZR_VERSIONS_DIRECTORY}" ] || [ ! -d "${HZR_VERSIONS_DIRECTORY}" ]; then
+    echo "hzr: versions root must be a real directory: ${HZR_VERSIONS_DIRECTORY}" >&2
+    return 1
+  fi
+  if [ -L "${HZR_ACTIVE_VERSION_ROOT}" ] || [ ! -d "${HZR_ACTIVE_VERSION_ROOT}" ]; then
+    echo "hzr: active version root must be a real directory: ${HZR_ACTIVE_VERSION_ROOT}" >&2
+    return 1
+  fi
+  case "${HZR_ACTIVE_VERSION_ROOT}" in
+    "${HZR_VERSIONS_DIRECTORY}"/*) ;;
+    *)
+      echo "hzr: active version is outside ${HZR_VERSIONS_DIRECTORY}" >&2
+      return 1
+      ;;
+  esac
+
+  HZR_PRUNED_VERSION_COUNT=0
+  for HZR_VERSION_CANDIDATE in \
+    "${HZR_VERSIONS_DIRECTORY}"/* \
+    "${HZR_VERSIONS_DIRECTORY}"/.[!.]* \
+    "${HZR_VERSIONS_DIRECTORY}"/..?*; do
+    if { [ ! -e "${HZR_VERSION_CANDIDATE}" ] && [ ! -L "${HZR_VERSION_CANDIDATE}" ]; } || \
+      [ "${HZR_VERSION_CANDIDATE}" = "${HZR_ACTIVE_VERSION_ROOT}" ]; then
+      continue
+    fi
+    rm -rf -- "${HZR_VERSION_CANDIDATE}"
+    HZR_PRUNED_VERSION_COUNT=$((HZR_PRUNED_VERSION_COUNT + 1))
+  done
 }
 
 # A bundle download takes minutes on a slow link, so the large transfer shows a
@@ -298,6 +333,9 @@ if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
   hzr_note "installing or restarting the background daemon service"
   "${HZR_INSTALL_ROOT}/current/bin/hzr" daemon service install
 fi
+
+prune_hzr_versions "${HZR_INSTALL_ROOT}/versions" "${HZR_VERSION_ROOT}"
+hzr_note "removed ${HZR_PRUNED_VERSION_COUNT} inactive HZR release(s)"
 
 # ---------------------------------------------------------------------------
 # Closing summary.

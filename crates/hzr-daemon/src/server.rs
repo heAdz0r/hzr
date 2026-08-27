@@ -47,6 +47,7 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         .route("/v1/usage", post(api::usage))
         .route("/v1/billing/receipts", post(api::provider_receipt))
         .route("/v1/operations", post(api::operation))
+        .route("/v1/policy/events", post(api::policy_event))
         .route_layer(middleware::from_fn_with_state(token, authorize));
     let public = Router::new()
         .route("/v1/dashboard", get(api::dashboard))
@@ -147,7 +148,7 @@ mod tests {
         Config, Ledger, OperationAttribution, OperationChannel, OperationMeasurement,
         OperationRoute,
     };
-    use hzr_exec::PINNED_RTK_VERSION;
+    use hzr_exec::{PINNED_RTK_VERSION, expected_engine_identity};
     use hzr_index::{WORKSPACE_REGISTRATION_SCHEMA_VERSION, Workspace, WorkspaceRegistration};
     use hzr_protocol::{DashboardLifecycleKind, DashboardTraceStage, DashboardTraceState};
     use rusqlite::{Connection, params};
@@ -201,10 +202,17 @@ mod tests {
         let engines = directory.path().join("engines");
         std::fs::create_dir_all(&engines).expect("engine directory");
         let binary = engines.join("rtk");
+        let contract =
+            serde_json::to_string(&expected_engine_identity().expect("current engine identity"))
+                .expect("contract JSON");
         let script = format!(
             r#"#!/bin/sh
 if test "${{1:-}}" = --version; then
   printf 'rtk %s\n' '{PINNED_RTK_VERSION}'
+  exit 0
+fi
+if test "${{1:-}}" = contract && test "${{2:-}}" = --json; then
+  printf '%s\n' '{contract}'
   exit 0
 fi
 if test "${{1:-}}" = rewrite && test "${{2:-}}" = --help; then
@@ -220,7 +228,8 @@ if test "${{1:-}}" = rewrite-plan; then
   exit 0
 fi
 exit 64
-"#
+"#,
+            contract = contract,
         );
         std::fs::write(&binary, script).expect("fake rtk");
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700))

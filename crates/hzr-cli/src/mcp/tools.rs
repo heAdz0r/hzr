@@ -1,3 +1,6 @@
+use std::collections::BTreeSet;
+use std::sync::LazyLock;
+
 use serde_json::{Value, json};
 
 pub(super) const MCP_EXEC_TIMEOUT_MAX_MS: u64 = 29_500;
@@ -5,10 +8,10 @@ pub(super) const MCP_PATH_MAX_BYTES: usize = 4096;
 pub(super) const MCP_PATCH_BLOCK_MAX_BYTES: usize = 65_536;
 pub(super) const MCP_CREATE_CONTENT_MAX_BYTES: usize = 192 * 1024;
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct ToolContract {
-    pub name: &'static str,
+#[derive(Clone, Debug)]
+pub(super) struct ToolDefinition {
     pub kind: ToolKind,
+    wire: Value,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -28,63 +31,43 @@ pub(super) enum ToolKind {
     Doctor,
 }
 
-pub(super) const TOOL_CONTRACTS: &[ToolContract] = &[
-    ToolContract {
-        name: "hzr_memory_recall",
-        kind: ToolKind::MemoryRecall,
-    },
-    ToolContract {
-        name: "hzr_memory_store",
-        kind: ToolKind::MemoryStore,
-    },
-    ToolContract {
-        name: "hzr_memory_forget",
-        kind: ToolKind::MemoryForget,
-    },
-    ToolContract {
-        name: "hzr_memory_update",
-        kind: ToolKind::MemoryUpdate,
-    },
-    ToolContract {
-        name: "hzr_memory_prune",
-        kind: ToolKind::MemoryPrune,
-    },
-    ToolContract {
-        name: "hzr_search",
-        kind: ToolKind::Search,
-    },
-    ToolContract {
-        name: "hzr_context_plan",
-        kind: ToolKind::ContextPlan,
-    },
-    ToolContract {
-        name: "hzr_codec",
-        kind: ToolKind::Codec,
-    },
-    ToolContract {
-        name: "hzr_read",
-        kind: ToolKind::Read,
-    },
-    ToolContract {
-        name: "hzr_write",
-        kind: ToolKind::Write,
-    },
-    ToolContract {
-        name: "hzr_exec",
-        kind: ToolKind::Exec,
-    },
-    ToolContract {
-        name: "hzr_observability",
-        kind: ToolKind::Observability,
-    },
-    ToolContract {
-        name: "hzr_doctor",
-        kind: ToolKind::Doctor,
-    },
-];
+impl ToolKind {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::MemoryRecall => "hzr_memory_recall",
+            Self::MemoryStore => "hzr_memory_store",
+            Self::MemoryForget => "hzr_memory_forget",
+            Self::MemoryUpdate => "hzr_memory_update",
+            Self::MemoryPrune => "hzr_memory_prune",
+            Self::Search => "hzr_search",
+            Self::ContextPlan => "hzr_context_plan",
+            Self::Codec => "hzr_codec",
+            Self::Read => "hzr_read",
+            Self::Write => "hzr_write",
+            Self::Exec => "hzr_exec",
+            Self::Observability => "hzr_observability",
+            Self::Doctor => "hzr_doctor",
+        }
+    }
+}
 
-pub(super) fn tool_contract(name: &str) -> Option<&'static ToolContract> {
-    TOOL_CONTRACTS.iter().find(|contract| contract.name == name)
+impl ToolDefinition {
+    fn new(kind: ToolKind, mut wire: Value) -> Self {
+        wire.as_object_mut()
+            .expect("internal MCP definition must be an object")
+            .insert("name".into(), Value::String(kind.name().into()));
+        Self { kind, wire }
+    }
+
+    fn name(&self) -> &'static str {
+        self.kind.name()
+    }
+}
+
+pub(super) fn tool_contract(name: &str) -> Option<&'static ToolDefinition> {
+    tool_definition_registry()
+        .iter()
+        .find(|definition| definition.name() == name)
 }
 
 fn strict_object(properties: Value, required: &[&str]) -> Value {
@@ -387,615 +370,652 @@ fn doctor_schema() -> Value {
     )
 }
 
-fn raw_tool_definitions() -> Vec<Value> {
+fn raw_tool_definitions() -> Vec<ToolDefinition> {
     vec![
-        json!({
-            "name": "hzr_memory_recall",
-            "title": "Recall HZR Memory",
-            "description": "Recall durable decisions, resolved errors and preferences before \
-        re-reading prior work. Defaults to this repository plus explicitly user-global memory; \
-        memories from another repository are never returned.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Natural-language description of the decision, fact or prior context to recall.",
-                    },
-                    "topic": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 64,
-                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
-                        "description": "Optional exact memory kind such as architecture, preference or resolved-error.",
-                    },
-                    "keyword": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Optional keyword filter applied by the memory engine.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 50,
-                        "default": 10,
-                        "description": "Maximum memories returned.",
-                    },
-                    "scope": {
-                        "type": "string",
-                        "enum": ["project", "global", "project_and_global"],
-                        "default": "project_and_global",
-                        "description": "project_and_global returns this repository plus explicit user-wide memory. Use project or global to restrict the lookup.",
-                    },
-                },
-                "required": ["query"],
-            },
-            "outputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "count": {"type": "integer", "minimum": 0},
-                    "total_matches": {"type": "integer", "minimum": 0},
-                    "memories": {"type": "array", "items": memory_record_schema()},
-                },
-                "required": ["count", "total_matches", "memories"],
-            },
-            "annotations": {
-                "readOnlyHint": true,
-                "destructiveHint": false,
-                "openWorldHint": false,
-            },
-        }),
-        json!({
-            "name": "hzr_memory_store",
-            "title": "Store HZR Memory",
-            "description": "Persist one durable decision, preference, resolved error or completed \
-        handoff in the single HZR-owned store. Do not store ephemeral progress, raw tool output, \
-        credentials or speculative conclusions.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "topic": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 64,
-                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
-                        "description": "Stable memory kind such as architecture, preference or resolved-error.",
-                    },
-                    "content": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Self-contained durable fact including the decision and why it matters.",
-                    },
-                    "importance": {
-                        "type": "string",
-                        "enum": ["critical", "high", "medium", "low"],
-                        "default": "medium",
-                        "description": "Retrieval priority. Reserve critical for invariants whose omission can cause harm.",
-                    },
-                    "keywords": {
-                        "type": "array",
-                        "maxItems": 32,
-                        "items": {"type": "string", "minLength": 1},
-                        "description": "Optional exact retrieval terms; at most 32.",
-                    },
-                    "scope": {
-                        "type": "string",
-                        "enum": ["project", "global"],
-                        "default": "project",
-                        "description": "Use global only for a user-wide preference or rule; project is the safe default for repository facts.",
-                    },
-                },
-                "required": ["topic", "content"],
-            },
-            "outputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "transport": {"type": "string", "enum": ["http", "stdio_mcp", "cli"]},
-                    "memory": {"anyOf": [memory_record_schema(), {"type": "null"}]},
-                },
-                "required": ["transport", "memory"],
-            },
-            "annotations": {
-                "readOnlyHint": false,
-                "destructiveHint": false,
-                "idempotentHint": false,
-                "openWorldHint": false,
-            },
-        }),
-        json!({
-            "name": "hzr_memory_forget",
-            "title": "Forget HZR Memory",
-            "description": "Delete one memory only after HZR verifies that it belongs to the selected project or global namespace.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "id": {"type": "string", "minLength": 1, "maxLength": 128},
-                    "scope": {
-                        "type": "string",
-                        "enum": ["project", "global"],
-                        "default": "project"
-                    }
-                },
-                "required": ["id"]
-            },
-            "outputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "affected_ids": {"type": "array", "items": {"type": "string"}},
-                    "dry_run": {"type": "boolean"}
-                },
-                "required": ["affected_ids", "dry_run"]
-            },
-            "annotations": {
-                "readOnlyHint": false,
-                "destructiveHint": true,
-                "idempotentHint": false,
-                "openWorldHint": false
-            }
-        }),
-        json!({
-            "name": "hzr_memory_update",
-            "title": "Update HZR Memory",
-            "description": "Replace one memory in place only after HZR verifies namespace ownership.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "id": {"type": "string", "minLength": 1, "maxLength": 128},
-                    "content": {"type": "string", "minLength": 1},
-                    "importance": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
-                    "keywords": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1}},
-                    "scope": {
-                        "type": "string",
-                        "enum": ["project", "global"],
-                        "default": "project"
-                    }
-                },
-                "required": ["id", "content"]
-            },
-            "outputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "affected_ids": {"type": "array", "items": {"type": "string"}},
-                    "dry_run": {"type": "boolean"}
-                },
-                "required": ["affected_ids", "dry_run"]
-            },
-            "annotations": {
-                "readOnlyHint": false,
-                "destructiveHint": true,
-                "idempotentHint": true,
-                "openWorldHint": false
-            }
-        }),
-        json!({
-            "name": "hzr_memory_prune",
-            "title": "Prune HZR Memory",
-            "description": "Preview or delete low-weight memories only inside the selected HZR namespace. Dry-run defaults to true.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "threshold": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.1},
-                    "dry_run": {"type": "boolean", "default": true},
-                    "scope": {
-                        "type": "string",
-                        "enum": ["project", "global"],
-                        "default": "project"
-                    }
-                },
-                "required": []
-            },
-            "outputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "affected_ids": {"type": "array", "items": {"type": "string"}},
-                    "dry_run": {"type": "boolean"}
-                },
-                "required": ["affected_ids", "dry_run"]
-            },
-            "annotations": {
-                "readOnlyHint": false,
-                "destructiveHint": true,
-                "idempotentHint": false,
-                "openWorldHint": false
-            }
-        }),
-        json!({
-            "name": "hzr_search",
-            "title": "Search HZR Workspace",
-            "description": "Find code in this repository through the one canonical HZR index. \
-        Use semantic for intent or concepts, exact for literal symbols and error text, and auto \
-        when either strategy is acceptable. Results may report an exact fallback while the \
-        semantic index warms.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Intent or exact pattern to find.",
-                    },
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Optional path inside the fixed workspace used to narrow the search; it cannot widen scope.",
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["auto", "semantic", "exact"],
-                        "default": "auto",
-                        "description": "semantic searches by intent; exact preserves a literal pattern; auto selects or safely degrades.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 50,
-                        "default": 10,
-                        "description": "Maximum search hits returned.",
-                    },
-                    "include_content": {
-                        "type": "boolean",
-                        "default": false,
-                        "description": "Include bounded matching snippets when true. Keep false for file discovery.",
-                    },
-                },
-                "required": ["query"],
-            },
-            "outputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "query": {"type": "string"},
-                    "path": {"type": "string"},
-                    "total_hits": {"type": "integer", "minimum": 0},
-                    "shown_hits": {"type": "integer", "minimum": 0},
-                    "scanned_files": {"type": "integer", "minimum": 0},
-                    "skipped_large": {"type": "integer", "minimum": 0},
-                    "skipped_binary": {"type": "integer", "minimum": 0},
-                    "hits": {"type": "array", "items": search_hit_schema()},
-                    "effective_mode": {"type": "string", "enum": ["auto", "semantic", "exact"]},
-                    "strategy": {
-                        "type": "string",
-                        "enum": [
-                            "fork_rgai_adaptive",
-                            "fork_rgai_builtin",
-                            "fork_rgai_grepai",
-                            "fork_rgai_ripgrep",
-                            "fork_rgai_files"
-                        ]
-                    },
-                    "fallback_code": {
-                        "type": "string",
-                        "enum": ["legacy_index_requires_migration", "semantic_index_unavailable", "grepai_unavailable", "ripgrep_unavailable"]
-                    },
-                    "fallback_reason": {"type": "string"},
-                    "next_step": {"type": "string"},
-                },
-                "required": ["query", "path", "total_hits", "shown_hits", "scanned_files", "skipped_large", "skipped_binary", "hits", "effective_mode", "strategy"],
-            },
-            "annotations": {
-                "readOnlyHint": true,
-                "destructiveHint": false,
-                "openWorldHint": false,
-            },
-        }),
-        json!({
-            "name": "hzr_context_plan",
-            "title": "Plan HZR Context",
-            "description": "Build one bounded graph-first evidence plan for unfamiliar, \
-        architectural or cross-cutting work. It fuses structural code candidates, the canonical \
-        HZR search index and durable memory, returning selected files, contents, token budget, \
-        provenance and explicit degradation warnings.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "intent": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "The exact task or architectural question to gather evidence for.",
-                    },
-                    "path": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "Optional path inside the fixed workspace used to narrow planning.",
-                    },
-                    "topic": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 64,
-                        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
-                        "description": "Optional project-memory kind used to narrow durable context.",
-                    },
-                    "search_limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 50,
-                        "default": 10,
-                        "description": "Maximum code candidates before fusion.",
-                    },
-                    "memory_limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 50,
-                        "default": 5,
-                        "description": "Maximum project-memory candidates before fusion.",
-                    },
-                },
-                "required": ["intent"],
-            },
-            "outputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "pack": context_pack_schema(),
-                    "contents": {"type": "object", "additionalProperties": {"type": "string"}},
-                    "warnings": {
-                        "type": "array",
-                        "items": strict_object(
-                            json!({
-                                "code": {"type": "string", "enum": ["planner_fallback", "planner_unavailable", "search_degraded", "search_unavailable", "memory_unavailable", "content_unavailable", "outline_unavailable", "warnings_truncated"]},
-                                "message": {"type": "string"}
-                            }),
-                            &["code", "message"]
-                        )
-                    },
-                    "planner": strict_object(
-                        json!({
-                            "pipeline_version": nullable_string(),
-                            "semantic_backend_used": nullable_string(),
-                            "graph_candidate_count": {"type": ["integer", "null"], "minimum": 0},
-                            "semantic_hit_count": {"type": ["integer", "null"], "minimum": 0},
-                            "candidates_total": {"type": "integer", "minimum": 0},
-                            "candidates_selected": {"type": "integer", "minimum": 0},
-                            "estimated_tokens_used": {"type": "integer", "minimum": 0},
-                            "token_budget": {"type": "integer", "minimum": 0}
-                        }),
-                        &["pipeline_version", "semantic_backend_used", "graph_candidate_count", "semantic_hit_count", "candidates_total", "candidates_selected", "estimated_tokens_used", "token_budget"]
-                    ),
-                },
-                "required": ["pack", "contents", "warnings"],
-            },
-            "annotations": {
-                "readOnlyHint": true,
-                "destructiveHint": false,
-                "openWorldHint": false,
-            },
-        }),
-        json!({
-            "name": "hzr_codec",
-            "title": "Compile an HZR Response-Density Contract",
-            "description": "Remove exact duplicate paragraphs from a long answer while provably \
-        preserving code, commands, paths, identifiers, errors, numbers and URLs. It is a \
-        structural transform, not a summariser: it never rewords prose, so text with no \
-        repeated paragraph comes back byte-identical and that is a correct result, not a \
-        failure. Use profile \"shadow\" to measure the counterfactual without changing the \
-        text. Protected spans are verified after the transform: if any of them changed, the \
-        call fails rather than returning altered technical content. Claude and Codex do not \
-        expose a global response-replacement hook. The returned tool payload can earn \
-        estimated codec-token credit when it is smaller, but it never proves a later final \
-        response was replaced and never earns provider-billed credit by itself.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "The prose to compile. Code blocks, inline code, paths, flags, URLs, hashes and versions inside it are protected and returned unchanged.",
-                    },
-                    "fidelity": {
-                        "type": "string",
-                        "enum": ["exact", "lossless_structural", "semantic", "summary"],
-                        "default": "semantic",
-                        "description": "How much rewriting is permitted. exact returns the input untouched; summary permits the most aggressive rewrite.",
-                    },
-                    "risk": {
-                        "type": "string",
-                        "enum": ["low", "medium", "high", "irreversible"],
-                        "default": "low",
-                        "description": "Risk of the action being described. high and irreversible force full detail regardless of profile.",
-                    },
-                    "profile": {
-                        "type": "string",
-                        "enum": ["off", "safe", "adaptive", "compact", "shadow"],
-                        "default": "adaptive",
-                        "description": "shadow computes the counterfactual without changing the content, which is the only honest way to measure the codec's value.",
-                    },
-                },
-                "required": ["content"],
-            },
-            "outputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "content": {"type": "string"},
-                    "changed": {"type": "boolean"},
-                    "profile": {"type": "string"},
-                    "coverage_state": {
-                        "type": "string",
-                        "enum": ["applied", "shadow_measured", "instructed", "unavailable"]
-                    },
-                    "global_response_replacement_confirmed": {"type": "boolean"},
-                    "estimated_token_credit_eligible": {"type": "boolean"},
-                    "protected_spans": {
-                        "type": "array",
-                        "items": strict_object(
-                            json!({
-                                "start": {"type": "integer", "minimum": 0},
-                                "end": {"type": "integer", "minimum": 0},
-                                "kind": {"type": "string"}
-                            }),
-                            &["start", "end", "kind"]
-                        )
-                    },
-                    "counterfactual": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "description": "Present in shadow profile: the sizes the transform would have produced.",
-                        "properties": {
-                            "input_bytes": {"type": "integer", "minimum": 0},
-                            "output_bytes": {"type": "integer", "minimum": 0},
-                            "saved_bytes": {"type": "integer", "minimum": 0},
-                            "would_change": {"type": "boolean"},
+        ToolDefinition::new(
+            ToolKind::MemoryRecall,
+            json!({
+                "title": "Recall HZR Memory",
+                "description": "Recall durable decisions, resolved errors and preferences before \
+            re-reading prior work. Defaults to this repository plus explicitly user-global memory; \
+            memories from another repository are never returned.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Natural-language description of the decision, fact or prior context to recall.",
                         },
-                        "required": ["input_bytes", "output_bytes", "saved_bytes", "would_change"],
+                        "topic": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                            "description": "Optional exact memory kind such as architecture, preference or resolved-error.",
+                        },
+                        "keyword": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Optional keyword filter applied by the memory engine.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50,
+                            "default": 10,
+                            "description": "Maximum memories returned.",
+                        },
+                        "scope": {
+                            "type": "string",
+                            "enum": ["project", "global", "project_and_global"],
+                            "default": "project_and_global",
+                            "description": "project_and_global returns this repository plus explicit user-wide memory. Use project or global to restrict the lookup.",
+                        },
                     },
+                    "required": ["query"],
                 },
-                "required": [
-                    "content", "changed", "profile", "protected_spans", "coverage_state",
-                    "global_response_replacement_confirmed", "estimated_token_credit_eligible"
-                ],
-            },
-            "annotations": {
-                "readOnlyHint": true,
-                "destructiveHint": false,
-                "openWorldHint": false,
-            },
-        }),
-        json!({
-            "name": "hzr_read",
-            "title": "Read through HZR",
-            "description": "Read bounded exact content through the daemon-owned fork-core path. The response preserves termination, hashes and truncation so omitted bytes cannot look complete.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "path": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES},
-                    "outline": {"type": "boolean", "default": false},
-                    "from": {"type": "integer", "minimum": 1},
-                    "to": {"type": "integer", "minimum": 1},
-                    "max_lines": {"type": "integer", "minimum": 1}
-                },
-                "required": ["path"]
-            },
-            "outputSchema": fork_result_schema("content", json!({"type": "string"})),
-            "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
-        }),
-        json!({
-            "name": "hzr_write",
-            "title": "Write through HZR",
-            "description": "Apply an atomic patch or non-overwriting create through daemon-owned fork-core. Patch always uses CAS with two bounded retries and returns the typed write receipt.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "operation": {"type": "string", "enum": ["patch", "create"]},
-                    "path": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES},
-                    "old": {"type": "string", "maxLength": MCP_PATCH_BLOCK_MAX_BYTES},
-                    "new": {"type": "string", "maxLength": MCP_PATCH_BLOCK_MAX_BYTES},
-                    "content": {"type": "string", "maxLength": MCP_CREATE_CONTENT_MAX_BYTES},
-                    "cas": {"type": "boolean", "const": true, "default": true}
-                },
-                "required": ["operation", "path"],
-                "allOf": [
-                    {
-                        "if": {"properties": {"operation": {"const": "patch"}}},
-                        "then": {"required": ["old", "new"], "not": {"required": ["content"]}}
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "count": {"type": "integer", "minimum": 0},
+                        "total_matches": {"type": "integer", "minimum": 0},
+                        "memories": {"type": "array", "items": memory_record_schema()},
                     },
-                    {
-                        "if": {"properties": {"operation": {"const": "create"}}},
-                        "then": {"required": ["content"], "not": {"anyOf": [{"required": ["old"]}, {"required": ["new"]}]}}
-                    }
-                ]
-            },
-            "outputSchema": fork_result_schema("receipt", json!({"type": "object"})),
-            "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false}
-        }),
-        json!({
-            "name": "hzr_exec",
-            "title": "Execute through HZR Policy",
-            "description": "Run one shell command through the daemon-owned policy, rewrite and accounting pipeline. Approval-required and denied decisions are returned as typed outcomes; MCP never falls back to a direct shell.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "command": {"type": "string", "minLength": 1},
-                    "timeout_ms": {"type": "integer", "minimum": 1, "maximum": MCP_EXEC_TIMEOUT_MAX_MS}
+                    "required": ["count", "total_matches", "memories"],
                 },
-                "required": ["command"]
-            },
-            "outputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "outcome": {"type": "string", "enum": ["completed", "executed_accounting_incomplete", "not_started"]},
-                    "result": {"type": "object"},
-                    "disposition": {"type": "object"}
+                "annotations": {
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "openWorldHint": false,
                 },
-                "required": ["outcome"]
-            },
-            "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true}
-        }),
-        json!({
-            "name": "hzr_observability",
-            "title": "Observe HZR Health",
-            "description": "Return the daemon's typed health, engine state, capabilities and exact bound workspace without scraping CLI or UI text.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object", "additionalProperties": false, "properties": {}, "required": []
-            },
-            "outputSchema": health_schema(),
-            "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
-        }),
-        json!({
-            "name": "hzr_doctor",
-            "title": "Diagnose HZR Desired State",
-            "description": "Run the typed desired-state doctor for the exact MCP workspace, including ownership, binding, ledger and engine checks.",
-            "inputSchema": {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "type": "object", "additionalProperties": false, "properties": {}, "required": []
-            },
-            "outputSchema": doctor_schema(),
-            "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
-        }),
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::MemoryStore,
+            json!({
+                "title": "Store HZR Memory",
+                "description": "Persist one durable decision, preference, resolved error or completed \
+            handoff in the single HZR-owned store. Do not store ephemeral progress, raw tool output, \
+            credentials or speculative conclusions.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "topic": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                            "description": "Stable memory kind such as architecture, preference or resolved-error.",
+                        },
+                        "content": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Self-contained durable fact including the decision and why it matters.",
+                        },
+                        "importance": {
+                            "type": "string",
+                            "enum": ["critical", "high", "medium", "low"],
+                            "default": "medium",
+                            "description": "Retrieval priority. Reserve critical for invariants whose omission can cause harm.",
+                        },
+                        "keywords": {
+                            "type": "array",
+                            "maxItems": 32,
+                            "items": {"type": "string", "minLength": 1},
+                            "description": "Optional exact retrieval terms; at most 32.",
+                        },
+                        "scope": {
+                            "type": "string",
+                            "enum": ["project", "global"],
+                            "default": "project",
+                            "description": "Use global only for a user-wide preference or rule; project is the safe default for repository facts.",
+                        },
+                    },
+                    "required": ["topic", "content"],
+                },
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "transport": {"type": "string", "enum": ["http", "stdio_mcp", "cli"]},
+                        "memory": {"anyOf": [memory_record_schema(), {"type": "null"}]},
+                    },
+                    "required": ["transport", "memory"],
+                },
+                "annotations": {
+                    "readOnlyHint": false,
+                    "destructiveHint": false,
+                    "idempotentHint": false,
+                    "openWorldHint": false,
+                },
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::MemoryForget,
+            json!({
+                "title": "Forget HZR Memory",
+                "description": "Delete one memory only after HZR verifies that it belongs to the selected project or global namespace.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                        "scope": {
+                            "type": "string",
+                            "enum": ["project", "global"],
+                            "default": "project"
+                        }
+                    },
+                    "required": ["id"]
+                },
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "affected_ids": {"type": "array", "items": {"type": "string"}},
+                        "dry_run": {"type": "boolean"}
+                    },
+                    "required": ["affected_ids", "dry_run"]
+                },
+                "annotations": {
+                    "readOnlyHint": false,
+                    "destructiveHint": true,
+                    "idempotentHint": false,
+                    "openWorldHint": false
+                }
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::MemoryUpdate,
+            json!({
+                "title": "Update HZR Memory",
+                "description": "Replace one memory in place only after HZR verifies namespace ownership.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                        "content": {"type": "string", "minLength": 1},
+                        "importance": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                        "keywords": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1}},
+                        "scope": {
+                            "type": "string",
+                            "enum": ["project", "global"],
+                            "default": "project"
+                        }
+                    },
+                    "required": ["id", "content"]
+                },
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "affected_ids": {"type": "array", "items": {"type": "string"}},
+                        "dry_run": {"type": "boolean"}
+                    },
+                    "required": ["affected_ids", "dry_run"]
+                },
+                "annotations": {
+                    "readOnlyHint": false,
+                    "destructiveHint": true,
+                    "idempotentHint": true,
+                    "openWorldHint": false
+                }
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::MemoryPrune,
+            json!({
+                "title": "Prune HZR Memory",
+                "description": "Preview or delete low-weight memories only inside the selected HZR namespace. Dry-run defaults to true.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "threshold": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.1},
+                        "dry_run": {"type": "boolean", "default": true},
+                        "scope": {
+                            "type": "string",
+                            "enum": ["project", "global"],
+                            "default": "project"
+                        }
+                    },
+                    "required": []
+                },
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "affected_ids": {"type": "array", "items": {"type": "string"}},
+                        "dry_run": {"type": "boolean"}
+                    },
+                    "required": ["affected_ids", "dry_run"]
+                },
+                "annotations": {
+                    "readOnlyHint": false,
+                    "destructiveHint": true,
+                    "idempotentHint": false,
+                    "openWorldHint": false
+                }
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::Search,
+            json!({
+                "title": "Search HZR Workspace",
+                "description": "Find code in this repository through the one canonical HZR index. \
+            Use semantic for intent or concepts, exact for literal symbols and error text, and auto \
+            when either strategy is acceptable. Results may report an exact fallback while the \
+            semantic index warms.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Intent or exact pattern to find.",
+                        },
+                        "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Optional path inside the fixed workspace used to narrow the search; it cannot widen scope.",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["auto", "semantic", "exact"],
+                            "default": "auto",
+                            "description": "semantic searches by intent; exact preserves a literal pattern; auto selects or safely degrades.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50,
+                            "default": 10,
+                            "description": "Maximum search hits returned.",
+                        },
+                        "include_content": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Include bounded matching snippets when true. Keep false for file discovery.",
+                        },
+                    },
+                    "required": ["query"],
+                },
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "query": {"type": "string"},
+                        "path": {"type": "string"},
+                        "total_hits": {"type": "integer", "minimum": 0},
+                        "shown_hits": {"type": "integer", "minimum": 0},
+                        "scanned_files": {"type": "integer", "minimum": 0},
+                        "skipped_large": {"type": "integer", "minimum": 0},
+                        "skipped_binary": {"type": "integer", "minimum": 0},
+                        "hits": {"type": "array", "items": search_hit_schema()},
+                        "effective_mode": {"type": "string", "enum": ["auto", "semantic", "exact"]},
+                        "strategy": {
+                            "type": "string",
+                            "enum": [
+                                "fork_rgai_adaptive",
+                                "fork_rgai_builtin",
+                                "fork_rgai_grepai",
+                                "fork_rgai_ripgrep",
+                                "fork_rgai_files"
+                            ]
+                        },
+                        "fallback_code": {
+                            "type": "string",
+                            "enum": ["legacy_index_requires_migration", "semantic_index_unavailable", "grepai_unavailable", "ripgrep_unavailable"]
+                        },
+                        "fallback_reason": {"type": "string"},
+                        "next_step": {"type": "string"},
+                    },
+                    "required": ["query", "path", "total_hits", "shown_hits", "scanned_files", "skipped_large", "skipped_binary", "hits", "effective_mode", "strategy"],
+                },
+                "annotations": {
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "openWorldHint": false,
+                },
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::ContextPlan,
+            json!({
+                "title": "Plan HZR Context",
+                "description": "Build one bounded graph-first evidence plan for unfamiliar, \
+            architectural or cross-cutting work. It fuses structural code candidates, the canonical \
+            HZR search index and durable memory, returning selected files, contents, token budget, \
+            provenance and explicit degradation warnings.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "intent": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The exact task or architectural question to gather evidence for.",
+                        },
+                        "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Optional path inside the fixed workspace used to narrow planning.",
+                        },
+                        "topic": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                            "description": "Optional project-memory kind used to narrow durable context.",
+                        },
+                        "search_limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50,
+                            "default": 10,
+                            "description": "Maximum code candidates before fusion.",
+                        },
+                        "memory_limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50,
+                            "default": 5,
+                            "description": "Maximum project-memory candidates before fusion.",
+                        },
+                    },
+                    "required": ["intent"],
+                },
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "pack": context_pack_schema(),
+                        "contents": {"type": "object", "additionalProperties": {"type": "string"}},
+                        "warnings": {
+                            "type": "array",
+                            "items": strict_object(
+                                json!({
+                                    "code": {"type": "string", "enum": ["planner_fallback", "planner_unavailable", "search_degraded", "search_unavailable", "memory_unavailable", "content_unavailable", "outline_unavailable", "warnings_truncated"]},
+                                    "message": {"type": "string"}
+                                }),
+                                &["code", "message"]
+                            )
+                        },
+                        "planner": strict_object(
+                            json!({
+                                "pipeline_version": nullable_string(),
+                                "semantic_backend_used": nullable_string(),
+                                "graph_candidate_count": {"type": ["integer", "null"], "minimum": 0},
+                                "semantic_hit_count": {"type": ["integer", "null"], "minimum": 0},
+                                "candidates_total": {"type": "integer", "minimum": 0},
+                                "candidates_selected": {"type": "integer", "minimum": 0},
+                                "estimated_tokens_used": {"type": "integer", "minimum": 0},
+                                "token_budget": {"type": "integer", "minimum": 0}
+                            }),
+                            &["pipeline_version", "semantic_backend_used", "graph_candidate_count", "semantic_hit_count", "candidates_total", "candidates_selected", "estimated_tokens_used", "token_budget"]
+                        ),
+                    },
+                    "required": ["pack", "contents", "warnings"],
+                },
+                "annotations": {
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "openWorldHint": false,
+                },
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::Codec,
+            json!({
+                "title": "Compile an HZR Response-Density Contract",
+                "description": "Remove exact duplicate paragraphs from a long answer while provably \
+            preserving code, commands, paths, identifiers, errors, numbers and URLs. It is a \
+            structural transform, not a summariser: it never rewords prose, so text with no \
+            repeated paragraph comes back byte-identical and that is a correct result, not a \
+            failure. Use profile \"shadow\" to measure the counterfactual without changing the \
+            text. Protected spans are verified after the transform: if any of them changed, the \
+            call fails rather than returning altered technical content. Claude and Codex do not \
+            expose a global response-replacement hook. The returned tool payload can earn \
+            estimated codec-token credit when it is smaller, but it never proves a later final \
+            response was replaced and never earns provider-billed credit by itself.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "The prose to compile. Code blocks, inline code, paths, flags, URLs, hashes and versions inside it are protected and returned unchanged.",
+                        },
+                        "fidelity": {
+                            "type": "string",
+                            "enum": ["exact", "lossless_structural", "semantic", "summary"],
+                            "default": "semantic",
+                            "description": "How much rewriting is permitted. exact returns the input untouched; summary permits the most aggressive rewrite.",
+                        },
+                        "risk": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "irreversible"],
+                            "default": "low",
+                            "description": "Risk of the action being described. high and irreversible force full detail regardless of profile.",
+                        },
+                        "profile": {
+                            "type": "string",
+                            "enum": ["off", "safe", "adaptive", "compact", "shadow"],
+                            "default": "adaptive",
+                            "description": "shadow computes the counterfactual without changing the content, which is the only honest way to measure the codec's value.",
+                        },
+                    },
+                    "required": ["content"],
+                },
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "content": {"type": "string"},
+                        "changed": {"type": "boolean"},
+                        "profile": {"type": "string"},
+                        "coverage_state": {
+                            "type": "string",
+                            "enum": ["applied", "shadow_measured", "instructed", "unavailable"]
+                        },
+                        "global_response_replacement_confirmed": {"type": "boolean"},
+                        "estimated_token_credit_eligible": {"type": "boolean"},
+                        "protected_spans": {
+                            "type": "array",
+                            "items": strict_object(
+                                json!({
+                                    "start": {"type": "integer", "minimum": 0},
+                                    "end": {"type": "integer", "minimum": 0},
+                                    "kind": {"type": "string"}
+                                }),
+                                &["start", "end", "kind"]
+                            )
+                        },
+                        "counterfactual": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "description": "Present in shadow profile: the sizes the transform would have produced.",
+                            "properties": {
+                                "input_bytes": {"type": "integer", "minimum": 0},
+                                "output_bytes": {"type": "integer", "minimum": 0},
+                                "saved_bytes": {"type": "integer", "minimum": 0},
+                                "would_change": {"type": "boolean"},
+                            },
+                            "required": ["input_bytes", "output_bytes", "saved_bytes", "would_change"],
+                        },
+                    },
+                    "required": [
+                        "content", "changed", "profile", "protected_spans", "coverage_state",
+                        "global_response_replacement_confirmed", "estimated_token_credit_eligible"
+                    ],
+                },
+                "annotations": {
+                    "readOnlyHint": true,
+                    "destructiveHint": false,
+                    "openWorldHint": false,
+                },
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::Read,
+            json!({
+                "title": "Read through HZR",
+                "description": "Read bounded exact content through the daemon-owned fork-core path. The response preserves termination, hashes and truncation so omitted bytes cannot look complete.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "path": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES},
+                        "outline": {"type": "boolean", "default": false},
+                        "from": {"type": "integer", "minimum": 1},
+                        "to": {"type": "integer", "minimum": 1},
+                        "max_lines": {"type": "integer", "minimum": 1}
+                    },
+                    "required": ["path"]
+                },
+                "outputSchema": fork_result_schema("content", json!({"type": "string"})),
+                "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::Write,
+            json!({
+                "title": "Write through HZR",
+                "description": "Apply an atomic patch or non-overwriting create through daemon-owned fork-core. Patch always uses CAS with two bounded retries and returns the typed write receipt.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "operation": {"type": "string", "enum": ["patch", "create"]},
+                        "path": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES},
+                        "old": {"type": "string", "maxLength": MCP_PATCH_BLOCK_MAX_BYTES},
+                        "new": {"type": "string", "maxLength": MCP_PATCH_BLOCK_MAX_BYTES},
+                        "content": {"type": "string", "maxLength": MCP_CREATE_CONTENT_MAX_BYTES},
+                        "cas": {"type": "boolean", "const": true, "default": true}
+                    },
+                    "required": ["operation", "path"],
+                    "allOf": [
+                        {
+                            "if": {"properties": {"operation": {"const": "patch"}}},
+                            "then": {"required": ["old", "new"], "not": {"required": ["content"]}}
+                        },
+                        {
+                            "if": {"properties": {"operation": {"const": "create"}}},
+                            "then": {"required": ["content"], "not": {"anyOf": [{"required": ["old"]}, {"required": ["new"]}]}}
+                        }
+                    ]
+                },
+                "outputSchema": fork_result_schema("receipt", json!({"type": "object"})),
+                "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": true, "openWorldHint": false}
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::Exec,
+            json!({
+                "title": "Execute through HZR Policy",
+                "description": "Run one shell command through the daemon-owned policy, rewrite and accounting pipeline. Approval-required and denied decisions are returned as typed outcomes; MCP never falls back to a direct shell.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "command": {"type": "string", "minLength": 1},
+                        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": MCP_EXEC_TIMEOUT_MAX_MS}
+                    },
+                    "required": ["command"]
+                },
+                "outputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "outcome": {"type": "string", "enum": ["completed", "executed_accounting_incomplete", "not_started"]},
+                        "result": {"type": "object"},
+                        "disposition": {"type": "object"}
+                    },
+                    "required": ["outcome"]
+                },
+                "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true}
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::Observability,
+            json!({
+                "title": "Observe HZR Health",
+                "description": "Return the daemon's typed health, engine state, capabilities and exact bound workspace without scraping CLI or UI text.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object", "additionalProperties": false, "properties": {}, "required": []
+                },
+                "outputSchema": health_schema(),
+                "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
+            }),
+        ),
+        ToolDefinition::new(
+            ToolKind::Doctor,
+            json!({
+                "title": "Diagnose HZR Desired State",
+                "description": "Run the typed desired-state doctor for the exact MCP workspace, including ownership, binding, ledger and engine checks.",
+                "inputSchema": {
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "type": "object", "additionalProperties": false, "properties": {}, "required": []
+                },
+                "outputSchema": doctor_schema(),
+                "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
+            }),
+        ),
     ]
 }
 
-pub(super) fn tool_definitions() -> Vec<Value> {
+static TOOL_DEFINITIONS: LazyLock<Vec<ToolDefinition>> = LazyLock::new(|| {
     let definitions = raw_tool_definitions();
+    let mut names = BTreeSet::new();
     for definition in &definitions {
-        let name = definition["name"]
+        let name = definition.wire["name"]
             .as_str()
             .expect("internal MCP definition has a name");
-        debug_assert!(
-            tool_contract(name).is_some(),
-            "internal MCP definition has no handler contract: {name}"
-        );
+        assert_eq!(name, definition.name());
+        assert!(names.insert(name), "duplicate internal MCP tool: {name}");
+        assert!(definition.wire.get("inputSchema").is_some());
+        assert!(definition.wire.get("outputSchema").is_some());
     }
-    debug_assert_eq!(definitions.len(), TOOL_CONTRACTS.len());
     definitions
+});
+
+fn tool_definition_registry() -> &'static [ToolDefinition] {
+    TOOL_DEFINITIONS.as_slice()
+}
+
+pub(super) fn tool_definitions() -> Vec<Value> {
+    tool_definition_registry()
+        .iter()
+        .map(|definition| definition.wire.clone())
+        .collect()
 }
 
 pub(super) fn validate_tool_input(name: &str, value: &Value) -> Result<(), String> {
@@ -1007,12 +1027,11 @@ pub(super) fn validate_tool_output(name: &str, value: &Value) -> Result<(), Stri
 }
 
 fn validate_tool_payload(name: &str, schema_key: &str, value: &Value) -> Result<(), String> {
-    let definitions = raw_tool_definitions();
-    let definition = definitions
+    let definition = tool_definition_registry()
         .iter()
-        .find(|definition| definition["name"] == name)
+        .find(|definition| definition.name() == name)
         .ok_or_else(|| format!("unknown tool: {name}"))?;
-    validate_schema(&definition[schema_key], value, name)
+    validate_schema(&definition.wire[schema_key], value, name)
 }
 
 fn validate_schema(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
@@ -1318,5 +1337,16 @@ mod tests {
             descriptions.len(),
             "MCP tools must not duplicate top-level descriptions"
         );
+    }
+
+    #[test]
+    fn tool_validation_reuses_one_schema_registry() {
+        let first = super::tool_definition_registry();
+        for _ in 0..100 {
+            super::validate_tool_input("hzr_observability", &serde_json::json!({}))
+                .expect("valid observability input");
+        }
+        let second = super::tool_definition_registry();
+        assert!(std::ptr::eq(first, second));
     }
 }

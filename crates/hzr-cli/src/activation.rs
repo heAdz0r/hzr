@@ -36,39 +36,175 @@ pub fn record(workspace: &Workspace) -> EnabledWorkspace {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstructionLocation {
+    UserGlobal,
+    WorkspaceShared,
+    WorkspaceLocal,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct InstructionTarget {
+    pub surface: crate::instructions::Surface,
+    pub path: PathBuf,
+    pub location: InstructionLocation,
+}
+
+impl InstructionTarget {
+    pub fn is_local_codex(&self) -> bool {
+        self.location == InstructionLocation::WorkspaceLocal
+            && self.surface == crate::instructions::Surface::Codex
+    }
+
+    #[cfg(test)]
+    pub fn path_is_local_codex(surface: crate::instructions::Surface, path: &Path) -> bool {
+        surface == crate::instructions::Surface::Codex
+            && path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.override.md")
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct InstructionDesiredState {
+    pub desired: Vec<InstructionTarget>,
+    pub obsolete: Vec<InstructionTarget>,
+    pub excluded: Vec<PathBuf>,
+}
+
+fn workspace_targets(root: &Path, location: InstructionLocation) -> [InstructionTarget; 2] {
+    let (claude, codex) = match location {
+        InstructionLocation::WorkspaceShared => ("CLAUDE.md", "AGENTS.md"),
+        InstructionLocation::WorkspaceLocal => ("CLAUDE.local.md", "AGENTS.override.md"),
+        InstructionLocation::UserGlobal => {
+            unreachable!("global targets do not belong to a workspace")
+        }
+    };
+    [
+        InstructionTarget {
+            surface: crate::instructions::Surface::Claude,
+            path: root.join(claude),
+            location,
+        },
+        InstructionTarget {
+            surface: crate::instructions::Surface::Codex,
+            path: root.join(codex),
+            location,
+        },
+    ]
+}
+
+fn global_targets() -> Result<[InstructionTarget; 2]> {
+    Ok([
+        InstructionTarget {
+            surface: crate::instructions::Surface::Claude,
+            path: crate::instructions::Surface::Claude.default_path()?,
+            location: InstructionLocation::UserGlobal,
+        },
+        InstructionTarget {
+            surface: crate::instructions::Surface::Codex,
+            path: crate::instructions::Surface::Codex.default_path()?,
+            location: InstructionLocation::UserGlobal,
+        },
+    ])
+}
+
 pub fn local_instruction_paths(
     root: &Path,
     scope: InstructionScope,
 ) -> [(crate::instructions::Surface, PathBuf); 2] {
-    match scope {
-        InstructionScope::Shared => [
-            (crate::instructions::Surface::Claude, root.join("CLAUDE.md")),
-            (crate::instructions::Surface::Codex, root.join("AGENTS.md")),
-        ],
-        InstructionScope::Local => [
-            (
-                crate::instructions::Surface::Claude,
-                root.join("CLAUDE.local.md"),
-            ),
-            (
-                crate::instructions::Surface::Codex,
-                root.join("AGENTS.override.md"),
-            ),
-        ],
-    }
+    let location = match scope {
+        InstructionScope::Shared => InstructionLocation::WorkspaceShared,
+        InstructionScope::Local => InstructionLocation::WorkspaceLocal,
+    };
+    workspace_targets(root, location).map(|target| (target.surface, target.path))
 }
 
-const LOCAL_EXCLUDE_BLOCK: &str = "# hzr:begin local instructions\n/CLAUDE.local.md\n/AGENTS.override.md\n# hzr:end local instructions";
-
-/// Keep machine-local instruction surfaces out of commits without touching the repository's
-/// shared `.gitignore`. Non-Git workspaces have no transmission path and need no exclude file.
-pub fn ensure_local_instruction_excludes(
+pub fn instruction_desired_state(
     root: &Path,
+    activation: ActivationMode,
     scope: InstructionScope,
-    dry_run: bool,
-) -> Result<bool> {
-    if scope != InstructionScope::Local || !root.join(".git").exists() {
-        return Ok(false);
+) -> Result<InstructionDesiredState> {
+    let globals = global_targets()?;
+    let shared = workspace_targets(root, InstructionLocation::WorkspaceShared);
+    let local = workspace_targets(root, InstructionLocation::WorkspaceLocal);
+    let desired = match (activation, scope) {
+        (_, InstructionScope::Local) => local.to_vec(),
+        (ActivationMode::All, InstructionScope::Shared) => {
+            globals.iter().chain(shared.iter()).cloned().collect()
+        }
+        (ActivationMode::Selected, InstructionScope::Shared) => shared.to_vec(),
+    };
+    let mut obsolete = globals
+        .iter()
+        .chain(shared.iter())
+        .chain(local.iter())
+        .filter(|target| !desired.iter().any(|item| item.path == target.path))
+        .cloned()
+        .collect::<Vec<_>>();
+    obsolete.sort_by(|left, right| left.path.cmp(&right.path));
+    let excluded = if scope == InstructionScope::Local {
+        local.iter().map(|target| target.path.clone()).collect()
+    } else {
+        Vec::new()
+    };
+    Ok(InstructionDesiredState {
+        desired,
+        obsolete,
+        excluded,
+    })
+}
+
+const LOCAL_EXCLUDE_BEGIN: &str = "# hzr:begin local instructions";
+const LOCAL_EXCLUDE_END: &str = "# hzr:end local instructions";
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LocalExcludeReport {
+    pub path: Option<PathBuf>,
+    pub backup_path: Option<PathBuf>,
+    pub changed: bool,
+    pub installed: bool,
+    pub before_sha256: Option<String>,
+    pub after_sha256: Option<String>,
+}
+
+fn exclude_block(state: &InstructionDesiredState) -> String {
+    let mut block = String::from(LOCAL_EXCLUDE_BEGIN);
+    for path in &state.excluded {
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            block.push('\n');
+            block.push('/');
+            block.push_str(name);
+        }
+    }
+    block.push('\n');
+    block.push_str(LOCAL_EXCLUDE_END);
+    block
+}
+
+fn strip_exclude_block(text: &str) -> String {
+    let Some(start) = text.find(LOCAL_EXCLUDE_BEGIN) else {
+        return text.to_owned();
+    };
+    let Some(relative_end) = text[start..].find(LOCAL_EXCLUDE_END) else {
+        return text.to_owned();
+    };
+    let end = start + relative_end + LOCAL_EXCLUDE_END.len();
+    let mut stripped = String::with_capacity(text.len());
+    stripped.push_str(text[..start].trim_end());
+    let suffix = text[end..].trim_start_matches(['\r', '\n']);
+    if !stripped.is_empty() && !suffix.is_empty() {
+        stripped.push('\n');
+    }
+    stripped.push_str(suffix);
+    if !stripped.is_empty() && !stripped.ends_with('\n') {
+        stripped.push('\n');
+    }
+    stripped
+}
+
+pub fn local_exclude_path(root: &Path) -> Result<Option<PathBuf>> {
+    if !root.join(".git").exists() {
+        return Ok(None);
     }
     let output = Command::new("git")
         .args(["rev-parse", "--git-path", "info/exclude"])
@@ -82,28 +218,56 @@ pub fn ensure_local_instruction_excludes(
     }
     let raw = String::from_utf8(output.stdout)?;
     let reported = PathBuf::from(raw.trim());
-    let path = if reported.is_absolute() {
+    Ok(Some(if reported.is_absolute() {
         reported
     } else {
         root.join(reported)
+    }))
+}
+
+pub fn reconcile_local_instruction_excludes(
+    root: &Path,
+    state: &InstructionDesiredState,
+    dry_run: bool,
+) -> Result<LocalExcludeReport> {
+    let Some(path) = local_exclude_path(root)? else {
+        return Ok(LocalExcludeReport {
+            path: None,
+            backup_path: None,
+            changed: false,
+            installed: false,
+            before_sha256: None,
+            after_sha256: None,
+        });
     };
-    let before = std::fs::read_to_string(&path).unwrap_or_default();
-    if before.contains(LOCAL_EXCLUDE_BLOCK) {
-        return Ok(false);
-    }
-    let mut after = before.trim_end().to_owned();
-    if !after.is_empty() {
-        after.push_str("\n\n");
-    }
-    after.push_str(LOCAL_EXCLUDE_BLOCK);
-    after.push('\n');
-    if !dry_run {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+    let before = crate::adoption::read_optional(&path)?;
+    let before_text = String::from_utf8(before.clone())?;
+    let mut after = strip_exclude_block(&before_text);
+    let installed = !state.excluded.is_empty();
+    if installed {
+        if !after.is_empty() && !after.ends_with("\n\n") {
+            if after.ends_with('\n') {
+                after.push('\n');
+            } else {
+                after.push_str("\n\n");
+            }
         }
-        crate::adoption::atomic_write(&path, after.as_bytes())?;
+        after.push_str(&exclude_block(state));
+        after.push('\n');
     }
-    Ok(true)
+    let changed = before != after.as_bytes();
+    let backup_path = changed.then(|| crate::adoption::backup_path(&path, &before));
+    if !dry_run && let Some(backup) = backup_path.as_ref() {
+        crate::adoption::commit(&path, &before, after.as_bytes(), backup, b"")?;
+    }
+    Ok(LocalExcludeReport {
+        path: Some(path),
+        backup_path,
+        changed,
+        installed,
+        before_sha256: Some(crate::adoption::sha256(&before)),
+        after_sha256: Some(crate::adoption::sha256(after.as_bytes())),
+    })
 }
 
 /// Снимок режима активации и списка явно включённых workspace.
@@ -155,10 +319,90 @@ pub fn render_status_text(report: &ActivationStatusReport) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use hzr_core::{ActivationMode, Config, EnabledWorkspace};
+    use hzr_core::{ActivationMode, Config, EnabledWorkspace, InstructionScope};
     use tempfile::tempdir;
 
-    use super::{ActivationStatusReport, discover, is_enabled, record, render_status_text};
+    use super::{
+        ActivationStatusReport, InstructionLocation, discover, instruction_desired_state,
+        is_enabled, reconcile_local_instruction_excludes, record, render_status_text,
+    };
+
+    #[test]
+    fn desired_state_makes_scope_transitions_explicit() {
+        let directory = tempdir().expect("temporary directory");
+        let local = instruction_desired_state(
+            directory.path(),
+            ActivationMode::All,
+            InstructionScope::Local,
+        )
+        .expect("local desired state");
+        assert_eq!(local.desired.len(), 2);
+        assert!(
+            local
+                .desired
+                .iter()
+                .all(|target| target.location == InstructionLocation::WorkspaceLocal)
+        );
+        assert_eq!(local.excluded.len(), 2);
+        assert_eq!(local.obsolete.len(), 4);
+
+        let shared = instruction_desired_state(
+            directory.path(),
+            ActivationMode::Selected,
+            InstructionScope::Shared,
+        )
+        .expect("shared desired state");
+        assert!(
+            shared
+                .desired
+                .iter()
+                .all(|target| target.location == InstructionLocation::WorkspaceShared)
+        );
+        assert!(shared.excluded.is_empty());
+        assert!(shared.obsolete.iter().any(|target| {
+            target.location == InstructionLocation::WorkspaceLocal && target.is_local_codex()
+        }));
+    }
+
+    #[test]
+    fn local_exclude_is_installed_removed_and_preserves_user_bytes() {
+        let directory = tempdir().expect("temporary directory");
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .expect("git init");
+        assert!(status.success());
+        let exclude = directory.path().join(".git/info/exclude");
+        std::fs::write(&exclude, "user-pattern\n").expect("user exclude");
+        let local = instruction_desired_state(
+            directory.path(),
+            ActivationMode::Selected,
+            InstructionScope::Local,
+        )
+        .expect("local state");
+        let installed = reconcile_local_instruction_excludes(directory.path(), &local, false)
+            .expect("install excludes");
+        assert!(installed.changed);
+        let installed_bytes = std::fs::read_to_string(&exclude).expect("installed exclude");
+        assert!(installed_bytes.starts_with("user-pattern\n"));
+        assert!(installed_bytes.contains("/CLAUDE.local.md"));
+        assert!(installed_bytes.contains("/AGENTS.override.md"));
+
+        let shared = instruction_desired_state(
+            directory.path(),
+            ActivationMode::Selected,
+            InstructionScope::Shared,
+        )
+        .expect("shared state");
+        let removed = reconcile_local_instruction_excludes(directory.path(), &shared, false)
+            .expect("remove excludes");
+        assert!(removed.changed);
+        assert_eq!(
+            std::fs::read_to_string(&exclude).expect("removed exclude"),
+            "user-pattern\n"
+        );
+    }
 
     #[tokio::test]
     async fn selected_activation_is_exactly_scoped_to_the_enabled_workspace() {

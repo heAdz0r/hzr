@@ -10,6 +10,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use hzr_core::Config;
 use hzr_daemon::{AppState, AuthToken, router};
+use hzr_exec::expected_engine_identity;
 use hzr_index::Workspace;
 use serde_json::Value;
 use tokio::time::sleep;
@@ -286,10 +287,16 @@ esac
 
 fn write_fake_rtk(engines: &Path) {
     let path = engines.join("rtk");
+    let contract =
+        serde_json::to_string(&expected_engine_identity().expect("current engine identity"))
+            .expect("contract JSON");
     let script = r#"#!/bin/sh
 case "$1" in
   --version)
     printf '%s\n' 'rtk 0.44.1-fork.1'
+    ;;
+  contract)
+    [ "${2:-}" = "--json" ] && printf '%s\n' '__CONTRACT_JSON__' || exit 64
     ;;
   rewrite)
     if [ "${2:-}" = "--help" ]; then
@@ -315,7 +322,8 @@ case "$1" in
     exit 67
     ;;
 esac
-"#;
+"#
+    .replace("__CONTRACT_JSON__", &contract);
     fs::write(&path, script).expect("fake rtk");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("fake rtk executable");
 }

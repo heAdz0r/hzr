@@ -4,16 +4,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+pub use hzr_engine_contract::{
+    ACCOUNTING_POLICY_VERSION, AccountingAttribution, AccountingChannel, AccountingFailureEvent,
+    AccountingFailureKind, AccountingFilterLevel, AccountingMeasurement, AccountingOperationKind,
+    AccountingOperationMode, AccountingRoute, AccountingSearchStrategy, AccountingStage,
+    BYTE_FIDELITY_ENV, ENGINE_CONTRACT_VERSION, EnforcementTier, EngineAccountingReceipt,
+    EngineContractIdentity, EvasionAttribution, EvasionClass, EvasionInterpreter, EvasionPathForm,
+    FidelityReason, FidelityValidation, HOST_GRANT_APPLIED_ENV, INTERNAL_EVASION_ENV,
+    PolicyDecision, RAW_FIDELITY_ENV, RAW_FIDELITY_REASON_ENV, RewritePlan, RewritePlanDecision,
+    RewritePlanReason, SearchFallbackCode,
+};
+
 mod api;
 
 pub use api::{
-    AccountingAttribution, AccountingChannel, AccountingFilterLevel, AccountingMeasurement,
-    AccountingOperationKind, AccountingOperationMode, AccountingRoute, AccountingSearchStrategy,
-    AccountingStage, COMPLETENESS_CONTRACTS, CodecApiRequest, CommandTermination,
-    CompletenessContract, ContextPlanApiRequest, ContextPlanApiResponse, ContextWarning,
-    ContextWarningCode, DashboardEconomicAmount, DashboardEstimatedEfficiency,
-    DashboardHelpCommand, DashboardIndexArtifacts, DashboardIndexObservatory,
-    DashboardIndexWatcher, DashboardLifecycleEvent, DashboardLifecycleKind, DashboardLocalActivity,
+    COMPLETENESS_CONTRACTS, CodecApiRequest, CommandTermination, CompletenessContract,
+    ContextPlanApiRequest, ContextPlanApiResponse, ContextWarning, ContextWarningCode,
+    DashboardEconomicAmount, DashboardEstimatedEfficiency, DashboardHelpCommand,
+    DashboardIndexArtifacts, DashboardIndexObservatory, DashboardIndexWatcher,
+    DashboardLifecycleEvent, DashboardLifecycleKind, DashboardLocalActivity,
     DashboardLocalOperation, DashboardMemoryDetail, DashboardMemoryEdge,
     DashboardMemoryObservatory, DashboardMemoryRetrieval, DashboardMemoryTopic,
     DashboardMemoryTopicDetails, DashboardObservability, DashboardObservedUsage,
@@ -21,19 +30,79 @@ pub use api::{
     DashboardProjectState, DashboardProviderReceiptState, DashboardProviderReceipts,
     DashboardRawPublicEstimate, DashboardResponse, DashboardSearchActivity, DashboardService,
     DashboardSessionCommand, DashboardSessionRoi, DashboardState, DashboardTraceSpan,
-    DashboardTraceStage, DashboardTraceState, EnforcementTier, EvasionAttribution, EvasionClass,
-    EvasionInterpreter, EvasionPathForm, ExecApiRequest, ExecApprovalApiRequest, FidelityReason,
+    DashboardTraceStage, DashboardTraceState, ExecApiRequest, ExecApprovalApiRequest,
     FidelityReconcileApiRequest, FidelityReconcileReceipt, FidelityUnknownResolution,
-    FidelityValidation, FilterPlacement, ForkManagedWrite, ForkPlannerMetadata, ForkRunApiRequest,
-    ForkRunApiResponse, HOST_EXECUTION_GRANT_ENV, HOST_EXECUTION_GRANT_MAX_AGE_MS,
+    FilterPlacement, ForkManagedWrite, ForkPlannerMetadata, ForkRunApiRequest, ForkRunApiResponse,
+    HOST_EXECUTION_GRANT_ENV, HOST_EXECUTION_GRANT_MAX_AGE_MS,
     HOST_EXECUTION_GRANT_MAX_FUTURE_SKEW_MS, HostExecutionGrant, HostGrantRejection,
     HostPermissionMode, MemoryForgetApiRequest, MemoryImportance, MemoryMutationApiResponse,
     MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest,
     MemoryUpdateApiRequest, MemoryWriteScope, MustKeep, OperationApiRequest, OperationApiResponse,
-    PolicyDecision, SearchApiRequest, SearchApiResponse, SearchFallbackCode, SearchHit, SearchLine,
-    SearchMode, SearchSnippet, SearchStrategy, SemanticReadinessApiRequest,
+    PolicyEventApiRequest, PolicyEventApiResponse, SearchApiRequest, SearchApiResponse, SearchHit,
+    SearchLine, SearchMode, SearchSnippet, SearchStrategy, SemanticReadinessApiRequest,
     SemanticReadinessApiResponse, UsageApiRequest, UsageApiResponse, completeness_contract,
 };
+
+/// Delivery metadata that is independent of the search strategy selected by the daemon.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SearchAccountingMetadata {
+    pub stage: AccountingStage,
+    pub include_content: bool,
+    pub limit: u64,
+    pub path_scope_count: u64,
+}
+
+/// Build the canonical requested/effective attribution for a delivered search response.
+#[must_use]
+pub const fn build_search_accounting_attribution(
+    requested_mode: SearchMode,
+    response: &SearchApiResponse,
+    metadata: SearchAccountingMetadata,
+) -> AccountingAttribution {
+    let requested_mode = search_accounting_mode(requested_mode);
+    let effective_mode = match response.strategy {
+        SearchStrategy::ForkRgaiBuiltin if matches!(response.effective_mode, SearchMode::Exact) => {
+            AccountingOperationMode::SearchExact
+        }
+        SearchStrategy::ForkRgaiBuiltin => AccountingOperationMode::SearchBuiltin,
+        SearchStrategy::ForkRgaiAdaptive => search_accounting_mode(response.effective_mode),
+        SearchStrategy::ForkRgaiGrepai
+        | SearchStrategy::ForkRgaiRipgrep
+        | SearchStrategy::ForkRgaiFiles => AccountingOperationMode::SearchSemantic,
+    };
+    let search_strategy = match response.strategy {
+        SearchStrategy::ForkRgaiAdaptive => AccountingSearchStrategy::ForkRgaiAdaptive,
+        SearchStrategy::ForkRgaiBuiltin => AccountingSearchStrategy::ForkRgaiBuiltin,
+        SearchStrategy::ForkRgaiGrepai => AccountingSearchStrategy::ForkRgaiGrepai,
+        SearchStrategy::ForkRgaiRipgrep => AccountingSearchStrategy::ForkRgaiRipgrep,
+        SearchStrategy::ForkRgaiFiles => AccountingSearchStrategy::ForkRgaiFiles,
+    };
+    AccountingAttribution {
+        operation: AccountingOperationKind::Search,
+        mode: effective_mode,
+        stage: metadata.stage,
+        requested_mode: Some(requested_mode),
+        effective_mode: Some(effective_mode),
+        search_strategy: Some(search_strategy),
+        search_fallback_code: response.fallback_code,
+        include_content: Some(metadata.include_content),
+        limit: Some(metadata.limit),
+        path_scope_count: Some(metadata.path_scope_count),
+        filter_level: None,
+        from_line: None,
+        to_line: None,
+        source_bytes: None,
+        evasion: None,
+    }
+}
+
+const fn search_accounting_mode(mode: SearchMode) -> AccountingOperationMode {
+    match mode {
+        SearchMode::Auto => AccountingOperationMode::SearchAuto,
+        SearchMode::Semantic => AccountingOperationMode::SearchSemantic,
+        SearchMode::Exact => AccountingOperationMode::SearchExact,
+    }
+}
 
 pub const PROTOCOL_VERSION: u16 = 1;
 
@@ -291,8 +360,11 @@ pub struct ErrorResponse {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActualUsage, EnforcementTier, EstimatedUsage, EvasionAttribution, EvasionClass,
-        EvasionInterpreter, EvasionPathForm, FidelityReason, FidelityValidation, TokenCount, Usage,
+        AccountingOperationMode, AccountingSearchStrategy, AccountingStage, ActualUsage,
+        EnforcementTier, EstimatedUsage, EvasionAttribution, EvasionClass, EvasionInterpreter,
+        EvasionPathForm, FidelityReason, FidelityValidation, SearchAccountingMetadata,
+        SearchApiResponse, SearchMode, SearchStrategy, TokenCount, Usage,
+        build_search_accounting_attribution,
     };
 
     #[test]
@@ -317,6 +389,51 @@ mod tests {
     fn test_token_count_tracks_measurement_source() {
         assert!(TokenCount::provider(5).is_actual());
         assert!(!TokenCount::estimate(5).is_actual());
+    }
+
+    #[test]
+    fn search_accounting_builder_owns_requested_and_effective_mapping() {
+        let response = SearchApiResponse {
+            query: "needle".into(),
+            path: ".".into(),
+            total_hits: 0,
+            shown_hits: 0,
+            scanned_files: 0,
+            skipped_large: 0,
+            skipped_binary: 0,
+            hits: Vec::new(),
+            effective_mode: SearchMode::Exact,
+            strategy: SearchStrategy::ForkRgaiBuiltin,
+            fallback_code: None,
+            index_generation: None,
+            fallback_reason: None,
+            next_step: None,
+        };
+
+        let attribution = build_search_accounting_attribution(
+            SearchMode::Auto,
+            &response,
+            SearchAccountingMetadata {
+                stage: AccountingStage::FinalDelivery,
+                include_content: false,
+                limit: 10,
+                path_scope_count: 2,
+            },
+        );
+
+        assert_eq!(
+            attribution.requested_mode,
+            Some(AccountingOperationMode::SearchAuto)
+        );
+        assert_eq!(
+            attribution.effective_mode,
+            Some(AccountingOperationMode::SearchExact)
+        );
+        assert_eq!(
+            attribution.search_strategy,
+            Some(AccountingSearchStrategy::ForkRgaiBuiltin)
+        );
+        assert_eq!(attribution.path_scope_count, Some(2));
     }
 
     #[test]

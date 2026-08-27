@@ -9,18 +9,55 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use hzr_core::{Config, Ledger};
+use hzr_exec::expected_engine_identity;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
 fn write_fake_rtk(engines: &std::path::Path, config_path: &std::path::Path) {
     fs::create_dir_all(engines).expect("engine directory");
     let path = engines.join("rtk");
+    let current = expected_engine_identity().expect("current engine metadata");
+    let contract = serde_json::to_string(&json!({
+        "contract_version": current.contract_version,
+        "engine_version": current.engine_version,
+        "manifest_sha256": current.manifest_sha256,
+        "content_manifest_sha256": current.content_manifest_sha256,
+    }))
+    .expect("contract JSON");
     let script = format!(
         r#"#!/usr/bin/env python3
-import hashlib, json, pathlib, sys, time
+import json, os, pathlib, sys, time
 a = sys.argv[1:]
+engine = json.loads({contract:?})
+def record_receipt(operation, mode):
+    journal = os.environ.get('HZR_INTERNAL_ACCOUNTING_RECEIPT_JOURNAL')
+    correlation = os.environ.get('HZR_INTERNAL_ACCOUNTING_CORRELATION')
+    if not journal or not correlation:
+        return
+    receipt = {{
+        "contract_version": 1,
+        "engine": engine,
+        "correlation_id": correlation,
+        "sequence": 1,
+        "occurred_at_unix_ms": int(time.time() * 1000),
+        "baseline_tokens": 10,
+        "delivered_tokens": 5,
+        "execution_ms": 1,
+        "measurement": "estimated",
+        "route": "optimized",
+        "attribution": {{
+            "operation": operation,
+            "mode": mode,
+            "stage": "internal_transport"
+        }},
+        "host_grant_applied": False
+    }}
+    with open(journal, 'a', encoding='utf-8') as handle:
+        handle.write(json.dumps(receipt, separators=(',', ':')) + '\n')
 if a == ['--version']:
     print('rtk 0.44.1-fork.1')
+elif a == ['contract', '--json']:
+    print(json.dumps(engine, separators=(',', ':')))
 elif len(a) >= 2 and a[0] == 'rewrite' and a[1] == '--help':
     print('rtk rewrite\nRaw command to rewrite')
 elif len(a) >= 2 and a[0] == 'proxy' and a[1] == '--help':
@@ -44,6 +81,7 @@ elif a and a[0] == 'read':
         end = start + int(a[a.index('--max-lines') + 1])
     else:
         end = len(lines)
+    record_receipt('read', 'read_range' if '--from' in a or '--to' in a else 'read_filtered')
     sys.stdout.write(''.join(lines[start:end]))
 elif len(a) >= 5 and a[:4] == ['write', '--output', 'json', 'patch']:
     target = pathlib.Path(a[4])
@@ -56,6 +94,7 @@ elif len(a) >= 5 and a[:4] == ['write', '--output', 'json', 'patch']:
         print(json.dumps({{"version":1,"ok":False,"op":"patch","error":"CAS block missing"}}))
         sys.exit(3)
     target.write_text(text.replace(old, new, 1))
+    record_receipt('write', 'write')
     print(json.dumps({{"version":1,"ok":True,"op":"patch","applied":1}}))
 elif len(a) >= 5 and a[:4] == ['write', '--output', 'json', 'create']:
     target = pathlib.Path(a[4])
@@ -63,12 +102,14 @@ elif len(a) >= 5 and a[:4] == ['write', '--output', 'json', 'create']:
         print(json.dumps({{"version":1,"ok":False,"op":"create","error":"exists"}}))
         sys.exit(4)
     target.write_text(sys.stdin.read())
+    record_receipt('write', 'write')
     print(json.dumps({{"version":1,"ok":True,"op":"create","applied":1}}))
 else:
     print('unsupported fake rtk invocation: ' + repr(a), file=sys.stderr)
     sys.exit(67)
 "#,
-        config_path = config_path.to_string_lossy()
+        config_path = config_path.to_string_lossy(),
+        contract = contract,
     );
     fs::write(&path, script).expect("fake rtk");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("fake executable");

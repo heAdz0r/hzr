@@ -139,6 +139,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Emit the machine-verifiable HZR engine contract
+    #[command(hide = true)]
+    Contract {
+        /// Emit the contract as JSON
+        #[arg(long, required = true)]
+        json: bool,
+    },
+
     /// Internal typed capability probe used by the HZR stats collector.
     #[command(name = "capability-batch", hide = true)]
     CapabilityBatch,
@@ -1961,6 +1969,13 @@ fn main() -> Result<()> {
     };
 
     match cli.command {
+        Commands::Contract { json } => {
+            if json {
+                let identity = tracking::embedded_engine_identity();
+                serde_json::to_writer(std::io::stdout().lock(), &identity)?;
+                println!();
+            }
+        }
         Commands::CapabilityBatch => run_capability_batch(std::io::stdin(), std::io::stdout())?,
         Commands::Ls { args } => {
             ls::run(&args, cli.verbose)?;

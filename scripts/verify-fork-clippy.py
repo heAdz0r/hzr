@@ -17,10 +17,9 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 141
-# Recomputed after execution-time replacement capability evidence was added to
-# tracking.rs. The inherited warning set remains 141 hits with no new lint codes;
-# only tracked source positions moved. The ratchet still rejects later drift.
-EXPECTED_SHA256 = "61cb04477b8ec5d6d734ea86aee855c69cf13ae41b0f4b91c208f10e8f365c83"
+# Recomputed after typed engine contracts, receipt accounting and PATH resolution moved reviewed
+# source positions. Warning code/message/source rows and the count remain identical to the import.
+EXPECTED_SHA256 = "3aa3353d899a0fa403f018310b913a5919095d746744b68e6ac0af65ab8fbfc8"
 
 
 def main() -> int:

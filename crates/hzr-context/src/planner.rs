@@ -1489,7 +1489,7 @@ mod tests {
     #[cfg(unix)]
     use hzr_core::Config;
     #[cfg(unix)]
-    use hzr_exec::{ForkCoreConfig, ForkRuntimePaths, PinnedRtkAdapter};
+    use hzr_exec::{ForkCoreConfig, ForkRuntimePaths, PinnedRtkAdapter, expected_engine_identity};
     #[cfg(unix)]
     use hzr_memory::{IcmClient, IcmConfig, IcmTransport};
     use hzr_protocol::{
@@ -1694,6 +1694,9 @@ mod tests {
     fn write_config_probe(path: &Path, config_path: &Path, counter_path: &Path) {
         let digest = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
         let config_json = serde_json::to_string(config_path).expect("JSON config path");
+        let contract_json =
+            serde_json::to_string(&expected_engine_identity().expect("current engine identity"))
+                .expect("contract JSON");
         let config_shell = config_path.to_string_lossy();
         let counter_shell = counter_path.to_string_lossy();
         assert!(!config_shell.contains('\''));
@@ -1702,6 +1705,9 @@ mod tests {
 case "$1" in
   --version)
     printf '%s\n' 'rtk 0.44.1-fork.1'
+    ;;
+  contract)
+    [ "$2" = "--json" ] && printf '%s\n' '__CONTRACT_JSON__' || exit 64
     ;;
   rewrite)
     [ "$2" = "--help" ] && printf '%s\n' 'rtk rewrite - Raw command to rewrite' || exit 64
@@ -1734,6 +1740,7 @@ case "$1" in
 esac
 "#
         .replace("__CONFIG_JSON__", &config_json)
+        .replace("__CONTRACT_JSON__", &contract_json)
         .replace("__CONFIG_SHELL__", &config_shell)
         .replace("__COUNTER_SHELL__", &counter_shell)
         .replace("__ALPHA_DIGEST__", &digest(b"alpha"))

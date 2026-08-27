@@ -220,7 +220,6 @@ impl IndexCoordinator {
                     let uptime_ms =
                         u64::try_from(entry.handle.uptime().as_millis()).unwrap_or(u64::MAX);
                     let state = if entry.handle.is_running()? {
-                        entry.last_used = Instant::now();
                         entry.failed_at = None;
                         IndexWatcherState::Live
                     } else {

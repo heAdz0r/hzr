@@ -19,6 +19,13 @@ fn custom_config(data_dir: &std::path::Path, engines: &std::path::Path) -> Strin
     )
 }
 
+fn local_instruction_config(data_dir: &std::path::Path, engines: &std::path::Path) -> String {
+    format!(
+        "{}\n[instructions]\nscope = \"local\"\n",
+        custom_config(data_dir, engines)
+    )
+}
+
 #[test]
 fn init_force_preserves_existing_config_bytes() {
     let fixture = tempdir().expect("fixture");
@@ -74,12 +81,6 @@ fn init_dry_run_has_zero_filesystem_mutations() {
 
     assert!(output.status.success());
     assert!(!config.exists());
-    assert!(
-        fs::read_dir(&workspace)
-            .expect("workspace read")
-            .next()
-            .is_none()
-    );
     assert!(fs::read_dir(&home).expect("home read").next().is_none());
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).expect("dry-run JSON");
     assert_eq!(payload["dry_run"], true);
@@ -230,13 +231,6 @@ fn init_rolls_back_config_instructions_index_and_registration_after_injected_fai
         original
     );
     assert!(!new_data.exists(), "new data layout must be removed");
-    assert!(
-        fs::read_dir(&workspace)
-            .expect("workspace read")
-            .next()
-            .is_none()
-    );
-    assert!(fs::read_dir(&home).expect("home read").next().is_none());
     assert!(
         fs::read_dir(fixture.path())
             .expect("fixture read")
@@ -494,4 +488,183 @@ fn if_needed_reconciles_project_mcp_with_instruction_rollback() {
         fs::read_to_string(workspace.join(".codex/config.toml")).expect("project MCP registration");
     assert!(project_mcp.contains("[mcp_servers.hzr]"));
     assert!(project_mcp.contains(workspace.to_str().expect("workspace UTF-8")));
+}
+
+#[test]
+fn activation_failure_restores_config_workspace_and_backup_artifacts() {
+    let fixture = tempdir().expect("fixture");
+    let workspace = fixture.path().join("workspace");
+    let home = fixture.path().join("home");
+    let data = fixture.path().join("data");
+    let engines = fixture.path().join("engines");
+    for directory in [&workspace, &home, &engines] {
+        fs::create_dir_all(directory).expect("fixture directory");
+    }
+    let git = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&workspace)
+        .status()
+        .expect("git init");
+    assert!(git.success());
+    let exclude = workspace.join(".git/info/exclude");
+    fs::write(&exclude, "user-pattern\n").expect("user exclude");
+    let config = fixture.path().join("config.toml");
+    let original_config = local_instruction_config(&data, &engines);
+    fs::write(&config, &original_config).expect("config fixture");
+
+    let failed = command(&home, &workspace)
+        .env("HZR_TEST_ACTIVATION_FAIL_AFTER", "project_mcp")
+        .args([
+            "--config",
+            config.to_str().expect("config path"),
+            "enable",
+            "--workspace",
+            workspace.to_str().expect("workspace path"),
+        ])
+        .output()
+        .expect("failing activation");
+
+    assert!(!failed.status.success());
+    assert_eq!(
+        fs::read_to_string(&config).expect("rolled back config"),
+        original_config
+    );
+    assert_eq!(
+        fs::read_to_string(&exclude).expect("rolled back exclude"),
+        "user-pattern\n"
+    );
+    assert!(!workspace.join(".grepai").exists());
+    assert!(!workspace.join("CLAUDE.local.md").exists());
+    assert!(!workspace.join("AGENTS.override.md").exists());
+    assert!(!workspace.join(".codex/config.toml").exists());
+    assert!(!workspace.join(".codex").exists());
+    assert!(
+        !data.exists(),
+        "rollback residue: {:?}",
+        fs::read_dir(&data)
+            .map(|entries| {
+                entries
+                    .map(|entry| entry.expect("data entry").path())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    );
+    assert!(
+        fs::read_dir(&workspace)
+            .expect("workspace entries")
+            .all(|entry| !entry
+                .expect("workspace entry")
+                .file_name()
+                .to_string_lossy()
+                .contains("hzr-backup"))
+    );
+    assert!(
+        fs::read_dir(exclude.parent().expect("exclude parent"))
+            .expect("exclude entries")
+            .all(|entry| !entry
+                .expect("exclude entry")
+                .file_name()
+                .to_string_lossy()
+                .contains("hzr-backup"))
+    );
+}
+
+#[test]
+fn concurrent_workspace_activation_retains_both_roots() {
+    let fixture = tempdir().expect("fixture");
+    let first = fixture.path().join("first");
+    let second = fixture.path().join("second");
+    let home = fixture.path().join("home");
+    let data = fixture.path().join("data");
+    let engines = fixture.path().join("engines");
+    for directory in [&first, &second, &home, &engines] {
+        fs::create_dir_all(directory).expect("fixture directory");
+    }
+    let config = fixture.path().join("config.toml");
+    fs::write(&config, custom_config(&data, &engines)).expect("config fixture");
+
+    let mut first_enable = command(&home, &first)
+        .args([
+            "--config",
+            config.to_str().expect("config path"),
+            "enable",
+            "--workspace",
+            first.to_str().expect("first workspace"),
+        ])
+        .spawn()
+        .expect("first activation");
+    let mut second_enable = command(&home, &second)
+        .args([
+            "--config",
+            config.to_str().expect("config path"),
+            "enable",
+            "--workspace",
+            second.to_str().expect("second workspace"),
+        ])
+        .spawn()
+        .expect("second activation");
+
+    assert!(first_enable.wait().expect("first status").success());
+    assert!(second_enable.wait().expect("second status").success());
+    let config = fs::read_to_string(config).expect("activation config");
+    assert!(config.contains(first.to_str().expect("first UTF-8")));
+    assert!(config.contains(second.to_str().expect("second UTF-8")));
+}
+
+#[test]
+fn uninstall_cleans_every_registered_workspace_from_unrelated_cwd() {
+    let fixture = tempdir().expect("fixture");
+    let first = fixture.path().join("first");
+    let second = fixture.path().join("second");
+    let home = fixture.path().join("home");
+    let data = fixture.path().join("data");
+    let engines = fixture.path().join("engines");
+    for directory in [&first, &second, &home, &engines] {
+        fs::create_dir_all(directory).expect("fixture directory");
+    }
+    let config = fixture.path().join("config.toml");
+    fs::write(&config, custom_config(&data, &engines)).expect("config fixture");
+    for workspace in [&first, &second] {
+        fs::write(workspace.join("AGENTS.md"), "user codex rule\n").expect("user AGENTS");
+        fs::write(workspace.join("CLAUDE.md"), "user claude rule\n").expect("user CLAUDE");
+        let output = command(&home, workspace)
+            .args([
+                "--config",
+                config.to_str().expect("config path"),
+                "enable",
+                "--workspace",
+                workspace.to_str().expect("workspace path"),
+            ])
+            .output()
+            .expect("workspace activation");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let output = command(&home, fixture.path())
+        .args([
+            "--config",
+            config.to_str().expect("config path"),
+            "uninstall",
+            "--force",
+        ])
+        .output()
+        .expect("uninstall");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for workspace in [&first, &second] {
+        let agents = fs::read_to_string(workspace.join("AGENTS.md")).unwrap_or_default();
+        let claude = fs::read_to_string(workspace.join("CLAUDE.md")).unwrap_or_default();
+        let project_mcp =
+            fs::read_to_string(workspace.join(".codex/config.toml")).unwrap_or_default();
+        assert_eq!(agents, "user codex rule\n");
+        assert_eq!(claude, "user claude rule\n");
+        assert!(!project_mcp.contains("[mcp_servers.hzr]"));
+    }
 }

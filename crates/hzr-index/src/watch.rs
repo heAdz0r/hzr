@@ -69,6 +69,8 @@ pub(crate) async fn start(
     .await
     {
         let _ = child.kill().await;
+        let _ = child.wait().await;
+        let _ = std::fs::remove_dir_all(&runtime_dir);
         return Err(error);
     }
 
@@ -150,11 +152,12 @@ impl WatchHandle {
             match timeout(self.stop_deadline, self.child.wait()).await {
                 Ok(Ok(_)) => {
                     self.stopped = true;
-                    return Ok(());
+                    return remove_runtime_dir(&self.runtime_dir);
                 }
                 Ok(Err(source)) => {
                     let _ = self.child.kill().await;
                     self.stopped = true;
+                    let _ = std::fs::remove_dir_all(&self.runtime_dir);
                     return Err(IndexError::Io {
                         operation: "wait for grepai watch shutdown",
                         path: self.binary.clone(),
@@ -165,6 +168,7 @@ impl WatchHandle {
                     let _ = self.child.kill().await;
                     let _ = self.child.wait().await;
                     self.stopped = true;
+                    let _ = std::fs::remove_dir_all(&self.runtime_dir);
                     return Err(IndexError::DeadlineExceeded {
                         operation: "stop grepai watch",
                         duration: self.stop_deadline,
@@ -176,7 +180,8 @@ impl WatchHandle {
         let _ = self.child.kill().await;
         let _ = self.child.wait().await;
         self.stopped = true;
-        stop_result.map(|_| ())
+        let cleanup_result = remove_runtime_dir(&self.runtime_dir);
+        stop_result.and(cleanup_result)
     }
 }
 
@@ -184,7 +189,20 @@ impl Drop for WatchHandle {
     fn drop(&mut self) {
         if !self.stopped {
             let _ = self.child.start_kill();
+            let _ = std::fs::remove_dir_all(&self.runtime_dir);
         }
+    }
+}
+
+fn remove_runtime_dir(path: &Path) -> Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(IndexError::Io {
+            operation: "remove grepai watch runtime",
+            path: path.to_path_buf(),
+            source,
+        }),
     }
 }
 

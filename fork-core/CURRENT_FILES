@@ -523,6 +523,7 @@ tests/fixtures/anti_evasion_policy.json
 tests/fixtures/anti_evasion_fixture.rs
 tests/git_cli_parity.rs
 tests/git_log_semantics.rs
+tests/hzr_accounting_receipt.rs
 tests/internal_env.rs
 tests/read_accounting.rs
 tests/read_cli.rs

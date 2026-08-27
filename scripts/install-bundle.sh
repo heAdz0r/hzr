@@ -44,7 +44,6 @@ if [[ -z "${HZR_VERSION}" ]]; then
 fi
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) HZR_PLATFORM="darwin-arm64" ;;
-  Darwin-x86_64) HZR_PLATFORM="darwin-x64" ;;
   Linux-aarch64 | Linux-arm64) HZR_PLATFORM="linux-arm64" ;;
   Linux-x86_64) HZR_PLATFORM="linux-x64" ;;
   *)
@@ -57,7 +56,9 @@ esac
 # `mv -f` resolves an existing `current` and moves the new link *inside* the old release,
 # leaving `current` pointing at the previous version.
 # shellcheck source=/dev/null
-source <(sed -n '/^replace_hzr_symlink()/,/^}/p' \
+source <(sed -n \
+  -e '/^replace_hzr_symlink()/,/^}/p' \
+  -e '/^prune_hzr_versions()/,/^}/p' \
   "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)/install.sh")
 
 HZR_VERSION_ROOT="${HZR_INSTALL_ROOT}/versions/v${HZR_VERSION}-${HZR_PLATFORM}"
@@ -94,5 +95,6 @@ done
 if [[ -n "${HZR_RETIRED}" ]]; then
   rm -rf -- "${HZR_RETIRED}"
 fi
+prune_hzr_versions "${HZR_INSTALL_ROOT}/versions" "${HZR_VERSION_ROOT}"
 
-echo "installed v${HZR_VERSION}-${HZR_PLATFORM}; current -> $(readlink "${HZR_INSTALL_ROOT}/current")"
+echo "installed v${HZR_VERSION}-${HZR_PLATFORM}; current -> $(readlink "${HZR_INSTALL_ROOT}/current"); pruned ${HZR_PRUNED_VERSION_COUNT} inactive release(s)"

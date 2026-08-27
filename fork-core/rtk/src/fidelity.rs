@@ -1,21 +1,13 @@
 use std::ffi::OsStr;
 
 use anyhow::{bail, Result};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FidelityReason {
-    Binary,
-    Checksum,
-    MachineProtocol,
-    CompleteLog,
-    FullPatch,
-    VerbatimSource,
-}
+pub use hzr_engine_contract::FidelityReason;
+use hzr_engine_contract::{RAW_FIDELITY_ENV, RAW_FIDELITY_REASON_ENV};
 
 pub fn exact_requested(allowed: &[FidelityReason]) -> Result<bool> {
     validate_request(
-        std::env::var_os("HZR_RAW_FIDELITY").as_deref(),
-        std::env::var_os("HZR_RAW_FIDELITY_REASON").as_deref(),
+        std::env::var_os(RAW_FIDELITY_ENV).as_deref(),
+        std::env::var_os(RAW_FIDELITY_REASON_ENV).as_deref(),
         allowed,
     )
 }
@@ -31,7 +23,7 @@ pub(crate) fn validate_request(
     let authorized = marker == Some(OsStr::new("1"))
         && reason
             .and_then(OsStr::to_str)
-            .and_then(parse_reason)
+            .and_then(FidelityReason::parse)
             .is_some_and(|reason| allowed.contains(&reason));
     if !authorized {
         bail!(
@@ -39,18 +31,6 @@ pub(crate) fn validate_request(
         );
     }
     Ok(true)
-}
-
-fn parse_reason(reason: &str) -> Option<FidelityReason> {
-    match reason {
-        "binary" => Some(FidelityReason::Binary),
-        "checksum" => Some(FidelityReason::Checksum),
-        "machine_protocol" => Some(FidelityReason::MachineProtocol),
-        "complete_log" => Some(FidelityReason::CompleteLog),
-        "full_patch" => Some(FidelityReason::FullPatch),
-        "verbatim_source" => Some(FidelityReason::VerbatimSource),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

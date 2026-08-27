@@ -15,7 +15,6 @@ HZR_OUTPUT_ROOT="$(cd -- "${HZR_OUTPUT_ROOT}" && pwd -P)"
 HZR_VERSION="$(${HZR_BUNDLE_ROOT}/bin/hzr --version | awk '{print $2}')"
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) HZR_PLATFORM="darwin-arm64" ;;
-  Darwin-x86_64) HZR_PLATFORM="darwin-x64" ;;
   Linux-aarch64 | Linux-arm64) HZR_PLATFORM="linux-arm64" ;;
   Linux-x86_64) HZR_PLATFORM="linux-x64" ;;
   *)

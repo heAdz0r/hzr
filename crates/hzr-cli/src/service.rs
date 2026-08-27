@@ -61,6 +61,103 @@ pub fn ensure_running_if_installed() -> Result<Option<ServiceReport>> {
     execute(action).map(Some)
 }
 
+pub fn owned_definition_path() -> Result<Option<PathBuf>> {
+    let base = BaseDirs::new().context("cannot determine the user home directory")?;
+    let home = base.home_dir();
+    if cfg!(target_os = "macos") {
+        Ok(Some(
+            home.join("Library/LaunchAgents")
+                .join(format!("{LABEL}.plist")),
+        ))
+    } else if cfg!(target_os = "linux") {
+        Ok(Some(
+            home.join(".config/systemd/user")
+                .join(format!("{LABEL}.service")),
+        ))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn uninstall_owned(dry_run: bool, confirmed: bool) -> Result<Option<ServiceReport>> {
+    let base = BaseDirs::new().context("cannot determine the user home directory")?;
+    let home = base.home_dir();
+    let (manager, definition) = if cfg!(target_os = "macos") {
+        (
+            ServiceManager::Launchd,
+            home.join("Library/LaunchAgents")
+                .join(format!("{LABEL}.plist")),
+        )
+    } else if cfg!(target_os = "linux") {
+        (
+            ServiceManager::SystemdUser,
+            home.join(".config/systemd/user")
+                .join(format!("{LABEL}.service")),
+        )
+    } else {
+        bail!("production daemon service is supported only on macOS and Linux")
+    };
+    crate::adoption::validate_lifecycle_target(&definition)?;
+    let existing = match std::fs::read(&definition) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("cannot read service definition"),
+    };
+    let binary = service_binary()?;
+    let rendered = match manager {
+        ServiceManager::Launchd => launchd_definition(home, &binary),
+        ServiceManager::SystemdUser => systemd_definition(home, &binary),
+    };
+    if existing != rendered.as_bytes() {
+        bail!(
+            "refusing to remove foreign service definition: {}",
+            definition.display()
+        );
+    }
+    if dry_run {
+        return Ok(Some(ServiceReport {
+            manager,
+            action: "uninstall".to_owned(),
+            definition,
+            binary,
+            active: false,
+            changed: true,
+        }));
+    }
+    if !confirmed {
+        bail!("service removal requires confirmed uninstallation");
+    }
+    match manager {
+        ServiceManager::Launchd => {
+            let command = manager_command("HZR_LAUNCHCTL", "launchctl");
+            let domain = format!("gui/{}", user_id()?);
+            let service = format!("{domain}/{LABEL}");
+            if run_status(&command, ["print", &service]).success() {
+                run(&command, ["bootout", &service])?;
+            }
+        }
+        ServiceManager::SystemdUser => {
+            let command = manager_command("HZR_SYSTEMCTL", "systemctl");
+            let _ = run_status(&command, ["--user", "stop", LABEL]);
+            let _ = run_status(&command, ["--user", "disable", LABEL]);
+        }
+    }
+    std::fs::remove_file(&definition)
+        .with_context(|| format!("remove owned service definition {}", definition.display()))?;
+    if manager == ServiceManager::SystemdUser {
+        let command = manager_command("HZR_SYSTEMCTL", "systemctl");
+        run(&command, ["--user", "daemon-reload"])?;
+    }
+    Ok(Some(ServiceReport {
+        manager,
+        action: "uninstall".to_owned(),
+        definition,
+        binary,
+        active: false,
+        changed: true,
+    }))
+}
+
 fn service_binary() -> Result<PathBuf> {
     if let Some(binary) = std::env::var_os("HZR_SERVICE_BINARY") {
         return validate_service_binary(PathBuf::from(binary));
@@ -202,6 +299,7 @@ fn systemd(action: ServiceCommand, home: &Path, binary: &Path) -> Result<Service
 }
 
 fn install_definition(action: ServiceCommand, path: &Path, rendered: &[u8]) -> Result<bool> {
+    crate::adoption::validate_lifecycle_target(path)?;
     if action != ServiceCommand::Install {
         if action != ServiceCommand::Status && !path.is_file() {
             bail!(

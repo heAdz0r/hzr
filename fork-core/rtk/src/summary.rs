@@ -40,12 +40,11 @@ pub fn run(command: &str, verbose: u8) -> Result<()> {
     // a ❌ nobody's script could read. A filter that turns a red run green is worse than no
     // filter, because the summary is believed.
     if !output.status.success() {
-        std::process::exit(
-            output
-                .status
-                .code()
-                .unwrap_or(if output.status.success() { 0 } else { 1 }),
-        );
+        std::process::exit(output.status.code().unwrap_or(if output.status.success() {
+            0
+        } else {
+            1
+        }));
     }
     Ok(())
 }

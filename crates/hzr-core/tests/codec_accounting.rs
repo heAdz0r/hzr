@@ -5,9 +5,8 @@
 //! capability that cannot be measured cannot be justified, and one that is never called is
 //! indistinguishable from one that does not work.
 
-use hzr_core::{
-    Ledger, OperationContext, OperationSubsystem, classify_operation, privacy_identity_hash,
-};
+use hzr_core::{Ledger, OperationContext, OperationRoute, privacy_identity_hash};
+use hzr_protocol::AccountingOperationKind;
 use tempfile::tempdir;
 
 #[test]
@@ -28,12 +27,9 @@ fn test_a_recorded_operation_reaches_the_efficiency_summary() {
         .by_command
         .first()
         .expect("the operation is grouped by command");
-    assert_eq!(command.command, "rtk codec");
-    assert_eq!(
-        classify_operation(&command.command).subsystem,
-        OperationSubsystem::Codec,
-        "a recorded codec operation must land in the codec subsystem"
-    );
+    assert_eq!(command.key.family, "codec");
+    assert_eq!(command.key.operation, Some(AccountingOperationKind::Codec));
+    assert_eq!(command.key.route, OperationRoute::Optimized);
 }
 
 /// A transform that grew the text is a regression, and the ledger has to be able to say so
@@ -156,7 +152,7 @@ fn test_raw_routes_receive_zero_credit_even_when_recorded_counts_differ() {
     let raw = summary
         .by_command
         .iter()
-        .find(|command| command.command == "rtk raw rg")
+        .find(|command| command.key.family == "rg" && command.key.route == OperationRoute::Bypassed)
         .expect("raw command summary");
     assert_eq!(raw.baseline_tokens_estimated, 1);
     assert_eq!(raw.delivered_tokens_estimated, 1);

@@ -14,7 +14,10 @@ use hzr_core::{
     PricingCatalog, PrivacyPseudonymizer, PrivacySafeFidelityOperation, ProviderEconomicReceipt,
     ProviderReceiptRecordResult, privacy_identity_hash,
 };
-use hzr_protocol::{FidelityReconcileReceipt, FidelityUnknownResolution, TraceId};
+use hzr_protocol::{
+    AccountingChannel, EngineAccountingReceipt, FidelityReconcileReceipt,
+    FidelityUnknownResolution, TraceId,
+};
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
@@ -46,6 +49,14 @@ enum WriteCommand {
     Operation {
         record: Box<OperationRecord>,
         reply: oneshot::Sender<Result<(), LedgerWriterError>>,
+    },
+    EngineReceipt {
+        receipt: Box<EngineAccountingReceipt>,
+        project_path: String,
+        agent: Option<String>,
+        session_id: Option<String>,
+        channel: AccountingChannel,
+        reply: oneshot::Sender<Result<bool, LedgerError>>,
     },
     PolicyEvent {
         record: Box<PolicyEventRecord>,
@@ -560,6 +571,22 @@ impl LedgerWriter {
                                 write_operation(&ledger, &record).map_err(LedgerWriterError::Ledger);
                             let _ = reply.send(result);
                         }
+                        WriteCommand::EngineReceipt {
+                            receipt,
+                            project_path,
+                            agent,
+                            session_id,
+                            channel,
+                            reply,
+                        } => {
+                            let _ = reply.send(ledger.record_engine_accounting_receipt(
+                                &receipt,
+                                &project_path,
+                                agent.as_deref(),
+                                session_id.as_deref(),
+                                channel,
+                            ));
+                        }
                         WriteCommand::PolicyEvent { record, reply } => {
                             let _ = reply.send(ledger.record_policy_event(hzr_core::PolicyEvent {
                                 project_path: &record.project_path,
@@ -977,6 +1004,29 @@ impl LedgerWriter {
             .map_err(|_| LedgerWriterError::Unavailable)?;
         result.await.map_err(|_| LedgerWriterError::Unavailable)??;
         Ok(())
+    }
+
+    pub async fn record_engine_receipt(
+        &self,
+        receipt: EngineAccountingReceipt,
+        project_path: String,
+        agent: Option<String>,
+        session_id: Option<String>,
+        channel: AccountingChannel,
+    ) -> Result<bool, LedgerWriterError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriteCommand::EngineReceipt {
+                receipt: Box::new(receipt),
+                project_path,
+                agent,
+                session_id,
+                channel,
+                reply,
+            })
+            .await
+            .map_err(|_| LedgerWriterError::Unavailable)?;
+        Ok(result.await.map_err(|_| LedgerWriterError::Unavailable)??)
     }
 
     #[cfg(test)]

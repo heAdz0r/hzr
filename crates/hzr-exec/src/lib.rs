@@ -3,6 +3,7 @@
 //! The crate keeps user commands canonical, treats shell syntax conservatively,
 //! and never exposes upstream adapter exit codes as policy decisions.
 
+mod accounting;
 mod adapter;
 mod capture;
 mod error;
@@ -10,10 +11,15 @@ mod executor;
 mod model;
 mod shell;
 
+pub use accounting::{
+    AccountingDrain, AccountingDrainIssue, AccountingDrainIssueKind, AccountingDrainStatus,
+    AccountingJournalKind, acknowledge_accounting, drain_accounting,
+};
 pub use adapter::{
-    ForkCoreConfig, ForkCoreInvocation, ForkCoreRunner, ForkRuntimePaths, INTERNAL_EVASION_ENV,
-    PINNED_RTK_VERSION, PinnedRtkAdapter, RtkAdapterConfig, RtkCapabilities, RtkRewriteInterface,
-    RtkRewriteOutcome,
+    AccountedForkExecution, ForkAccountingHandle, ForkCoreConfig, ForkCoreInvocation,
+    ForkCoreRunner, ForkRuntimePaths, INTERNAL_EVASION_ENV, PINNED_RTK_VERSION, PinnedRtkAdapter,
+    RtkAdapterConfig, RtkCapabilities, RtkRewriteInterface, RtkRewriteOutcome,
+    expected_engine_identity,
 };
 pub use error::ExecError;
 pub use executor::{ExecutionHandle, ExecutionPipeline};

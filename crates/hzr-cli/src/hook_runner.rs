@@ -1,27 +1,29 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use fs2::FileExt;
 use hzr_core::{
-    Config, DetailedOperationAttribution, FidelityAllowance, FidelityBudget, FidelityPreflight,
-    Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-    PolicyEvent, RawFidelityRequest, RawPublicEstimate, RawPublicEstimateRequest,
-    SessionEconomicSummary, SessionEfficiencySummary, SessionEvasionSummary,
-    efficient_route_replacement, fidelity_preflight_required, first_class_replacement,
-    load_pricing_catalog, price_avoided_input_tokens, privacy_identity_hash, raw_fidelity_request,
+    AccountingCoverageStore, AccountingGapEvent, AccountingGapSurface, ActivationMode, Config,
+    FidelityAllowance, FidelityBudget, FidelityPreflight, Ledger, OperationRoute,
+    RawFidelityRequest, RawPublicEstimate, RawPublicEstimateRequest, SessionEconomicSummary,
+    SessionEfficiencySummary, SessionEvasionSummary, efficient_route_replacement,
+    fidelity_preflight_required, first_class_replacement, load_pricing_catalog,
+    price_avoided_input_tokens, privacy_identity_hash, raw_fidelity_request,
 };
 use hzr_exec::{
     CanonicalCommand, ForkRuntimePaths, HOST_GRANT_APPLIED_ENV, PinnedRtkAdapter, RewriteDecision,
-    RewriteSource, RtkAdapterConfig, host_grant_applied, reconcile_host_grant,
+    RewriteSource, RtkAdapterConfig, RtkRewriteOutcome, host_grant_applied, reconcile_host_grant,
 };
 use hzr_index::registered_workspaces;
 use hzr_protocol::{
-    ContextPlanApiRequest, EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm,
-    ExecApiRequest, FidelityValidation, FilterPlacement, HOST_EXECUTION_GRANT_ENV,
-    HostExecutionGrant, HostPermissionMode, PolicyDecision,
+    AccountingAttribution, AccountingChannel, AccountingMeasurement, AccountingOperationKind,
+    AccountingOperationMode, AccountingRoute, AccountingStage, ContextPlanApiRequest,
+    EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, ExecApiRequest,
+    FidelityValidation, FilterPlacement, HOST_EXECUTION_GRANT_ENV, HostExecutionGrant,
+    HostPermissionMode, OperationApiRequest, PolicyDecision, PolicyEventApiRequest,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -42,20 +44,16 @@ const SESSION_BYPASS_COUNT_BUDGET: u64 = 40;
 const SESSION_BYPASS_TOKEN_BUDGET: u64 = 250_000;
 const SESSION_AVOIDABLE_SHARE_NUDGE: f64 = 10.0;
 const STATUSLINE_UPSTREAM_ENV: &str = "HZR_STATUSLINE_UPSTREAM_HEX";
+const STATUSLINE_UPSTREAM_TIMEOUT: Duration = Duration::from_millis(500);
+const STATUSLINE_UPSTREAM_MAX_BYTES: u64 = 64 * 1024;
 
 pub async fn dispatch(config: &Config, native_mode: NativeToolMode) {
-    let Ok(cwd) = std::env::current_dir() else {
-        return;
-    };
-    if !crate::activation::is_enabled(config, &cwd)
-        .await
-        .unwrap_or(false)
-    {
-        return;
-    }
     let Ok(input) = read_input() else {
         return;
     };
+    if hook_workspace_root(config, &input).is_none() {
+        return;
+    }
     let _ = update_session(config, &input, |state| {
         state.operations = state.operations.saturating_add(1);
         state.operations_this_turn = state.operations_this_turn.saturating_add(1);
@@ -73,7 +71,7 @@ pub async fn dispatch(config: &Config, native_mode: NativeToolMode) {
             let _ = task(config, &input).await;
         }
         "Read" | "Grep" | "Glob" | "Edit" | "Write" => {
-            let _ = native_pre_tool(config, &input, native_mode);
+            let _ = native_pre_tool(config, &input, native_mode).await;
         }
         _ => {}
     }
@@ -84,28 +82,59 @@ pub async fn dispatch(config: &Config, native_mode: NativeToolMode) {
 /// This entry point intentionally returns no error: a measurement failure must never turn a
 /// successful host tool call into a failed one. The hook emits no stdout payload.
 pub async fn observe(config: &Config, native_mode: NativeToolMode) {
-    let Ok(cwd) = std::env::current_dir() else {
-        return;
-    };
-    if !crate::activation::is_enabled(config, &cwd)
-        .await
-        .unwrap_or(false)
-    {
-        return;
-    }
     let Ok(input) = read_input() else {
         return;
     };
-    let _ = observe_input(config, &input, native_mode);
+    if hook_workspace_root(config, &input).is_none() {
+        return;
+    }
+    let _ = observe_input(config, &input, native_mode).await;
 }
 
-fn observe_input(config: &Config, input: &Value, native_mode: NativeToolMode) -> Result<()> {
+async fn observe_input(config: &Config, input: &Value, native_mode: NativeToolMode) -> Result<()> {
+    let Some(request) = native_observation_request(input, native_mode)? else {
+        return Ok(());
+    };
+    let workspace = request.project_path.clone();
+    let session = request.session_id.clone();
+    let family = request
+        .attribution
+        .as_ref()
+        .map(|attribution| attribution.operation.as_str());
+    let recorded = match DaemonClient::from_config(config) {
+        Ok(client) => client.record_operation(&request).await.is_ok(),
+        Err(_) => false,
+    };
+    if !recorded {
+        record_accounting_gap_now(
+            config,
+            AccountingGapSurface::Hook,
+            Some(&workspace),
+            session.as_deref(),
+            family,
+        )?;
+    } else {
+        recover_accounting_gap_now(
+            config,
+            AccountingGapSurface::Hook,
+            Some(&workspace),
+            session.as_deref(),
+            family,
+        )?;
+    }
+    Ok(())
+}
+
+fn native_observation_request(
+    input: &Value,
+    native_mode: NativeToolMode,
+) -> Result<Option<OperationApiRequest>> {
     let tool = input
         .get("tool_name")
         .and_then(Value::as_str)
         .unwrap_or_default();
     if !matches!(tool, "Read" | "Grep" | "Glob" | "Edit" | "Write") {
-        return Ok(());
+        return Ok(None);
     }
     let response = input.get("tool_response");
     let response_bytes = response
@@ -118,33 +147,60 @@ fn observe_input(config: &Config, input: &Value, native_mode: NativeToolMode) ->
     let session_id = input.get("session_id").and_then(Value::as_str);
     let agent = agent_attribution(input);
     let (measurement, tokens) = if response.is_some() {
-        (OperationMeasurement::Estimated, estimated)
+        (AccountingMeasurement::Estimated, estimated)
     } else {
-        (OperationMeasurement::Unmeasured, 0)
+        (AccountingMeasurement::Unmeasured, 0)
     };
     let (route, evasion) = native_observation_policy(tool, native_mode);
-    Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?
-        .record_operation_attributed_with_detail(
-            &format!("native {tool}"),
-            &format!("native {tool}"),
-            tokens,
-            tokens,
-            0,
-            DetailedOperationAttribution {
-                attribution: OperationAttribution {
-                    project_path: cwd,
-                    agent: Some(&agent),
-                    session_id,
-                    channel: OperationChannel::NativeHost,
-                    measurement,
-                    route,
-                },
-                detail: None,
-                evasion: Some(&evasion),
-                host_grant_applied: false,
-            },
-        )?;
-    Ok(())
+    let (operation, mode) = match tool {
+        "Read" => (
+            AccountingOperationKind::Read,
+            AccountingOperationMode::ReadFull,
+        ),
+        "Grep" | "Glob" => (
+            AccountingOperationKind::Search,
+            AccountingOperationMode::SearchExact,
+        ),
+        "Edit" | "Write" => (
+            AccountingOperationKind::Write,
+            AccountingOperationMode::Write,
+        ),
+        _ => unreachable!("native tool was validated above"),
+    };
+    Ok(Some(OperationApiRequest {
+        original_command: format!("native {tool}"),
+        recorded_command: format!("native {tool}"),
+        baseline_tokens_estimated: tokens,
+        delivered_tokens_estimated: tokens,
+        execution_ms: 0,
+        project_path: cwd.to_owned(),
+        channel: AccountingChannel::NativeHost,
+        measurement,
+        route: match route {
+            OperationRoute::Optimized => AccountingRoute::Optimized,
+            OperationRoute::Bypassed => AccountingRoute::Bypassed,
+            OperationRoute::NativeUnaccounted => AccountingRoute::NativeUnaccounted,
+        },
+        agent: Some(agent),
+        session_id: session_id.map(str::to_owned),
+        attribution: Some(AccountingAttribution {
+            operation,
+            mode,
+            stage: AccountingStage::FinalDelivery,
+            requested_mode: None,
+            effective_mode: Some(mode),
+            search_strategy: None,
+            search_fallback_code: None,
+            include_content: None,
+            limit: None,
+            path_scope_count: None,
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: None,
+            evasion: Some(evasion),
+        }),
+    }))
 }
 
 fn read_input() -> Result<Value> {
@@ -166,12 +222,13 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     if raw.is_empty() {
         return Ok(());
     }
-    let cwd = std::env::current_dir().context("failed to resolve hook working directory")?;
+    let cwd = hook_workspace_root(config, input)
+        .context("hook input is outside the configured HZR workspace")?;
     let fidelity_evasion = match hook_fidelity_preflight(config, input, raw, &cwd) {
         HookFidelityPreflight::NotRequested => None,
         HookFidelityPreflight::Allow(evasion) => Some(evasion),
         HookFidelityPreflight::Ask { decision, evasion } => {
-            let _ = record_local_policy_decision(config, input, &decision, Some(evasion));
+            let _ = record_local_policy_decision(config, input, &decision, Some(evasion)).await;
             return write_decision(input, decision, None);
         }
     };
@@ -203,19 +260,18 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         None
     };
     let daemon_recorded_policy = managed.is_some();
-    let mut managed_evasion = None;
-    let (decision, accounting_notice) = match managed {
+    let (decision, accounting_notice, managed_evasion) = match managed {
         Some(outcome) => {
-            managed_evasion = outcome.evasion;
-            let notice = clear_reconciled_rewrites(config)
+            let notice = recover_accounting_for_input(config, input)
                 .ok()
                 .and_then(|()| accounting_transition(config, input, false));
-            (outcome.decision, notice)
+            (outcome.decision, notice, outcome.evasion)
         }
         None => {
-            let _ = record_degraded_rewrite(config);
+            let _ = record_degraded_rewrite_for_input(config, input);
             let notice = accounting_transition(config, input, true);
-            (fallback_decision(config, raw, &cwd).await, notice)
+            let outcome = fallback_decision(config, raw, &cwd).await;
+            (outcome.decision, notice, outcome.evasion)
         }
     };
     let decision = steer_to_first_class(raw, decision);
@@ -231,7 +287,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     // together: a grant without its session in the same environment is refused, by design.
     let decision = attach_host_grant(input, decision);
     if !daemon_recorded_policy {
-        let _ = record_local_policy_decision(config, input, &decision, None);
+        let _ = record_local_policy_decision(config, input, &decision, None).await;
     }
     write_decision(input, decision, accounting_notice.as_deref())
 }
@@ -276,7 +332,7 @@ fn accounting_transition_at(
     })
 }
 
-fn record_local_policy_decision(
+async fn record_local_policy_decision(
     config: &Config,
     input: &Value,
     decision: &RewriteDecision,
@@ -300,17 +356,26 @@ fn record_local_policy_decision(
         fidelity_reason: None,
         fidelity_validation: FidelityValidation::NotRequested,
     });
-    let agent = agent_attribution(input);
-    Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?.record_policy_event(PolicyEvent {
-        project_path: input.get("cwd").and_then(Value::as_str).unwrap_or_default(),
-        agent: Some(&agent),
-        session_id: input.get("session_id").and_then(Value::as_str),
+    let request = PolicyEventApiRequest {
+        project_path: input
+            .get("cwd")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        agent: Some(agent_attribution(input)),
+        session_id: input
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         evasion,
         decision,
         replacement_family: None,
-        command_identity: input.pointer("/tool_input/command").and_then(Value::as_str),
-    })?;
-    Ok(())
+        command_identity: input
+            .pointer("/tool_input/command")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    };
+    send_hook_policy_event(config, input, "policy", &request).await
 }
 
 enum HookFidelityPreflight {
@@ -524,7 +589,7 @@ fn attach_session_attribution(_input: &Value, decision: RewriteDecision) -> Rewr
     decision
 }
 
-fn native_pre_tool(config: &Config, input: &Value, mode: NativeToolMode) -> Result<()> {
+async fn native_pre_tool(config: &Config, input: &Value, mode: NativeToolMode) -> Result<()> {
     let tool = input
         .get("tool_name")
         .and_then(Value::as_str)
@@ -538,7 +603,7 @@ fn native_pre_tool(config: &Config, input: &Value, mode: NativeToolMode) -> Resu
     let Some(replacement) = native_replacement(input, mode) else {
         return Ok(());
     };
-    record_native_correction(config, input, tool)?;
+    record_native_correction(config, input, tool).await?;
     let count = update_session(config, input, |state| {
         state.corrections = state.corrections.saturating_add(1);
         state.native_denials = state.native_denials.saturating_add(1);
@@ -612,7 +677,7 @@ fn native_observation_policy(
     }
 }
 
-fn record_native_correction(config: &Config, input: &Value, tool: &str) -> Result<()> {
+async fn record_native_correction(config: &Config, input: &Value, tool: &str) -> Result<()> {
     let cwd = input.get("cwd").and_then(Value::as_str).unwrap_or_default();
     let session_id = input.get("session_id").and_then(Value::as_str);
     let agent = agent_attribution(input);
@@ -621,20 +686,53 @@ fn record_native_correction(config: &Config, input: &Value, tool: &str) -> Resul
         true,
         EnforcementTier::T1NamedCorrection,
     );
-    Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))?.record_policy_event(PolicyEvent {
-        project_path: cwd,
-        agent: Some(&agent),
-        session_id,
+    let family = match tool {
+        "Read" => "read",
+        "Grep" => "search",
+        "Edit" | "Write" => "write",
+        _ => "other",
+    };
+    let request = PolicyEventApiRequest {
+        project_path: cwd.to_owned(),
+        agent: Some(agent),
+        session_id: session_id.map(str::to_owned),
         evasion,
         decision: PolicyDecision::Deny,
-        replacement_family: Some(match tool {
-            "Read" => "read",
-            "Grep" => "search",
-            "Edit" | "Write" => "write",
-            _ => "other",
-        }),
+        replacement_family: Some(family.to_owned()),
         command_identity: None,
-    })?;
+    };
+    send_hook_policy_event(config, input, family, &request).await
+}
+
+async fn send_hook_policy_event(
+    config: &Config,
+    input: &Value,
+    family: &str,
+    request: &PolicyEventApiRequest,
+) -> Result<()> {
+    let recorded = match DaemonClient::from_config(config) {
+        Ok(client) => client.record_policy_event(request).await.is_ok(),
+        Err(_) => false,
+    };
+    let workspace = input.get("cwd").and_then(Value::as_str);
+    let session = input.get("session_id").and_then(Value::as_str);
+    if recorded {
+        recover_accounting_gap_now(
+            config,
+            AccountingGapSurface::Hook,
+            workspace,
+            session,
+            Some(family),
+        )?;
+    } else {
+        record_accounting_gap_now(
+            config,
+            AccountingGapSurface::Hook,
+            workspace,
+            session,
+            Some(family),
+        )?;
+    }
     Ok(())
 }
 
@@ -949,7 +1047,7 @@ fn hzr_policy_rewrite(replacement: hzr_core::RawReplacement) -> RewriteDecision 
     }
 }
 
-async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RewriteDecision {
+async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RtkRewriteOutcome {
     let adapter = PinnedRtkAdapter::detect(RtkAdapterConfig {
         binary: config.engines.binary("rtk"),
         runtime_paths: Some(ForkRuntimePaths::from_data_root(&config.data_dir)),
@@ -961,34 +1059,45 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RewriteDec
     let command = match fidelity {
         RawFidelityRequest::NotRequested => hzr_core::managed_raw_payload(raw).unwrap_or(raw),
         RawFidelityRequest::MissingReason => {
-            return RewriteDecision::Ask {
-                proposed: None,
-                reason: "HZR_RAW_FIDELITY=1 requires a closed HZR_RAW_FIDELITY_REASON".into(),
+            return RtkRewriteOutcome {
+                decision: RewriteDecision::Ask {
+                    proposed: None,
+                    reason: "HZR_RAW_FIDELITY=1 requires a closed HZR_RAW_FIDELITY_REASON".into(),
+                },
+                evasion: None,
             };
         }
         RawFidelityRequest::InvalidReason => {
-            return RewriteDecision::Ask {
-                proposed: None,
-                reason: "HZR_RAW_FIDELITY_REASON is not an allowed fidelity reason".into(),
+            return RtkRewriteOutcome {
+                decision: RewriteDecision::Ask {
+                    proposed: None,
+                    reason: "HZR_RAW_FIDELITY_REASON is not an allowed fidelity reason".into(),
+                },
+                evasion: None,
             };
         }
         RawFidelityRequest::Authorized { payload, .. } => {
             if let Some(replacement) = first_class_replacement(raw) {
-                return hzr_policy_rewrite(replacement);
+                return RtkRewriteOutcome {
+                    decision: hzr_policy_rewrite(replacement),
+                    evasion: None,
+                };
             }
             payload
         }
     };
     let authorized = matches!(fidelity, RawFidelityRequest::Authorized { .. });
     let canonical = CanonicalCommand::shell(command);
-    let decision = if authorized {
-        adapter.decide_byte_fidelity_in(&canonical, Some(cwd)).await
+    let mut outcome = if authorized {
+        adapter
+            .decide_byte_fidelity_with_plan_in(&canonical, Some(cwd))
+            .await
     } else {
-        adapter.decide_in(&canonical, Some(cwd)).await
+        adapter.decide_with_plan_in(&canonical, Some(cwd)).await
     };
     if authorized
         && matches!(
-            &decision,
+            &outcome.decision,
             RewriteDecision::AllowRewrite {
                 source: RewriteSource::Rtk {
                     route: hzr_exec::RtkRewriteRoute::Proxy,
@@ -998,11 +1107,11 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RewriteDec
             }
         )
     {
-        return RewriteDecision::allow_raw(
+        outcome.decision = RewriteDecision::allow_raw(
             "authorized raw fidelity request has no byte-faithful managed equivalent",
         );
     }
-    decision
+    outcome
 }
 
 fn write_decision(input: &Value, decision: RewriteDecision, notice: Option<&str>) -> Result<()> {
@@ -1137,6 +1246,38 @@ fn agent_attribution(input: &Value) -> String {
     identity.map_or_else(|| host.to_owned(), |identity| format!("{host}:{identity}"))
 }
 
+fn hook_workspace_root(config: &Config, input: &Value) -> Option<std::path::PathBuf> {
+    let requested = input.get("cwd").and_then(Value::as_str)?;
+    let requested_path = std::path::PathBuf::from(requested);
+    let requested = match fs::canonicalize(&requested_path) {
+        Ok(requested) => requested,
+        Err(_) if config.activation.mode == ActivationMode::All && requested_path.is_absolute() => {
+            requested_path
+        }
+        Err(_) => return None,
+    };
+    let registry = registered_workspaces(&config.data_dir);
+    let registration = registry
+        .registrations
+        .iter()
+        .filter(|registration| requested.starts_with(&registration.root))
+        .max_by_key(|registration| registration.root.components().count());
+    match config.activation.mode {
+        ActivationMode::All => Some(
+            registration
+                .map(|registration| registration.root.clone())
+                .unwrap_or(requested),
+        ),
+        ActivationMode::Selected => registration
+            .filter(|registration| {
+                config
+                    .activation
+                    .allows(&registration.repository_id, &registration.worktree_id)
+            })
+            .map(|registration| registration.root.clone()),
+    }
+}
+
 fn session_state_path(config: &Config, input: &Value) -> Option<std::path::PathBuf> {
     let session = input.get("session_id")?.as_str()?.trim();
     if session.is_empty() {
@@ -1151,9 +1292,12 @@ fn session_state_path(config: &Config, input: &Value) -> Option<std::path::PathB
                 .and_then(Value::as_str)
         })
         .unwrap_or("root");
+    let workspace = hook_workspace_root(config, input)?;
+    let workspace_hash = privacy_identity_hash("workspace", workspace.to_string_lossy().as_ref());
     let digest = hex::encode(Sha256::digest(format!(
-        "hook-session\0{session}\0{}\0{subagent}",
-        agent_identity(input)
+        "hook-session\0{session}\0{}\0{subagent}\0{}",
+        agent_identity(input),
+        workspace_hash
     )));
     Some(
         config
@@ -1189,7 +1333,8 @@ fn update_session_at(
         .open(&lock_path)?;
     lock.lock_exclusive()?;
     let mut state = match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .with_context(|| format!("failed to parse {}", path.display()))?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => SessionFeedback::default(),
         Err(error) => return Err(error.into()),
     };
@@ -1456,11 +1601,45 @@ pub async fn feedback(config: &Config) {
     let Ok(input) = read_input() else {
         return;
     };
+    if hook_workspace_root(config, &input).is_none() {
+        return;
+    }
     let event = input
         .get("hook_event_name")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let state = read_session(config, &input).unwrap_or_default();
+    let coverage = match session_accounting_coverage(config, &input) {
+        Ok(coverage) => coverage,
+        Err(_) => {
+            let _ = write_hook_json(json!({
+                "hookSpecificOutput": {
+                    "hookEventName": event,
+                    "additionalContext": "HZR ACCOUNTING UNKNOWN: the accounting coverage journal failed integrity validation. Run `hzr doctor` before trusting savings."
+                }
+            }));
+            return;
+        }
+    };
+    let mut state = match read_session(config, &input) {
+        Some(state) => state,
+        None if session_state_path(config, &input).is_some_and(|path| path.exists()) => {
+            let _ = write_hook_json(json!({
+                "hookSpecificOutput": {
+                    "hookEventName": event,
+                    "additionalContext": "HZR ACCOUNTING UNKNOWN: session accounting state failed integrity validation and was not reset. Run `hzr doctor` before trusting savings for this session."
+                }
+            }));
+            return;
+        }
+        None => SessionFeedback::default(),
+    };
+    if let Some(coverage) = &coverage {
+        let degraded = !coverage.live_complete;
+        if state.accounting_degraded != degraded {
+            let _ = accounting_transition(config, &input, degraded);
+            state = read_session(config, &input).unwrap_or(state);
+        }
+    }
     let session_summaries =
         input
             .get("session_id")
@@ -1547,16 +1726,25 @@ pub fn statusline(config: &Config) {
     let Ok(input) = read_input() else {
         return;
     };
+    if hook_workspace_root(config, &input).is_none() {
+        return;
+    }
     if let Some(upstream) = statusline_upstream() {
         let bytes = serde_json::to_vec(&input).unwrap_or_default();
         if let Some(rendered) = run_statusline_upstream(&upstream, &bytes) {
             println!("{rendered}");
         }
     }
-    println!(
-        "{}",
-        accounting_statusline(read_session(config, &input).as_ref())
-    );
+    let state = read_session(config, &input);
+    let status = match session_accounting_coverage(config, &input) {
+        Err(_) => "ACCOUNTING: UNKNOWN",
+        Ok(Some(coverage)) if !coverage.live_complete => "ACCOUNTING: DEGRADED",
+        Ok(Some(coverage)) if !coverage.historical_complete => {
+            "ACCOUNTING: RECOVERED (SESSION PARTIAL)"
+        }
+        Ok(_) => accounting_statusline(state.as_ref()),
+    };
+    println!("{status}");
 }
 
 fn accounting_statusline(state: Option<&SessionFeedback>) -> &'static str {
@@ -1566,6 +1754,24 @@ fn accounting_statusline(state: Option<&SessionFeedback>) -> &'static str {
         Some(_) => "ACCOUNTING: COMPLETE",
         None => "ACCOUNTING: UNKNOWN",
     }
+}
+
+fn session_accounting_coverage(
+    config: &Config,
+    input: &Value,
+) -> Result<Option<hzr_core::AccountingCoverageSnapshot>> {
+    let Some(session) = input.get("session_id").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let Some(workspace) = hook_workspace_root(config, input) else {
+        return Ok(None);
+    };
+    let session_hash = privacy_identity_hash("session", session);
+    let workspace_hash = privacy_identity_hash("workspace", workspace.to_string_lossy().as_ref());
+    AccountingCoverageStore::new(&config.data_dir)
+        .snapshot_for_context(&session_hash, &workspace_hash, unix_now())
+        .map(Some)
+        .map_err(anyhow::Error::from)
 }
 
 fn statusline_upstream() -> Option<String> {
@@ -1580,27 +1786,68 @@ fn statusline_upstream() -> Option<String> {
 
 fn run_statusline_upstream(command: &str, input: &[u8]) -> Option<String> {
     #[cfg(unix)]
-    let mut child = std::process::Command::new("/bin/sh");
+    let mut command_process = std::process::Command::new("/bin/sh");
     #[cfg(windows)]
-    let mut child = std::process::Command::new("cmd.exe");
+    let mut command_process = std::process::Command::new("cmd.exe");
     #[cfg(unix)]
-    child.arg("-c").arg(command);
+    {
+        use std::os::unix::process::CommandExt;
+        command_process.arg("-c").arg(command).process_group(0);
+    }
     #[cfg(windows)]
-    child.arg("/C").arg(command);
-    let mut child = child
+    command_process.arg("/C").arg(command);
+    let mut child = command_process
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok()?;
-    child.stdin.as_mut()?.write_all(input).ok()?;
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
+    let mut stdin = child.stdin.take()?;
+    let input = input.to_vec();
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout
+            .take(STATUSLINE_UPSTREAM_MAX_BYTES.saturating_add(1))
+            .read_to_end(&mut output)
+            .map(|_| output)
+    });
+    let deadline = Instant::now() + STATUSLINE_UPSTREAM_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) | Err(_) => {
+                terminate_statusline(&mut child);
+                let _ = writer.join();
+                let _ = reader.join();
+                return None;
+            }
+        }
+    };
+    writer.join().ok()?.ok()?;
+    let output = reader.join().ok()?.ok()?;
+    if !status.success() || output.len() as u64 > STATUSLINE_UPSTREAM_MAX_BYTES {
         return None;
     }
-    let rendered = String::from_utf8_lossy(&output.stdout);
+    let rendered = String::from_utf8_lossy(&output);
     let rendered = rendered.trim_end();
     (!rendered.is_empty()).then(|| rendered.chars().take(4_096).collect())
+}
+
+fn terminate_statusline(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let process_group = format!("-{}", child.id());
+        let _ = std::process::Command::new("/bin/kill")
+            .args(["-KILL", "--", &process_group])
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn registered_workspace_root(config: &Config, requested: &str) -> Option<String> {
@@ -1766,9 +2013,19 @@ pub struct AccountingCoverage {
     pub lifetime_rewrites: usize,
     pub daemon_unavailable_operations: usize,
     pub complete: bool,
+    pub live_complete: bool,
+    pub historical_complete: bool,
+    pub open_intervals: usize,
+    pub closed_intervals: usize,
     pub last_degraded_at_unix: Option<u64>,
     pub gap_started_at_unix: Option<u64>,
+    pub last_recovered_at_unix: Option<u64>,
     pub open_gap_seconds: Option<u64>,
+    pub closed_gap_seconds: u64,
+    pub hook_missing_operations: u64,
+    pub cli_missing_operations: u64,
+    pub mcp_missing_operations: u64,
+    pub fork_producer_missing_operations: u64,
 }
 
 #[cfg(test)]
@@ -1778,6 +2035,8 @@ impl AccountingCoverage {
     pub fn default_complete() -> Self {
         Self {
             complete: true,
+            live_complete: true,
+            historical_complete: true,
             ..Self::default()
         }
     }
@@ -1803,24 +2062,76 @@ fn daemon_unavailable_total_path(config: &Config) -> std::path::PathBuf {
         .join("ledger/daemon-unavailable-operations.total")
 }
 
-pub(crate) fn record_daemon_unavailable_operation(config: &Config) -> Result<()> {
-    let ledger = config.data_dir.join("ledger");
-    fs::create_dir_all(&ledger)
-        .with_context(|| format!("failed to create {}", ledger.display()))?;
-    let path = daemon_unavailable_total_path(config);
-    let lock_path = path.with_extension("lock");
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("failed to open {}", lock_path.display()))?;
-    lock.lock_exclusive()?;
-    let current = daemon_unavailable_operations(config)?;
-    crate::adoption::atomic_write(&path, format!("{}\n", current.saturating_add(1)).as_bytes())?;
-    FileExt::unlock(&lock)?;
-    Ok(())
+pub(crate) fn record_accounting_gap_now(
+    config: &Config,
+    surface: AccountingGapSurface,
+    workspace: Option<&str>,
+    session_id: Option<&str>,
+    operation_family: Option<&str>,
+) -> Result<()> {
+    record_accounting_gap(
+        config,
+        surface,
+        workspace,
+        session_id,
+        operation_family,
+        unix_now(),
+    )
+}
+
+pub(crate) fn recover_accounting_gap_now(
+    config: &Config,
+    surface: AccountingGapSurface,
+    workspace: Option<&str>,
+    session_id: Option<&str>,
+    operation_family: Option<&str>,
+) -> Result<bool> {
+    AccountingCoverageStore::new(&config.data_dir)
+        .recover(accounting_gap_event(
+            surface,
+            workspace,
+            session_id,
+            operation_family,
+            unix_now(),
+        ))
+        .map(|recovered| recovered > 0)
+        .map_err(anyhow::Error::from)
+}
+
+pub(crate) fn record_accounting_gap(
+    config: &Config,
+    surface: AccountingGapSurface,
+    workspace: Option<&str>,
+    session_id: Option<&str>,
+    operation_family: Option<&str>,
+    at_unix: u64,
+) -> Result<()> {
+    AccountingCoverageStore::new(&config.data_dir)
+        .record_missing(accounting_gap_event(
+            surface,
+            workspace,
+            session_id,
+            operation_family,
+            at_unix,
+        ))
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
+}
+
+fn accounting_gap_event(
+    surface: AccountingGapSurface,
+    workspace: Option<&str>,
+    session_id: Option<&str>,
+    operation_family: Option<&str>,
+    at_unix: u64,
+) -> AccountingGapEvent {
+    AccountingGapEvent {
+        surface,
+        workspace_hash: workspace.map(|value| privacy_identity_hash("workspace", value)),
+        session_hash: session_id.map(|value| privacy_identity_hash("session", value)),
+        operation_family: operation_family.map(str::to_owned),
+        at_unix,
+    }
 }
 
 fn daemon_unavailable_operations(config: &Config) -> Result<usize> {
@@ -1845,51 +2156,60 @@ fn daemon_unavailable_operations(config: &Config) -> Result<usize> {
     }
 }
 
-fn record_degraded_rewrite(config: &Config) -> Result<()> {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    record_degraded_rewrite_at(config, timestamp)
+fn record_degraded_rewrite_for_input(config: &Config, input: &Value) -> Result<()> {
+    let workspace = hook_workspace_root(config, input);
+    record_accounting_gap(
+        config,
+        AccountingGapSurface::RewriteDaemon,
+        workspace.as_deref().and_then(Path::to_str),
+        input.get("session_id").and_then(Value::as_str),
+        Some("rewrite"),
+        unix_now(),
+    )
 }
 
+#[cfg(test)]
 fn record_degraded_rewrite_at(config: &Config, timestamp: u64) -> Result<()> {
-    let ledger = config.data_dir.join("ledger");
-    fs::create_dir_all(&ledger)
-        .with_context(|| format!("failed to create {}", ledger.display()))?;
-    let path = degraded_log_path(config);
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("failed to open {}", path.display()))?;
-    writeln!(file, "{timestamp}")?;
-    Ok(())
+    record_accounting_gap(
+        config,
+        AccountingGapSurface::RewriteDaemon,
+        None,
+        None,
+        Some("rewrite"),
+        timestamp,
+    )
 }
 
 /// Fold the open gap into the lifetime total once the daemon proves it is serving again.
 ///
 /// Called after every successful managed rewrite, so the common case — nothing pending —
 /// must not touch the filesystem beyond one `metadata` probe.
-fn clear_reconciled_rewrites(config: &Config) -> Result<()> {
-    let path = degraded_log_path(config);
-    let pending = match fs::metadata(&path) {
-        Ok(metadata) if metadata.len() > 0 => read_degraded_log(config)?.len(),
-        Ok(_) => 0,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
-        }
-    };
-    if pending == 0 {
-        return Ok(());
-    }
-    let total = read_lifetime_total(config)?.unwrap_or(0) + pending;
-    let total_path = degraded_total_path(config);
-    fs::write(&total_path, format!("{total}\n"))
-        .with_context(|| format!("failed to write {}", total_path.display()))?;
-    fs::write(&path, "").with_context(|| format!("failed to truncate {}", path.display()))?;
-    Ok(())
+#[cfg(test)]
+fn close_open_accounting_gaps(config: &Config) -> Result<()> {
+    AccountingCoverageStore::new(&config.data_dir)
+        .recover(accounting_gap_event(
+            AccountingGapSurface::RewriteDaemon,
+            None,
+            None,
+            Some("rewrite"),
+            unix_now(),
+        ))
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
+}
+
+fn recover_accounting_for_input(config: &Config, input: &Value) -> Result<()> {
+    let workspace = hook_workspace_root(config, input);
+    AccountingCoverageStore::new(&config.data_dir)
+        .recover(accounting_gap_event(
+            AccountingGapSurface::RewriteDaemon,
+            workspace.as_deref().and_then(Path::to_str),
+            input.get("session_id").and_then(Value::as_str),
+            Some("rewrite"),
+            unix_now(),
+        ))
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
 }
 
 fn read_degraded_log(config: &Config) -> Result<Vec<u64>> {
@@ -1918,21 +2238,55 @@ pub fn degraded_rewrite_coverage(config: &Config) -> Result<AccountingCoverage> 
 }
 
 fn degraded_rewrite_coverage_at(config: &Config, now_unix: u64) -> Result<AccountingCoverage> {
-    let pending = read_degraded_log(config)?;
-    // A ledger written by an earlier HZR has no lifetime file; its open log *is* the
-    // history, so fall back to it instead of reporting a zero total next to a non-zero gap.
-    let lifetime = read_lifetime_total(config)?.unwrap_or(0) + pending.len();
-    let daemon_unavailable_operations = daemon_unavailable_operations(config)?;
+    let store = AccountingCoverageStore::new(&config.data_dir);
+    if !store.exists() {
+        let pending = read_degraded_log(config)?;
+        let closed = read_lifetime_total(config)?.unwrap_or(0);
+        let daemon_unavailable = daemon_unavailable_operations(config)?;
+        store.import_legacy(
+            u64::try_from(closed.saturating_add(daemon_unavailable)).unwrap_or(u64::MAX),
+        )?;
+        for timestamp in pending {
+            store.record_missing(AccountingGapEvent {
+                surface: AccountingGapSurface::RewriteDaemon,
+                workspace_hash: None,
+                session_hash: None,
+                operation_family: Some("rewrite".into()),
+                at_unix: timestamp,
+            })?;
+        }
+    }
+    let snapshot = store.snapshot(now_unix)?;
+    let lifetime_rewrites =
+        usize::try_from(snapshot.lifetime_missing_operations).unwrap_or(usize::MAX);
+    let unreconciled_rewrites =
+        usize::try_from(snapshot.open_missing_operations).unwrap_or(usize::MAX);
+    let daemon_unavailable_operations = usize::try_from(
+        snapshot
+            .hook_missing_operations
+            .saturating_add(snapshot.cli_missing_operations)
+            .saturating_add(snapshot.mcp_missing_operations)
+            .saturating_add(snapshot.fork_producer_missing_operations),
+    )
+    .unwrap_or(usize::MAX);
     Ok(AccountingCoverage {
-        unreconciled_rewrites: pending.len(),
-        lifetime_rewrites: lifetime,
+        unreconciled_rewrites,
+        lifetime_rewrites,
         daemon_unavailable_operations,
-        complete: pending.is_empty() && daemon_unavailable_operations == 0,
-        last_degraded_at_unix: pending.last().copied(),
-        gap_started_at_unix: pending.first().copied(),
-        open_gap_seconds: pending
-            .first()
-            .map(|started| now_unix.saturating_sub(*started)),
+        complete: snapshot.live_complete && snapshot.historical_complete,
+        live_complete: snapshot.live_complete,
+        historical_complete: snapshot.historical_complete,
+        open_intervals: snapshot.open_intervals,
+        closed_intervals: snapshot.closed_intervals,
+        last_degraded_at_unix: snapshot.last_failure_at_unix,
+        gap_started_at_unix: snapshot.gap_started_at_unix,
+        last_recovered_at_unix: snapshot.last_recovered_at_unix,
+        open_gap_seconds: snapshot.open_gap_seconds,
+        closed_gap_seconds: snapshot.closed_gap_seconds,
+        hook_missing_operations: snapshot.hook_missing_operations,
+        cli_missing_operations: snapshot.cli_missing_operations,
+        mcp_missing_operations: snapshot.mcp_missing_operations,
+        fork_producer_missing_operations: snapshot.fork_producer_missing_operations,
     })
 }
 
@@ -1973,9 +2327,9 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use hzr_core::{
-        Config, EconomicAmount, FidelityAllowance, Ledger, OperationAttribution, OperationChannel,
-        OperationMeasurement, OperationRoute, ReceiptProvenance, SessionEconomicSummary,
-        SessionEfficiencySummary, SessionEvasionSummary,
+        AccountingGapSurface, Config, EconomicAmount, FidelityAllowance, Ledger,
+        OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
+        ReceiptProvenance, SessionEconomicSummary, SessionEfficiencySummary, SessionEvasionSummary,
     };
     use hzr_protocol::{
         EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, FidelityValidation,
@@ -1992,14 +2346,27 @@ mod tests {
         HookFidelityPreflight, SessionFeedback, accounting_statusline, accounting_transition,
         accounting_transition_at, agent_attribution, agent_identity, apply_filter_placement,
         attach_host_grant, attach_policy_feedback, attach_session_attribution,
-        clear_reconciled_rewrites, context_brief, deepest_registered_root,
+        close_open_accounting_gaps, context_brief, deepest_registered_root,
         degraded_rewrite_coverage, degraded_rewrite_coverage_at, fallback_decision,
         honor_host_permission_mode, hook_fidelity_preflight, native_observation_policy,
-        native_replacement, observe_input, read_session, reconcile_host_grant,
-        record_daemon_unavailable_operation, record_degraded_rewrite_at,
-        record_local_policy_decision, record_native_correction, render_command, scorecard_message,
+        native_replacement, read_session, reconcile_host_grant, record_accounting_gap_now,
+        record_degraded_rewrite_at, render_command, run_statusline_upstream, scorecard_message,
         steer_to_first_class, update_session,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn upstream_statusline_timeout_is_bounded() {
+        let started = std::time::Instant::now();
+        assert!(run_statusline_upstream("sleep 30", b"{}").is_none());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn upstream_statusline_output_is_bounded() {
+        assert!(run_statusline_upstream("yes x | head -c 2097152", b"{}",).is_none());
+    }
 
     #[test]
     fn deepest_registered_workspace_binds_descendants_without_crossing_nested_roots() {
@@ -2035,154 +2402,15 @@ mod tests {
         let directory = tempdir().expect("temporary directory");
         let config = config(directory.path());
         for _ in 0..100 {
-            record_daemon_unavailable_operation(&config).expect("record degraded operation");
+            record_accounting_gap_now(&config, AccountingGapSurface::Mcp, None, None, Some("test"))
+                .expect("record degraded operation");
         }
 
         let coverage = degraded_rewrite_coverage(&config).expect("coverage");
         assert_eq!(coverage.daemon_unavailable_operations, 100);
-        let counter = config
-            .data_dir
-            .join("ledger/daemon-unavailable-operations.total");
-        assert!(fs::metadata(counter).expect("counter metadata").len() <= 32);
-    }
-
-    #[test]
-    fn test_native_observer_records_coverage_without_claiming_savings() {
-        let directory = tempdir().expect("temporary directory");
-        let config = config(directory.path());
-        observe_input(
-            &config,
-            &serde_json::json!({
-                "tool_name": "Read",
-                "tool_input": {"file_path": "/work/src/lib.rs"},
-                "tool_response": {"content": "four words of output"},
-                "cwd": "/work",
-                "session_id": "session-1",
-                "agent_type": "claude-code",
-                "agent_id": "agent-private-123"
-            }),
-            NativeToolMode::Observe,
-        )
-        .expect("native observation");
-
-        let summary = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))
-            .expect("ledger")
-            .efficiency_summary()
-            .expect("summary");
-        assert_eq!(summary.operations, 0);
-        assert_eq!(summary.native_unaccounted_operations, 1);
-        assert_eq!(summary.total_observed_operations, 1);
-        assert_eq!(summary.by_channel.get("native_host"), Some(&1));
-        let correction = serde_json::json!({
-            "tool_name": "Read",
-            "tool_input": {"file_path": "/work/src/lib.rs"},
-            "cwd": "/work",
-            "session_id": "session-1",
-            "agent_type": "claude-code",
-            "agent_id": "agent-private-123"
-        });
-        record_native_correction(&config, &correction, "Read").expect("typed native correction");
-        let agent = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite"))
-            .expect("ledger")
-            .session_evasion_summary("session-1", FidelityAllowance::default())
-            .expect("session summary");
-        assert_eq!(agent.agent.as_deref(), Some("claude-code"));
-        assert!(agent.agent_hash.is_some());
-        assert_eq!(agent.avoidable_operations, 0);
-        assert_eq!(agent.policy_attempts, 1);
-        assert_eq!(agent.policy_denials, 1);
-        assert!(
-            !serde_json::to_string(&agent)
-                .expect("summary JSON")
-                .contains("agent-private-123")
-        );
-    }
-
-    #[test]
-    fn acceptance_gate_local_fidelity_ask_is_a_policy_event_not_an_operation() {
-        let directory = tempdir().expect("temporary directory");
-        let config = config(directory.path());
-        let input = serde_json::json!({
-            "cwd": "/private/work",
-            "session_id": "private-session",
-            "agent_type": "claude-code",
-            "agent_id": "private-agent"
-        });
-        let decision = RewriteDecision::Ask {
-            proposed: None,
-            reason: "bounded audit reason".into(),
-        };
-        record_local_policy_decision(
-            &config,
-            &input,
-            &decision,
-            Some(EvasionAttribution {
-                class: EvasionClass::E7FidelityHatch,
-                wrapper_depth: 1,
-                interpreter: None,
-                path_form: EvasionPathForm::Bare,
-                stage_count: 1,
-                hatch_marker: true,
-                avoidable: true,
-                tier: EnforcementTier::T4HatchQuarantine,
-                fidelity_reason: None,
-                fidelity_validation: FidelityValidation::MissingReason,
-            }),
-        )
-        .expect("policy event");
-        let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite")).expect("ledger");
-        assert_eq!(
-            ledger.efficiency_summary().expect("efficiency").operations,
-            0
-        );
-        let score = ledger
-            .session_evasion_summary("private-session", FidelityAllowance::default())
-            .expect("score");
-        assert_eq!(score.policy_attempts, 1);
-        assert_eq!(score.policy_asks, 1);
-        assert_eq!(score.top_class, Some(EvasionClass::E7FidelityHatch));
-        assert!(
-            !serde_json::to_string(&score)
-                .expect("JSON")
-                .contains("private")
-        );
-    }
-
-    #[test]
-    fn acceptance_gate_steer_allowed_native_tools_are_typed_e10_bypasses() {
-        let directory = tempdir().expect("temporary directory");
-        let config = config(directory.path());
-        for tool in ["Glob", "Edit", "Write"] {
-            observe_input(
-                &config,
-                &serde_json::json!({
-                    "tool_name": tool,
-                    "tool_response": {"content": "measured native result"},
-                    "cwd": "/work",
-                    "session_id": "session-native-allowed",
-                    "agent_type": "claude-code"
-                }),
-                NativeToolMode::Steer,
-            )
-            .expect("policy-allowed native observation");
-        }
-
-        let ledger = Ledger::open(&config.data_dir.join("ledger/hzr.sqlite")).expect("ledger");
-        let efficiency = ledger.efficiency_summary().expect("efficiency summary");
-        assert_eq!(efficiency.native_unaccounted_operations, 0);
-        assert_eq!(efficiency.operations, 3);
-        assert_eq!(
-            efficiency.baseline_tokens_estimated,
-            efficiency.delivered_tokens_estimated
-        );
-        assert_eq!(efficiency.net_avoided_tokens_estimated, 0);
-        assert_eq!(efficiency.by_channel.get("native_host"), Some(&3));
-
-        let evasion = ledger
-            .session_evasion_summary("session-native-allowed", FidelityAllowance::default())
-            .expect("session evasion summary");
-        assert_eq!(evasion.top_class, Some(EvasionClass::E10CapabilityGap));
-        assert_eq!(evasion.avoidable_operations, 0);
+        assert_eq!(coverage.mcp_missing_operations, 100);
+        let journal = config.data_dir.join("ledger/accounting-coverage.json");
+        assert!(fs::metadata(journal).expect("journal metadata").len() <= 1_024);
     }
 
     #[test]
@@ -2906,7 +3134,10 @@ mod tests {
     fn acceptance_gate_accounting_transition_notices_are_edge_triggered() {
         let directory = tempdir().expect("temporary directory");
         let config = config(directory.path());
-        let input = serde_json::json!({"session_id": "transition-session"});
+        let input = serde_json::json!({
+            "session_id": "transition-session",
+            "cwd": directory.path()
+        });
 
         let degraded = accounting_transition(&config, &input, true)
             .expect("first degraded rewrite must announce the transition");
@@ -3045,7 +3276,8 @@ mod tests {
         let input = serde_json::json!({
             "session_id": "private-session",
             "agent_type": "claude-code",
-            "agent_id": "private-subagent"
+            "agent_id": "private-subagent",
+            "cwd": directory.path()
         });
         let decision = RewriteDecision::AllowRewrite {
             command: CanonicalCommand::shell("hzr read README.md"),
@@ -3366,10 +3598,18 @@ mod tests {
         fs::create_dir(&engines).expect("engine directory");
         let binary = engines.join("rtk");
         let plan_path = directory.path().join("rewrite-plan.json");
+        let contract = serde_json::to_string(
+            &hzr_exec::expected_engine_identity().expect("embedded current-engine identity"),
+        )
+        .expect("contract JSON");
         let script = format!(
             r#"#!/bin/sh
 if test "${{1:-}}" = --version; then
   printf 'rtk %s\n' '{PINNED_RTK_VERSION}'
+  exit 0
+fi
+if test "${{1:-}}" = contract && test "${{2:-}}" = --json; then
+  printf '%s\n' '{contract}'
   exit 0
 fi
 if test "${{1:-}}" = rewrite && test "${{2:-}}" = --help; then
@@ -3393,18 +3633,38 @@ exit 64
             .expect("fake fork-core permissions");
         let mut config = config(directory.path());
         config.engines.directory = Some(engines);
+        let expected_evasion = EvasionAttribution {
+            class: EvasionClass::E10CapabilityGap,
+            wrapper_depth: 0,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 1,
+            hatch_marker: false,
+            avoidable: false,
+            tier: EnforcementTier::T0TransparentRewrite,
+            fidelity_reason: None,
+            fidelity_validation: FidelityValidation::NotRequested,
+        };
 
         for probe in shell_probes {
             let plan = match probe.decision {
                 ProbeDecision::Rewrite => serde_json::json!({
                     "decision": "rewrite",
-                    "proposed": probe.route.as_deref().expect("rewrite route")
+                    "proposed": probe.route.as_deref().expect("rewrite route"),
+                    "attribution": expected_evasion
                 }),
                 ProbeDecision::Ask => {
-                    serde_json::json!({"decision": "ask", "reason": "canonical_policy"})
+                    serde_json::json!({
+                        "decision": "ask",
+                        "reason": "canonical_policy",
+                        "attribution": expected_evasion
+                    })
                 }
                 ProbeDecision::Proxy | ProbeDecision::Raw => {
-                    serde_json::json!({"decision": "proxy"})
+                    serde_json::json!({
+                        "decision": "proxy",
+                        "attribution": expected_evasion
+                    })
                 }
                 ProbeDecision::Allow | ProbeDecision::Deny => {
                     assert!(
@@ -3422,7 +3682,16 @@ exit 64
             .expect("rewrite plan fixture");
             let command = probe.command.as_deref().expect("shell command");
             let fallback = fallback_decision(&config, command, directory.path()).await;
-            let decision = steer_to_first_class(command, fallback);
+            if !probe.id.starts_with("fidelity-") {
+                assert_eq!(
+                    fallback.evasion,
+                    Some(expected_evasion),
+                    "daemon-down fallback dropped attribution for {}: {:?}",
+                    probe.id,
+                    fallback.decision
+                );
+            }
+            let decision = steer_to_first_class(command, fallback.decision);
             match probe.decision {
                 ProbeDecision::Rewrite => {
                     let RewriteDecision::AllowRewrite {
@@ -3570,20 +3839,25 @@ exit 64
         assert_eq!(coverage.lifetime_rewrites, 2);
     }
 
-    /// The decisive behaviour: once the daemon serves a rewrite again the earlier gap is
-    /// reconciled and coverage returns to complete. The lifetime count is kept, because
-    /// erasing the history would be the dishonest fix.
     #[test]
-    fn test_a_healthy_daemon_reconciles_the_gap_but_keeps_the_lifetime_count() {
+    fn healthy_daemon_closes_live_gap_but_history_stays_partial() {
         let directory = tempdir().expect("temp directory");
         let config = config(directory.path());
         record_degraded_rewrite_at(&config, 1_785_531_432).expect("record");
         record_degraded_rewrite_at(&config, 1_785_531_500).expect("record");
 
-        clear_reconciled_rewrites(&config).expect("reconcile");
+        close_open_accounting_gaps(&config).expect("close gap");
         let coverage = degraded_rewrite_coverage(&config).expect("coverage");
 
-        assert!(coverage.complete, "a healthy daemon closes the gap");
+        assert!(
+            coverage.live_complete,
+            "a healthy daemon closes the live gap"
+        );
+        assert!(
+            !coverage.complete,
+            "missing operations remain historical partial evidence"
+        );
+        assert!(!coverage.historical_complete);
         assert_eq!(coverage.unreconciled_rewrites, 0);
         assert_eq!(
             coverage.lifetime_rewrites, 2,
@@ -3592,13 +3866,13 @@ exit 64
     }
 
     #[test]
-    fn test_reconciling_twice_does_not_double_count_the_lifetime_total() {
+    fn closing_twice_does_not_double_count_the_lifetime_total() {
         let directory = tempdir().expect("temp directory");
         let config = config(directory.path());
         record_degraded_rewrite_at(&config, 1_785_531_432).expect("record");
 
-        clear_reconciled_rewrites(&config).expect("reconcile");
-        clear_reconciled_rewrites(&config).expect("reconcile again");
+        close_open_accounting_gaps(&config).expect("close gap");
+        close_open_accounting_gaps(&config).expect("close gap again");
         record_degraded_rewrite_at(&config, 1_785_600_000).expect("record");
         let coverage = degraded_rewrite_coverage(&config).expect("coverage");
 
@@ -3606,14 +3880,12 @@ exit 64
         assert_eq!(coverage.lifetime_rewrites, 2);
     }
 
-    /// Reconciling when nothing is pending must not touch the filesystem: this runs on
-    /// every successful managed rewrite, the hottest path HZR has.
     #[test]
-    fn test_reconciling_a_clean_ledger_writes_nothing() {
+    fn closing_a_clean_coverage_store_writes_nothing() {
         let directory = tempdir().expect("temp directory");
         let config = config(directory.path());
 
-        clear_reconciled_rewrites(&config).expect("reconcile");
+        close_open_accounting_gaps(&config).expect("close clean store");
 
         assert!(
             !directory.path().join("ledger").exists(),
@@ -3644,7 +3916,10 @@ exit 64
         assert_eq!(coverage.last_degraded_at_unix, Some(1_060));
         assert_eq!(coverage.open_gap_seconds, Some(720));
 
-        let input = serde_json::json!({"session_id": "session-gap"});
+        let input = serde_json::json!({
+            "session_id": "session-gap",
+            "cwd": directory.path(),
+        });
         assert!(accounting_transition_at(&config, &input, true, 1_000).is_some());
         assert!(accounting_transition_at(&config, &input, true, 1_060).is_none());
         assert!(accounting_transition_at(&config, &input, false, 1_120).is_some());

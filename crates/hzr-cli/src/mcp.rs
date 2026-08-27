@@ -28,15 +28,15 @@ use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 use directories::BaseDirs;
-use hzr_core::{Config, ConfigPaths};
+use hzr_core::{AccountingGapSurface, Config, ConfigPaths, ambient_session_id};
 use hzr_index::IndexPlacement;
 use hzr_protocol::{
-    AccountingAttribution, AccountingOperationKind, AccountingOperationMode,
-    AccountingSearchStrategy, AccountingStage, CodecApiRequest, CodecProfile,
-    ContextPlanApiRequest, FidelityClass, ForkManagedWrite, ForkRunApiRequest, ForkRunApiResponse,
-    MemoryForgetApiRequest, MemoryImportance, MemoryPruneApiRequest, MemoryRecallApiRequest,
-    MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope,
-    RiskClass, SearchApiRequest, SearchApiResponse, SearchMode, SearchStrategy,
+    AccountingAttribution, AccountingOperationKind, AccountingOperationMode, AccountingStage,
+    CodecApiRequest, CodecProfile, ContextPlanApiRequest, FidelityClass, ForkManagedWrite,
+    ForkRunApiRequest, ForkRunApiResponse, MemoryForgetApiRequest, MemoryImportance,
+    MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest,
+    MemoryUpdateApiRequest, MemoryWriteScope, RiskClass, SearchAccountingMetadata,
+    SearchApiRequest, SearchApiResponse, SearchMode, build_search_accounting_attribution,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -609,8 +609,23 @@ async fn call_tool(
                 if let Ok(accounting) =
                     mcp_operation_request(contract.kind, name, workspace, &arguments, &value)
                 {
+                    let session = ambient_session_id();
                     if client.record_operation(&accounting).await.is_err() {
-                        let _ = crate::hook_runner::record_daemon_unavailable_operation(config);
+                        let _ = crate::hook_runner::record_accounting_gap_now(
+                            config,
+                            AccountingGapSurface::Mcp,
+                            Some(workspace),
+                            session.as_deref(),
+                            Some(name.trim_start_matches("hzr_")),
+                        );
+                    } else {
+                        let _ = crate::hook_runner::recover_accounting_gap_now(
+                            config,
+                            AccountingGapSurface::Mcp,
+                            Some(workspace),
+                            session.as_deref(),
+                            Some(name.trim_start_matches("hzr_")),
+                        );
                     }
                 }
             }
@@ -659,12 +674,11 @@ fn mcp_operation_request(
     let attribution = Some(match kind {
         ToolKind::Search => search_accounting_attribution(arguments, response)?,
         ToolKind::Read => read_accounting_attribution(arguments),
-        // A tool call is the whole operation: no engine stage records it separately,
-        // so `final_delivery` would drop it from every efficiency total.
+        // Fork-backed operations already have an included transport receipt.
         ToolKind::Write => simple_accounting_attribution(
             AccountingOperationKind::Write,
             AccountingOperationMode::Write,
-            AccountingStage::StandaloneDelivery,
+            AccountingStage::FinalDelivery,
         ),
         ToolKind::ContextPlan => simple_accounting_attribution(
             AccountingOperationKind::Context,
@@ -767,7 +781,7 @@ fn read_accounting_attribution(arguments: &Value) -> AccountingAttribution {
     let mut attribution = simple_accounting_attribution(
         AccountingOperationKind::Read,
         mode,
-        AccountingStage::StandaloneDelivery,
+        AccountingStage::FinalDelivery,
     );
     attribution.from_line = arguments.get("from").and_then(Value::as_u64);
     attribution.to_line = arguments.get("to").and_then(Value::as_u64);
@@ -788,51 +802,16 @@ fn search_accounting_attribution(
         "auto, semantic, exact",
     )?;
     let response: SearchApiResponse = serde_json::from_value(response.clone())?;
-    let effective_mode = accounting_effective_search_mode(&response);
-    Ok(AccountingAttribution {
-        operation: AccountingOperationKind::Search,
-        mode: effective_mode,
-        stage: AccountingStage::FinalDelivery,
-        requested_mode: Some(accounting_search_mode(requested_mode)),
-        effective_mode: Some(effective_mode),
-        search_strategy: Some(match response.strategy {
-            SearchStrategy::ForkRgaiAdaptive => AccountingSearchStrategy::ForkRgaiAdaptive,
-            SearchStrategy::ForkRgaiBuiltin => AccountingSearchStrategy::ForkRgaiBuiltin,
-            SearchStrategy::ForkRgaiGrepai => AccountingSearchStrategy::ForkRgaiGrepai,
-            SearchStrategy::ForkRgaiRipgrep => AccountingSearchStrategy::ForkRgaiRipgrep,
-            SearchStrategy::ForkRgaiFiles => AccountingSearchStrategy::ForkRgaiFiles,
-        }),
-        search_fallback_code: response.fallback_code,
-        include_content: Some(optional_bool(arguments, "include_content", false)?),
-        limit: Some(u64::try_from(bounded_usize(arguments, "limit", 10, 50)?)?),
-        path_scope_count: Some(1),
-        filter_level: None,
-        from_line: None,
-        to_line: None,
-        source_bytes: None,
-        evasion: None,
-    })
-}
-
-const fn accounting_effective_search_mode(response: &SearchApiResponse) -> AccountingOperationMode {
-    match response.strategy {
-        SearchStrategy::ForkRgaiBuiltin if matches!(response.effective_mode, SearchMode::Exact) => {
-            AccountingOperationMode::SearchExact
-        }
-        SearchStrategy::ForkRgaiBuiltin => AccountingOperationMode::SearchBuiltin,
-        SearchStrategy::ForkRgaiAdaptive => accounting_search_mode(response.effective_mode),
-        SearchStrategy::ForkRgaiGrepai
-        | SearchStrategy::ForkRgaiRipgrep
-        | SearchStrategy::ForkRgaiFiles => AccountingOperationMode::SearchSemantic,
-    }
-}
-
-const fn accounting_search_mode(mode: SearchMode) -> AccountingOperationMode {
-    match mode {
-        SearchMode::Auto => AccountingOperationMode::SearchAuto,
-        SearchMode::Semantic => AccountingOperationMode::SearchSemantic,
-        SearchMode::Exact => AccountingOperationMode::SearchExact,
-    }
+    Ok(build_search_accounting_attribution(
+        requested_mode,
+        &response,
+        SearchAccountingMetadata {
+            stage: AccountingStage::FinalDelivery,
+            include_content: optional_bool(arguments, "include_content", false)?,
+            limit: u64::try_from(bounded_usize(arguments, "limit", 10, 50)?)?,
+            path_scope_count: 1,
+        },
+    ))
 }
 
 /// Compile a response-density contract through the daemon.
@@ -1075,6 +1054,8 @@ fn read_fork_request(workspace: &str, arguments: &Value) -> Result<ForkRunApiReq
         args,
         stdin: None,
         timeout_ms: None,
+        agent: Some("mcp".to_owned()),
+        session_id: hzr_core::ambient_session_id(),
         managed_write: None,
     })
 }
@@ -1122,6 +1103,8 @@ fn write_fork_request(workspace: &str, arguments: &Value) -> Result<ForkRunApiRe
         args: Vec::new(),
         stdin: None,
         timeout_ms: None,
+        agent: Some("mcp".to_owned()),
+        session_id: hzr_core::ambient_session_id(),
         managed_write: Some(managed_write),
     })
 }

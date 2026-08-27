@@ -8,19 +8,13 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
     // Try next directly first, fallback to npx if not found
-    let next_exists = Command::new("which")
-        .arg("next")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    let mut cmd = if next_exists {
-        Command::new("next")
-    } else {
-        let mut c = Command::new("npx");
-        c.arg("next");
-        c
-    };
+    let next = crate::utils::resolve_binary("next").ok();
+    let next_exists = next.is_some();
+    let mut cmd = next.map(Command::new).unwrap_or_else(|| {
+        let mut command = Command::new("npx");
+        command.arg("next");
+        command
+    });
 
     cmd.arg("build");
 

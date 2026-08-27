@@ -35,8 +35,8 @@ texts. HZR bundles carry the full pinned runtime license texts as `grepai-MIT.tx
 source is not included in the runtime bundle.
 
 HZR redistributes the official Node.js 22.17.1 binary archive matching the release platform. The
-four permitted archive names and their SHA-256 digests (`darwin-arm64`, `darwin-x64`, `linux-arm64`,
-and `linux-x64`) are pinned in `engines.lock.toml` and verified before extraction. The unmodified
+three permitted archive names and their SHA-256 digests (`darwin-arm64`, `linux-arm64`, and
+`linux-x64`) are pinned in `engines.lock.toml` and verified before extraction. The unmodified
 Node.js distribution license file, including its bundled dependency notices, is copied to every HZR
 bundle as `licenses/Node.js-MIT-and-dependencies.txt`. Node.js is private runtime infrastructure and
 is not represented as a separately installed system dependency.

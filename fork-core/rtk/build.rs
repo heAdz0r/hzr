@@ -12,6 +12,26 @@ fn main() {
         println!("cargo:rustc-link-arg=/STACK:8388608");
     }
 
+    let engine_metadata_path = Path::new("../CURRENT_ENGINE.toml");
+    println!("cargo:rerun-if-changed={}", engine_metadata_path.display());
+    let engine_metadata: toml::Value = fs::read_to_string(engine_metadata_path)
+        .expect("CURRENT_ENGINE.toml must be readable")
+        .parse()
+        .expect("CURRENT_ENGINE.toml must be valid TOML");
+    for (key, environment_name) in [
+        ("manifest_sha256", "HZR_ENGINE_MANIFEST_SHA256"),
+        (
+            "content_manifest_sha256",
+            "HZR_ENGINE_CONTENT_MANIFEST_SHA256",
+        ),
+    ] {
+        let value = engine_metadata
+            .get(key)
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("CURRENT_ENGINE.toml must define {key}"));
+        println!("cargo:rustc-env={environment_name}={value}");
+    }
+
     let filters_dir = Path::new("src/filters");
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR must be set by Cargo");
     let dest = Path::new(&out_dir).join("builtin_filters.toml");

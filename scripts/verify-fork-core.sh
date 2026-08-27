@@ -259,7 +259,8 @@ fi
 
 if [[ "${HZR_RUN_TESTS}" == "--test" ]]; then
   python3 "${HZR_REPOSITORY_ROOT}/scripts/verify-fork-clippy.py"
-  HZR_TEST_ROOT="${HZR_VERIFY_TEMP}/rtk"
+  HZR_TEST_WORKSPACE="${HZR_VERIFY_TEMP}/workspace"
+  HZR_TEST_ROOT="${HZR_TEST_WORKSPACE}/fork-core/rtk"
   mkdir -p "${HZR_TEST_ROOT}"
   while IFS= read -r HZR_RELATIVE_PATH; do
     hzr_snapshot_validate_relative_path "${HZR_RELATIVE_PATH}"
@@ -267,6 +268,15 @@ if [[ "${HZR_RUN_TESTS}" == "--test" ]]; then
     mkdir -p -- "$(dirname -- "${HZR_TEST_PATH}")"
     cp -pP -- "${HZR_CORE_ROOT}/${HZR_RELATIVE_PATH}" "${HZR_TEST_PATH}"
   done <"${HZR_SNAPSHOT_ROOT}/CURRENT_FILES"
+
+  HZR_CONTRACT_SOURCE="${HZR_REPOSITORY_ROOT}/crates/hzr-engine-contract"
+  HZR_CONTRACT_TARGET="${HZR_TEST_WORKSPACE}/crates/hzr-engine-contract"
+  mkdir -p "${HZR_CONTRACT_TARGET}/src"
+  cp -p -- "${HZR_CONTRACT_SOURCE}/Cargo.toml" "${HZR_CONTRACT_TARGET}/Cargo.toml"
+  cp -p -- "${HZR_CONTRACT_SOURCE}/src/lib.rs" "${HZR_CONTRACT_TARGET}/src/lib.rs"
+  cp -p -- \
+    "${HZR_SNAPSHOT_ROOT}/CURRENT_ENGINE.toml" \
+    "${HZR_TEST_WORKSPACE}/fork-core/CURRENT_ENGINE.toml"
 
   git -C "${HZR_TEST_ROOT}" init --quiet
   git -C "${HZR_TEST_ROOT}" config user.name "HZR Snapshot Verifier"

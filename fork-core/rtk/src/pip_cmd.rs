@@ -1,6 +1,7 @@
 use crate::tracking;
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Deserialize)]
@@ -15,8 +16,13 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
     // Auto-detect uv vs pip
-    let use_uv = which_command("uv").is_some();
+    let uv = crate::utils::resolve_binary("uv").ok();
+    let use_uv = uv.is_some();
     let base_cmd = if use_uv { "uv" } else { "pip" };
+    let binary = match uv {
+        Some(binary) => binary,
+        None => crate::utils::resolve_binary("pip").unwrap_or_else(|_| PathBuf::from("pip")),
+    };
 
     if verbose > 0 && use_uv {
         eprintln!("Using uv (pip-compatible)");
@@ -26,11 +32,11 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let subcommand = args.first().map(|s| s.as_str()).unwrap_or("");
 
     let (cmd_str, filtered) = match subcommand {
-        "list" => run_list(base_cmd, &args[1..], verbose)?,
-        "outdated" => run_outdated(base_cmd, &args[1..], verbose)?,
+        "list" => run_list(&binary, base_cmd, &args[1..], verbose)?,
+        "outdated" => run_outdated(&binary, base_cmd, &args[1..], verbose)?,
         "install" | "uninstall" | "show" => {
             // Passthrough for write operations
-            run_passthrough(base_cmd, args, verbose)?
+            run_passthrough(&binary, base_cmd, args, verbose)?
         }
         _ => {
             anyhow::bail!(
@@ -50,8 +56,13 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     Ok(())
 }
 
-fn run_list(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, String)> {
-    let mut cmd = Command::new(base_cmd);
+fn run_list(
+    binary: &Path,
+    base_cmd: &str,
+    args: &[String],
+    verbose: u8,
+) -> Result<(String, String)> {
+    let mut cmd = Command::new(binary);
 
     if base_cmd == "uv" {
         cmd.arg("pip");
@@ -85,8 +96,13 @@ fn run_list(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, Str
     Ok((raw, filtered))
 }
 
-fn run_outdated(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, String)> {
-    let mut cmd = Command::new(base_cmd);
+fn run_outdated(
+    binary: &Path,
+    base_cmd: &str,
+    args: &[String],
+    verbose: u8,
+) -> Result<(String, String)> {
+    let mut cmd = Command::new(binary);
 
     if base_cmd == "uv" {
         cmd.arg("pip");
@@ -120,8 +136,13 @@ fn run_outdated(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String,
     Ok((raw, filtered))
 }
 
-fn run_passthrough(base_cmd: &str, args: &[String], verbose: u8) -> Result<(String, String)> {
-    let mut cmd = Command::new(base_cmd);
+fn run_passthrough(
+    binary: &Path,
+    base_cmd: &str,
+    args: &[String],
+    verbose: u8,
+) -> Result<(String, String)> {
+    let mut cmd = Command::new(binary);
 
     if base_cmd == "uv" {
         cmd.arg("pip");
@@ -151,18 +172,6 @@ fn run_passthrough(base_cmd: &str, args: &[String], verbose: u8) -> Result<(Stri
     }
 
     Ok((raw.clone(), raw))
-}
-
-/// Check if a command exists in PATH
-fn which_command(cmd: &str) -> Option<String> {
-    Command::new("which")
-        .arg(cmd)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
 }
 
 /// Filter pip list JSON output

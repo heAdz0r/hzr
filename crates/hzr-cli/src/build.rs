@@ -73,16 +73,17 @@ pub struct BuildOptions {
     pub install_root: Option<PathBuf>,
 }
 
+fn platform_for(os: &str, architecture: &str) -> Result<&'static str> {
+    match (os, architecture) {
+        ("macos", "aarch64") => Ok("darwin-arm64"),
+        ("linux", "aarch64") => Ok("linux-arm64"),
+        ("linux", "x86_64") => Ok("linux-x64"),
+        _ => bail!("unsupported build platform: {os}-{architecture}"),
+    }
+}
+
 fn platform() -> Result<String> {
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-    Ok(match (os, arch) {
-        ("macos", "aarch64") => "darwin-arm64".to_owned(),
-        ("macos", "x86_64") => "darwin-x64".to_owned(),
-        ("linux", "aarch64") => "linux-arm64".to_owned(),
-        ("linux", "x86_64") => "linux-x64".to_owned(),
-        _ => bail!("unsupported build platform: {os}-{arch}"),
-    })
+    platform_for(std::env::consts::OS, std::env::consts::ARCH).map(str::to_owned)
 }
 
 fn default_install_root() -> Result<PathBuf> {
@@ -363,7 +364,7 @@ pub fn run(options: BuildOptions) -> Result<BuildReport> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildReport, DAEMON_VERSION_TIMEOUT, EngineCheck, VERIFIED_ENGINES, platform,
+        BuildReport, DAEMON_VERSION_TIMEOUT, EngineCheck, VERIFIED_ENGINES, platform, platform_for,
         wait_for_daemon_version_with_timeout,
     };
 
@@ -425,6 +426,12 @@ mod tests {
     fn test_platform_is_recognized_on_this_host() {
         let resolved = platform().expect("the test host must be a supported platform");
         assert!(resolved.starts_with("darwin-") || resolved.starts_with("linux-"));
+    }
+
+    #[test]
+    fn test_intel_macos_is_not_a_release_platform() {
+        let error = platform_for("macos", "x86_64").expect_err("Intel macOS is unsupported");
+        assert!(error.to_string().contains("unsupported build platform"));
     }
 
     #[test]

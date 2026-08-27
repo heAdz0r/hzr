@@ -2,7 +2,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CodecProfile, ContextPack, FidelityClass, RiskClass, Usage};
+use crate::{
+    AccountingAttribution, AccountingChannel, AccountingMeasurement, AccountingRoute, CodecProfile,
+    ContextPack, EvasionAttribution, FidelityClass, PolicyDecision, RiskClass, SearchFallbackCode,
+    Usage,
+};
 
 fn default_search_limit() -> usize {
     10
@@ -29,15 +33,6 @@ pub enum SearchStrategy {
     ForkRgaiGrepai,
     ForkRgaiRipgrep,
     ForkRgaiFiles,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SearchFallbackCode {
-    LegacyIndexRequiresMigration,
-    SemanticIndexUnavailable,
-    GrepaiUnavailable,
-    RipgrepUnavailable,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -709,6 +704,10 @@ pub struct ForkRunApiRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_write: Option<ForkManagedWrite>,
 }
 
@@ -774,520 +773,6 @@ pub struct UsageApiResponse {
     pub recorded: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountingChannel {
-    HookCli,
-    Mcp,
-    NativeHost,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountingMeasurement {
-    Estimated,
-    Unmeasured,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountingRoute {
-    Optimized,
-    Bypassed,
-    NativeUnaccounted,
-}
-
-/// Non-sensitive operation family recorded independently from command payloads.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountingOperationKind {
-    Search,
-    Read,
-    Write,
-    Context,
-    Memory,
-    Codec,
-    Exec,
-    Observability,
-    Doctor,
-}
-
-impl AccountingOperationKind {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Search => "search",
-            Self::Read => "read",
-            Self::Write => "write",
-            Self::Context => "context",
-            Self::Memory => "memory",
-            Self::Codec => "codec",
-            Self::Exec => "exec",
-            Self::Observability => "observability",
-            Self::Doctor => "doctor",
-        }
-    }
-}
-
-/// Requested operation mode. Family-prefixed variants remain unambiguous when persisted.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountingOperationMode {
-    SearchAuto,
-    SearchSemantic,
-    SearchExact,
-    SearchBuiltin,
-    ReadFull,
-    ReadFiltered,
-    ReadRange,
-    ReadHead,
-    ReadTail,
-    ReadOutline,
-    ReadSymbols,
-    ReadChanged,
-    ReadSince,
-    Write,
-    ContextPlan,
-    MemoryRecall,
-    MemoryStore,
-    MemoryForget,
-    MemoryUpdate,
-    MemoryPrune,
-    CodecCompile,
-    ExecRun,
-    ObservabilitySnapshot,
-    DoctorCheck,
-}
-
-impl AccountingOperationMode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SearchAuto => "search_auto",
-            Self::SearchSemantic => "search_semantic",
-            Self::SearchExact => "search_exact",
-            Self::SearchBuiltin => "search_builtin",
-            Self::ReadFull => "read_full",
-            Self::ReadFiltered => "read_filtered",
-            Self::ReadRange => "read_range",
-            Self::ReadHead => "read_head",
-            Self::ReadTail => "read_tail",
-            Self::ReadOutline => "read_outline",
-            Self::ReadSymbols => "read_symbols",
-            Self::ReadChanged => "read_changed",
-            Self::ReadSince => "read_since",
-            Self::Write => "write",
-            Self::ContextPlan => "context_plan",
-            Self::MemoryRecall => "memory_recall",
-            Self::MemoryStore => "memory_store",
-            Self::MemoryForget => "memory_forget",
-            Self::MemoryUpdate => "memory_update",
-            Self::MemoryPrune => "memory_prune",
-            Self::CodecCompile => "codec_compile",
-            Self::ExecRun => "exec_run",
-            Self::ObservabilitySnapshot => "observability_snapshot",
-            Self::DoctorCheck => "doctor_check",
-        }
-    }
-
-    #[must_use]
-    pub const fn operation(self) -> AccountingOperationKind {
-        match self {
-            Self::SearchAuto | Self::SearchSemantic | Self::SearchExact | Self::SearchBuiltin => {
-                AccountingOperationKind::Search
-            }
-            Self::ReadFull
-            | Self::ReadFiltered
-            | Self::ReadRange
-            | Self::ReadHead
-            | Self::ReadTail
-            | Self::ReadOutline
-            | Self::ReadSymbols
-            | Self::ReadChanged
-            | Self::ReadSince => AccountingOperationKind::Read,
-            Self::Write => AccountingOperationKind::Write,
-            Self::ContextPlan => AccountingOperationKind::Context,
-            Self::MemoryRecall
-            | Self::MemoryStore
-            | Self::MemoryForget
-            | Self::MemoryUpdate
-            | Self::MemoryPrune => AccountingOperationKind::Memory,
-            Self::CodecCompile => AccountingOperationKind::Codec,
-            Self::ExecRun => AccountingOperationKind::Exec,
-            Self::ObservabilitySnapshot => AccountingOperationKind::Observability,
-            Self::DoctorCheck => AccountingOperationKind::Doctor,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountingStage {
-    InternalTransport,
-    FinalDelivery,
-    StandaloneDelivery,
-    ControlPlane,
-}
-
-impl AccountingStage {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::InternalTransport => "internal_transport",
-            Self::FinalDelivery => "final_delivery",
-            Self::StandaloneDelivery => "standalone_delivery",
-            Self::ControlPlane => "control_plane",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountingFilterLevel {
-    None,
-    Minimal,
-    Aggressive,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountingSearchStrategy {
-    ForkRgaiAdaptive,
-    ForkRgaiBuiltin,
-    ForkRgaiGrepai,
-    ForkRgaiRipgrep,
-    ForkRgaiFiles,
-}
-
-impl AccountingSearchStrategy {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ForkRgaiAdaptive => "fork_rgai_adaptive",
-            Self::ForkRgaiBuiltin => "fork_rgai_builtin",
-            Self::ForkRgaiGrepai => "fork_rgai_grepai",
-            Self::ForkRgaiRipgrep => "fork_rgai_ripgrep",
-            Self::ForkRgaiFiles => "fork_rgai_files",
-        }
-    }
-}
-
-impl SearchFallbackCode {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::LegacyIndexRequiresMigration => "legacy_index_requires_migration",
-            Self::SemanticIndexUnavailable => "semantic_index_unavailable",
-            Self::GrepaiUnavailable => "grepai_unavailable",
-            Self::RipgrepUnavailable => "ripgrep_unavailable",
-        }
-    }
-}
-
-impl AccountingFilterLevel {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Minimal => "minimal",
-            Self::Aggressive => "aggressive",
-        }
-    }
-}
-
-/// Typed observability dimensions only. Query text, paths, file contents, and secrets are
-/// deliberately absent from this transport contract.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct AccountingAttribution {
-    pub operation: AccountingOperationKind,
-    /// Backward-compatible canonical mode. New search producers set this to the effective mode.
-    pub mode: AccountingOperationMode,
-    pub stage: AccountingStage,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requested_mode: Option<AccountingOperationMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effective_mode: Option<AccountingOperationMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub search_strategy: Option<AccountingSearchStrategy>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub search_fallback_code: Option<SearchFallbackCode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include_content: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path_scope_count: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filter_level: Option<AccountingFilterLevel>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub from_line: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub to_line: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_bytes: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub evasion: Option<EvasionAttribution>,
-}
-
-/// Closed, privacy-safe taxonomy for command-routing evasion. These values are suitable for
-/// persistence and IPC because they describe only the construct, never its payload.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EvasionClass {
-    E1QuotedCoveredCommand,
-    E2ShellWrapper,
-    E3InterpreterRead,
-    E4ExecutablePath,
-    E5PipelineOrRedirect,
-    E6NestedUnboundedReader,
-    E7FidelityHatch,
-    E8NativeTool,
-    E9DiagnosticBypass,
-    E10CapabilityGap,
-    E11PrivilegedPrefix,
-}
-
-impl EvasionClass {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::E1QuotedCoveredCommand => "e1",
-            Self::E2ShellWrapper => "e2",
-            Self::E3InterpreterRead => "e3",
-            Self::E4ExecutablePath => "e4",
-            Self::E5PipelineOrRedirect => "e5",
-            Self::E6NestedUnboundedReader => "e6",
-            Self::E7FidelityHatch => "e7",
-            Self::E8NativeTool => "e8",
-            Self::E9DiagnosticBypass => "e9",
-            Self::E10CapabilityGap => "e10",
-            Self::E11PrivilegedPrefix => "e11",
-        }
-    }
-
-    /// Short human-readable name of the construct, for agent-facing policy messages.
-    #[must_use]
-    pub const fn construct(self) -> &'static str {
-        match self {
-            Self::E1QuotedCoveredCommand => "quoted covered command",
-            Self::E2ShellWrapper => "shell wrapper",
-            Self::E3InterpreterRead => "interpreter file read",
-            Self::E4ExecutablePath => "executable path form",
-            Self::E5PipelineOrRedirect => "pipeline or redirect",
-            Self::E6NestedUnboundedReader => "nested unbounded reader",
-            Self::E7FidelityHatch => "raw fidelity request",
-            Self::E8NativeTool => "host-native file tool",
-            Self::E9DiagnosticBypass => "direct HZR diagnostic access",
-            Self::E10CapabilityGap => "no first-class route",
-            Self::E11PrivilegedPrefix => "privilege elevation prefix",
-        }
-    }
-
-    /// The route an agent should reach for instead.
-    ///
-    /// An Ask that does not say what to run instead costs a turn and teaches nothing, so every
-    /// class carries its prescription here rather than leaving the caller to invent one. E10 is
-    /// deliberately not a correction: no route exists, so approval is the honest outcome.
-    #[must_use]
-    pub const fn prescription(self) -> &'static str {
-        match self {
-            Self::E1QuotedCoveredCommand | Self::E2ShellWrapper | Self::E4ExecutablePath => {
-                "re-issue the inner command directly so HZR can route it"
-            }
-            Self::E3InterpreterRead => {
-                "read files with `hzr read <file>` and scan them with `hzr search '<pattern>'`; \
-                 keep the interpreter for computation that has no managed route"
-            }
-            Self::E5PipelineOrRedirect => {
-                "run each stage through its own managed route, for example \
-                 `hzr read <file> --max-lines N` instead of piping a full read into a limiter"
-            }
-            Self::E6NestedUnboundedReader => {
-                "read the matched files with `hzr read <file>` instead of embedding an unbounded \
-                 reader in the command"
-            }
-            Self::E7FidelityHatch => {
-                "supply a fidelity reason that matches the command, or use the bounded managed \
-                 route when exact bytes are not required"
-            }
-            Self::E8NativeTool => "use the equivalent `hzr` file operation",
-            Self::E9DiagnosticBypass => {
-                "use `hzr stats` (add `--since` or `--workspace`) instead of reading HZR state \
-                 directly; this is an HZR policy decision surfaced through the harness approval \
-                 channel, not a harness permission"
-            }
-            Self::E10CapabilityGap => {
-                "no managed route covers this command; approving runs it as tracked raw"
-            }
-            Self::E11PrivilegedPrefix => {
-                "elevation was granted to one binary; HZR stays out of it and runs the command \
-                 verbatim — drop the elevation to get a managed route"
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EvasionInterpreter {
-    Shell,
-    Python,
-    Javascript,
-    Ruby,
-    Perl,
-    Awk,
-    Sed,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EvasionPathForm {
-    Bare,
-    AbsoluteSystem,
-    Relative,
-    ResolvedAlias,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EnforcementTier {
-    T0TransparentRewrite,
-    T1NamedCorrection,
-    T2DenyWithPrescription,
-    T3BudgetExhaustion,
-    T4HatchQuarantine,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FidelityReason {
-    Binary,
-    Checksum,
-    MachineProtocol,
-    CompleteLog,
-    FullPatch,
-    VerbatimSource,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FidelityValidation {
-    NotRequested,
-    Valid,
-    MissingReason,
-    InvalidReason,
-    Contradicted,
-    ProvenEquivalent,
-    BudgetExhausted,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PolicyDecision {
-    Ask,
-    Deny,
-    Correction,
-}
-
-impl PolicyDecision {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ask => "ask",
-            Self::Deny => "deny",
-            Self::Correction => "correction",
-        }
-    }
-}
-
-impl EnforcementTier {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::T0TransparentRewrite => "t0",
-            Self::T1NamedCorrection => "t1",
-            Self::T2DenyWithPrescription => "t2",
-            Self::T3BudgetExhaustion => "t3",
-            Self::T4HatchQuarantine => "t4",
-        }
-    }
-}
-
-impl FidelityReason {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Binary => "binary",
-            Self::Checksum => "checksum",
-            Self::MachineProtocol => "machine_protocol",
-            Self::CompleteLog => "complete_log",
-            Self::FullPatch => "full_patch",
-            Self::VerbatimSource => "verbatim_source",
-        }
-    }
-}
-
-impl FidelityValidation {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::NotRequested => "not_requested",
-            Self::Valid => "valid",
-            Self::MissingReason => "missing_reason",
-            Self::InvalidReason => "invalid_reason",
-            Self::Contradicted => "contradicted",
-            Self::ProvenEquivalent => "proven_equivalent",
-            Self::BudgetExhausted => "budget_exhausted",
-        }
-    }
-}
-
-impl EvasionInterpreter {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Shell => "shell",
-            Self::Python => "python",
-            Self::Javascript => "javascript",
-            Self::Ruby => "ruby",
-            Self::Perl => "perl",
-            Self::Awk => "awk",
-            Self::Sed => "sed",
-        }
-    }
-}
-
-impl EvasionPathForm {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Bare => "bare",
-            Self::AbsoluteSystem => "absolute_system",
-            Self::Relative => "relative",
-            Self::ResolvedAlias => "resolved_alias",
-        }
-    }
-}
-
-/// Payload-free accounting evidence. Producers may populate this after the shared normalizer;
-/// consumers can aggregate it without learning the original command, path, query, or content.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EvasionAttribution {
-    pub class: EvasionClass,
-    pub wrapper_depth: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interpreter: Option<EvasionInterpreter>,
-    pub path_form: EvasionPathForm,
-    pub stage_count: u16,
-    pub hatch_marker: bool,
-    pub avoidable: bool,
-    pub tier: EnforcementTier,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fidelity_reason: Option<FidelityReason>,
-    pub fidelity_validation: FidelityValidation,
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OperationApiRequest {
     pub original_command: String,
@@ -1309,6 +794,26 @@ pub struct OperationApiRequest {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OperationApiResponse {
+    pub recorded: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PolicyEventApiRequest {
+    pub project_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub evasion: EvasionAttribution,
+    pub decision: PolicyDecision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_identity: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PolicyEventApiResponse {
     pub recorded: bool,
 }
 

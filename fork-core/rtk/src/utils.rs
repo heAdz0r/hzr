@@ -7,7 +7,9 @@
 
 use anyhow::{Context, Result};
 use regex::Regex;
-use std::path::PathBuf;
+use std::env;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Tronque une chaîne à `max_len` caractères avec "..." si nécessaire.
@@ -64,7 +66,19 @@ pub fn strip_ansi(text: &str) -> String {
 }
 
 pub fn resolve_binary(name: &str) -> Result<PathBuf> {
-    which::which(name).context(format!("Binary '{}' not found on PATH", name))
+    let current_dir = env::current_dir().context("Cannot resolve current directory")?;
+    let paths = env::var_os("PATH");
+    resolve_binary_in_path(name, paths.as_deref(), &current_dir)
+        .context(format!("Binary '{}' not found on PATH", name))
+}
+
+fn resolve_binary_in_path(
+    name: &str,
+    paths: Option<&OsStr>,
+    current_dir: &Path,
+) -> Result<PathBuf> {
+    which::which_in(name, paths, current_dir)
+        .context(format!("Binary '{}' not found on supplied PATH", name))
 }
 
 pub fn resolved_command(name: &str) -> Command {
@@ -309,14 +323,8 @@ pub fn detect_package_manager() -> &'static str {
 /// Build a Command using the detected package manager's exec mechanism.
 /// Returns a Command ready to have tool-specific args appended.
 pub fn package_manager_exec(tool: &str) -> Command {
-    let tool_exists = Command::new("which")
-        .arg(tool)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if tool_exists {
-        Command::new(tool)
+    if let Ok(binary) = resolve_binary(tool) {
+        Command::new(binary)
     } else {
         let pm = detect_package_manager();
         match pm {
@@ -342,6 +350,58 @@ pub fn package_manager_exec(tool: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn resolves_executable_without_external_which_binary() {
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join(if cfg!(windows) {
+            "hzr-path-fixture.exe"
+        } else {
+            "hzr-path-fixture"
+        });
+        fs::write(&executable, b"fixture").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let isolated_path = std::env::join_paths([temp.path()]).unwrap();
+        let resolved = resolve_binary_in_path(
+            "hzr-path-fixture",
+            Some(isolated_path.as_os_str()),
+            temp.path(),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, executable);
+        assert!(!temp.path().join("which").exists());
+    }
+
+    #[test]
+    fn production_sources_do_not_spawn_external_which() {
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let forbidden = ["Command::new(", "\"which\"", ")"].concat();
+        let mut violations = Vec::new();
+
+        for entry in walkdir::WalkDir::new(source_root) {
+            let entry = entry.unwrap();
+            if entry.path().extension().and_then(OsStr::to_str) != Some("rs") {
+                continue;
+            }
+            let source = fs::read_to_string(entry.path()).unwrap();
+            if source.contains(&forbidden) {
+                violations.push(entry.path().display().to_string());
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "production sources spawn external which: {}",
+            violations.join(", ")
+        );
+    }
 
     #[test]
     fn test_truncate_short_string() {

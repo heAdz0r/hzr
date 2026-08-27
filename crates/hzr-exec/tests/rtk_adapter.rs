@@ -28,19 +28,34 @@ impl FakeFork {
     fn new(version: &str, rewrite_body: &str) -> Result<Self> {
         let directory = TempDir::new()?;
         let binary = directory.path().join("rtk");
+        let metadata: toml::Value =
+            include_str!("../../../fork-core/CURRENT_ENGINE.toml").parse()?;
+        let contract = serde_json::json!({
+            "contract_version": hzr_engine_contract::ENGINE_CONTRACT_VERSION,
+            "engine_version": metadata["engine_version"].as_str().ok_or_else(|| anyhow!("missing engine version"))?,
+            "manifest_sha256": metadata["manifest_sha256"].as_str().ok_or_else(|| anyhow!("missing manifest hash"))?,
+            "content_manifest_sha256": metadata["content_manifest_sha256"].as_str().ok_or_else(|| anyhow!("missing content manifest hash"))?,
+        });
         let script = format!(
             r#"#!/bin/sh
 check_hzr_env() {{
   test -n "${{RTK_MEM_DB_PATH:-}}"
-  test -n "${{RTK_DB_PATH:-}}"
+  test -z "${{RTK_DB_PATH:-}}"
   test -n "${{RTK_TEE_DIR:-}}"
   test -n "${{RTK_AUDIT_DIR:-}}"
+  test -n "${{HZR_INTERNAL_ACCOUNTING_RECEIPT_JOURNAL:-}}"
+  test -n "${{HZR_INTERNAL_ACCOUNTING_FAILURE_JOURNAL:-}}"
+  test -n "${{HZR_INTERNAL_ACCOUNTING_CORRELATION:-}}"
   test "${{RTK_TEE:-}}" = 0
   test "${{RTK_TELEMETRY_DISABLED:-}}" = 1
 }}
 check_hzr_env
 if test "${{1:-}}" = --version; then
   printf '%s\n' 'rtk {version}'
+  exit 0
+fi
+if test "${{1:-}}" = contract && test "${{2:-}}" = --json; then
+  printf '%s\n' '{contract}'
   exit 0
 fi
 if test "${{1:-}}" = rewrite && test "${{2:-}}" = --help; then
@@ -364,6 +379,27 @@ async fn test_adapter_version_mismatch_fails_closed() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_adapter_rejects_matching_help_and_version_with_wrong_contract_identity() -> Result<()>
+{
+    let _guard = TEST_LOCK.lock().await;
+    let fork = FakeFork::new(PINNED_RTK_VERSION, "exit 1")?;
+    let script = fs::read_to_string(&fork.binary)?;
+    let metadata: toml::Value = include_str!("../../../fork-core/CURRENT_ENGINE.toml").parse()?;
+    let expected = metadata["manifest_sha256"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing manifest hash"))?;
+    fs::write(&fork.binary, script.replace(expected, &"0".repeat(64)))?;
+    let adapter = PinnedRtkAdapter::detect(fork.config()).await;
+
+    assert!(matches!(
+        adapter.capabilities().rewrite,
+        RtkRewriteInterface::Unavailable { ref reason }
+            if reason.contains("contract identity")
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_adapter_missing_binary_fails_closed() -> Result<()> {
     let _guard = TEST_LOCK.lock().await;
     let directory = TempDir::new()?;
@@ -514,6 +550,11 @@ async fn test_std_command_uses_exact_binary_and_centralized_environment() -> Res
         key == OsStr::new("RTK_MEM_DB_PATH")
             && value == Some(fork.runtime_paths.memory_db.as_os_str())
     }));
+    assert!(
+        command
+            .get_envs()
+            .any(|(key, value)| { key == OsStr::new("RTK_DB_PATH") && value.is_none() })
+    );
     assert!(
         command
             .get_envs()
