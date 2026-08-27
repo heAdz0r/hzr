@@ -257,8 +257,10 @@ pub fn reconcile_local_instruction_excludes(
     }
     let changed = before != after.as_bytes();
     let backup_path = changed.then(|| crate::adoption::backup_path(&path, &before));
-    if !dry_run && let Some(backup) = backup_path.as_ref() {
-        crate::adoption::commit(&path, &before, after.as_bytes(), backup, b"")?;
+    if !dry_run {
+        if let Some(backup) = backup_path.as_ref() {
+            crate::adoption::commit(&path, &before, after.as_bytes(), backup, b"")?;
+        }
     }
     Ok(LocalExcludeReport {
         path: Some(path),

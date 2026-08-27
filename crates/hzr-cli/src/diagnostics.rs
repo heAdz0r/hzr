@@ -727,16 +727,16 @@ pub async fn reconcile_fleet_contracts(
             }
         };
         for target in &instruction_state.desired {
-            if target.path.starts_with(&registration.root)
-                && let Err(error) = confined_workspace_target(&registration.root, &target.path)
-            {
-                report.rewritten.push(FleetContractRewrite {
-                    path: target.path.clone(),
-                    surface: target.surface.as_str(),
-                    changed: false,
-                    error: Some(error),
-                });
-                continue;
+            if target.path.starts_with(&registration.root) {
+                if let Err(error) = confined_workspace_target(&registration.root, &target.path) {
+                    report.rewritten.push(FleetContractRewrite {
+                        path: target.path.clone(),
+                        surface: target.surface.as_str(),
+                        changed: false,
+                        error: Some(error),
+                    });
+                    continue;
+                }
             }
             let audit = match instructions::audit(target.surface, &target.path) {
                 Ok(audit) => audit,
@@ -778,16 +778,16 @@ pub async fn reconcile_fleet_contracts(
             }
         }
         for target in &instruction_state.obsolete {
-            if target.path.starts_with(&registration.root)
-                && let Err(error) = confined_workspace_target(&registration.root, &target.path)
-            {
-                report.rewritten.push(FleetContractRewrite {
-                    path: target.path.clone(),
-                    surface: target.surface.as_str(),
-                    changed: false,
-                    error: Some(error),
-                });
-                continue;
+            if target.path.starts_with(&registration.root) {
+                if let Err(error) = confined_workspace_target(&registration.root, &target.path) {
+                    report.rewritten.push(FleetContractRewrite {
+                        path: target.path.clone(),
+                        surface: target.surface.as_str(),
+                        changed: false,
+                        error: Some(error),
+                    });
+                    continue;
+                }
             }
             match instructions::uninstall_target(target, dry_run, true) {
                 Ok(uninstalled) if uninstalled.changed => {

@@ -1568,15 +1568,15 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
                 options.force,
             )?;
             instruction_reports.extend(applied.reports);
-            if applied.exclude.changed
-                && let Some(path) = applied.exclude.path
-            {
-                let transaction = adoption_transaction
-                    .as_mut()
-                    .context("adoption transaction")?;
-                transaction.mark_written(&path)?;
-                if let Some(backup) = applied.exclude.backup_path {
-                    transaction.mark_written(&backup)?;
+            if applied.exclude.changed {
+                if let Some(path) = applied.exclude.path {
+                    let transaction = adoption_transaction
+                        .as_mut()
+                        .context("adoption transaction")?;
+                    transaction.mark_written(&path)?;
+                    if let Some(backup) = applied.exclude.backup_path {
+                        transaction.mark_written(&backup)?;
+                    }
                 }
             }
         }
@@ -1621,10 +1621,10 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
         options.force,
     )?;
     client_reports.push(project_mcp);
-    if let Some(transaction) = adoption_transaction.as_mut()
-        && let Some(report) = client_reports.last()
-        && report.changed
-    {
+    if let Some(report) = client_reports.last().filter(|report| report.changed) {
+        let transaction = adoption_transaction
+            .as_mut()
+            .context("adoption transaction")?;
         transaction.mark_written(&report.path)?;
     }
     if let Some(journal) = journal.as_mut() {
@@ -1640,9 +1640,10 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     };
     if let (Some(transaction), Some(report)) =
         (adoption_transaction.as_mut(), service_report.as_ref())
-        && report.changed
     {
-        transaction.mark_written(&report.definition)?;
+        if report.changed {
+            transaction.mark_written(&report.definition)?;
+        }
     }
     if let Some(journal) = journal.as_mut() {
         journal.stage(&journal_path, "service")?;
@@ -3390,14 +3391,14 @@ async fn set_workspace_activation(
                 report.backup_path.as_deref(),
             )?;
         }
-        if instruction_application.exclude.changed
-            && let Some(path) = instruction_application.exclude.path.as_ref()
-        {
-            mark_activation_mutation(
-                &mut transaction,
-                path,
-                instruction_application.exclude.backup_path.as_deref(),
-            )?;
+        if instruction_application.exclude.changed {
+            if let Some(path) = instruction_application.exclude.path.as_ref() {
+                mark_activation_mutation(
+                    &mut transaction,
+                    path,
+                    instruction_application.exclude.backup_path.as_deref(),
+                )?;
+            }
         }
         inject_activation_failure("instructions")?;
 
