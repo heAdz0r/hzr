@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+report_smoke_failure() {
+  local status="$?"
+  echo "smoke-install failed at line $1 (exit ${status})" >&2
+  exit "${status}"
+}
+trap 'report_smoke_failure "${LINENO}"' ERR
 
 HZR_REPOSITORY_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 HZR_ARCHIVE="${1:-}"
@@ -471,7 +478,7 @@ awk -v artifact="${HZR_UPGRADE_ARTIFACT}" \
   HZR_INSTALL_HOOKS=0 \
   HZR_INSTALL_SERVICE=0 \
   PATH="/usr/bin:/bin" \
-    /bin/sh "${HZR_REPOSITORY_ROOT}/install.sh" >/dev/null
+    /bin/sh "${HZR_REPOSITORY_ROOT}/install.sh"
 )
 HZR_SECOND_RELEASE="${HZR_HOME}/.local/share/hzr/versions/v${HZR_UPGRADE_VERSION}-${HZR_SMOKE_PLATFORM}"
 
