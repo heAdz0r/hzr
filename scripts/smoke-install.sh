@@ -299,12 +299,14 @@ run_hzr memory recall installed-bundle-memory \
   --workspace "${HZR_SMOKE_TEMP}/workspace" --json >/dev/null
 run_hzr stats --json >/dev/null
 run_hzr mcp --help >/dev/null
-printf '%s\n' \
-  '{"tool_name":"Bash","tool_input":{"command":"cat main.rs"}}' \
-  | HOME="${HZR_SMOKE_TEMP}/home" \
-    PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" \
-    "${HZR_INSTALLED_BIN}/hzr" hooks dispatch \
-    >"${HZR_SMOKE_TEMP}/hook.json"
+printf '{"cwd":"%s","tool_name":"Bash","tool_input":{"command":"cat main.rs"}}\n' \
+  "${HZR_SMOKE_TEMP}/workspace" \
+  | (
+      cd "${HZR_SMOKE_TEMP}/workspace"
+      HOME="${HZR_SMOKE_TEMP}/home" \
+        PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" \
+        "${HZR_INSTALLED_BIN}/hzr" hooks dispatch
+    ) >"${HZR_SMOKE_TEMP}/hook.json"
 grep -F "hookSpecificOutput" "${HZR_SMOKE_TEMP}/hook.json" >/dev/null
 run_hzr doctor --workspace "${HZR_SMOKE_TEMP}/workspace" --json \
   >"${HZR_SMOKE_TEMP}/doctor.json"
