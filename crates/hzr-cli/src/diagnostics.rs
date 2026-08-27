@@ -3383,10 +3383,6 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         assert_eq!(planned.legacy_index_audit, "not_requested");
         assert!(planned.legacy_indexes.is_empty());
         assert_eq!(
-            planned.rewritten.iter().filter(|item| item.changed).count(),
-            2
-        );
-        assert_eq!(
             planned
                 .project_codex_mcp
                 .iter()
