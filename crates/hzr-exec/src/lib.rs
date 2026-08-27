@@ -20,8 +20,9 @@ pub use executor::{ExecutionHandle, ExecutionPipeline};
 pub use model::{
     AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent,
     CapturedStream, Environment, ExecutionEnvelope, ExecutionEvent, ExecutionOutcome,
-    ExecutionResult, ExecutionStream, NeverWorseChoice, NotStarted, RewriteDecision, RewriteSource,
-    RtkRewriteRoute, StdinSpec, Termination, TerminationCause,
+    ExecutionResult, ExecutionStream, GRANT_APPLIED_REASON, HOST_GRANT_APPLIED_ENV,
+    NeverWorseChoice, NotStarted, RewriteDecision, RewriteSource, RtkRewriteRoute, StdinSpec,
+    Termination, TerminationCause, host_grant_applied, reconcile_host_grant,
 };
 pub use shell::{ShellSafety, analyze_shell, parse_simple_shell};
 

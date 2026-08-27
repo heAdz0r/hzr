@@ -20,7 +20,7 @@ EXPECTED_COUNT = 141
 # Recomputed after execution-time replacement capability evidence was added to
 # tracking.rs. The inherited warning set remains 141 hits with no new lint codes;
 # only tracked source positions moved. The ratchet still rejects later drift.
-EXPECTED_SHA256 = "853bbd92a8fc25b4aa0a5f2aa88779f12637638e633049d3862ef29ae6041e7b"
+EXPECTED_SHA256 = "61cb04477b8ec5d6d734ea86aee855c69cf13ae41b0f4b91c208f10e8f365c83"
 
 
 def main() -> int:

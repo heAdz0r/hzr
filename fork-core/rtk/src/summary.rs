@@ -35,6 +35,18 @@ pub fn run(command: &str, verbose: u8) -> Result<()> {
     let shown = crate::guard::never_worse(&raw, &summary);
     println!("{}", shown);
     timer.track(command, "rtk summary", &raw, shown);
+    // Propagate the child's status, as `run_test` and `run_err` already do. Summarizing used to
+    // return success unconditionally, so `rtk summary <failing command>` exited 0 while printing
+    // a ❌ nobody's script could read. A filter that turns a red run green is worse than no
+    // filter, because the summary is believed.
+    if !output.status.success() {
+        std::process::exit(
+            output
+                .status
+                .code()
+                .unwrap_or(if output.status.success() { 0 } else { 1 }),
+        );
+    }
     Ok(())
 }
 

@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
-use hzr_protocol::CodecProfile;
+use hzr_protocol::{CodecProfile, FilterPlacement};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -456,6 +456,13 @@ pub struct PolicyConfig {
     pub context_token_limit: u64,
     pub output_reserve: u64,
     pub safety_margin: u64,
+    /// Where a filter may fire relative to the model's turn structure.
+    ///
+    /// Defaults to the shipped behaviour. `turn_boundary` trades some delivered-byte reduction
+    /// for a request prefix that does not move mid-turn, which is the arm a billed-input
+    /// benchmark needs in order to say whether prefix-cache invalidation eats the saving.
+    #[serde(default)]
+    pub filter_placement: FilterPlacement,
 }
 
 impl Default for PolicyConfig {
@@ -465,6 +472,7 @@ impl Default for PolicyConfig {
             context_token_limit: 16_000,
             output_reserve: 2_000,
             safety_margin: 1_000,
+            filter_placement: FilterPlacement::Anywhere,
         }
     }
 }

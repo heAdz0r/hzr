@@ -110,6 +110,57 @@ impl RewriteDecision {
     }
 }
 
+/// Reconcile a policy verdict with a host that has already granted execution.
+///
+/// This is the single authority for that reconciliation, and it lives beside `RewriteDecision`
+/// rather than inside one caller on purpose. It used to exist only in the `PreToolUse` hook, so
+/// HZR answered the same question twice with two different amounts of information: the hook saw
+/// the host's permission mode and allowed, then the `hzr exec run` that the approval had just
+/// launched re-derived the verdict without it and refused. One intent, two verdicts, and an
+/// operator watching an approved command fail.
+///
+/// Three properties hold on every surface:
+///
+/// * **Routing survives.** An `Ask` carrying an executable proposal becomes that managed command,
+///   not raw execution — a grant removes the prompt, never the route.
+/// * **Deny survives.** An explicit deny is a rule, not an absent one.
+/// * **Evidence survives.** The reason records that a grant was applied, so an auto-approved
+///   bypass is still visible as a bypass instead of quietly becoming an ordinary allow.
+#[must_use]
+pub fn reconcile_host_grant(decision: RewriteDecision, granted: bool) -> RewriteDecision {
+    if !granted {
+        return decision;
+    }
+    let RewriteDecision::Ask { proposed, reason } = decision else {
+        return decision;
+    };
+    match proposed {
+        Some(command) => RewriteDecision::AllowRewrite {
+            command,
+            source: RewriteSource::HzrPolicy,
+            reason: format!("{reason}; {GRANT_APPLIED_REASON}"),
+        },
+        None => RewriteDecision::allow_raw(format!("{reason}; {GRANT_APPLIED_REASON}")),
+    }
+}
+
+#[must_use]
+pub fn host_grant_applied(decision: &RewriteDecision) -> bool {
+    match decision {
+        RewriteDecision::AllowRaw { reason } | RewriteDecision::AllowRewrite { reason, .. } => {
+            reason.ends_with(GRANT_APPLIED_REASON)
+        }
+        RewriteDecision::Ask { .. } | RewriteDecision::Deny { .. } => false,
+    }
+}
+
+/// Stated on every decision a grant converted, so the ledger and the operator see the same cause.
+pub const GRANT_APPLIED_REASON: &str =
+    "host permission mode grants execution, so HZR recorded it instead of prompting";
+
+/// Private process marker consumed by the ledger writer before it can reach child processes.
+pub const HOST_GRANT_APPLIED_ENV: &str = "HZR_INTERNAL_HOST_GRANT_APPLIED";
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Environment {
     pub inherit: bool,

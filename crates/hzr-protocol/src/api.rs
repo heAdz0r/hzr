@@ -294,6 +294,380 @@ pub struct ExecApiRequest {
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// The host's standing execution grant, when the harness reported one.
+    ///
+    /// Without this the daemon re-derives a verdict the host already answered, and a command the
+    /// `PreToolUse` hook approved can be refused by the `hzr exec run` that approval launched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_execution_grant: Option<HostExecutionGrant>,
+}
+
+/// The harness's own permission posture for the current session.
+///
+/// A closed enum rather than a string: policy must never branch on an unrecognised value, and an
+/// unknown mode has to fail into "no grant" instead of into whatever a substring match returns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HostPermissionMode {
+    Default,
+    AcceptEdits,
+    Plan,
+    BypassPermissions,
+}
+
+impl HostPermissionMode {
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        [
+            Self::Default,
+            Self::AcceptEdits,
+            Self::Plan,
+            Self::BypassPermissions,
+        ]
+        .into_iter()
+        .find(|candidate| value.eq_ignore_ascii_case(candidate.as_str()))
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::AcceptEdits => "acceptEdits",
+            Self::Plan => "plan",
+            Self::BypassPermissions => "bypassPermissions",
+        }
+    }
+
+    /// Whether the operator has already decided that commands run without prompting.
+    #[must_use]
+    pub const fn grants_execution(self) -> bool {
+        matches!(self, Self::BypassPermissions)
+    }
+}
+
+/// An output class a filter may never drop, whatever it does to the rest of the stream.
+///
+/// "Command families need explicit completeness contracts" was documented prose and therefore
+/// unenforceable: nothing failed if a filter quietly started swallowing a compiler error. These
+/// variants are the closed vocabulary that turns the sentence into a checkable artifact.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MustKeep {
+    /// The child's exit status, unaltered — a filter that reports success for a failed run is
+    /// worse than no filter at all.
+    ExitStatus,
+    /// Every failure line: a failing test, a compiler error, a non-zero diagnostic.
+    Failures,
+    /// Warnings. Droppable-looking and not droppable: a warning ratchet is a real gate.
+    Warnings,
+    /// The list of files a command changed, which is the whole result of a write-shaped command.
+    ChangedFiles,
+}
+
+impl MustKeep {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ExitStatus => "exit_status",
+            Self::Failures => "failures",
+            Self::Warnings => "warnings",
+            Self::ChangedFiles => "changed_files",
+        }
+    }
+}
+
+/// What one filtered output route promises to preserve.
+///
+/// Serialize-only: the table is compiled-in truth, so a deserialized contract would be a claim
+/// from outside the binary about what the binary guarantees.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct CompletenessContract {
+    /// The filtered route, as an agent names it.
+    pub route: &'static str,
+    /// Whether the route runs a child process.
+    ///
+    /// `log` filters a stream that someone else produced, so it has no exit status to preserve.
+    /// Collapsing this into `carries_failure` would demand a promise it cannot keep, and a
+    /// contract nobody can satisfy gets weakened rather than met.
+    pub spawns_child: bool,
+    /// Whether this route carries failure semantics at all.
+    ///
+    /// Content-selection routes (`read`, `search`) have no notion of a failing child; holding them
+    /// to a failure contract would be theatre. They are bound instead by `raw_pointer_required`.
+    pub carries_failure: bool,
+    /// Undroppable by rule.
+    pub must_keep: &'static [MustKeep],
+    /// Whether everything outside `must_keep` may be summarized only alongside an explicit
+    /// pointer back to the unfiltered output.
+    pub raw_pointer_required: bool,
+}
+
+/// Every filtered route HZR owns, with the completeness it guarantees.
+///
+/// The table is exhaustive on purpose: a new filtered route that reaches an agent without an
+/// entry here fails `acceptance_gate_every_filtered_route_declares_its_completeness`, so the
+/// contract cannot be an afterthought written down later.
+pub const COMPLETENESS_CONTRACTS: &[CompletenessContract] = &[
+    CompletenessContract {
+        route: "test",
+        spawns_child: true,
+        carries_failure: true,
+        must_keep: &[MustKeep::ExitStatus, MustKeep::Failures, MustKeep::Warnings],
+        raw_pointer_required: true,
+    },
+    CompletenessContract {
+        route: "err",
+        spawns_child: true,
+        carries_failure: true,
+        must_keep: &[MustKeep::ExitStatus, MustKeep::Failures],
+        raw_pointer_required: true,
+    },
+    CompletenessContract {
+        route: "summary",
+        spawns_child: true,
+        carries_failure: true,
+        must_keep: &[MustKeep::ExitStatus, MustKeep::Failures],
+        raw_pointer_required: true,
+    },
+    CompletenessContract {
+        route: "log",
+        spawns_child: false,
+        carries_failure: true,
+        must_keep: &[MustKeep::Failures, MustKeep::Warnings],
+        raw_pointer_required: true,
+    },
+    CompletenessContract {
+        route: "build",
+        spawns_child: true,
+        carries_failure: true,
+        must_keep: &[
+            MustKeep::ExitStatus,
+            MustKeep::Failures,
+            MustKeep::Warnings,
+            MustKeep::ChangedFiles,
+        ],
+        raw_pointer_required: true,
+    },
+    CompletenessContract {
+        route: "write",
+        spawns_child: true,
+        carries_failure: true,
+        // A patch whose hunk does not match is a failure, and a write that reports only the files
+        // it touched would present a refused edit as a completed one.
+        must_keep: &[
+            MustKeep::ExitStatus,
+            MustKeep::Failures,
+            MustKeep::ChangedFiles,
+        ],
+        raw_pointer_required: false,
+    },
+    CompletenessContract {
+        route: "read",
+        spawns_child: false,
+        carries_failure: false,
+        must_keep: &[],
+        raw_pointer_required: true,
+    },
+    CompletenessContract {
+        route: "search",
+        spawns_child: false,
+        carries_failure: false,
+        must_keep: &[],
+        raw_pointer_required: true,
+    },
+];
+
+#[must_use]
+pub fn completeness_contract(route: &str) -> Option<&'static CompletenessContract> {
+    COMPLETENESS_CONTRACTS
+        .iter()
+        .find(|contract| contract.route == route)
+}
+
+#[cfg(test)]
+mod completeness_contract_tests {
+    use super::{COMPLETENESS_CONTRACTS, MustKeep, completeness_contract};
+
+    /// Every filtered route an agent can reach declares what it will not drop.
+    ///
+    /// The list is written here rather than derived from the table, so adding a route to the table
+    /// is not enough to satisfy the gate — and shipping a filter without an entry fails it. That
+    /// asymmetry is the point: the contract has to be a decision, not a side effect.
+    #[test]
+    fn acceptance_gate_every_filtered_route_declares_its_completeness() {
+        for route in [
+            "test", "err", "summary", "log", "build", "write", "read", "search",
+        ] {
+            let contract = completeness_contract(route).unwrap_or_else(|| {
+                unreachable!("filtered route `{route}` ships without a contract")
+            });
+            assert_eq!(contract.route, route);
+        }
+        assert_eq!(
+            COMPLETENESS_CONTRACTS.len(),
+            8,
+            "a route was added to the table without being added to this gate"
+        );
+    }
+
+    /// A route that can fail must promise to say so.
+    ///
+    /// Exit status and failure lines are the two things a filter can drop that turn a red run
+    /// green. Content-selection routes are exempt from the failure clause and bound instead by an
+    /// explicit pointer back to unfiltered output, so summarizing can never be a dead end.
+    #[test]
+    fn acceptance_gate_failure_capable_routes_cannot_drop_failures_or_status() {
+        for contract in COMPLETENESS_CONTRACTS {
+            if contract.carries_failure {
+                assert_eq!(
+                    contract.must_keep.contains(&MustKeep::ExitStatus),
+                    contract.spawns_child,
+                    "`{}` must promise the child's exit status exactly when it runs one",
+                    contract.route
+                );
+                assert!(
+                    contract.must_keep.contains(&MustKeep::Failures),
+                    "`{}` may swallow failure lines",
+                    contract.route
+                );
+            } else {
+                assert!(
+                    contract.raw_pointer_required,
+                    "`{}` summarizes without promising a route back to the raw output",
+                    contract.route
+                );
+                assert!(
+                    contract.must_keep.is_empty(),
+                    "`{}` declares failure obligations while claiming no failure semantics",
+                    contract.route
+                );
+            }
+        }
+    }
+}
+
+/// Where a filter is allowed to fire, relative to the model's turn structure.
+///
+/// This exists because output reduction and provider cost are not the same axis. A harness that
+/// caches the request prefix bills a cached read far below a fresh one; a filter that fires in the
+/// middle of a turn rewrites content the prefix already contains, invalidating the cached span
+/// after it. The delivered-byte saving is real and the *billed* input can still rise.
+///
+/// Making placement an explicit policy dimension is what lets that be measured instead of
+/// assumed. `Anywhere` is the shipped behaviour and stays the default; `TurnBoundary` is the
+/// arm a paired billed-input benchmark compares it against.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterPlacement {
+    /// Filter wherever the route applies. Maximum delivered-byte reduction, prefix may move.
+    #[default]
+    Anywhere,
+    /// Filter only on the first operation of a turn, leaving a mid-turn prefix untouched.
+    TurnBoundary,
+}
+
+impl FilterPlacement {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Anywhere => "anywhere",
+            Self::TurnBoundary => "turn_boundary",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        [Self::Anywhere, Self::TurnBoundary]
+            .into_iter()
+            .find(|candidate| value.eq_ignore_ascii_case(candidate.as_str()))
+    }
+
+    /// Whether a filter may fire at this position in the turn under this policy.
+    #[must_use]
+    pub const fn permits(self, at_turn_boundary: bool) -> bool {
+        match self {
+            Self::Anywhere => true,
+            Self::TurnBoundary => at_turn_boundary,
+        }
+    }
+}
+
+/// Environment variable carrying a grant to every descendant of an approved command.
+pub const HOST_EXECUTION_GRANT_ENV: &str = "HZR_HOST_EXECUTION_GRANT";
+
+/// How long a grant stays usable.
+///
+/// Long enough to cover a working session, short enough that a value left in an exported shell,
+/// a `.env`, or a committed script stops being an approval. A grant is a record of an answer the
+/// operator gave a while ago, not a permanent capability.
+pub const HOST_EXECUTION_GRANT_MAX_AGE_MS: u64 = 12 * 60 * 60 * 1000;
+
+/// Tolerance for a clock that runs slightly ahead of the process reading the grant.
+pub const HOST_EXECUTION_GRANT_MAX_FUTURE_SKEW_MS: u64 = 5 * 60 * 1000;
+
+/// One host decision, carried to every process that would otherwise re-decide it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HostExecutionGrant {
+    pub mode: HostPermissionMode,
+    /// Keyed digest of the session the host granted. Never a raw session identifier.
+    pub granted_for_session: String,
+    pub granted_at_ms: u64,
+    /// Which surface observed the host decision, for audit.
+    pub source: String,
+}
+
+/// Why a grant was not honoured. Every variant is a refusal to trust, never a downgrade to allow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostGrantRejection {
+    /// The mode does not grant execution (`default`, `plan`, `acceptEdits`).
+    ModeDoesNotGrantExecution,
+    /// The grant names a different session than the one now executing.
+    SessionMismatch,
+    /// The grant is older than `HOST_EXECUTION_GRANT_MAX_AGE_MS`.
+    Expired,
+    /// The grant is stamped further in the future than the allowed clock skew.
+    FutureTimestamp,
+}
+
+impl HostGrantRejection {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ModeDoesNotGrantExecution => "mode_does_not_grant_execution",
+            Self::SessionMismatch => "session_mismatch",
+            Self::Expired => "expired",
+            Self::FutureTimestamp => "future_timestamp",
+        }
+    }
+}
+
+impl HostExecutionGrant {
+    /// Whether this grant may stand in for a fresh host answer, right now, for this session.
+    ///
+    /// Fail-closed on every axis. A grant that cannot be tied to the running session, or that has
+    /// aged out, is ignored — it never degrades into a weaker-but-still-permissive verdict,
+    /// because a stale approval that still approves is indistinguishable from no policy at all.
+    pub fn authorize(
+        &self,
+        session_digest: Option<&str>,
+        now_ms: u64,
+    ) -> Result<(), HostGrantRejection> {
+        if !self.mode.grants_execution() {
+            return Err(HostGrantRejection::ModeDoesNotGrantExecution);
+        }
+        if session_digest != Some(self.granted_for_session.as_str()) {
+            return Err(HostGrantRejection::SessionMismatch);
+        }
+        if self.granted_at_ms > now_ms.saturating_add(HOST_EXECUTION_GRANT_MAX_FUTURE_SKEW_MS) {
+            return Err(HostGrantRejection::FutureTimestamp);
+        }
+        if now_ms.saturating_sub(self.granted_at_ms) > HOST_EXECUTION_GRANT_MAX_AGE_MS {
+            return Err(HostGrantRejection::Expired);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -739,7 +1113,8 @@ impl EvasionClass {
             Self::E8NativeTool => "use the equivalent `hzr` file operation",
             Self::E9DiagnosticBypass => {
                 "use `hzr stats` (add `--since` or `--workspace`) instead of reading HZR state \
-                 directly"
+                 directly; this is an HZR policy decision surfaced through the harness approval \
+                 channel, not a harness permission"
             }
             Self::E10CapabilityGap => {
                 "no managed route covers this command; approving runs it as tracked raw"
@@ -1462,6 +1837,7 @@ mod tests {
             caller_path: Some("/toolchain/bin:/usr/bin".into()),
             agent: Some("cli".into()),
             session_id: None,
+            host_execution_grant: None,
         };
         let value = serde_json::to_value(request).expect("exec request serializes");
         assert_eq!(value["caller_path"], "/toolchain/bin:/usr/bin");

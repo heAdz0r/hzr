@@ -492,6 +492,8 @@ pub enum HooksCommand {
     },
     #[command(hide = true)]
     Feedback,
+    #[command(hide = true)]
+    Statusline,
 }
 
 #[derive(Debug, Subcommand)]

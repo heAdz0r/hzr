@@ -20,12 +20,18 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::billing::{
-    BillingError, EconomicAmount, PricingCatalog, ProviderEconomicReceipt,
+    BillingError, EconomicAmount, EconomicScopeSummary, PricingCatalog, ProviderEconomicReceipt,
     ProviderReceiptRecordResult, ReceiptProvenance, SessionEconomicSummary, price_receipt,
     receipt_payload_hash, validate_receipt, validate_receipt_observed_at,
 };
 
 pub const CURRENT_ACCOUNTING_POLICY_VERSION: &str = "privacy_typed_v2";
+
+/// How many subsequent operations of the same session can still count as a reaction to a filter.
+///
+/// Bounded deliberately: the same command re-issued much later is ordinary work, and an unbounded
+/// window would eventually attribute every repeat in a long session to filtering.
+pub const RERUN_DETECTION_WINDOW_OPERATIONS: u64 = 8;
 const LEGACY_ACCOUNTING_POLICY_VERSION_V1: &str = "privacy_typed_v1";
 const IDENTITY_HMAC_UUID_V1: &str = "hmac_sha256_uuid_v1";
 const IDENTITY_HMAC_KEY256_V2: &str = "hmac_sha256_key256_v2";
@@ -72,10 +78,27 @@ pub struct EfficiencySummary {
     pub total_execution_ms: u64,
     /// Rows included in the measured reduction ratio plus explicit unmeasured bypasses.
     pub accounted_operations: u64,
-    /// Every row observed across measured, unmeasured, and host-native channels.
+    /// Every row observed across measured, unmeasured, and host-native channels **within the
+    /// stages the reduction ratio measures**. Delivery and control-plane stages are counted
+    /// separately in `stage_excluded_operations`, so this field never silently absorbs them.
     pub total_observed_operations: u64,
     pub native_unaccounted_operations: u64,
     pub unmeasured_bypass_operations: u64,
+    /// Repeats of a command the model had already run through a filter.
+    ///
+    /// The re-run tax was previously assumed to be zero because nothing measured it: if a filtered
+    /// result made the model re-issue the same command, the second run's tokens were booked as
+    /// ordinary traffic and the reduction ratio never saw a cost. `regression_tokens_estimated`
+    /// only catches an operation whose own output grew, which is a different failure.
+    pub filter_induced_rerun_operations: u64,
+    pub filter_induced_rerun_tokens_estimated: u64,
+    /// Rows dropped from the ratio because their stage is `final_delivery` or `control_plane`.
+    ///
+    /// These operations are real and appear in `by_mode`; they are excluded from the ratio so a
+    /// delivery stage cannot double-count the `internal_transport` row that measured it. Without
+    /// this counter the two panels use different denominators and nothing reconciles them.
+    pub stage_excluded_operations: u64,
+    pub stage_excluded_delivered_tokens_estimated: u64,
     pub by_channel: BTreeMap<String, u64>,
     pub by_mode: Vec<OperationModeSummary>,
     pub by_command: Vec<EfficiencyCommandSummary>,
@@ -122,6 +145,12 @@ pub struct StatsQuery<'a> {
     pub since_unix_seconds: Option<i64>,
     /// Current policy is the only scope suitable for headline efficiency claims.
     pub include_legacy_versions: bool,
+    /// Project used for the per-project money row, independent of `project_path`.
+    ///
+    /// The default `hzr stats` view is global, but an operator still wants to see what the
+    /// repository they are standing in is worth. Carrying it separately keeps the money block
+    /// two-scoped without quietly re-scoping the headline underneath it.
+    pub economics_project_path: Option<&'a str>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -131,6 +160,17 @@ pub struct StatsSnapshot {
     pub provider_usage: LedgerSummary,
     pub by_family: Vec<OperationFamilySummary>,
     pub evasion: EvasionSummary,
+    /// Net avoided tokens for `StatsQuery::economics_project_path`, priced as the project row.
+    pub project_avoided_tokens_estimated: i64,
+    /// Net avoided tokens across the whole ledger, priced as the global row.
+    pub global_avoided_tokens_estimated: i64,
+    /// Receipts attributed to `StatsQuery::economics_project_path`, empty when unresolved.
+    pub project_economics: EconomicScopeSummary,
+    /// Receipts across the whole ledger, regardless of the query's project scope.
+    ///
+    /// Collected in the same snapshot as the project scope so the two money rows an operator
+    /// compares can never come from two different reads of a moving ledger.
+    pub global_economics: EconomicScopeSummary,
 }
 
 pub const DEFAULT_FIDELITY_OPERATION_ALLOWANCE: u64 = 5;
@@ -177,6 +217,7 @@ pub struct SessionEvasionSummary {
     pub policy_asks: u64,
     pub policy_denials: u64,
     pub policy_corrections: u64,
+    pub host_grant_applied_operations: u64,
 }
 
 /// The measured efficiency slice for one private session identity.
@@ -192,6 +233,9 @@ pub struct SessionEfficiencySummary {
     pub gross_avoided_tokens_estimated: u64,
     pub regression_tokens_estimated: u64,
     pub net_avoided_tokens_estimated: i64,
+    pub total_observed_operations: u64,
+    pub stage_excluded_operations: u64,
+    pub excluded_legacy_operations: u64,
     pub top_commands: Vec<EfficiencyCommandSummary>,
 }
 
@@ -231,6 +275,7 @@ pub struct PolicyEvent<'a> {
     pub evasion: EvasionAttribution,
     pub decision: PolicyDecision,
     pub replacement_family: Option<&'a str>,
+    pub command_identity: Option<&'a str>,
 }
 
 #[derive(Clone, Debug)]
@@ -320,6 +365,7 @@ pub struct DetailedOperationAttribution<'a> {
     pub attribution: OperationAttribution<'a>,
     pub detail: Option<&'a AccountingAttribution>,
     pub evasion: Option<&'a EvasionAttribution>,
+    pub host_grant_applied: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -335,6 +381,7 @@ pub struct PrivacySafeFidelityOperation {
     pub agent: Option<String>,
     pub agent_hash: Option<String>,
     pub evasion: EvasionAttribution,
+    pub host_grant_applied: bool,
 }
 
 /// Operations that never reached the optimizer, split out of the reduction ratio they
@@ -1339,7 +1386,8 @@ impl Ledger {
                     replacement_capability TEXT,
                     replacement_route TEXT,
                     replacement_reason TEXT,
-                    fidelity_reservation_id TEXT
+                    fidelity_reservation_id TEXT,
+                    host_grant_applied INTEGER NOT NULL DEFAULT 0
                  );
                  CREATE INDEX IF NOT EXISTS idx_timestamp ON commands(timestamp);
                  CREATE INDEX IF NOT EXISTS idx_project_path_timestamp
@@ -1388,6 +1436,7 @@ impl Ledger {
                     fidelity_validation TEXT NOT NULL,
                     decision TEXT NOT NULL,
                     replacement_family TEXT,
+                    command_hash TEXT,
                     producer_version TEXT NOT NULL,
                     accounting_policy_version TEXT NOT NULL
                  );
@@ -1454,6 +1503,7 @@ impl Ledger {
             [],
         );
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN session_id TEXT", []);
+        let _ = connection.execute("ALTER TABLE policy_events ADD COLUMN command_hash TEXT", []);
         let _ = connection.execute(
             "ALTER TABLE commands ADD COLUMN channel TEXT NOT NULL DEFAULT 'hook_cli'",
             [],
@@ -1500,6 +1550,7 @@ impl Ledger {
             "replacement_route TEXT",
             "replacement_reason TEXT",
             "fidelity_reservation_id TEXT",
+            "host_grant_applied INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = connection.execute(&format!("ALTER TABLE commands ADD COLUMN {column}"), []);
         }
@@ -1807,7 +1858,53 @@ impl Ledger {
             .map_err(LedgerError::Database)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(LedgerError::Database)?;
-        aggregate_economic_rows(&rows)
+        aggregate_economic_rows(&rows, "this session")
+    }
+
+    /// Aggregate every provider receipt attributed to one project, or to the whole ledger.
+    ///
+    /// `hzr stats` needs the money view at the two scopes an operator actually reasons about —
+    /// "what did this repository cost me" and "what has HZR cost me overall" — and the receipt
+    /// table is already indexed by `(project_hash, observed_at_ms)` for exactly this read. The
+    /// session variant above stays as it is; both share `aggregate_economic_rows`, so the
+    /// single-currency, complete-pair and provenance rules cannot drift between scopes.
+    pub fn economic_scope_summary(
+        &self,
+        project_path: Option<&str>,
+    ) -> Result<EconomicScopeSummary, LedgerError> {
+        let project_hash = project_path.map(|value| privacy_identity_hash("project", value));
+        let rows = self
+            .connection
+            .prepare_cached(
+                "SELECT currency,
+                        invoice_baseline_microunits, invoice_delivered_microunits,
+                        public_baseline_microunits, public_delivered_microunits,
+                        price_table_identity, provenance, externally_verified
+                   FROM provider_economic_receipts
+                  WHERE ?1 IS NULL OR project_hash = ?1",
+            )
+            .map_err(LedgerError::Database)?
+            .query_map(params![project_hash], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<u64>>(1)?,
+                    row.get::<_, Option<u64>>(2)?,
+                    row.get::<_, Option<u64>>(3)?,
+                    row.get::<_, Option<u64>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, bool>(7)?,
+                ))
+            })
+            .map_err(LedgerError::Database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LedgerError::Database)?;
+        let scope_label = if project_path.is_some() {
+            "this project"
+        } else {
+            "the global ledger"
+        };
+        aggregate_economic_rows(&rows, scope_label)
     }
 
     pub fn find(&self, trace_id: &TraceId) -> Result<Option<LedgerRecord>, LedgerError> {
@@ -1888,6 +1985,21 @@ impl Ledger {
                     .summary_scoped(query.project_path, query.since_unix_seconds)?,
                 by_family,
                 evasion: self.evasion_summary(query)?,
+                project_avoided_tokens_estimated: match query.economics_project_path {
+                    Some(project) => self.net_avoided_tokens_scoped(
+                        Some(project),
+                        query.since_unix_seconds,
+                        query.include_legacy_versions,
+                    )?,
+                    None => 0,
+                },
+                global_avoided_tokens_estimated: self.net_avoided_tokens_scoped(
+                    None,
+                    query.since_unix_seconds,
+                    query.include_legacy_versions,
+                )?,
+                project_economics: self.economic_scope_summary(query.economics_project_path)?,
+                global_economics: self.economic_scope_summary(None)?,
             },
         })
     }
@@ -2112,11 +2224,38 @@ impl Ledger {
                         gross_avoided_tokens_estimated: row.get(3)?,
                         regression_tokens_estimated: row.get(4)?,
                         net_avoided_tokens_estimated: row.get(5)?,
+                        total_observed_operations: 0,
+                        stage_excluded_operations: 0,
+                        excluded_legacy_operations: 0,
                         top_commands: Vec::new(),
                     })
                 },
             )
             .map_err(LedgerError::Database)?;
+        let (total_observed, stage_excluded, excluded_legacy) = self
+            .connection
+            .query_row(
+                "SELECT
+                    COALESCE(SUM(accounting_policy_version = ?3), 0),
+                    COALESCE(SUM(accounting_policy_version = ?3 AND
+                        COALESCE(accounting_stage, 'internal_transport') IN
+                        ('final_delivery', 'control_plane')), 0),
+                    COALESCE(SUM(COALESCE(accounting_policy_version, '') != ?3), 0)
+                   FROM commands
+                  WHERE session_hash IN (?1, ?2)
+                    AND (?4 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?4 || '|') > 0)",
+                params![
+                    session_hash,
+                    legacy_session_hash,
+                    CURRENT_ACCOUNTING_POLICY_VERSION,
+                    project_hash,
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(LedgerError::Database)?;
+        summary.total_observed_operations = total_observed;
+        summary.stage_excluded_operations = stage_excluded;
+        summary.excluded_legacy_operations = excluded_legacy;
         let commands_query = format!(
             "SELECT
                 COALESCE(operation_family, 'legacy_command'),
@@ -2183,7 +2322,8 @@ impl Ledger {
                 "SELECT COUNT(*), COALESCE(SUM(output_tokens), 0),
                     COALESCE(SUM(CASE WHEN avoidable = 1 THEN 1 ELSE 0 END), 0),
                     COALESCE(SUM(CASE WHEN avoidable = 1 THEN output_tokens ELSE 0 END), 0),
-                    MAX(agent), MAX(agent_hash)
+                    MAX(agent), MAX(agent_hash),
+                    COALESCE(SUM(host_grant_applied = 1), 0)
                FROM commands WHERE session_hash IN (?1, ?2) AND accounting_policy_version = ?3",
                 params![
                     session_hash,
@@ -2199,6 +2339,7 @@ impl Ledger {
                         delivered_tokens: row.get(1)?,
                         avoidable_operations: row.get(2)?,
                         avoidable_tokens: row.get(3)?,
+                        host_grant_applied_operations: row.get(6)?,
                         ..SessionEvasionSummary::default()
                     })
                 },
@@ -2323,6 +2464,106 @@ impl Ledger {
         self.efficiency_summary_scoped(Some(project_path), None, false)
     }
 
+    /// Repeats of an already-filtered command, and what those repeats delivered.
+    ///
+    /// A filtered result can make the model re-issue the command it just ran. Those extra tokens
+    /// are a real cost of filtering, and nothing measured them: the second run looked like
+    /// ordinary traffic, so the re-run tax was reported as zero by omission rather than by
+    /// evidence. `regression_tokens_estimated` does not cover this — it only catches an operation
+    /// whose own output grew.
+    ///
+    /// A repeat counts when the same privacy-safe command identity reappears in the same session
+    /// within `RERUN_DETECTION_WINDOW` subsequent operations of a filtered run. `EXISTS` rather
+    /// than a join, so a command filtered twice does not count its repeat twice. The window is
+    /// bounded because a command re-issued much later is ordinary work, not a reaction.
+    fn filter_induced_reruns(
+        &self,
+        project_path: Option<&str>,
+        since_unix_seconds: Option<i64>,
+        include_legacy_versions: bool,
+    ) -> Result<(u64, u64), LedgerError> {
+        let version_predicate = accounting_policy_predicate(include_legacy_versions);
+        let query = format!(
+            "WITH scoped AS (
+                SELECT command_hash, session_hash, route, input_tokens, output_tokens,
+                       ROW_NUMBER() OVER (PARTITION BY session_hash ORDER BY timestamp, id) AS seq
+                  FROM commands
+                 WHERE command_hash IS NOT NULL
+                   AND session_hash IS NOT NULL
+                   AND measurement = 'estimated'
+                   AND ({version_predicate})
+                   AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
+                   AND length(?2) = 1
+                   AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
+             ),
+             filtered AS (
+                SELECT command_hash, session_hash, seq FROM scoped
+                 WHERE COALESCE(route, '') = 'optimized' AND output_tokens < input_tokens
+             )
+             SELECT COUNT(*), COALESCE(SUM(repeat.output_tokens), 0)
+               FROM scoped AS repeat
+              WHERE EXISTS (
+                    SELECT 1 FROM filtered
+                     WHERE filtered.session_hash = repeat.session_hash
+                       AND filtered.command_hash = repeat.command_hash
+                       AND repeat.seq > filtered.seq
+                       AND repeat.seq <= filtered.seq + {RERUN_DETECTION_WINDOW_OPERATIONS}
+              )"
+        );
+        self.connection
+            .query_row(
+                &query,
+                params![
+                    project_path.map(|value| privacy_identity_hash("project", value)),
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .map_err(LedgerError::Database)
+    }
+
+    /// Net avoided tokens for one scope, using the headline's own expression.
+    ///
+    /// The money block must never be able to state a different number of avoided tokens than the
+    /// reduction panel a few lines below it. Sharing the SQL expression — rather than a second
+    /// hand-written aggregate — is what makes that a structural guarantee instead of a habit.
+    /// Only the scalar is selected: the full summary also groups every command, which is wasted
+    /// work when the caller wants one total.
+    fn net_avoided_tokens_scoped(
+        &self,
+        project_path: Option<&str>,
+        since_unix_seconds: Option<i64>,
+        include_legacy_versions: bool,
+    ) -> Result<i64, LedgerError> {
+        let raw_predicate = raw_route_sql_predicate("rtk_cmd");
+        let neutral_predicate = format!("({raw_predicate}) OR rtk_cmd = 'rtk write'");
+        let version_predicate = accounting_policy_predicate(include_legacy_versions);
+        let query = format!(
+            "SELECT COALESCE(SUM(CASE WHEN ({neutral_predicate})
+                                      THEN 0 ELSE input_tokens - output_tokens END), 0)
+               FROM commands
+              WHERE measurement = 'estimated'
+                AND COALESCE(route, '') != 'native_unaccounted'
+                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                AND ({version_predicate})
+                AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
+                AND length(?2) = 1
+                AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
+        );
+        self.connection
+            .query_row(
+                &query,
+                params![
+                    project_path.map(|value| privacy_identity_hash("project", value)),
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
+                |row| row.get(0),
+            )
+            .map_err(LedgerError::Database)
+    }
+
     fn efficiency_summary_scoped(
         &self,
         project_path: Option<&str>,
@@ -2376,6 +2617,10 @@ impl Ledger {
                         total_observed_operations: 0,
                         native_unaccounted_operations: 0,
                         unmeasured_bypass_operations: 0,
+                        stage_excluded_operations: 0,
+                        stage_excluded_delivered_tokens_estimated: 0,
+                        filter_induced_rerun_operations: 0,
+                        filter_induced_rerun_tokens_estimated: 0,
                         by_channel: BTreeMap::new(),
                         by_mode: Vec::new(),
                         by_command: Vec::new(),
@@ -2472,6 +2717,36 @@ impl Ledger {
         summary.native_unaccounted_operations = native;
         summary.unmeasured_bypass_operations = unmeasured;
         summary.accounted_operations = total.saturating_sub(native);
+        // Count the rows the ratio drops for stage reasons under the *same* project, window and
+        // version predicates. `by_mode` applies no stage filter, so without this counter the two
+        // panels report different denominators and the output offers no way to reconcile them.
+        let stage_excluded_query = format!(
+            "SELECT COUNT(*), COALESCE(SUM(output_tokens), 0)
+               FROM commands
+              WHERE COALESCE(accounting_stage, 'internal_transport') IN ('final_delivery', 'control_plane')
+                AND ({version_predicate})
+                AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
+                AND length(?2) = 1
+                AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
+        );
+        let (stage_excluded, stage_excluded_delivered) = self
+            .connection
+            .query_row(
+                &stage_excluded_query,
+                params![
+                    project_path.map(|value| privacy_identity_hash("project", value)),
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
+            )
+            .map_err(LedgerError::Database)?;
+        summary.stage_excluded_operations = stage_excluded;
+        summary.stage_excluded_delivered_tokens_estimated = stage_excluded_delivered;
+        let (rerun_operations, rerun_tokens) =
+            self.filter_induced_reruns(project_path, since_unix_seconds, include_legacy_versions)?;
+        summary.filter_induced_rerun_operations = rerun_operations;
+        summary.filter_induced_rerun_tokens_estimated = rerun_tokens;
         let channels_query = format!(
             "SELECT channel, COUNT(*) FROM commands
               WHERE (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
@@ -2550,10 +2825,14 @@ impl Ledger {
             )
             .map_err(LedgerError::Database)?;
         if !include_legacy_versions {
+            // Deliberately unfiltered by stage. A legacy row at a delivery stage is outside this
+            // view for the version reason, and it is outside `stage_excluded_operations` too —
+            // that counter carries the version predicate. Keeping the stage filter here left such
+            // rows in no counter at all, so the three figures could not add up to the ledger and
+            // an operator had no way to prove nothing had been dropped silently.
             let excluded_query = format!(
                 "SELECT COUNT(*) FROM commands
                   WHERE COALESCE(accounting_policy_version, '') != '{CURRENT_ACCOUNTING_POLICY_VERSION}'
-                    AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
                     AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                     AND length(?2) = 1
                     AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
@@ -2709,6 +2988,7 @@ impl Ledger {
                 attribution,
                 detail: None,
                 evasion: None,
+                host_grant_applied: false,
             },
         )
     }
@@ -2818,12 +3098,12 @@ impl Ledger {
                     evasion_class, wrapper_depth, interpreter_kind, path_form, stage_count,
                     hatch_marker, avoidable, enforcement_tier, fidelity_reason,
                     fidelity_validation, replacement_capability, replacement_route,
-                    replacement_reason
+                    replacement_reason, host_grant_applied
                  ) VALUES (
                     datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
                     ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40,
-                    ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48
+                    ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49
                  )",
                 params![
                     format!("[redacted:{family}]"),
@@ -2882,6 +3162,7 @@ impl Ledger {
                     replacement_capability.as_str(),
                     replacement_route,
                     replacement.as_ref().map(|value| value.rationale),
+                    accounting.host_grant_applied,
                 ],
             )
             .map_err(LedgerError::Database)?;
@@ -2921,11 +3202,12 @@ impl Ledger {
                     accounting_policy_version, evasion_class, wrapper_depth, interpreter_kind,
                     path_form, stage_count, hatch_marker, avoidable, enforcement_tier,
                     fidelity_reason, fidelity_validation, fidelity_reservation_id
+                    , host_grant_applied
                  ) VALUES (
                     datetime('now'), '[redacted:execution]', 'rtk raw execution', ?1, ?2, ?3,
                     ?4, ?5, '[redacted]', ?6, NULL, 'hook_cli', ?14, 'bypassed',
                     'execution', ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?15, ?16, ?17, ?18,
-                    ?19, ?20, ?21, ?22, ?23, ?24, ?25
+                    ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
                  )",
                 params![
                     record.input_tokens,
@@ -2953,6 +3235,7 @@ impl Ledger {
                     record.evasion.fidelity_reason.map(|value| value.as_str()),
                     record.evasion.fidelity_validation.as_str(),
                     record.reservation_id.as_str(),
+                    record.host_grant_applied,
                 ],
             )
             .map_err(LedgerError::Database)?;
@@ -2972,17 +3255,20 @@ impl Ledger {
             .map(|value| agent_identity_hash(&self.connection, value))
             .transpose()?;
         let replacement_family = event.replacement_family.map(privacy_safe_family);
+        let command_hash = event
+            .command_identity
+            .map(|command| privacy_identity_hash("command", &format!("{command}\0{command}")));
         self.connection
             .execute(
                 "INSERT INTO policy_events (
                     timestamp, project_hash, project_scope_hashes, session_hash, agent,
                     agent_hash, evasion_class, wrapper_depth, interpreter_kind, path_form,
                     stage_count, hatch_marker, avoidable, enforcement_tier, fidelity_reason,
-                    fidelity_validation, decision, replacement_family, producer_version,
-                    accounting_policy_version
+                    fidelity_validation, decision, replacement_family, command_hash,
+                    producer_version, accounting_policy_version
                  ) VALUES (
                     datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                    ?13, ?14, ?15, ?16, ?17, ?18, ?19
+                    ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
                  )",
                 params![
                     project_hash,
@@ -3002,12 +3288,32 @@ impl Ledger {
                     event.evasion.fidelity_validation.as_str(),
                     event.decision.as_str(),
                     replacement_family,
+                    command_hash,
                     CURRENT_PRODUCER_VERSION,
                     CURRENT_ACCOUNTING_POLICY_VERSION,
                 ],
             )
             .map_err(LedgerError::Database)?;
         Ok(())
+    }
+
+    pub fn host_permission_grant_propagation_drift(&self) -> Result<u64, LedgerError> {
+        self.connection
+            .query_row(
+                "SELECT COUNT(*)
+                   FROM policy_events AS policy
+                  WHERE policy.decision = 'ask'
+                    AND policy.command_hash IS NOT NULL
+                    AND EXISTS (
+                        SELECT 1 FROM commands AS operation
+                         WHERE operation.session_hash = policy.session_hash
+                           AND operation.command_hash = policy.command_hash
+                           AND operation.host_grant_applied = 1
+                    )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(LedgerError::Database)
     }
 
     /// Count the operations that reached the shell without passing through the optimizer.
@@ -3832,16 +4138,25 @@ type EconomicRow = (
     bool,
 );
 
-fn aggregate_economic_rows(rows: &[EconomicRow]) -> Result<SessionEconomicSummary, LedgerError> {
+/// Aggregate receipt rows for one scope.
+///
+/// `scope_label` names what the caller asked about — a session, a project, or the global
+/// ledger — because an "unavailable" reason that always says "this session" is wrong on every
+/// other scope, and an operator reading `hzr stats` would take it as evidence about the wrong
+/// thing. The arithmetic itself is scope-agnostic and must stay identical everywhere.
+fn aggregate_economic_rows(
+    rows: &[EconomicRow],
+    scope_label: &str,
+) -> Result<SessionEconomicSummary, LedgerError> {
     let mut summary = SessionEconomicSummary {
         paired_receipts: u64::try_from(rows.len()).unwrap_or(u64::MAX),
         public_estimate_preliminary: true,
         ..SessionEconomicSummary::default()
     };
     if rows.is_empty() {
-        summary
-            .unavailable_reasons
-            .push("no paired provider receipt is attributed to this session".into());
+        summary.unavailable_reasons.push(format!(
+            "no paired provider receipt is attributed to {scope_label}"
+        ));
         return Ok(summary);
     }
     let currencies = rows
@@ -3849,10 +4164,9 @@ fn aggregate_economic_rows(rows: &[EconomicRow]) -> Result<SessionEconomicSummar
         .map(|row| row.0.as_str())
         .collect::<std::collections::BTreeSet<_>>();
     if currencies.len() != 1 {
-        summary.unavailable_reasons.push(
-            "session receipts contain multiple currencies; no hidden FX conversion was applied"
-                .into(),
-        );
+        summary.unavailable_reasons.push(format!(
+            "receipts for {scope_label} contain multiple currencies; no hidden FX conversion was applied"
+        ));
         return Ok(summary);
     }
     let currency = currencies.first().ok_or_else(|| {
@@ -4027,12 +4341,13 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use super::{FidelityAllowance, PolicyEvent};
     use crate::operation::{OperationChannel, OperationMeasurement, OperationRoute};
     use hzr_protocol::{
         AccountingAttribution, AccountingOperationKind, AccountingOperationMode,
         AccountingSearchStrategy, AccountingStage, ActualUsage, EnforcementTier, EstimatedUsage,
         EvasionAttribution, EvasionClass, EvasionPathForm, FidelityReason, FidelityValidation,
-        SearchFallbackCode, TraceId, Usage,
+        PolicyDecision, SearchFallbackCode, TraceId, Usage,
     };
     use rusqlite::{Connection, params};
     use tempfile::tempdir;
@@ -4132,6 +4447,7 @@ mod tests {
                 project_path: None,
                 since_unix_seconds: Some(cutoff),
                 include_legacy_versions: true,
+                economics_project_path: None,
             })
             .expect("windowed snapshot");
 
@@ -4333,6 +4649,7 @@ mod tests {
                 project_path: None,
                 since_unix_seconds: Some(cutoff),
                 include_legacy_versions: true,
+                economics_project_path: None,
             })
             .expect("seven-day snapshot");
         let families = collection.snapshot.by_family;
@@ -4413,6 +4730,7 @@ mod tests {
                     },
                     detail: Some(&detail),
                     evasion: None,
+                    host_grant_applied: false,
                 },
             )
             .expect("attributed operation");
@@ -4596,6 +4914,7 @@ mod tests {
                     },
                     detail: Some(&detail),
                     evasion: None,
+                    host_grant_applied: false,
                 },
             )
             .expect("read operation");
@@ -4658,6 +4977,7 @@ mod tests {
                         },
                         detail: Some(detail),
                         evasion: None,
+                        host_grant_applied: false,
                     },
                 )
                 .expect("record stage");
@@ -4697,6 +5017,7 @@ mod tests {
                     },
                     detail: Some(&control_plane),
                     evasion: None,
+                    host_grant_applied: false,
                 },
             )
             .expect("record control plane stage");
@@ -4721,6 +5042,172 @@ mod tests {
         assert_eq!(project.operations, 1);
         assert_eq!(project.recent_operations.len(), 1);
         assert_eq!(project.delivered_tokens_estimated, 20);
+
+        // The delivery and control-plane rows are excluded from the ratio, not from existence.
+        // Counting them is what lets the two panels be reconciled instead of merely disagreeing.
+        assert_eq!(summary.stage_excluded_operations, 2);
+        assert_eq!(summary.stage_excluded_delivered_tokens_estimated, 30);
+    }
+
+    /// The re-run tax must be bounded, de-duplicated, and blind to unfiltered repeats.
+    ///
+    /// Three properties, each closing a way the number could lie: a repeat far later in the
+    /// session is ordinary work and must not be attributed to filtering; a command filtered twice
+    /// must not count one repeat twice; and a repeat of a command that was never filtered is not
+    /// a cost of filtering at all.
+    #[test]
+    fn acceptance_gate_rerun_tax_is_bounded_deduplicated_and_filter_scoped() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        let record = |command: &str, baseline: u64, delivered: u64| {
+            ledger
+                .record_operation_attributed(
+                    command,
+                    command,
+                    baseline,
+                    delivered,
+                    1,
+                    OperationAttribution {
+                        project_path: "/work",
+                        agent: Some("cli"),
+                        session_id: Some("rerun-session"),
+                        channel: OperationChannel::HookCli,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Optimized,
+                    },
+                )
+                .expect("record operation");
+        };
+
+        // A filtered run, then the same command again inside the window: one taxed repeat.
+        record("rtk read a", 100, 20);
+        record("rtk read a", 100, 20);
+        let summary = ledger
+            .efficiency_summary_for_project("/work")
+            .expect("summary");
+        assert_eq!(summary.filter_induced_rerun_operations, 1);
+        assert_eq!(summary.filter_induced_rerun_tokens_estimated, 20);
+
+        // A command that was never filtered contributes nothing, however often it repeats.
+        for _ in 0..3 {
+            record("rtk write b", 40, 40);
+        }
+        let summary = ledger
+            .efficiency_summary_for_project("/work")
+            .expect("summary");
+        assert_eq!(
+            summary.filter_induced_rerun_operations, 1,
+            "a repeat of an unfiltered command is not a cost of filtering"
+        );
+
+        // Push the next repeat of `rtk read a` past the detection window with unrelated work.
+        for index in 0..super::RERUN_DETECTION_WINDOW_OPERATIONS {
+            record(&format!("rtk read filler{index}"), 30, 30);
+        }
+        record("rtk read a", 100, 20);
+        let summary = ledger
+            .efficiency_summary_for_project("/work")
+            .expect("summary");
+        assert_eq!(
+            summary.filter_induced_rerun_operations, 1,
+            "a repeat beyond the window is ordinary work, not a reaction to a filter"
+        );
+    }
+
+    /// Nothing may vanish between the ledger and the report.
+    ///
+    /// The three counters partition every row in scope: measured stages under the current policy,
+    /// stages the ratio deliberately drops, and rows written by an earlier policy. If a future
+    /// predicate narrows one of them without widening another, some rows would belong to no
+    /// counter and `hzr stats` would once again under-report without saying so.
+    #[test]
+    fn acceptance_gate_every_recorded_row_belongs_to_exactly_one_counter() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("ledger.sqlite");
+        let ledger = Ledger::open(&path).expect("ledger");
+        let delivery = AccountingAttribution {
+            operation: AccountingOperationKind::Search,
+            mode: AccountingOperationMode::SearchExact,
+            stage: AccountingStage::FinalDelivery,
+            requested_mode: None,
+            effective_mode: Some(AccountingOperationMode::SearchExact),
+            search_strategy: None,
+            search_fallback_code: None,
+            include_content: Some(false),
+            limit: Some(10),
+            path_scope_count: Some(1),
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: None,
+            evasion: None,
+        };
+        let measured = AccountingAttribution {
+            stage: AccountingStage::InternalTransport,
+            ..delivery.clone()
+        };
+        for detail in [&measured, &delivery] {
+            ledger
+                .record_operation_attributed_with_detail(
+                    "hzr search",
+                    "hzr search",
+                    100,
+                    20,
+                    1,
+                    DetailedOperationAttribution {
+                        attribution: OperationAttribution {
+                            project_path: "/work",
+                            agent: Some("cli"),
+                            session_id: Some("session"),
+                            channel: OperationChannel::HookCli,
+                            measurement: OperationMeasurement::Estimated,
+                            route: OperationRoute::Optimized,
+                        },
+                        detail: Some(detail),
+                        evasion: None,
+                        host_grant_applied: false,
+                    },
+                )
+                .expect("record row");
+        }
+        // Two rows from an earlier producer, one of them at an excluded stage — the combination
+        // that previously belonged to no counter at all.
+        for stage in ["internal_transport", "final_delivery"] {
+            ledger
+                .connection
+                .execute(
+                    "INSERT INTO commands (
+                        timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
+                        saved_tokens, savings_pct, project_path, project_scope_hashes,
+                        channel, measurement, route, accounting_stage,
+                        accounting_policy_version
+                     ) VALUES (datetime('now'), 'legacy', 'rtk legacy', 50, 10, 40, 80.0,
+                               '[redacted]', ?1, 'hook_cli', 'estimated', 'optimized', ?2,
+                               'privacy_typed_v0')",
+                    params![crate::privacy_identity_hash("project", "/work"), stage],
+                )
+                .expect("legacy row");
+        }
+
+        let summary = ledger
+            .efficiency_summary_for_project("/work")
+            .expect("project summary");
+        let recorded: u64 = ledger
+            .connection
+            .query_row("SELECT COUNT(*) FROM commands", [], |row| row.get(0))
+            .expect("row count");
+
+        assert_eq!(recorded, 4);
+        assert_eq!(summary.total_observed_operations, 1);
+        assert_eq!(summary.stage_excluded_operations, 1);
+        assert_eq!(summary.excluded_legacy_operations, 2);
+        assert_eq!(
+            summary.total_observed_operations
+                + summary.stage_excluded_operations
+                + summary.excluded_legacy_operations,
+            recorded,
+            "every recorded row must be accounted for by exactly one counter"
+        );
     }
 
     #[test]
@@ -5311,6 +5798,7 @@ mod tests {
                         },
                         detail: None,
                         evasion: Some(&evasion),
+                        host_grant_applied: false,
                     },
                 )
                 .expect("record fidelity operation");
@@ -5563,6 +6051,7 @@ mod tests {
                     },
                     detail: None,
                     evasion: Some(&evasion),
+                    host_grant_applied: false,
                 },
             )
             .expect("record");
@@ -5600,6 +6089,7 @@ mod tests {
                 evasion,
                 decision: hzr_protocol::PolicyDecision::Ask,
                 replacement_family: Some(sentinel),
+                command_identity: Some(sentinel),
             })
             .expect("policy event");
 
@@ -5641,6 +6131,89 @@ mod tests {
         assert_eq!(stored.2.as_deref(), Some("claude-code"));
         assert_eq!(stored.3, CURRENT_PRODUCER_VERSION);
         assert_eq!(stored.4, CURRENT_ACCOUNTING_POLICY_VERSION);
+    }
+
+    #[test]
+    fn acceptance_gate_host_grant_keeps_bypass_visible_and_detects_re_refusal() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        let command = "hzr stats --accounting-version all";
+        let evasion = EvasionAttribution {
+            class: EvasionClass::E9DiagnosticBypass,
+            wrapper_depth: 0,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 1,
+            hatch_marker: false,
+            avoidable: true,
+            tier: EnforcementTier::T2DenyWithPrescription,
+            fidelity_reason: None,
+            fidelity_validation: FidelityValidation::NotRequested,
+        };
+        ledger
+            .record_operation_attributed_with_detail(
+                command,
+                command,
+                2_048,
+                2_048,
+                1,
+                DetailedOperationAttribution {
+                    attribution: OperationAttribution {
+                        project_path: "/tmp/project",
+                        agent: Some("claude-code"),
+                        session_id: Some("granted-session"),
+                        channel: OperationChannel::HookCli,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Bypassed,
+                    },
+                    detail: None,
+                    evasion: Some(&evasion),
+                    host_grant_applied: true,
+                },
+            )
+            .expect("grant-approved operation");
+
+        let efficiency = ledger
+            .session_efficiency_summary("granted-session")
+            .expect("session efficiency");
+        assert_eq!(efficiency.net_avoided_tokens_estimated, 0);
+        let leakage = ledger
+            .session_evasion_summary("granted-session", FidelityAllowance::default())
+            .expect("session evasion");
+        assert_eq!(leakage.avoidable_operations, 1);
+        assert_eq!(leakage.avoidable_tokens, 2_048);
+        assert_eq!(leakage.host_grant_applied_operations, 1);
+        let stored: bool = ledger
+            .connection
+            .query_row("SELECT host_grant_applied FROM commands", [], |row| {
+                row.get(0)
+            })
+            .expect("stored host grant marker");
+        assert!(stored);
+        assert_eq!(
+            ledger
+                .host_permission_grant_propagation_drift()
+                .expect("drift query"),
+            0
+        );
+
+        ledger
+            .record_policy_event(PolicyEvent {
+                project_path: "/tmp/project",
+                agent: Some("claude-code"),
+                session_id: Some("granted-session"),
+                evasion,
+                decision: PolicyDecision::Ask,
+                replacement_family: Some("stats"),
+                command_identity: Some(command),
+            })
+            .expect("contradictory approval refusal");
+        assert_eq!(
+            ledger
+                .host_permission_grant_propagation_drift()
+                .expect("drift query"),
+            1
+        );
     }
 
     #[test]

@@ -362,6 +362,12 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             hook_runner::feedback(&config).await;
             Ok(ExitCode::SUCCESS)
         }
+        Command::Hooks {
+            command: HooksCommand::Statusline,
+        } => {
+            hook_runner::statusline(&config);
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Doctor {
             workspace,
             fix,
@@ -924,6 +930,7 @@ fn reject_direct_fork_bypass(config: &Config, args: &[std::ffi::OsString]) -> Re
             },
             decision: PolicyDecision::Deny,
             replacement_family: Some("hzr-exec"),
+            command_identity: None,
         })
     });
     if let Err(error) = accounting {
@@ -3597,13 +3604,10 @@ fn exec_request(arguments: ExecArgs) -> Result<ExecApiRequest> {
         timeout_ms: arguments.timeout_ms,
         caller_path: std::env::var("PATH").ok(),
         agent: Some("cli".into()),
-        session_id: ["CODEX_THREAD_ID", "CLAUDE_SESSION_ID"]
-            .into_iter()
-            .find_map(|name| {
-                std::env::var(name)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            }),
+        session_id: hzr_core::ambient_session_id(),
+        // This is the process that used to refuse what the hook had just approved. It now carries
+        // the host's own answer to the daemon instead of asking it to invent a second one.
+        host_execution_grant: hzr_core::inspect_ambient_host_grant().and_then(Result::ok),
     })
 }
 
@@ -3804,9 +3808,17 @@ async fn show_stats(
     let workspace = workspace
         .map(|path| canonical_directory(Some(path)))
         .transpose()?;
+    // The money block prices the repository the operator is standing in even when the headline
+    // stays global. A cwd outside any resolvable directory is not an error here — the project row
+    // simply reports that it has no scope.
+    let economics_project = match workspace.as_deref() {
+        Some(path) => Some(path.to_path_buf()),
+        None => canonical_directory(None).ok(),
+    };
     let report = stats::collect(
         config,
         workspace.as_deref(),
+        economics_project.as_deref(),
         include_all_commands,
         show_evasion,
         since,

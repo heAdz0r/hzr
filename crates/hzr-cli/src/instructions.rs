@@ -712,25 +712,49 @@ impl InstructionAudit {
 
 /// Extract the `@path` / literal contract reference the managed block points at, so the
 /// audit can verify the target rather than trusting the marker.
+/// Recover the contract path a managed block references.
+///
+/// Matched across the whole block rather than line by line. Managed prose is word-wrapped
+/// *after* interpolation, so a long absolute path — a temporary directory, a versioned install
+/// root — is kept intact as one unit but lands on the line after the phrase that introduces it.
+/// A per-line parser then found the phrase, failed to find the closing backtick on that same
+/// line, and reported no contract at all: a presentation layer silently destroying a
+/// machine-readable reference.
 fn referenced_contract(block: &str) -> Option<PathBuf> {
+    // An `@`-import is a whole line by construction and must stay line-anchored: the sigil is
+    // only meaningful at the start of a line.
     for line in block.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix('@') {
+        if let Some(rest) = line.trim().strip_prefix('@') {
             return Some(PathBuf::from(rest));
         }
-        if let Some(rest) = line.strip_prefix("Bootstrap by reading `") {
-            if let Some(end) = rest.find('`') {
-                return Some(PathBuf::from(&rest[..end]));
-            }
-        }
-        if let Some(start) = line.find("Read the full contract at `") {
-            let rest = &line[start + "Read the full contract at `".len()..];
-            if let Some(end) = rest.find('`') {
-                return Some(PathBuf::from(&rest[..end]));
-            }
+    }
+    // The markers deliberately stop before the opening backtick: the wrapper may place the line
+    // break in exactly that gap, so the phrase and the quoted path can end up on separate lines.
+    for marker in ["Bootstrap by reading", "Read the full contract at"] {
+        if let Some(path) = quoted_after(block, marker) {
+            return Some(path);
         }
     }
     None
+}
+
+/// The first backtick-quoted token following `marker`.
+///
+/// Only whitespace may separate the phrase from the opening backtick — anything else means the
+/// phrase was not actually introducing a path, and matching a later unrelated span would be worse
+/// than reporting nothing. The wrapper never splits a quoted span, so the token itself is
+/// contiguous once found.
+fn quoted_after(block: &str, marker: &str) -> Option<PathBuf> {
+    let start = block.find(marker)?;
+    let rest = &block[start + marker.len()..];
+    let open = rest.find('`')?;
+    if !rest[..open].chars().all(char::is_whitespace) {
+        return None;
+    }
+    let rest = &rest[open + 1..];
+    let end = rest.find('`')?;
+    let value = rest[..end].trim();
+    (!value.is_empty()).then(|| PathBuf::from(value))
 }
 
 pub fn audit(surface: Surface, path: &Path) -> Result<InstructionAudit> {

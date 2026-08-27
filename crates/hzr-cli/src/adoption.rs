@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 const HZR_DISPATCH_SUFFIX: &str = " hooks dispatch";
 const HZR_OBSERVE_SUFFIX: &str = " hooks observe";
 const HZR_FEEDBACK_SUFFIX: &str = " hooks feedback";
+const HZR_STATUSLINE_SUFFIX: &str = " hooks statusline";
+const STATUSLINE_UPSTREAM_ENV: &str = "HZR_STATUSLINE_UPSTREAM_HEX";
 const HZR_INIT_SUFFIX: &str = " init --if-needed --quiet --session-start-hook";
 const HZR_INIT_SKIP_SERVICE_SUFFIX: &str =
     " init --if-needed --quiet --session-start-hook --skip-service";
@@ -107,6 +109,7 @@ pub fn install(
     } = policy;
     let before = read_settings(path)?;
     let mut document = parse_settings(path, &before)?;
+    restore_owned_statusline(&mut document)?;
     let native_tool_mode = native_tool_mode
         .or_else(|| installed_native_tool_mode(&document))
         .unwrap_or(NativeToolMode::Steer);
@@ -119,10 +122,9 @@ pub fn install(
         // duplicate in place, so callers opt out explicitly instead.
         remove_owned_hooks(&mut document, HookOwner::Icm);
     }
-    add_hzr_hooks(
-        &mut document,
-        &managed_commands(binary, start_service, project_only, native_tool_mode)?,
-    )?;
+    let commands = managed_commands(binary, start_service, project_only, native_tool_mode)?;
+    add_hzr_hooks(&mut document, &commands)?;
+    add_hzr_statusline(&mut document, &commands.statusline)?;
     let after = render_settings(&document)?;
     let changed = before != after.as_bytes();
     let backup_path = changed.then(|| backup_path(path, &before));
@@ -162,6 +164,7 @@ pub fn uninstall(path: &Path, dry_run: bool, confirmed: bool) -> Result<Adoption
     let before = read_settings(path)?;
     let mut document = parse_settings(path, &before)?;
     remove_owned_hooks(&mut document, HookOwner::Hzr);
+    restore_owned_statusline(&mut document)?;
     let after = render_settings(&document)?;
     let changed = before != after.as_bytes();
     let backup_path = changed.then(|| backup_path(path, &before));
@@ -267,6 +270,7 @@ fn owner(command: &str) -> HookOwner {
     if hzr_dispatch_mode(command).is_some()
         || hzr_observe_mode(command).is_some()
         || command.trim_end().ends_with(HZR_FEEDBACK_SUFFIX)
+        || command.contains(HZR_STATUSLINE_SUFFIX)
         || command.trim_end().ends_with(HZR_INIT_SUFFIX)
         || command.trim_end().ends_with(HZR_INIT_SKIP_SERVICE_SUFFIX)
         || command.trim_end().ends_with(HZR_INIT_ENABLED_SUFFIX)
@@ -303,7 +307,7 @@ fn classify(path: &Path, document: &Value) -> HookStatus {
         hzr_entries,
         rtk_entries,
         external_icm_entries,
-        installed: hzr_entries == 6 && rtk_entries == 0,
+        installed: hzr_entries == 7 && rtk_entries == 0,
         conflict: hzr_entries > 0 && rtk_entries > 0,
         native_tool_mode: installed_native_tool_mode(document),
     }
@@ -391,6 +395,7 @@ struct ManagedCommands {
     observe: String,
     feedback: String,
     init: String,
+    statusline: String,
 }
 
 /// Resolve the executable that installed hooks will invoke.
@@ -469,7 +474,69 @@ fn managed_commands(
         ),
         feedback: format!("{executable}{HZR_FEEDBACK_SUFFIX}"),
         init: format!("{executable}{init_suffix}"),
+        statusline: format!("{executable}{HZR_STATUSLINE_SUFFIX}"),
     })
+}
+
+fn add_hzr_statusline(document: &mut Value, command: &str) -> Result<()> {
+    let root = document
+        .as_object_mut()
+        .context("settings document must remain a JSON object")?;
+    let original = root.get("statusLine").cloned().unwrap_or(Value::Null);
+    if !original.is_null()
+        && original
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind != "command")
+    {
+        bail!("existing statusLine is not command-backed and cannot be composed safely");
+    }
+    let encoded = hex::encode(serde_json::to_vec(&original)?);
+    let wrapped = format!(
+        "{STATUSLINE_UPSTREAM_ENV}={} {command}",
+        shell_literal(&encoded)
+    );
+    let mut installed = original.as_object().cloned().unwrap_or_else(Map::new);
+    installed.insert("type".into(), Value::String("command".into()));
+    installed.insert("command".into(), Value::String(wrapped));
+    installed.insert("refreshInterval".into(), Value::Number(1.into()));
+    root.insert("statusLine".into(), Value::Object(installed));
+    Ok(())
+}
+
+fn restore_owned_statusline(document: &mut Value) -> Result<()> {
+    let Some(root) = document.as_object_mut() else {
+        bail!("settings document must remain a JSON object");
+    };
+    let Some(command) = root
+        .get("statusLine")
+        .and_then(|value| value.get("command"))
+        .and_then(Value::as_str)
+    else {
+        return Ok(());
+    };
+    let Some(encoded) = statusline_upstream_hex(command) else {
+        return Ok(());
+    };
+    let bytes = hex::decode(encoded).context("installed HZR status line has invalid state")?;
+    let original: Value = serde_json::from_slice(&bytes)
+        .context("installed HZR status line has invalid original settings")?;
+    if original.is_null() {
+        root.remove("statusLine");
+    } else {
+        root.insert("statusLine".into(), original);
+    }
+    Ok(())
+}
+
+fn statusline_upstream_hex(command: &str) -> Option<&str> {
+    let marker = format!("{STATUSLINE_UPSTREAM_ENV}='");
+    let rest = command.strip_prefix(&marker)?;
+    rest.split_once("' ").map(|(encoded, _)| encoded)
+}
+
+fn shell_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn shell_word(path: &Path) -> Result<String> {
@@ -749,7 +816,7 @@ mod tests {
 
         assert!(first.changed);
         assert!(!second.changed);
-        assert_eq!(current.hzr_entries, 6);
+        assert_eq!(current.hzr_entries, 7);
         assert_eq!(current.rtk_entries, 0);
         assert_eq!(
             current.external_icm_entries, 0,
@@ -763,6 +830,7 @@ mod tests {
         assert!(installed.contains("hooks dispatch --native-mode steer"));
         assert!(installed.contains("UserPromptSubmit"));
         assert!(installed.contains("SubagentStop"));
+        assert!(installed.contains("hooks statusline"));
         assert_eq!(current.native_tool_mode, Some(NativeToolMode::Steer));
         assert!(
             installed.contains("/home/u/bin/foreign-hook"),
@@ -837,6 +905,45 @@ mod tests {
         let removed = uninstall(&path, false, true).expect("confirmed uninstall");
         assert!(removed.changed);
         assert_eq!(status(&path).expect("hook status").hzr_entries, 0);
+    }
+
+    #[test]
+    fn statusline_composes_with_and_restores_the_exact_existing_command() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("settings.json");
+        let original = json!({
+            "type": "command",
+            "command": "/home/u/bin/original-status --compact",
+            "padding": 2,
+            "refreshInterval": 9
+        });
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({"statusLine": original.clone()}))
+                .expect("settings JSON"),
+        )
+        .expect("settings write");
+
+        install(&path, binary(), true, true, false, policy(false, true)).expect("composed install");
+        let installed: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("installed settings"))
+                .expect("installed JSON");
+        let statusline = &installed["statusLine"];
+        assert_eq!(statusline["type"], "command");
+        assert_eq!(statusline["padding"], 2);
+        assert_eq!(statusline["refreshInterval"], 1);
+        assert!(
+            statusline["command"]
+                .as_str()
+                .expect("status-line command")
+                .contains("hooks statusline")
+        );
+
+        uninstall(&path, false, true).expect("confirmed uninstall");
+        let restored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("restored settings"))
+                .expect("restored JSON");
+        assert_eq!(restored["statusLine"], original);
     }
 
     #[test]

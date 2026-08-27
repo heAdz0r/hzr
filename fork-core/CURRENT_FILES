@@ -28,6 +28,7 @@ src/telemetry.rs
 tasks/prd-hzr-unified-agent-efficiency-platform.md
 tasks/prd-upstream-sync-v0.26.md
 tests/guard_integration_test.rs
+tests/must_keep_contract.rs
 tests/search_compress_test.rs
 tests/search_error_test.rs
 tests/search_faithful_test.rs

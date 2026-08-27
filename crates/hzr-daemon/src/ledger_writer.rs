@@ -102,6 +102,7 @@ pub struct OperationRecord {
     pub session_id: Option<String>,
     pub attribution: Option<hzr_protocol::AccountingAttribution>,
     pub evasion: Option<hzr_protocol::EvasionAttribution>,
+    pub host_grant_applied: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -118,6 +119,7 @@ pub struct PolicyEventRecord {
     pub evasion: hzr_protocol::EvasionAttribution,
     pub decision: hzr_protocol::PolicyDecision,
     pub replacement_family: Option<String>,
+    pub command_identity: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -359,6 +361,7 @@ fn privacy_safe_fidelity_operation(
             .map(|value| privacy.hash("agent", value)),
         agent,
         evasion,
+        host_grant_applied: record.host_grant_applied,
     })
 }
 
@@ -506,6 +509,7 @@ fn write_operation(ledger: &Ledger, record: &OperationRecord) -> Result<(), Ledg
                     .as_ref()
                     .and_then(|detail| detail.evasion.as_ref())
             }),
+            host_grant_applied: record.host_grant_applied,
         },
     )
 }
@@ -564,6 +568,7 @@ impl LedgerWriter {
                                 evasion: record.evasion,
                                 decision: record.decision,
                                 replacement_family: record.replacement_family.as_deref(),
+                                command_identity: record.command_identity.as_deref(),
                             }));
                         }
                         WriteCommand::FidelityUsage {
@@ -1194,6 +1199,7 @@ mod tests {
                 fidelity_reason: Some(FidelityReason::Checksum),
                 fidelity_validation: FidelityValidation::Valid,
             }),
+            host_grant_applied: false,
         }
     }
 
@@ -1302,6 +1308,7 @@ mod tests {
                         session_id: Some("shared-session".into()),
                         attribution: None,
                         evasion: Some(evasion),
+                        host_grant_applied: false,
                     },
                 )
                 .await
@@ -1358,6 +1365,7 @@ mod tests {
                 fidelity_reason: Some(FidelityReason::Checksum),
                 fidelity_validation: FidelityValidation::Valid,
             }),
+            host_grant_applied: false,
         };
         assert!(matches!(
             writer.complete_fidelity(reservation.clone(), record).await,
@@ -1420,6 +1428,7 @@ mod tests {
                         fidelity_reason: Some(FidelityReason::Checksum),
                         fidelity_validation: FidelityValidation::Valid,
                     }),
+                    host_grant_applied: false,
                 },
             )
             .await
@@ -1677,6 +1686,7 @@ mod tests {
                 },
                 decision: PolicyDecision::Deny,
                 replacement_family: Some("read".into()),
+                command_identity: None,
             })
             .await
             .expect("policy event write");

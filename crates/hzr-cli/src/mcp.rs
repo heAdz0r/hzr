@@ -721,13 +721,7 @@ fn mcp_operation_request(
         measurement: hzr_protocol::AccountingMeasurement::Estimated,
         route: hzr_protocol::AccountingRoute::Optimized,
         agent: Some("mcp".to_owned()),
-        session_id: ["CODEX_THREAD_ID", "CLAUDE_SESSION_ID"]
-            .into_iter()
-            .find_map(|name| {
-                std::env::var(name)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            }),
+        session_id: hzr_core::ambient_session_id(),
         attribution,
     })
 }
@@ -1039,13 +1033,8 @@ async fn exec(client: &DaemonClient, workspace: &str, arguments: &Value) -> Resu
         timeout_ms,
         caller_path: None,
         agent: Some("mcp".to_owned()),
-        session_id: ["CODEX_THREAD_ID", "CLAUDE_SESSION_ID"]
-            .into_iter()
-            .find_map(|name| {
-                std::env::var(name)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-            }),
+        session_id: hzr_core::ambient_session_id(),
+        host_execution_grant: hzr_core::inspect_ambient_host_grant().and_then(Result::ok),
     };
     Ok(serde_json::to_value(client.exec_run(&request).await?)?)
 }

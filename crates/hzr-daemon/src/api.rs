@@ -14,9 +14,9 @@ use hzr_core::{
 };
 use hzr_exec::{
     AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent,
-    ExecutionEnvelope, ExecutionOutcome, ForkCoreInvocation, NotStarted, PINNED_RTK_VERSION,
-    PinnedRtkAdapter, RewriteDecision, RewriteSource, RtkRewriteOutcome, StdinSpec,
-    TerminationCause,
+    ExecutionEnvelope, ExecutionOutcome, ForkCoreInvocation, HOST_GRANT_APPLIED_ENV, NotStarted,
+    PINNED_RTK_VERSION, PinnedRtkAdapter, RewriteDecision, RewriteSource, RtkRewriteOutcome,
+    StdinSpec, TerminationCause, host_grant_applied, reconcile_host_grant,
 };
 use hzr_index::{
     Deadlines, IndexCoordinatorSnapshot, IndexWatcherState, Workspace, WorkspaceRegistration,
@@ -1970,7 +1970,11 @@ pub async fn exec_run(
     if let FidelityPreflight::Allow { evasion, .. } = preflight {
         plan.evasion = Some(evasion);
     }
-    let decision = enforce_first_class(&request.command, plan.decision.clone());
+    let decision = apply_host_grant(
+        &request,
+        enforce_first_class(&request.command, plan.decision.clone()),
+    );
+    let grant_applied = host_grant_applied(&decision);
     let route = match &decision {
         RewriteDecision::AllowRewrite { .. } => "optimized",
         RewriteDecision::AllowRaw { .. } => "raw",
@@ -2107,6 +2111,12 @@ pub async fn exec_run(
     }
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
+    if grant_applied {
+        envelope
+            .environment
+            .set
+            .insert(HOST_GRANT_APPLIED_ENV.into(), "1".into());
+    }
     apply_caller_path(&mut envelope, request.caller_path.clone());
     if let (Some(reservation), Some(evasion)) = (fidelity_reservation.as_ref(), plan.evasion) {
         if let Err(error) = state
@@ -2118,6 +2128,7 @@ pub async fn exec_run(
                     request.agent.clone(),
                     request.session_id.clone(),
                     evasion,
+                    grant_applied,
                 ),
             )
             .await
@@ -2158,10 +2169,9 @@ pub async fn exec_run(
         fidelity_reservation.is_some() && process_started && outcome.is_err();
     let fidelity_accounting_error = match fidelity_reservation {
         Some(reservation) => match &outcome {
-            Ok(execution) => match plan
-                .evasion
-                .and_then(|evasion| fidelity_operation_record(&request, &cwd, evasion, execution))
-            {
+            Ok(execution) => match plan.evasion.and_then(|evasion| {
+                fidelity_operation_record(&request, &cwd, evasion, execution, grant_applied)
+            }) {
                 Some(record) => state
                     .ledger
                     .complete_fidelity(reservation, record)
@@ -2250,6 +2260,7 @@ fn fidelity_operation_record(
     cwd: &Path,
     evasion: EvasionAttribution,
     outcome: &ExecutionOutcome,
+    host_grant_applied: bool,
 ) -> Option<crate::ledger_writer::OperationRecord> {
     fidelity_operation_record_for_context(
         cwd,
@@ -2257,6 +2268,7 @@ fn fidelity_operation_record(
         request.session_id.clone(),
         evasion,
         outcome,
+        host_grant_applied,
     )
 }
 
@@ -2266,6 +2278,7 @@ fn fidelity_operation_record_for_context(
     session_id: Option<String>,
     evasion: EvasionAttribution,
     outcome: &ExecutionOutcome,
+    host_grant_applied: bool,
 ) -> Option<crate::ledger_writer::OperationRecord> {
     let ExecutionOutcome::Completed { result } = outcome else {
         return None;
@@ -2289,6 +2302,7 @@ fn fidelity_operation_record_for_context(
         session_id,
         attribution: None,
         evasion: Some(evasion),
+        host_grant_applied,
     })
 }
 
@@ -2297,6 +2311,7 @@ fn fidelity_pending_record_for_context(
     agent: Option<String>,
     session_id: Option<String>,
     evasion: EvasionAttribution,
+    host_grant_applied: bool,
 ) -> crate::ledger_writer::OperationRecord {
     crate::ledger_writer::OperationRecord {
         original_command: "hzr exec fidelity".into(),
@@ -2312,6 +2327,7 @@ fn fidelity_pending_record_for_context(
         session_id,
         attribution: None,
         evasion: Some(evasion),
+        host_grant_applied,
     }
 }
 
@@ -2451,6 +2467,7 @@ pub async fn exec_approval(
                     agent.clone(),
                     session_id.clone(),
                     *evasion,
+                    false,
                 ),
             )
             .await
@@ -2493,7 +2510,9 @@ pub async fn exec_approval(
     if let Some(reservation) = fidelity_reservation {
         let completion = match (outcome.as_ref(), fidelity_context) {
             (Ok(execution), Some((cwd, agent, session_id, evasion))) => {
-                fidelity_operation_record_for_context(&cwd, agent, session_id, evasion, execution)
+                fidelity_operation_record_for_context(
+                    &cwd, agent, session_id, evasion, execution, false,
+                )
             }
             _ => None,
         };
@@ -2868,6 +2887,7 @@ pub async fn operation(
             session_id: request.session_id,
             attribution: request.attribution,
             evasion: None,
+            host_grant_applied: false,
         })
         .await;
     let trace_state = if outcome.is_ok() {
@@ -2940,7 +2960,10 @@ pub async fn exec_rewrite(
     if let FidelityPreflight::Allow { evasion, .. } = preflight {
         outcome.evasion = Some(evasion);
     }
-    let decision = enforce_first_class(&request.command, outcome.decision);
+    let decision = apply_host_grant(
+        &request,
+        enforce_first_class(&request.command, outcome.decision),
+    );
     record_exec_policy_event(&state, &request, &cwd, outcome.evasion.as_ref(), &decision).await?;
     // The attribution travels with the decision: the hook forwards it to the process that will
     // execute and record the command, which has no other way to learn how it was classified.
@@ -3078,6 +3101,7 @@ async fn record_exec_policy_event(
             evasion,
             decision,
             replacement_family: None,
+            command_identity: Some(request.command.clone()),
         })
         .await
         .map_err(|error| ApiError::internal(format!("policy event ledger write failed: {error}")))
@@ -3209,6 +3233,35 @@ fn protocol_fidelity_reason(reason: RawFidelityReason) -> FidelityReason {
         RawFidelityReason::FullPatch => FidelityReason::FullPatch,
         RawFidelityReason::VerbatimSource => FidelityReason::VerbatimSource,
     }
+}
+
+/// Apply the caller's host execution grant to a verdict the daemon has just derived.
+///
+/// The daemon is the last place the desync could survive: `hzr exec run` forwards the host's
+/// answer, and if the daemon ignored it the CLI would still refuse what the hook approved. The
+/// grant is re-validated here against the request's own session rather than trusted as sent —
+/// a caller may not assert an approval for a session it is not running in.
+fn apply_host_grant(request: &ExecApiRequest, decision: RewriteDecision) -> RewriteDecision {
+    let granted = request.host_execution_grant.as_ref().is_some_and(|grant| {
+        let digest = request
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|session| !session.is_empty())
+            .map(|session| hzr_core::privacy_identity_hash("session", session));
+        grant
+            .authorize(digest.as_deref(), unix_millis_now())
+            .is_ok()
+    });
+    reconcile_host_grant(decision, granted)
+}
+
+fn unix_millis_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 fn enforce_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision {
@@ -3369,6 +3422,7 @@ async fn record_codec_operation(
                 evasion: None,
             }),
             evasion: None,
+            host_grant_applied: false,
         })
         .await
         .is_ok()
@@ -3830,7 +3884,7 @@ mod tests {
 
     use super::anti_evasion_fixture::{ProbeDecision, ProbeLayer, ProbeSurface};
     use super::{
-        ManagedExecutionBudget, apply_caller_path, approved_execution_decision,
+        ManagedExecutionBudget, apply_caller_path, apply_host_grant, approved_execution_decision,
         caveman_engine_health, daemon_fidelity_preflight, dashboard_index_state,
         dashboard_memory_detail, dashboard_overall_state, dashboard_registration,
         dashboard_search_activity, dashboard_session_roi, enforce_first_class,
@@ -3856,10 +3910,50 @@ mod tests {
         DashboardOperationRoute, DashboardProject, DashboardProjectArtifacts,
         DashboardProjectState, DashboardService, DashboardState, EnforcementTier, EngineHealth,
         EngineState, EvasionAttribution, EvasionClass, EvasionPathForm, ExecApiRequest,
-        FidelityReason, FidelityValidation, MemoryWriteScope, PolicyDecision,
+        FidelityReason, FidelityValidation, HostExecutionGrant, HostPermissionMode,
+        MemoryWriteScope, PolicyDecision,
     };
 
     const PROJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    #[test]
+    fn acceptance_gate_exec_run_honors_a_valid_grant_without_weakening_deny() {
+        let session = "exec-run-granted-session";
+        let request = ExecApiRequest {
+            cwd: "/tmp".into(),
+            command: "hzr stats --accounting-version all".into(),
+            fidelity_requested: false,
+            fidelity_reason: None,
+            timeout_ms: None,
+            caller_path: None,
+            agent: Some("claude-code".into()),
+            session_id: Some(session.into()),
+            host_execution_grant: Some(HostExecutionGrant {
+                mode: HostPermissionMode::BypassPermissions,
+                granted_for_session: hzr_core::privacy_identity_hash("session", session),
+                granted_at_ms: super::unix_millis_now(),
+                source: "test".into(),
+            }),
+        };
+        let allowed = apply_host_grant(
+            &request,
+            RewriteDecision::Ask {
+                proposed: Some(CanonicalCommand::shell(
+                    "hzr stats --accounting-version all",
+                )),
+                reason: "policy approval".into(),
+            },
+        );
+        assert!(matches!(allowed, RewriteDecision::AllowRewrite { .. }));
+
+        let denied = apply_host_grant(
+            &request,
+            RewriteDecision::Deny {
+                reason: "explicit deny".into(),
+            },
+        );
+        assert!(matches!(denied, RewriteDecision::Deny { .. }));
+    }
 
     #[test]
     fn dashboard_session_roi_keeps_estimate_and_imported_claim_provenance_distinct() {
@@ -3881,6 +3975,9 @@ mod tests {
                     gross_avoided_tokens_estimated: 1_000,
                     regression_tokens_estimated: 0,
                     net_avoided_tokens_estimated: 1_000,
+                    total_observed_operations: 2,
+                    stage_excluded_operations: 0,
+                    excluded_legacy_operations: 0,
                     top_commands: Vec::new(),
                 },
                 SessionEconomicSummary {
@@ -3926,6 +4023,7 @@ mod tests {
             caller_path: None,
             agent: Some("claude-code:agent-private".into()),
             session_id: Some("session-fidelity".into()),
+            host_execution_grant: None,
         };
 
         assert!(matches!(
@@ -3978,6 +4076,7 @@ mod tests {
                         },
                         detail: None,
                         evasion: Some(&evasion),
+                        host_grant_applied: false,
                     },
                 )
                 .expect("fidelity operation");
@@ -4009,6 +4108,7 @@ mod tests {
                 },
                 decision: PolicyDecision::Ask,
                 replacement_family: None,
+                command_identity: Some(request.command.clone()),
             })
             .await
             .expect("policy event");
@@ -4490,6 +4590,7 @@ exit 64
             Some("approved-session".into()),
             evasion,
             &outcome,
+            false,
         )
         .expect("completed execution record");
         assert_eq!(record.output_tokens, 3);
@@ -4516,6 +4617,7 @@ exit 64
                         reason: "denied".into(),
                     },
                 },
+                false,
             )
             .is_none()
         );

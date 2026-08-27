@@ -199,6 +199,14 @@ pub struct SessionEconomicSummary {
     pub unavailable_reasons: Vec<String>,
 }
 
+/// Receipt aggregation for a project or for the whole ledger.
+///
+/// `SessionEconomicSummary` predates the project/global scopes and carries exactly the fields a
+/// scope needs, so it is aliased rather than copied: the single-currency rule, the complete-pair
+/// rule and the provenance rule must be the same number wherever money is shown, and two structs
+/// would eventually disagree.
+pub type EconomicScopeSummary = SessionEconomicSummary;
+
 #[derive(Debug, Error)]
 pub enum BillingError {
     #[error("invalid pricing catalog: {0}")]

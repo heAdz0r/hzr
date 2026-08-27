@@ -4,11 +4,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use hzr_core::{
-    BypassSummary, CURRENT_ACCOUNTING_POLICY_VERSION, Config, EfficiencySummary, EvasionSummary,
-    Ledger, LedgerSummary, OperationChannel, OperationFamilySummary, OperationModeSummary,
-    OperationRoute, RawPublicEstimate, RawPublicEstimateRequest, ReadPipelineSummary,
-    ReplacementCapability, StatsQuery, classify_operation, load_pricing_catalog,
-    price_avoided_input_tokens, privacy_identity_hash,
+    BypassSummary, CURRENT_ACCOUNTING_POLICY_VERSION, Config, EconomicScopeSummary,
+    EfficiencySummary, EvasionSummary, Ledger, LedgerSummary, OperationChannel,
+    OperationFamilySummary, OperationModeSummary, OperationRoute, PricingCatalog,
+    RawPublicEstimate, RawPublicEstimateRequest, ReadPipelineSummary, ReplacementCapability,
+    StatsQuery, classify_operation, load_pricing_catalog, price_avoided_input_tokens,
+    privacy_identity_hash,
 };
 use serde::Serialize;
 
@@ -30,6 +31,78 @@ pub fn validate_request_bounds(
         );
     }
     Ok(())
+}
+
+/// Money for the two scopes an operator actually compares.
+///
+/// The block exists because 0.6.3 could price only whatever scope the command happened to ask
+/// for, and a single number answers neither "what is this repository costing me" nor "what has
+/// HZR saved overall". Both rows are always rendered, including when a scope has nothing to
+/// show — an absent row reads as zero, and zero is a claim.
+#[derive(Clone, Debug, Serialize)]
+pub struct EconomicsReport {
+    pub rows: Vec<EconomicScopeRow>,
+    /// The exact catalog selection every priced row used, stated once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<PricingIdentity>,
+    /// Why no row could be priced. Present exactly when `pricing` is absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+    /// Steps that would make pricing available, rendered verbatim next to the reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub enable_steps: Vec<&'static str>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct EconomicScopeRow {
+    pub scope: &'static str,
+    /// False when the scope could not be resolved — a cwd outside any registered worktree.
+    pub scope_resolved: bool,
+    pub avoided_input_tokens_estimated: u64,
+    /// Preliminary public-list value of `avoided_input_tokens_estimated`. Never an invoice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub potential_saved: Option<MoneyAmount>,
+    /// Sum of imported provider receipts for this scope. Never summed with `potential_saved`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billed_actual: Option<MoneyAmount>,
+    pub billed_receipts: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MoneyAmount {
+    pub currency: String,
+    pub microunits: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PricingIdentity {
+    pub harness: String,
+    pub provider: String,
+    pub model: String,
+    pub method: String,
+    pub pricing_basis: String,
+    pub price_table_identity: String,
+    pub retrieved_at: String,
+}
+
+/// Why a headline of `0` is on screen.
+///
+/// A reduction of zero has three very different meanings and 0.6.3 rendered all of them as the
+/// same `0.0%`. The renderer needs to distinguish them, so the classification is computed once
+/// here rather than re-derived from loose fields at print time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ZeroReductionCause {
+    /// Not zero at all.
+    NotZero,
+    /// Recorded history exists but sits outside the selected accounting-policy scope.
+    ExcludedHistory,
+    /// Every operation in scope belongs to a class that earns no savings credit by policy.
+    OnlyZeroCreditOperations,
+    /// The ledger genuinely holds nothing for this scope.
+    NoOperations,
 }
 
 struct ReportInputs {
@@ -60,6 +133,10 @@ pub struct StatsReport {
     pub accounting_version_scope: &'static str,
     pub accounting_policy_version: &'static str,
     pub excluded_legacy_operations: u64,
+    /// Rows `by_mode` shows and the reduction ratio deliberately does not measure.
+    pub stage_exclusion: StageExclusion,
+    /// Repeats of an already-filtered command, measured rather than assumed zero.
+    pub rerun_tax: RerunTax,
     /// Argument-free aggregation safe to retain and serialize even for sensitive commands.
     pub by_family: Vec<OperationFamilySummary>,
     /// Present only for the explicit `--evasion` view; always aggregate-only.
@@ -85,6 +162,10 @@ pub struct StatsReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_public_estimate: Option<RawPublicEstimate>,
     pub raw_public_estimate_unavailable_reason: Option<String>,
+    /// Per-project and global money, rendered above the reduction headline.
+    pub economics: EconomicsReport,
+    /// Why the headline reads zero, when it does.
+    pub zero_reduction_cause: ZeroReductionCause,
     pub notes: Vec<&'static str>,
 }
 
@@ -128,6 +209,28 @@ pub struct BypassToolReport {
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
+pub struct StageExclusion {
+    /// Operations visible in `by_mode` that the reduction ratio deliberately does not measure.
+    pub operations: u64,
+    pub delivered_tokens_estimated: u64,
+}
+
+/// The measured cost of a filtered result the model did not accept.
+///
+/// Reported next to the headline rather than folded into it. Subtracting it from net avoided
+/// would silently redefine a metric that shipped in 0.6.3, and a re-run has causes other than
+/// filtering. Showing it adjacently is what turns an assumed zero into a number an operator can
+/// argue with — `net_avoided_after_rerun_tax_estimated` states the pessimistic reading outright.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct RerunTax {
+    pub operations: u64,
+    pub tokens_estimated: u64,
+    pub net_avoided_after_rerun_tax_estimated: i64,
+    /// Operations after which a repeat still counts as a reaction to filtering.
+    pub detection_window_operations: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct DirectSavings {
     pub operations: u64,
     pub input_tokens_estimated: u64,
@@ -167,6 +270,7 @@ pub struct CommandSavings {
 pub async fn collect(
     config: &Config,
     workspace: Option<&Path>,
+    economics_project: Option<&Path>,
     include_all_commands: bool,
     show_evasion: bool,
     since: Option<&StatsDuration>,
@@ -182,15 +286,27 @@ pub async fn collect(
     let workspace_identity = workspace_text
         .as_deref()
         .map(|value| privacy_identity_hash("project", value));
+    // An explicit `--workspace` is also the project the money block prices; otherwise the caller
+    // resolves the current worktree. The headline scope is untouched either way.
+    let economics_project_text = workspace_text
+        .clone()
+        .or_else(|| economics_project.map(|path| path.to_string_lossy()));
     let collection = Ledger::stats_collection_read_only(
         &ledger_path,
         StatsQuery {
             project_path: workspace_text.as_deref(),
             since_unix_seconds: cutoff,
             include_legacy_versions: accounting_version == AccountingVersion::All,
+            economics_project_path: economics_project_text.as_deref(),
         },
     )?;
     let snapshot = collection.snapshot;
+    // Taken before the snapshot is partially moved into the report, so both money rows come from
+    // the one read that produced the headline rather than a second look at a moving ledger.
+    let snapshot_project_avoided = snapshot.project_avoided_tokens_estimated;
+    let snapshot_global_avoided = snapshot.global_avoided_tokens_estimated;
+    let snapshot_project_economics = snapshot.project_economics.clone();
+    let snapshot_global_economics = snapshot.global_economics.clone();
     let scope = match (workspace_identity.as_deref(), since) {
         (Some(workspace_hash), Some(duration)) => {
             format!("project {workspace_hash} since {}", duration.label())
@@ -232,33 +348,174 @@ pub async fn collect(
             recovery: Some(recovery),
         },
     );
-    if config.billing.public_estimate_enabled {
-        match load_pricing_catalog(config.billing.pricing_file.as_deref()).and_then(|catalog| {
-            price_avoided_input_tokens(
-                &catalog,
-                RawPublicEstimateRequest {
-                    harness: &config.billing.harness,
-                    provider: &config.billing.provider,
-                    model: &config.billing.model,
-                    method: &config.billing.method,
-                    request_input_tokens: config.billing.request_input_tokens,
-                    basis: config.billing.effective_pricing_basis(),
-                    avoided_tokens: report
-                        .direct_savings
-                        .net_avoided_tokens_estimated
-                        .max(0)
-                        .unsigned_abs(),
-                },
-            )
-        }) {
+    let catalog = if config.billing.public_estimate_enabled {
+        match load_pricing_catalog(config.billing.pricing_file.as_deref()) {
+            Ok(catalog) => Some(catalog),
+            Err(error) => {
+                report.raw_public_estimate_unavailable_reason = Some(error.to_string());
+                None
+            }
+        }
+    } else {
+        report.raw_public_estimate_unavailable_reason = Some(PRICING_OPT_IN_REASON.to_owned());
+        None
+    };
+    if let Some(catalog) = catalog.as_ref() {
+        match price_scope(
+            config,
+            catalog,
+            report.direct_savings.net_avoided_tokens_estimated,
+        ) {
             Ok(estimate) => report.raw_public_estimate = Some(estimate),
             Err(error) => report.raw_public_estimate_unavailable_reason = Some(error.to_string()),
         }
-    } else {
-        report.raw_public_estimate_unavailable_reason =
-            Some("public pricing estimate is opt-in; run `hzr billing catalog`, then configure [billing] public_estimate_enabled, harness, provider, model, method, and pricing_basis in the HZR config".into());
     }
+    report.economics = build_economics(
+        config,
+        catalog.as_ref(),
+        EconomicsInputs {
+            project_resolved: economics_project_text.is_some(),
+            project_avoided: snapshot_project_avoided,
+            global_avoided: snapshot_global_avoided,
+            project_receipts: snapshot_project_economics,
+            global_receipts: snapshot_global_economics,
+        },
+        report.raw_public_estimate_unavailable_reason.clone(),
+    );
     Ok(report)
+}
+
+const PRICING_OPT_IN_REASON: &str = "public pricing estimate is opt-in; run `hzr billing catalog`, then configure [billing] public_estimate_enabled, harness, provider, model, method, and pricing_basis in the HZR config";
+
+/// The steps that turn `unavailable` into a number, stated where the gap is visible.
+///
+/// A reason without a remedy is a dead end: the operator learns the feature exists and not how
+/// to reach it, which is how the money view stayed switched off through an entire release.
+const PRICING_ENABLE_STEPS: [&str; 3] = [
+    "1. `hzr billing catalog` — find the exact harness/provider/model/method row",
+    "2. set [billing] public_estimate_enabled = true in the HZR config",
+    "3. set [billing] harness, provider, model, method and pricing_basis to that exact row",
+];
+
+struct EconomicsInputs {
+    project_resolved: bool,
+    project_avoided: i64,
+    global_avoided: i64,
+    project_receipts: EconomicScopeSummary,
+    global_receipts: EconomicScopeSummary,
+}
+
+fn price_scope(
+    config: &Config,
+    catalog: &PricingCatalog,
+    avoided_tokens: i64,
+) -> Result<RawPublicEstimate, hzr_core::BillingError> {
+    price_avoided_input_tokens(
+        catalog,
+        RawPublicEstimateRequest {
+            harness: &config.billing.harness,
+            provider: &config.billing.provider,
+            model: &config.billing.model,
+            method: &config.billing.method,
+            request_input_tokens: config.billing.request_input_tokens,
+            basis: config.billing.effective_pricing_basis(),
+            avoided_tokens: avoided_tokens.max(0).unsigned_abs(),
+        },
+    )
+}
+
+/// Assemble the two money rows.
+///
+/// Both rows are always produced, including when a scope is unresolved or holds nothing. An
+/// omitted row would be read as a zero, and a zero is a claim about money that no evidence here
+/// supports; `scope_resolved` and an absent `billed_actual` say what is actually known.
+fn build_economics(
+    config: &Config,
+    catalog: Option<&PricingCatalog>,
+    inputs: EconomicsInputs,
+    unavailable_reason: Option<String>,
+) -> EconomicsReport {
+    let mut pricing = None;
+    let mut price = |avoided: i64| -> Option<MoneyAmount> {
+        let catalog = catalog?;
+        let estimate = price_scope(config, catalog, avoided).ok()?;
+        if pricing.is_none() {
+            pricing = Some(PricingIdentity {
+                harness: estimate.harness.clone(),
+                provider: estimate.provider.clone(),
+                model: estimate.model.clone(),
+                method: estimate.method.clone(),
+                pricing_basis: estimate.pricing_basis.clone(),
+                price_table_identity: estimate.price_table_identity.clone(),
+                retrieved_at: estimate.retrieved_at.clone(),
+            });
+        }
+        Some(MoneyAmount {
+            currency: estimate.currency,
+            microunits: estimate.savings_microunits,
+        })
+    };
+
+    let rows = vec![
+        economic_row(
+            "this project",
+            inputs.project_resolved,
+            inputs.project_avoided,
+            &inputs.project_receipts,
+            price(inputs.project_avoided),
+        ),
+        economic_row(
+            "global lifetime",
+            true,
+            inputs.global_avoided,
+            &inputs.global_receipts,
+            price(inputs.global_avoided),
+        ),
+    ];
+    let priced = pricing.is_some();
+    EconomicsReport {
+        rows,
+        pricing,
+        unavailable_reason: (!priced)
+            .then(|| unavailable_reason.unwrap_or_else(|| "no exact pricing evidence".to_owned())),
+        enable_steps: if priced {
+            Vec::new()
+        } else {
+            PRICING_ENABLE_STEPS.to_vec()
+        },
+    }
+}
+
+fn economic_row(
+    scope: &'static str,
+    scope_resolved: bool,
+    avoided: i64,
+    receipts: &EconomicScopeSummary,
+    potential_saved: Option<MoneyAmount>,
+) -> EconomicScopeRow {
+    // A receipt total is only shown when every receipt in the scope carried both sides of the
+    // pair; a partial sum would understate a bill and still look like one.
+    let billed_actual = receipts.reported_actual.as_ref().map(|amount| MoneyAmount {
+        currency: amount.currency.clone(),
+        microunits: amount.savings_microunits.max(0).unsigned_abs(),
+    });
+    EconomicScopeRow {
+        scope,
+        scope_resolved,
+        avoided_input_tokens_estimated: if scope_resolved {
+            avoided.max(0).unsigned_abs()
+        } else {
+            0
+        },
+        potential_saved: scope_resolved.then_some(potential_saved).flatten(),
+        billed_actual,
+        billed_receipts: receipts.paired_receipts,
+        notes: if scope_resolved {
+            receipts.unavailable_reasons.clone()
+        } else {
+            vec!["this directory is not inside a resolvable project scope".to_owned()]
+        },
+    }
 }
 
 #[cfg(test)]
@@ -305,6 +562,9 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         command_limit,
         recovery,
     } = options;
+    // Classified before `gain` is consumed below, so the explanation is derived from the same
+    // summary the headline is derived from rather than from whatever survives the moves.
+    let zero_reduction_cause = classify_zero_reduction(&gain);
     let by_mode = gain.by_mode.clone();
     let reveal_command_details = false;
     let traffic_complete = coverage.complete
@@ -441,6 +701,20 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         },
         accounting_policy_version: CURRENT_ACCOUNTING_POLICY_VERSION,
         excluded_legacy_operations: gain.excluded_legacy_operations,
+        stage_exclusion: StageExclusion {
+            operations: gain.stage_excluded_operations,
+            delivered_tokens_estimated: gain.stage_excluded_delivered_tokens_estimated,
+        },
+        rerun_tax: RerunTax {
+            operations: gain.filter_induced_rerun_operations,
+            tokens_estimated: gain.filter_induced_rerun_tokens_estimated,
+            net_avoided_after_rerun_tax_estimated: gain
+                .net_avoided_tokens_estimated
+                .saturating_sub(
+                    i64::try_from(gain.filter_induced_rerun_tokens_estimated).unwrap_or(i64::MAX),
+                ),
+            detection_window_operations: hzr_core::RERUN_DETECTION_WINDOW_OPERATIONS,
+        },
         by_family,
         evasion,
         by_command: commands,
@@ -457,8 +731,46 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
         economic_claim_ready: false,
         raw_public_estimate: None,
         raw_public_estimate_unavailable_reason: None,
+        economics: EconomicsReport {
+            rows: Vec::new(),
+            pricing: None,
+            unavailable_reason: None,
+            enable_steps: Vec::new(),
+        },
+        zero_reduction_cause,
         notes: provider_usage_notes(observed_model_usage_scope),
     }
+}
+
+/// Explain a zero headline instead of leaving the reader to guess.
+///
+/// Order matters. Excluded history is checked first because it is the only cause an operator can
+/// act on with one flag, and in the upgrade case it coexists with the others: after a policy
+/// bump the surviving rows are typically also zero-credit, and reporting only the second cause
+/// would send the reader looking for a defect that is really a scope boundary.
+fn classify_zero_reduction(gain: &EfficiencySummary) -> ZeroReductionCause {
+    classify_zero_reduction_values(
+        gain.net_avoided_tokens_estimated,
+        gain.operations,
+        gain.excluded_legacy_operations,
+    )
+}
+
+pub(crate) fn classify_zero_reduction_values(
+    net_avoided_tokens_estimated: i64,
+    operations: u64,
+    excluded_legacy_operations: u64,
+) -> ZeroReductionCause {
+    if net_avoided_tokens_estimated != 0 {
+        return ZeroReductionCause::NotZero;
+    }
+    if excluded_legacy_operations > 0 {
+        return ZeroReductionCause::ExcludedHistory;
+    }
+    if operations == 0 {
+        return ZeroReductionCause::NoOperations;
+    }
+    ZeroReductionCause::OnlyZeroCreditOperations
 }
 
 fn provider_usage_notes(observed_model_usage_scope: &str) -> Vec<&'static str> {

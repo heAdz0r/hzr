@@ -11,16 +11,17 @@ use hzr_core::{
     PolicyEvent, RawFidelityRequest, RawPublicEstimate, RawPublicEstimateRequest,
     SessionEconomicSummary, SessionEfficiencySummary, SessionEvasionSummary,
     efficient_route_replacement, fidelity_preflight_required, first_class_replacement,
-    load_pricing_catalog, price_avoided_input_tokens, raw_fidelity_request,
+    load_pricing_catalog, price_avoided_input_tokens, privacy_identity_hash, raw_fidelity_request,
 };
 use hzr_exec::{
-    CanonicalCommand, ForkRuntimePaths, PinnedRtkAdapter, RewriteDecision, RewriteSource,
-    RtkAdapterConfig,
+    CanonicalCommand, ForkRuntimePaths, HOST_GRANT_APPLIED_ENV, PinnedRtkAdapter, RewriteDecision,
+    RewriteSource, RtkAdapterConfig, host_grant_applied, reconcile_host_grant,
 };
 use hzr_index::registered_workspaces;
 use hzr_protocol::{
     ContextPlanApiRequest, EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm,
-    ExecApiRequest, FidelityValidation, PolicyDecision,
+    ExecApiRequest, FidelityValidation, FilterPlacement, HOST_EXECUTION_GRANT_ENV,
+    HostExecutionGrant, HostPermissionMode, PolicyDecision,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -40,6 +41,7 @@ const SESSION_CORRECTION_NUDGE: u64 = 3;
 const SESSION_BYPASS_COUNT_BUDGET: u64 = 40;
 const SESSION_BYPASS_TOKEN_BUDGET: u64 = 250_000;
 const SESSION_AVOIDABLE_SHARE_NUDGE: f64 = 10.0;
+const STATUSLINE_UPSTREAM_ENV: &str = "HZR_STATUSLINE_UPSTREAM_HEX";
 
 pub async fn dispatch(config: &Config, native_mode: NativeToolMode) {
     let Ok(cwd) = std::env::current_dir() else {
@@ -56,6 +58,8 @@ pub async fn dispatch(config: &Config, native_mode: NativeToolMode) {
     };
     let _ = update_session(config, &input, |state| {
         state.operations = state.operations.saturating_add(1);
+        state.operations_this_turn = state.operations_this_turn.saturating_add(1);
+        state.host_grant_seen |= host_grants_execution(&input);
     });
     let tool_name = input
         .get("tool_name")
@@ -137,6 +141,7 @@ fn observe_input(config: &Config, input: &Value, native_mode: NativeToolMode) ->
                 },
                 detail: None,
                 evasion: Some(&evasion),
+                host_grant_applied: false,
             },
         )?;
     Ok(())
@@ -167,7 +172,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         HookFidelityPreflight::Allow(evasion) => Some(evasion),
         HookFidelityPreflight::Ask { decision, evasion } => {
             let _ = record_local_policy_decision(config, input, &decision, Some(evasion));
-            return write_decision(input, decision);
+            return write_decision(input, decision, None);
         }
     };
     let request = ExecApiRequest {
@@ -185,6 +190,9 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
             .get("session_id")
             .and_then(Value::as_str)
             .map(str::to_owned),
+        // The hook holds the host's answer first-hand, so the daemon decides with the same
+        // information rather than producing an Ask this hook would immediately override.
+        host_execution_grant: host_grant_from_input(input),
     };
     let managed = if let Ok(client) = DaemonClient::from_config(config) {
         timeout(HOOK_TIMEOUT, client.exec_rewrite(&request))
@@ -196,31 +204,54 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     };
     let daemon_recorded_policy = managed.is_some();
     let mut managed_evasion = None;
-    let decision = match managed {
+    let (decision, accounting_notice) = match managed {
         Some(outcome) => {
-            // The daemon answered, so any earlier gap is now behind us: close it instead of
-            // leaving `hzr stats` pinned to INCOMPLETE for the rest of the installation.
-            let _ = clear_reconciled_rewrites(config);
             managed_evasion = outcome.evasion;
-            outcome.decision
+            let notice = clear_reconciled_rewrites(config)
+                .ok()
+                .and_then(|()| accounting_transition(config, input, false));
+            (outcome.decision, notice)
         }
         None => {
             let _ = record_degraded_rewrite(config);
-            fallback_decision(config, raw, &cwd).await
+            let notice = accounting_transition(config, input, true);
+            (fallback_decision(config, raw, &cwd).await, notice)
         }
     };
     let decision = steer_to_first_class(raw, decision);
     // Fidelity attribution is authoritative when present; otherwise the daemon's classification
     // of this exact command is what the recording process needs.
     let evasion = fidelity_evasion.or(managed_evasion);
+    let decision = apply_filter_placement(config, input, decision);
     let decision = honor_host_permission_mode(input, decision);
     let decision = attach_hook_evasion(raw, decision, evasion.as_ref());
     let decision = attach_policy_feedback(config, input, decision);
     let decision = attach_session_attribution(input, decision);
+    // After the session, because the grant names a digest of it and the reader validates the two
+    // together: a grant without its session in the same environment is refused, by design.
+    let decision = attach_host_grant(input, decision);
     if !daemon_recorded_policy {
         let _ = record_local_policy_decision(config, input, &decision, None);
     }
-    write_decision(input, decision)
+    write_decision(input, decision, accounting_notice.as_deref())
+}
+
+fn accounting_transition(config: &Config, input: &Value, degraded: bool) -> Option<String> {
+    let mut changed = false;
+    update_session(config, input, |state| {
+        changed = state.accounting_degraded != degraded;
+        state.accounting_degraded = degraded;
+        state.accounting_was_degraded |= degraded;
+    })
+    .ok()?;
+    if !changed {
+        return None;
+    }
+    Some(if degraded {
+        "HZR ACCOUNTING DEGRADED: the ledger is no longer recording this session's operations; coverage is unknown. Check `hzr daemon service status`.".into()
+    } else {
+        "HZR ACCOUNTING RECOVERED: managed rewrites are recording again. This session's earlier degraded interval remains partial evidence.".into()
+    })
 }
 
 fn record_local_policy_decision(
@@ -255,6 +286,7 @@ fn record_local_policy_decision(
         evasion,
         decision,
         replacement_family: None,
+        command_identity: input.pointer("/tool_input/command").and_then(Value::as_str),
     })?;
     Ok(())
 }
@@ -390,6 +422,16 @@ fn exported_hook_command(variable: &str, value: &str, command: &str) -> String {
     format!("export {variable}={};\n{command}", shell_quote(value))
 }
 
+/// The exact prefix `exported_hook_command` writes, for idempotency checks.
+///
+/// Deriving it from the same formatter is what keeps "did I already attach this?" answerable:
+/// a hand-written substring drifts from the emitter and then matches commands that merely
+/// reference the variable.
+#[cfg(unix)]
+fn already_exported(variable: &str) -> String {
+    format!("export {variable}=")
+}
+
 #[cfg(unix)]
 fn attributed_hook_command(encoded: &str, command: &str) -> Option<String> {
     Some(exported_hook_command(
@@ -437,7 +479,7 @@ fn attach_session_attribution(input: &Value, decision: RewriteDecision) -> Rewri
             reason,
         };
     };
-    if rendered.contains("HZR_SESSION_ID=") {
+    if rendered.contains(&already_exported("HZR_SESSION_ID")) {
         return RewriteDecision::AllowRewrite {
             command,
             source,
@@ -569,6 +611,7 @@ fn record_native_correction(config: &Config, input: &Value, tool: &str) -> Resul
             "Edit" | "Write" => "write",
             _ => "other",
         }),
+        command_identity: None,
     })?;
     Ok(())
 }
@@ -699,32 +742,177 @@ fn host_grants_execution(input: &Value) -> bool {
         .is_some_and(|mode| mode.eq_ignore_ascii_case("bypassPermissions"))
 }
 
+/// Decline a mid-turn filter when policy says the request prefix must stay put.
+///
+/// Delivered bytes and billed input are different axes. A harness that caches the request prefix
+/// bills a cached read far below a fresh one, and a filter firing mid-turn rewrites content the
+/// prefix already carries — invalidating everything after it. So a route can cut delivered bytes
+/// hard and still raise the provider's billed input.
+///
+/// Under `FilterPlacement::Anywhere` — the shipped default — nothing changes. Under
+/// `TurnBoundary`, only the first operation of a turn is filtered and the rest run raw, tracked,
+/// with the deferral counted so the reduction it costs is visible rather than silently absent.
+/// A Deny is untouched: prefix stability is not a reason to run something policy forbids.
+fn apply_filter_placement(
+    config: &Config,
+    input: &Value,
+    decision: RewriteDecision,
+) -> RewriteDecision {
+    let placement = config.policy.filter_placement;
+    if placement == FilterPlacement::Anywhere {
+        return decision;
+    }
+    // The current call has already been counted by the dispatcher, so `1` is the turn's first
+    // operation. Defaulting to `true` when the session cannot be read keeps an unreadable state
+    // from silently disabling filtering altogether.
+    let at_boundary = read_session(config, input)
+        .map(|state| state.operations_this_turn <= 1)
+        .unwrap_or(true);
+    if placement.permits(at_boundary) {
+        return decision;
+    }
+    match decision {
+        RewriteDecision::AllowRewrite { .. } => {
+            let _ = update_session(config, input, |state| {
+                state.placement_deferred_operations += 1;
+            });
+            RewriteDecision::allow_raw(format!(
+                "filter placement policy `{}` keeps the request prefix stable mid-turn; this \
+                 operation ran unfiltered and earns no savings credit",
+                placement.as_str()
+            ))
+        }
+        other => other,
+    }
+}
+
 /// Do not re-litigate a permission the operator has already granted.
 ///
-/// HZR derives its own verdict from the settings file, which is how a host running in
-/// `bypassPermissions` still saw prompts: the hook synthesized an Ask the operator had already
-/// answered. Routing and accounting are HZR's job; deciding whether a command may run is not.
-/// A Deny still stands — that is an explicit rule, not an absent one — and the decision is still
-/// recorded, so the ledger and the scorecard lose nothing.
+/// The reconciliation itself now lives in `hzr_exec::reconcile_host_grant`, beside the decision
+/// type, because the hook was never the only surface that needed it: `hzr exec run` re-derived
+/// the same verdict without the host's answer and refused commands this hook had approved.
+/// Keeping a private copy here is what allowed those two answers to differ.
 fn honor_host_permission_mode(input: &Value, decision: RewriteDecision) -> RewriteDecision {
+    reconcile_host_grant(decision, host_grants_execution(input))
+}
+
+/// Carry the host's decision to every process the approved command starts.
+///
+/// The hook already exports the session and the evasion attribution through the approved
+/// command's environment; the host's execution grant travels the same way, so a nested
+/// `hzr exec run`, the pinned engine, and any agent below them all read one answer instead of
+/// inventing three. The grant names only a keyed digest of the session, never the raw
+/// identifier, and it is bounded in time — see `HostExecutionGrant::authorize`.
+#[cfg(unix)]
+fn attach_host_grant(input: &Value, decision: RewriteDecision) -> RewriteDecision {
     if !host_grants_execution(input) {
         return decision;
     }
-    let RewriteDecision::Ask { proposed, reason } = decision else {
+    let Some(mode) = ["permission_mode", "permissionMode"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+        .and_then(HostPermissionMode::parse)
+    else {
         return decision;
     };
-    match proposed {
-        Some(command) => RewriteDecision::AllowRewrite {
+    let Some(session) = input
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|session| !session.is_empty())
+    else {
+        // A grant that cannot name its session can never be validated by the reader, and an
+        // unvalidatable grant must not be minted at all.
+        return decision;
+    };
+    let applied = host_grant_applied(&decision);
+    let RewriteDecision::AllowRewrite {
+        command,
+        source,
+        reason,
+    } = decision
+    else {
+        return decision;
+    };
+    let Ok(rendered) = render_command(&command) else {
+        return RewriteDecision::AllowRewrite {
             command,
-            source: RewriteSource::HzrPolicy,
-            reason: format!(
-                "{reason}; host permission mode grants execution, so HZR recorded it instead of prompting"
-            ),
-        },
-        None => RewriteDecision::allow_raw(
-            "host permission mode grants execution; HZR recorded the bypass instead of prompting",
-        ),
+            source,
+            reason,
+        };
+    };
+    // Match the export statement, not the bare variable name. A command that merely *mentions*
+    // the variable — a test asserting on it, a script that reads it — is not a command that
+    // already carries it, and treating the two as the same silently skipped the attachment.
+    if rendered.contains(&already_exported(HOST_EXECUTION_GRANT_ENV)) {
+        return RewriteDecision::AllowRewrite {
+            command,
+            source,
+            reason,
+        };
     }
+    let grant = HostExecutionGrant {
+        mode,
+        granted_for_session: privacy_identity_hash("session", session),
+        granted_at_ms: unix_millis_now(),
+        source: "claude_code_pre_tool_use".into(),
+    };
+    let Ok(encoded) = serde_json::to_string(&grant) else {
+        return RewriteDecision::AllowRewrite {
+            command,
+            source,
+            reason,
+        };
+    };
+    let granted_command = exported_hook_command(HOST_EXECUTION_GRANT_ENV, &encoded, &rendered);
+    let granted_command = if applied {
+        exported_hook_command(HOST_GRANT_APPLIED_ENV, "1", &granted_command)
+    } else {
+        granted_command
+    };
+    RewriteDecision::AllowRewrite {
+        command: CanonicalCommand::shell(granted_command),
+        source,
+        reason,
+    }
+}
+
+#[cfg(windows)]
+fn attach_host_grant(_input: &Value, decision: RewriteDecision) -> RewriteDecision {
+    decision
+}
+
+/// Mint a grant from the live hook payload.
+///
+/// Returns `None` unless the host both grants execution and names the session, because a grant
+/// that cannot be tied to a session can never be validated downstream and must not be created.
+fn host_grant_from_input(input: &Value) -> Option<HostExecutionGrant> {
+    if !host_grants_execution(input) {
+        return None;
+    }
+    let mode = ["permission_mode", "permissionMode"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+        .and_then(HostPermissionMode::parse)?;
+    let session = input
+        .get("session_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|session| !session.is_empty())?;
+    Some(HostExecutionGrant {
+        mode,
+        granted_for_session: privacy_identity_hash("session", session),
+        granted_at_ms: unix_millis_now(),
+        source: "claude_code_pre_tool_use".into(),
+    })
+}
+
+fn unix_millis_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 fn hzr_policy_rewrite(replacement: hzr_core::RawReplacement) -> RewriteDecision {
@@ -795,9 +983,12 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RewriteDec
     decision
 }
 
-fn write_decision(input: &Value, decision: RewriteDecision) -> Result<()> {
-    let output = match decision {
-        RewriteDecision::AllowRaw { .. } => return Ok(()),
+fn write_decision(input: &Value, decision: RewriteDecision, notice: Option<&str>) -> Result<()> {
+    let mut output = match decision {
+        RewriteDecision::AllowRaw { .. } => match notice {
+            Some(notice) => json!({"systemMessage": notice}),
+            None => return Ok(()),
+        },
         RewriteDecision::AllowRewrite {
             command, reason, ..
         } => json!({
@@ -827,6 +1018,9 @@ fn write_decision(input: &Value, decision: RewriteDecision) -> Result<()> {
             }
         }),
     };
+    if let Some(notice) = notice {
+        output["systemMessage"] = Value::String(notice.to_owned());
+    }
     serde_json::to_writer(io::stdout().lock(), &output)?;
     io::stdout().lock().write_all(b"\n")?;
     Ok(())
@@ -870,6 +1064,21 @@ struct SessionFeedback {
     corrections: u64,
     native_denials: u64,
     nudged: bool,
+    host_grant_seen: bool,
+    accounting_degraded: bool,
+    accounting_was_degraded: bool,
+    /// Tool calls seen since the last user prompt.
+    ///
+    /// The first call of a turn is the only position at which a filter cannot invalidate a request
+    /// prefix that already reached the provider, so this counter is what makes
+    /// `FilterPlacement::TurnBoundary` expressible without asking the harness for turn metadata it
+    /// does not send.
+    operations_this_turn: u64,
+    /// Operations that ran raw because the placement policy declined to filter mid-turn.
+    ///
+    /// Counted so the trade is visible: a policy that protects the cached prefix necessarily gives
+    /// up reduction, and an operator comparing arms needs the size of what was given up.
+    placement_deferred_operations: u64,
 }
 
 fn agent_identity(input: &Value) -> &'static str {
@@ -969,7 +1178,11 @@ fn scorecard_message(
     efficiency: Option<&SessionEfficiencySummary>,
     economics: Option<&SessionEconomicSummary>,
 ) -> String {
-    let (savings, commands) = match efficiency {
+    let complete_efficiency = (!state.accounting_was_degraded)
+        .then_some(efficiency)
+        .flatten();
+    let (potential, billed) = economic_message(config, complete_efficiency, economics);
+    let (savings, commands) = match complete_efficiency {
         Some(summary) if summary.operations > 0 => {
             let reduction_pct = if summary.baseline_tokens_estimated == 0 {
                 0.0
@@ -977,9 +1190,25 @@ fn scorecard_message(
                 summary.net_avoided_tokens_estimated as f64 * 100.0
                     / summary.baseline_tokens_estimated as f64
             };
+            let zero_cause = match crate::stats::classify_zero_reduction_values(
+                summary.net_avoided_tokens_estimated,
+                summary.operations,
+                summary.excluded_legacy_operations,
+            ) {
+                crate::stats::ZeroReductionCause::OnlyZeroCreditOperations => {
+                    "; zero explained: every measured row is zero-credit by policy"
+                }
+                crate::stats::ZeroReductionCause::ExcludedHistory => {
+                    "; zero explained: earlier accounting-policy rows are outside this view"
+                }
+                crate::stats::ZeroReductionCause::NoOperations => {
+                    "; zero explained: no measured command executions"
+                }
+                crate::stats::ZeroReductionCause::NotZero => "",
+            };
             let outcome = if summary.net_avoided_tokens_estimated >= 0 {
                 format!(
-                    "Saved (estimated net): {} tokens ({reduction_pct:.1}%; gross {}, regression {}; {} -> {})",
+                    "Saved (estimated net): {} tokens ({reduction_pct:.1}%; gross {}, regression {}; {} -> {}){zero_cause}; {potential}",
                     summary.net_avoided_tokens_estimated,
                     summary.gross_avoided_tokens_estimated,
                     summary.regression_tokens_estimated,
@@ -988,7 +1217,7 @@ fn scorecard_message(
                 )
             } else {
                 format!(
-                    "Regression (estimated net): {} tokens ({reduction_pct:.1}%; gross saved {}, regression {}; {} -> {})",
+                    "Regression (estimated net): {} tokens ({reduction_pct:.1}%; gross saved {}, regression {}; {} -> {}); {potential}",
                     summary.net_avoided_tokens_estimated.unsigned_abs(),
                     summary.gross_avoided_tokens_estimated,
                     summary.regression_tokens_estimated,
@@ -1002,29 +1231,59 @@ fn scorecard_message(
                 .map(|command| format!("{} x{}", command.command, command.executions))
                 .collect::<Vec<_>>()
                 .join(", ");
+            // The five figures on this line must partition the hook's own event count, or the
+            // card repeats the defect it exists to fix: a measured total beside a larger
+            // observed total with nothing explaining the difference.
+            //
+            // `total_observed_operations` counts current-policy rows in the *measured* stages
+            // only; `stage_excluded_operations` and `excluded_legacy_operations` are disjoint
+            // from it. So the unmeasured/native remainder is what is left inside the measured
+            // stages, and the ledger holds the sum of all three buckets.
+            let non_ratio = summary
+                .total_observed_operations
+                .saturating_sub(summary.operations);
+            let ledger_rows = summary
+                .total_observed_operations
+                .max(summary.operations)
+                .saturating_add(summary.stage_excluded_operations)
+                .saturating_add(summary.excluded_legacy_operations);
+            let hook_only = state.operations.saturating_sub(ledger_rows);
             (
                 outcome,
                 format!(
-                    "Measured commands: {} | Top: {}",
+                    "Measured commands (ratio rows): {} | excluded: {} stage + {} unmeasured/native + {} earlier-policy | hook-only events: {}\nTop measured: {}",
                     summary.operations,
-                    if top_commands.is_empty() {
-                        "none"
-                    } else {
-                        &top_commands
-                    },
+                    summary.stage_excluded_operations,
+                    non_ratio,
+                    summary.excluded_legacy_operations,
+                    hook_only,
+                    if top_commands.is_empty() { "none" } else { &top_commands },
                 ),
             )
         }
-        Some(_) => (
-            "Savings: not measured yet (no session command executions)".to_owned(),
-            "Measured commands: 0 | Top: none".to_owned(),
+        Some(summary) => (
+            format!(
+                "Savings: not measured yet (no session command executions); {potential}"
+            ),
+            format!(
+                "Measured commands (ratio rows): 0 | observed ledger rows: {} | hook-only events: {}",
+                summary.total_observed_operations,
+                state.operations.saturating_sub(summary.total_observed_operations),
+            ),
+        ),
+        None if state.accounting_was_degraded => (
+            "Savings: unknown (session accounting was degraded; partial ledger totals withheld); potential public-list value unknown".to_owned(),
+            format!(
+                "Measured commands: partial and withheld | hook events: {} | ACCOUNTING: DEGRADED DURING SESSION",
+                state.operations
+            ),
         ),
         None => (
-            "Savings: unknown (ledger unavailable, not zero)".to_owned(),
+            format!("Savings: unknown (ledger unavailable, not zero); {potential}"),
             "Measured commands: unknown | Top: unknown".to_owned(),
         ),
     };
-    let policy = match session_summary {
+    let policy = match session_summary.filter(|_| !state.accounting_was_degraded) {
         Some(summary) => {
             let top_class = match summary.top_class {
                 Some(EvasionClass::E10CapabilityGap) => "e10-capability-gap",
@@ -1039,24 +1298,35 @@ fn scorecard_message(
             let prevented = state
                 .corrections
                 .max(summary.policy_corrections + summary.policy_denials);
+            let asked = if state.host_grant_seen && summary.policy_asks > 0 {
+                format!(
+                    "asked {} (PROPAGATION FAILURE: a host-granted session must ask 0)",
+                    summary.policy_asks
+                )
+            } else {
+                format!("asked {}", summary.policy_asks)
+            };
             format!(
-                "Policy: prevented {} ({} native denial); asked {}; avoidable leakage {} ops / {} tokens ({leakage_meaning})\nEvidence: prevented output not estimated | top evasion {top_class} | hook events {}",
+                "Policy: prevented {} ({} native denial); {asked}; avoidable leakage {} ops / {} tokens ({leakage_meaning})\nEvidence: prevented output not estimated | top evasion {top_class} | grant-applied operations {} | hook events {}",
                 prevented,
                 state.native_denials,
-                summary.policy_asks,
                 summary.avoidable_operations,
                 summary.avoidable_tokens,
+                summary.host_grant_applied_operations,
                 state.operations,
             )
         }
+        None if state.accounting_was_degraded => format!(
+            "Policy: prevented {} ({} native denial); avoidable leakage unknown\nEvidence: session spent time degraded, so ledger-derived leakage is partial and withheld | hook events {}",
+            state.corrections, state.native_denials, state.operations,
+        ),
         None => format!(
             "Policy: prevented {} ({} native denial); avoidable leakage unknown\nEvidence: ledger unavailable, so leakage is unknown rather than zero | prevented output not estimated | hook events {}",
             state.corrections, state.native_denials, state.operations,
         ),
     };
-    let economic = economic_message(config, efficiency, economics);
     format!(
-        "HZR session ROI\n{savings}\n{economic}\n{commands}\n{policy}\nShadow guard: T3 observe-only | limit {} ops / {} tokens",
+        "HZR session ROI\n{savings}\n{billed}\n{commands}\n{policy}\nShadow guard: T3 observe-only | limit {} ops / {} tokens",
         SESSION_BYPASS_COUNT_BUDGET, SESSION_BYPASS_TOKEN_BUDGET,
     )
 }
@@ -1065,27 +1335,29 @@ fn economic_message(
     config: &Config,
     efficiency: Option<&SessionEfficiencySummary>,
     economics: Option<&SessionEconomicSummary>,
-) -> String {
-    let reported = economics
+) -> (String, String) {
+    let billed = economics
         .and_then(|summary| summary.reported_actual.as_ref())
         .map(|amount| {
             format!(
-                "\nUser-supplied reported amount (unverified): saved {} {} ({} -> {})",
+                "Billed actual (user-supplied, unverified): saved {} {} ({} -> {})",
                 amount.currency,
                 format_signed_microunits(amount.savings_microunits),
                 format_microunits(amount.baseline_microunits),
                 format_microunits(amount.delivered_microunits),
             )
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| "Billed actual: not measured".to_owned());
     if !config.billing.public_estimate_enabled {
-        return format!(
-            "Potential public-list savings: unavailable (opt-in disabled; not an invoice){reported}"
+        return (
+            "potential public-list value unavailable (opt-in disabled; not an invoice)".into(),
+            billed,
         );
     }
     let Some(efficiency) = efficiency else {
-        return format!(
-            "Potential public-list savings: unavailable (ledger unavailable; not an invoice){reported}"
+        return (
+            "potential public-list value unavailable (ledger unavailable; not an invoice)".into(),
+            billed,
         );
     };
     let avoided_tokens = efficiency
@@ -1107,7 +1379,7 @@ fn economic_message(
                 },
             )
         });
-    match estimate {
+    let potential = match estimate {
         Ok(RawPublicEstimate {
             currency,
             savings_microunits,
@@ -1117,15 +1389,14 @@ fn economic_message(
             price_table_identity,
             ..
         }) => format!(
-            "Potential public-list savings: {currency} {} preliminary from {avoided_tokens} avoided input tokens ({model}/{method}, basis={pricing_basis}, catalog={price_table_identity}); not an invoice{reported}",
+            "potential public-list value {currency} {} preliminary ({model}/{method}, basis={pricing_basis}, catalog={price_table_identity}; not an invoice)",
             format_microunits(savings_microunits),
         ),
         Err(error) => {
-            format!(
-                "Potential public-list savings: unavailable ({error}); not an invoice{reported}"
-            )
+            format!("potential public-list value unavailable ({error}; not an invoice)")
         }
-    }
+    };
+    (potential, billed)
 }
 
 fn format_microunits(value: u64) -> String {
@@ -1184,6 +1455,24 @@ pub async fn feedback(config: &Config) {
     if state.operations == 0 && session_summary.is_none() {
         return;
     }
+    // A prompt boundary is where the operator is actually reading. The transition notice rides a
+    // `systemMessage` on the tool call that detected it, which is immediate but easy to scroll
+    // past, and a status line has to be configured to exist. Restating the *current* state here
+    // is what makes degradation impossible to miss without turning it into per-command noise:
+    // a prompt boundary happens once per user turn by construction.
+    // A new user prompt starts a new turn, so the next tool call is at a turn boundary.
+    if event == "UserPromptSubmit" {
+        let _ = update_session(config, &input, |state| state.operations_this_turn = 0);
+    }
+    if event == "UserPromptSubmit" && state.accounting_degraded {
+        let _ = write_hook_json(json!({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": "HZR ACCOUNTING DEGRADED: the ledger is not recording this session's operations, so savings and leakage for this interval are unknown rather than zero. Check `hzr daemon service status`.",
+            }
+        }));
+        return;
+    }
     match event {
         "UserPromptSubmit" if crosses_threshold && !state.nudged => {
             let updated = update_session(config, &input, |state| state.nudged = true);
@@ -1213,6 +1502,66 @@ pub async fn feedback(config: &Config) {
         }
         _ => {}
     }
+}
+
+pub fn statusline(config: &Config) {
+    let Ok(input) = read_input() else {
+        return;
+    };
+    if let Some(upstream) = statusline_upstream() {
+        let bytes = serde_json::to_vec(&input).unwrap_or_default();
+        if let Some(rendered) = run_statusline_upstream(&upstream, &bytes) {
+            println!("{rendered}");
+        }
+    }
+    println!(
+        "{}",
+        accounting_statusline(read_session(config, &input).as_ref())
+    );
+}
+
+fn accounting_statusline(state: Option<&SessionFeedback>) -> &'static str {
+    match state {
+        Some(state) if state.accounting_degraded => "ACCOUNTING: DEGRADED",
+        Some(state) if state.accounting_was_degraded => "ACCOUNTING: RECOVERED (SESSION PARTIAL)",
+        Some(_) => "ACCOUNTING: COMPLETE",
+        None => "ACCOUNTING: UNKNOWN",
+    }
+}
+
+fn statusline_upstream() -> Option<String> {
+    let encoded = std::env::var(STATUSLINE_UPSTREAM_ENV).ok()?;
+    let bytes = hex::decode(encoded).ok()?;
+    let value = serde_json::from_slice::<Value>(&bytes).ok()?;
+    value
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn run_statusline_upstream(command: &str, input: &[u8]) -> Option<String> {
+    #[cfg(unix)]
+    let mut child = std::process::Command::new("/bin/sh");
+    #[cfg(windows)]
+    let mut child = std::process::Command::new("cmd.exe");
+    #[cfg(unix)]
+    child.arg("-c").arg(command);
+    #[cfg(windows)]
+    child.arg("/C").arg(command);
+    let mut child = child
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.as_mut()?.write_all(input).ok()?;
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    let rendered = rendered.trim_end();
+    (!rendered.is_empty()).then(|| rendered.chars().take(4_096).collect())
 }
 
 fn registered_workspace_root(config: &Config, requested: &str) -> Option<String> {
@@ -1561,13 +1910,15 @@ mod tests {
         ProbeClass, ProbeDecision, ProbeLayer, ProbeNativeMode, ProbeSurface,
     };
     use super::{
-        HookFidelityPreflight, SessionFeedback, agent_attribution, agent_identity,
+        HookFidelityPreflight, SessionFeedback, accounting_statusline, accounting_transition,
+        agent_attribution, agent_identity, apply_filter_placement, attach_host_grant,
         attach_policy_feedback, attach_session_attribution, clear_reconciled_rewrites,
         context_brief, deepest_registered_root, degraded_rewrite_coverage, fallback_decision,
         honor_host_permission_mode, hook_fidelity_preflight, native_observation_policy,
-        native_replacement, observe_input, read_session, record_daemon_unavailable_operation,
-        record_degraded_rewrite_at, record_local_policy_decision, record_native_correction,
-        render_command, scorecard_message, steer_to_first_class,
+        native_replacement, observe_input, read_session, reconcile_host_grant,
+        record_daemon_unavailable_operation, record_degraded_rewrite_at,
+        record_local_policy_decision, record_native_correction, render_command, scorecard_message,
+        steer_to_first_class, update_session,
     };
 
     #[test]
@@ -2069,6 +2420,138 @@ mod tests {
         assert!(matches!(untouched, RewriteDecision::Ask { .. }));
     }
 
+    #[test]
+    fn acceptance_gate_host_grant_verdict_is_identical_across_policy_surfaces() {
+        let bypass = serde_json::json!({"permission_mode": "bypassPermissions"});
+        for probe in super::anti_evasion_fixture::load_anti_evasion_probes() {
+            let decision = match probe.decision {
+                ProbeDecision::Ask => RewriteDecision::Ask {
+                    proposed: probe
+                        .route
+                        .clone()
+                        .or_else(|| probe.command.clone())
+                        .map(CanonicalCommand::shell),
+                    reason: format!("{} requires approval", probe.id),
+                },
+                ProbeDecision::Deny => RewriteDecision::Deny {
+                    reason: format!("{} is explicitly denied", probe.id),
+                },
+                _ => continue,
+            };
+            let hook = honor_host_permission_mode(&bypass, decision.clone());
+            let exec = reconcile_host_grant(decision, true);
+            assert_eq!(hook, exec, "cross-surface verdict drift for {}", probe.id);
+            if probe.decision == ProbeDecision::Deny {
+                assert!(
+                    matches!(hook, RewriteDecision::Deny { .. }),
+                    "grant weakened explicit deny for {}",
+                    probe.id
+                );
+            }
+        }
+    }
+
+    /// Placement is a real policy dimension, and the default arm is unchanged.
+    ///
+    /// The point of the dimension is that delivered bytes and billed input are different axes: a
+    /// filter firing mid-turn rewrites content a cached request prefix already carries. Under the
+    /// default the behaviour must be byte-for-byte what shipped, or the benchmark comparing the
+    /// two arms is comparing against something that already moved.
+    #[test]
+    fn acceptance_gate_filter_placement_defers_mid_turn_only_when_policy_says_so() {
+        let directory = tempdir().expect("temporary directory");
+        let mut config = Config {
+            data_dir: directory.path().to_path_buf(),
+            ..Config::default()
+        };
+        let input = serde_json::json!({"session_id": "placement", "cwd": "/work"});
+        let rewrite = || RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("rtk read a"),
+            source: RewriteSource::HzrPolicy,
+            reason: "managed route".into(),
+        };
+
+        // Default arm: placement never intervenes, whatever the turn position.
+        for _ in 0..3 {
+            let _ = update_session(&config, &input, |state| {
+                state.operations_this_turn = state.operations_this_turn.saturating_add(1);
+            });
+            assert!(
+                matches!(
+                    apply_filter_placement(&config, &input, rewrite()),
+                    RewriteDecision::AllowRewrite { .. }
+                ),
+                "the shipped default must keep filtering wherever the route applies"
+            );
+        }
+
+        // Turn-boundary arm: the turn's first operation still filters.
+        config.policy.filter_placement = hzr_protocol::FilterPlacement::TurnBoundary;
+        let _ = update_session(&config, &input, |state| state.operations_this_turn = 1);
+        assert!(matches!(
+            apply_filter_placement(&config, &input, rewrite()),
+            RewriteDecision::AllowRewrite { .. }
+        ));
+
+        // ...and a later one runs raw, with the forgone reduction counted rather than hidden.
+        let _ = update_session(&config, &input, |state| state.operations_this_turn = 2);
+        let deferred = apply_filter_placement(&config, &input, rewrite());
+        assert!(
+            matches!(&deferred, RewriteDecision::AllowRaw { reason }
+                if reason.contains("turn_boundary") && reason.contains("no savings credit")),
+            "a deferral must name the policy and admit it earns no credit: {deferred:?}"
+        );
+        let state = read_session(&config, &input).expect("session state");
+        assert_eq!(
+            state.placement_deferred_operations, 1,
+            "reduction given up to protect the prefix must be measurable"
+        );
+
+        // A deny is not a prefix question.
+        let denied = apply_filter_placement(
+            &config,
+            &input,
+            RewriteDecision::Deny {
+                reason: "explicit deny".into(),
+            },
+        );
+        assert!(matches!(denied, RewriteDecision::Deny { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn acceptance_gate_bypass_permissions_returned_command_executes_end_to_end() {
+        let input = serde_json::json!({
+            "permission_mode": "bypassPermissions",
+            "session_id": "live-repro-session"
+        });
+        let decision = honor_host_permission_mode(
+            &input,
+            RewriteDecision::Ask {
+                proposed: Some(CanonicalCommand::shell(
+                    "test \"$HZR_SESSION_ID\" = live-repro-session && \
+                     test -n \"$HZR_HOST_EXECUTION_GRANT\" && \
+                     test \"$HZR_INTERNAL_HOST_GRANT_APPLIED\" = 1",
+                )),
+                reason: "nested exec policy requires approval".into(),
+            },
+        );
+        let decision = attach_session_attribution(&input, decision);
+        let decision = attach_host_grant(&input, decision);
+        let command = match decision {
+            RewriteDecision::AllowRewrite { command, .. } => Some(command),
+            _ => None,
+        }
+        .expect("host-granted command was not executable");
+        let rendered = render_command(&command).expect("returned shell command");
+        let status = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(rendered)
+            .status()
+            .expect("returned command starts");
+        assert_eq!(status.code(), Some(0), "live repro must not exit 77");
+    }
+
     /// The executed command must carry the session that will be charged for it.
     ///
     /// Policy events are recorded by the hook, which knows the session; operations are recorded
@@ -2156,6 +2639,7 @@ mod tests {
                     },
                     detail: None,
                     evasion: Some(&evasion),
+                    host_grant_applied: false,
                 },
             )
             .expect("recorded avoidable bypass");
@@ -2226,6 +2710,7 @@ mod tests {
                     },
                     detail: None,
                     evasion: None,
+                    host_grant_applied: false,
                 },
             )
             .expect("other session operation");
@@ -2246,6 +2731,7 @@ mod tests {
             corrections: 5,
             native_denials: 1,
             nudged: true,
+            ..SessionFeedback::default()
         };
         let summary = SessionEvasionSummary {
             operations: 4,
@@ -2285,8 +2771,8 @@ mod tests {
 
         assert!(message.contains("Saved (estimated net): 8000 tokens (66.7%"));
         assert!(message.contains("12000 -> 4000"));
-        assert!(message.contains("Top: hzr read <arguments omitted> x5"));
-        assert!(message.contains("hook events 464"));
+        assert!(message.contains("Top measured: hzr read <arguments omitted> x5"));
+        assert!(message.contains("hook-only events: 457"));
         assert!(message.contains("Policy: prevented 5 (1 native denial)"));
         assert!(message.contains("avoidable leakage 0 ops / 0 tokens"));
         assert!(message.contains("good: no proven avoidable bypass executed"));
@@ -2301,6 +2787,7 @@ mod tests {
             corrections: 2,
             native_denials: 0,
             nudged: false,
+            ..SessionFeedback::default()
         };
 
         let message = scorecard_message(&Config::default(), &state, None, None, None);
@@ -2325,12 +2812,150 @@ mod tests {
             ..SessionEconomicSummary::default()
         };
 
-        let message = super::economic_message(&Config::default(), None, Some(&economics));
+        let (potential, billed) =
+            super::economic_message(&Config::default(), None, Some(&economics));
+        let message = format!("{potential}\n{billed}");
 
         assert!(message.contains("opt-in disabled"));
-        assert!(message.contains("User-supplied reported amount (unverified)"));
-        assert!(message.contains("USD 1.250000"));
+        assert!(message.contains("Billed actual (user-supplied, unverified)"));
+        assert!(message.contains("saved USD 1.250000"));
         assert!(!message.contains("Provider invoice"));
+    }
+
+    #[test]
+    fn acceptance_gate_accounting_transition_notices_are_edge_triggered() {
+        let directory = tempdir().expect("temporary directory");
+        let config = config(directory.path());
+        let input = serde_json::json!({"session_id": "transition-session"});
+
+        let degraded = accounting_transition(&config, &input, true)
+            .expect("first degraded rewrite must announce the transition");
+        assert!(degraded.contains("ACCOUNTING DEGRADED"));
+        for _ in 0..9 {
+            assert_eq!(accounting_transition(&config, &input, true), None);
+        }
+        let degraded_state = read_session(&config, &input).expect("degraded session state");
+        assert_eq!(
+            accounting_statusline(Some(&degraded_state)),
+            "ACCOUNTING: DEGRADED"
+        );
+
+        let recovered = accounting_transition(&config, &input, false)
+            .expect("first successful managed rewrite must announce recovery");
+        assert!(recovered.contains("ACCOUNTING RECOVERED"));
+        assert_eq!(accounting_transition(&config, &input, false), None);
+        let recovered_state = read_session(&config, &input).expect("recovered session state");
+        assert_eq!(
+            accounting_statusline(Some(&recovered_state)),
+            "ACCOUNTING: RECOVERED (SESSION PARTIAL)"
+        );
+        assert_eq!(accounting_statusline(None), "ACCOUNTING: UNKNOWN");
+    }
+
+    #[test]
+    fn acceptance_gate_degraded_scorecard_withholds_partial_totals() {
+        let state = SessionFeedback {
+            operations: 10,
+            accounting_was_degraded: true,
+            ..SessionFeedback::default()
+        };
+        let efficiency = SessionEfficiencySummary {
+            operations: 4,
+            baseline_tokens_estimated: 1_000,
+            delivered_tokens_estimated: 100,
+            gross_avoided_tokens_estimated: 900,
+            net_avoided_tokens_estimated: 900,
+            ..SessionEfficiencySummary::default()
+        };
+        let message = scorecard_message(
+            &Config::default(),
+            &state,
+            Some(&SessionEvasionSummary::default()),
+            Some(&efficiency),
+            None,
+        );
+
+        assert!(message.contains("session accounting was degraded"));
+        assert!(message.contains("partial ledger totals withheld"));
+        assert!(!message.contains("Saved (estimated net): 900"));
+        assert!(!message.contains("avoidable leakage 0 ops"));
+    }
+
+    #[test]
+    fn acceptance_gate_scorecard_prices_saved_inline_without_merging_billed() {
+        let mut config = Config::default();
+        config.billing.public_estimate_enabled = true;
+        config.billing.harness = "codex".into();
+        config.billing.provider = "openai".into();
+        config.billing.model = "gpt-5.6-sol".into();
+        config.billing.method = "standard_short_context_lte_272k".into();
+        config.billing.request_input_tokens = Some(100_000);
+        config.billing.pricing_basis = "input".into();
+        let efficiency = SessionEfficiencySummary {
+            operations: 1,
+            total_observed_operations: 1,
+            baseline_tokens_estimated: 1_000_000,
+            delivered_tokens_estimated: 0,
+            gross_avoided_tokens_estimated: 1_000_000,
+            net_avoided_tokens_estimated: 1_000_000,
+            ..SessionEfficiencySummary::default()
+        };
+        let economics = SessionEconomicSummary {
+            reported_actual: Some(EconomicAmount {
+                currency: "USD".into(),
+                baseline_microunits: 2_000_000,
+                delivered_microunits: 1_000_000,
+                savings_microunits: 1_000_000,
+            }),
+            ..SessionEconomicSummary::default()
+        };
+        let message = scorecard_message(
+            &config,
+            &SessionFeedback::default(),
+            None,
+            Some(&efficiency),
+            Some(&economics),
+        );
+        let mut lines = message.lines();
+        assert_eq!(lines.next(), Some("HZR session ROI"));
+        let saved = lines.next().expect("saved line");
+        let billed = lines.next().expect("billed line");
+        assert!(saved.contains("Saved (estimated net): 1000000 tokens"));
+        assert!(saved.contains("potential public-list value USD"));
+        assert!(!saved.contains("Billed actual"));
+        assert!(billed.contains("Billed actual (user-supplied, unverified)"));
+        assert!(!billed.contains("potential public-list value"));
+    }
+
+    #[test]
+    fn acceptance_gate_scorecard_explains_zero_and_granted_asks() {
+        let state = SessionFeedback {
+            operations: 1,
+            host_grant_seen: true,
+            ..SessionFeedback::default()
+        };
+        let efficiency = SessionEfficiencySummary {
+            operations: 1,
+            total_observed_operations: 1,
+            baseline_tokens_estimated: 100,
+            delivered_tokens_estimated: 100,
+            ..SessionEfficiencySummary::default()
+        };
+        let evasion = SessionEvasionSummary {
+            policy_asks: 21,
+            ..SessionEvasionSummary::default()
+        };
+        let message = scorecard_message(
+            &Config::default(),
+            &state,
+            Some(&evasion),
+            Some(&efficiency),
+            None,
+        );
+
+        assert!(message.contains("zero explained: every measured row is zero-credit by policy"));
+        assert!(message.contains("asked 21 (PROPAGATION FAILURE"));
+        assert!(!message.contains("; asked 21;"));
     }
 
     #[test]

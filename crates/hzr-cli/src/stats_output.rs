@@ -17,7 +17,11 @@
 
 use std::io::{self, IsTerminal, Write};
 
-use crate::stats::{StatsReport, with_explicit_mcp_channel};
+use hzr_protocol::AccountingStage;
+
+use crate::stats::{
+    EconomicScopeRow, EconomicsReport, StatsReport, ZeroReductionCause, with_explicit_mcp_channel,
+};
 
 /// Inner width of every framed panel. Kept in one place so the alignment assertion in the
 /// tests stays meaningful.
@@ -37,8 +41,8 @@ fn write_stats(output: &mut impl Write, report: &StatsReport, color: bool) -> io
         style("// ZERO-REDUNDANCY LEDGER", "1;37", color)
     )?;
 
+    write_economics(output, &report.economics, color)?;
     write_local_reduction(output, report, color)?;
-    write_raw_public_estimate(output, report, color)?;
     write_optimizer_bypass(output, report, color)?;
     write_evasion(output, report, color)?;
     write_operation_families(output, report, color)?;
@@ -49,57 +53,121 @@ fn write_stats(output: &mut impl Write, report: &StatsReport, color: bool) -> io
     write_integrity(output, report, color)
 }
 
-fn write_raw_public_estimate(
+/// Section 0 — what the reduction is worth, for the two scopes an operator compares.
+///
+/// This sits above the token headline deliberately. 0.6.3 priced exactly one scope, at the very
+/// bottom of the output, and only when an opt-in flag was already set — so the release that
+/// introduced money shipped a surface on which money was, in practice, never visible.
+///
+/// Potential and billed are adjacent columns and never a sum. One is public-list arithmetic on
+/// an estimate; the other is an imported receipt. Adding them would manufacture a number with no
+/// referent, which is exactly the mistake the estimated/actual split exists to prevent.
+fn write_economics(
     output: &mut impl Write,
-    report: &StatsReport,
+    economics: &EconomicsReport,
     color: bool,
 ) -> io::Result<()> {
     writeln!(output)?;
     writeln!(
         output,
         "{}  {}",
-        style("POTENTIAL COST", "1;38;5;208", color),
+        style("ECONOMICS", "1;38;5;208", color),
         style(
-            "raw_public_estimate · preliminary · not an invoice",
+            "estimated potential · public list price · never an invoice",
             "2;37",
             color
         )
     )?;
-    if let Some(estimate) = &report.raw_public_estimate {
+    let columns = [
+        Column::left(17),
+        Column::right(14),
+        Column::right(15),
+        Column::right(15),
+    ];
+    write_rule(output, '╭', '┬', '╮', &columns)?;
+    write_row(
+        output,
+        &columns,
+        &[
+            "SCOPE".into(),
+            "AVOIDED TOKENS".into(),
+            "POTENTIAL SAVED".into(),
+            "BILLED (ACTUAL)".into(),
+        ],
+    )?;
+    write_rule(output, '├', '┼', '┤', &columns)?;
+    for row in &economics.rows {
+        write_economic_row(output, &columns, row)?;
+    }
+    write_rule(output, '╰', '┴', '╯', &columns)?;
+
+    if let Some(pricing) = &economics.pricing {
         writeln!(
             output,
-            "   potential saved {} {} from {} avoided input tokens",
-            estimate.currency,
-            format_microunits(estimate.savings_microunits),
-            format_count(estimate.avoided_input_tokens_estimated),
+            "   {} / {} / {} / {} · basis={}",
+            pricing.harness, pricing.provider, pricing.model, pricing.method, pricing.pricing_basis
         )?;
         writeln!(
             output,
-            "   {} / {} / {} / {} · basis={} · catalog={} retrieved={}",
-            estimate.harness,
-            estimate.provider,
-            estimate.model,
-            estimate.method,
-            estimate.pricing_basis,
-            estimate.price_table_identity,
-            estimate.retrieved_at,
-        )?;
-        writeln!(output, "   {}", estimate.disclaimer)?;
-    } else {
-        writeln!(
-            output,
-            "   unavailable: {}",
-            report
-                .raw_public_estimate_unavailable_reason
-                .as_deref()
-                .unwrap_or("no exact pricing evidence")
+            "   {}",
+            style(
+                &format!(
+                    "catalog={} retrieved={}",
+                    pricing.price_table_identity, pricing.retrieved_at
+                ),
+                "2;37",
+                color
+            )
         )?;
     }
-    Ok(())
+    if let Some(reason) = &economics.unavailable_reason {
+        writeln!(output, "   potential value unavailable: {reason}")?;
+    }
+    for step in &economics.enable_steps {
+        writeln!(output, "   {}", style(step, "2;37", color))?;
+    }
+    writeln!(
+        output,
+        "   {}",
+        style(
+            "potential and billed are different evidence and are never summed",
+            "2;37",
+            color
+        )
+    )
 }
 
-fn format_microunits(value: u64) -> String {
-    format!("{}.{:06}", value / 1_000_000, value % 1_000_000)
+fn write_economic_row(
+    output: &mut impl Write,
+    columns: &[Column],
+    row: &EconomicScopeRow,
+) -> io::Result<()> {
+    // "not measured" is not a cosmetic choice. A scope with no receipt has produced no evidence
+    // about money at all, and rendering that as `USD 0.00` states it cost nothing.
+    let avoided = if row.scope_resolved {
+        format_count(row.avoided_input_tokens_estimated)
+    } else {
+        "—".to_owned()
+    };
+    let potential = match (&row.potential_saved, row.scope_resolved) {
+        (Some(amount), _) => format_money(&amount.currency, amount.microunits),
+        (None, true) => "unavailable".to_owned(),
+        (None, false) => "—".to_owned(),
+    };
+    let billed = match &row.billed_actual {
+        Some(amount) => format_money(&amount.currency, amount.microunits),
+        None => "not measured".to_owned(),
+    };
+    write_row(
+        output,
+        columns,
+        &[
+            row.scope.into(),
+            avoided.as_str().into(),
+            potential.as_str().into(),
+            billed.as_str().into(),
+        ],
+    )
 }
 
 fn write_evasion(output: &mut impl Write, report: &StatsReport, color: bool) -> io::Result<()> {
@@ -168,26 +236,62 @@ fn write_operation_modes(
         style("OPERATION MODES", "1;38;5;208", color),
         style("estimated · stage-aware · top 12", "2;37", color)
     )?;
-    let columns = [10, 19, 20, 8, 11];
+    let columns = [
+        Column::left(13),
+        Column::left(17),
+        Column::left(10),
+        Column::left(3),
+        Column::right(5),
+        Column::right(7),
+    ];
     write_rule(output, '╭', '┬', '╮', &columns)?;
-    writeln!(
+    write_row(
         output,
-        "│ {:<8} │ {:<17} │ {:<18} │ {:>6} │ {:>9} │",
-        "FAMILY", "MODE", "STAGE", "CALLS", "DELIVERED"
+        &columns,
+        &[
+            "FAMILY".into(),
+            "MODE".into(),
+            "STAGE".into(),
+            "RAT".into(),
+            "CALLS".into(),
+            "DELIV".into(),
+        ],
     )?;
     write_rule(output, '├', '┼', '┤', &columns)?;
     for mode in report.by_mode.iter().take(12) {
-        writeln!(
+        let calls = format_count(mode.operations);
+        let delivered = format_count(mode.delivered_tokens_estimated);
+        write_row(
             output,
-            "│ {:<8} │ {:<17} │ {:<18} │ {:>6} │ {:>9} │",
-            mode.operation.as_str(),
-            truncate(mode.mode.as_str(), 17),
-            truncate(mode.stage.as_str(), 18),
-            format_count(mode.operations),
-            format_count(mode.delivered_tokens_estimated)
+            &columns,
+            &[
+                mode.operation.as_str().into(),
+                mode.mode.as_str().into(),
+                short_stage(mode.stage).into(),
+                if stage_in_ratio(mode.stage) {
+                    "yes"
+                } else {
+                    "no"
+                }
+                .into(),
+                calls.as_str().into(),
+                delivered.as_str().into(),
+            ],
         )?;
     }
     write_rule(output, '╰', '┴', '╯', &columns)?;
+    // Without this the panel and the headline disagree by hundreds of operations and the output
+    // offers no way to tell that they are answering two different questions.
+    writeln!(
+        output,
+        "   {}",
+        style(
+            "RAT = counted in the reduction ratio. Delivery and control-plane stages are shown \
+             here but excluded there, so a delivery cannot double-count the row that measured it.",
+            "2;37",
+            color
+        )
+    )?;
     if report.by_mode.len() > 12 {
         writeln!(
             output,
@@ -196,6 +300,30 @@ fn write_operation_modes(
         )?;
     }
     Ok(())
+}
+
+/// Whether a stage is inside the reduction ratio's denominator.
+///
+/// This is the renderer's copy of the SQL predicate every efficiency query applies. It is a
+/// closed enum, so a new stage forces a decision here instead of silently defaulting.
+const fn stage_in_ratio(stage: AccountingStage) -> bool {
+    match stage {
+        AccountingStage::InternalTransport | AccountingStage::StandaloneDelivery => true,
+        AccountingStage::FinalDelivery | AccountingStage::ControlPlane => false,
+    }
+}
+
+/// Stable short labels for a closed enum.
+///
+/// Mid-word ellipsis on a fixed vocabulary destroys information for no reason — `standalone_delive…`
+/// tells a reader less than `standalone` and looks like a rendering fault.
+const fn short_stage(stage: AccountingStage) -> &'static str {
+    match stage {
+        AccountingStage::InternalTransport => "internal",
+        AccountingStage::FinalDelivery => "delivery",
+        AccountingStage::StandaloneDelivery => "standalone",
+        AccountingStage::ControlPlane => "control",
+    }
 }
 
 fn write_operation_families(
@@ -213,12 +341,22 @@ fn write_operation_families(
         style("OPERATION FAMILIES", "1;38;5;208", color),
         style("estimated · arguments and content omitted", "2;37", color)
     )?;
-    let columns = [24, 20, 12, 13];
+    let columns = [
+        Column::left(22),
+        Column::left(18),
+        Column::right(10),
+        Column::right(11),
+    ];
     write_rule(output, '╭', '┬', '╮', &columns)?;
-    writeln!(
+    write_row(
         output,
-        "│ {:<22} │ {:<18} │ {:>10} │ {:>11} │",
-        "FAMILY", "ROUTE / REPLACE?", "CALLS", "DELIVERED"
+        &columns,
+        &[
+            "FAMILY".into(),
+            "ROUTE / REPLACE?".into(),
+            "CALLS".into(),
+            "DELIVERED".into(),
+        ],
     )?;
     write_rule(output, '├', '┼', '┤', &columns)?;
     for family in report.by_family.iter().take(12) {
@@ -233,13 +371,17 @@ fn write_operation_families(
             hzr_core::ReplacementCapability::Unknown => "unknown",
         };
         let route = format!("{route} / {capability}");
-        writeln!(
+        let calls = format_count(family.operations);
+        let delivered = format_count(family.delivered_tokens_estimated);
+        write_row(
             output,
-            "│ {:<22} │ {:<18} │ {:>10} │ {:>11} │",
-            truncate(&family.family, 22),
-            truncate(&route, 18),
-            format_count(family.operations),
-            format_count(family.delivered_tokens_estimated)
+            &columns,
+            &[
+                family.family.as_str().into(),
+                route.as_str().into(),
+                calls.as_str().into(),
+                delivered.as_str().into(),
+            ],
         )?;
     }
     write_rule(output, '╰', '┴', '╯', &columns)
@@ -288,6 +430,21 @@ fn write_local_reduction(
         "│  {}  │",
         style(&progress_bar(savings.reduction_pct, 68), "38;5;208", color)
     )?;
+    // A zero headline has three very different meanings and 0.6.3 rendered all of them
+    // identically. The upgrade case is the dangerous one: a policy-version bump moved the entire
+    // recorded history out of the default scope, and the panel went on printing `0.0%` as though
+    // it had measured something. An unexplained zero is a claim HZR cannot support.
+    let disclosure = zero_reduction_disclosure(report);
+    if !disclosure.is_empty() {
+        writeln!(output, "│{}│", " ".repeat(WIDTH))?;
+        for line in disclosure {
+            debug_assert!(
+                line.chars().count() <= 68,
+                "a disclosure truncated mid-sentence explains nothing: {line}"
+            );
+            writeln!(output, "│  {:<68}  │", truncate(&line, 68))?;
+        }
+    }
     if savings.regression_tokens_estimated > 0 {
         // Regressions are part of the net figure; hiding them would overstate the gain.
         writeln!(output, "│{}│", " ".repeat(WIDTH))?;
@@ -314,6 +471,37 @@ fn write_local_reduction(
             color
         )
     )
+}
+
+/// State why the headline reads zero, in the panel that reads zero.
+///
+/// The recovery command is spelled out because it is the whole remedy for the common case: the
+/// history is intact and one flag brings it back. Leaving the operator to discover
+/// `--accounting-version all` from `--help` is how a working install reads as a broken one.
+fn zero_reduction_disclosure(report: &StatsReport) -> Vec<String> {
+    match report.zero_reduction_cause {
+        ZeroReductionCause::NotZero => Vec::new(),
+        ZeroReductionCause::ExcludedHistory => vec![
+            "0.0% is a scope artifact, not a measurement.".to_owned(),
+            format!(
+                "{} operation(s) were recorded under an earlier accounting",
+                format_count(report.excluded_legacy_operations)
+            ),
+            format!(
+                "policy than {} and sit outside this view.",
+                report.accounting_policy_version
+            ),
+            "recover them with: hzr stats --accounting-version all".to_owned(),
+        ],
+        ZeroReductionCause::OnlyZeroCreditOperations => vec![
+            "every operation in scope earns no savings credit by policy:".to_owned(),
+            "generative operations and bypasses deliver exactly what they".to_owned(),
+            "consumed. A clean zero, not a lost measurement.".to_owned(),
+        ],
+        ZeroReductionCause::NoOperations => {
+            vec!["no operation has been recorded for this scope yet.".to_owned()]
+        }
+    }
 }
 
 /// Section 2 — what the headline ratio does not say.
@@ -461,23 +649,41 @@ fn write_subsystems(output: &mut impl Write, report: &StatsReport, color: bool) 
         style("WHERE IT WAS AVOIDED", "1;38;5;208", color),
         style("estimated", "2;37", color)
     )?;
-    let columns = [14, 10, 13, 9, 22];
+    let columns = [
+        Column::left(12),
+        Column::right(8),
+        Column::right(11),
+        Column::right(7),
+        Column::left(20),
+    ];
     write_rule(output, '╭', '┬', '╮', &columns)?;
-    writeln!(
+    write_row(
         output,
-        "│ {:<12} │ {:>8} │ {:>11} │ {:>7} │ {:<20} │",
-        "SUBSYSTEM", "CALLS", "AVOIDED", "SHARE", "DISTRIBUTION"
+        &columns,
+        &[
+            "SUBSYSTEM".into(),
+            "CALLS".into(),
+            "AVOIDED".into(),
+            "SHARE".into(),
+            "DISTRIBUTION".into(),
+        ],
     )?;
     write_rule(output, '├', '┼', '┤', &columns)?;
     for subsystem in &report.by_subsystem {
-        writeln!(
+        let calls = format_count(subsystem.operations);
+        let avoided = format_count(subsystem.net_avoided_tokens_estimated.max(0) as u64);
+        let share = format!("{:.1}%", subsystem.share_pct);
+        let bar = style(&progress_bar(subsystem.share_pct, 20), "38;5;208", color);
+        write_row(
             output,
-            "│ {:<12} │ {:>8} │ {:>11} │ {:>7} │ {} │",
-            subsystem.subsystem,
-            format_count(subsystem.operations),
-            format_count(subsystem.net_avoided_tokens_estimated.max(0) as u64),
-            format!("{:.1}%", subsystem.share_pct),
-            style(&progress_bar(subsystem.share_pct, 20), "38;5;208", color)
+            &columns,
+            &[
+                subsystem.subsystem.into(),
+                calls.as_str().into(),
+                avoided.as_str().into(),
+                share.as_str().into(),
+                Cell::Styled(&bar),
+            ],
         )?;
     }
     write_rule(output, '╰', '┴', '╯', &columns)
@@ -504,22 +710,37 @@ fn write_hot_paths(output: &mut impl Write, report: &StatsReport, color: bool) -
         style("TOP COMMANDS BY TOKENS AVOIDED", "1;38;5;208", color),
         style("estimated · ranked by absolute, not percent", "2;37", color)
     )?;
-    let columns = [37, 10, 13, 9];
+    let columns = [
+        Column::left(35),
+        Column::right(8),
+        Column::right(11),
+        Column::right(7),
+    ];
     write_rule(output, '╭', '┬', '╮', &columns)?;
-    writeln!(
+    write_row(
         output,
-        "│ {:<35} │ {:>8} │ {:>11} │ {:>7} │",
-        "COMMAND", "CALLS", "AVOIDED", "RATIO"
+        &columns,
+        &[
+            "COMMAND".into(),
+            "CALLS".into(),
+            "AVOIDED".into(),
+            "RATIO".into(),
+        ],
     )?;
     write_rule(output, '├', '┼', '┤', &columns)?;
     for command in ranked.iter().take(12) {
-        writeln!(
+        let calls = format_count(command.executions);
+        let avoided = format_count(command.net_avoided_tokens_estimated.max(0) as u64);
+        let ratio = format!("{:.0}%", command.avg_savings_pct);
+        write_row(
             output,
-            "│ {:<35} │ {:>8} │ {:>11} │ {:>7} │",
-            truncate(&command.command, 35),
-            format_count(command.executions),
-            format_count(command.net_avoided_tokens_estimated.max(0) as u64),
-            format!("{:.0}%", command.avg_savings_pct)
+            &columns,
+            &[
+                command.command.as_str().into(),
+                calls.as_str().into(),
+                avoided.as_str().into(),
+                ratio.as_str().into(),
+            ],
         )?;
     }
     write_rule(output, '╰', '┴', '╯', &columns)?;
@@ -588,22 +809,41 @@ fn write_provider_usage(
         return writeln!(output, "╰{}╯", "─".repeat(WIDTH));
     }
 
-    let columns = [10, 12, 12, 14, 20];
+    let columns = [
+        Column::right(8),
+        Column::right(10),
+        Column::right(10),
+        Column::right(12),
+        Column::right(18),
+    ];
     write_rule(output, '╭', '┬', '╮', &columns)?;
-    writeln!(
+    write_row(
         output,
-        "│ {:>8} │ {:>10} │ {:>10} │ {:>12} │ {:>18} │",
-        "TASKS", "ACTUAL IN", "ACTUAL OUT", "EST. INPUT", "BILLED COST"
+        &columns,
+        &[
+            "TASKS".into(),
+            "ACTUAL IN".into(),
+            "ACTUAL OUT".into(),
+            "EST. INPUT".into(),
+            "BILLED COST".into(),
+        ],
     )?;
     write_rule(output, '├', '┼', '┤', &columns)?;
-    writeln!(
+    let tasks = format_count(usage.tasks);
+    let actual_in = format_count(usage.actual_input_tokens);
+    let actual_out = format_count(usage.actual_output_tokens);
+    let estimated_in = format_count(usage.estimated_input_tokens);
+    let billed = format!("${:.4}", usage.cost_microusd as f64 / 1_000_000.0);
+    write_row(
         output,
-        "│ {:>8} │ {:>10} │ {:>10} │ {:>12} │ {:>18} │",
-        format_count(usage.tasks),
-        format_count(usage.actual_input_tokens),
-        format_count(usage.actual_output_tokens),
-        format_count(usage.estimated_input_tokens),
-        format!("${:.4}", usage.cost_microusd as f64 / 1_000_000.0)
+        &columns,
+        &[
+            tasks.as_str().into(),
+            actual_in.as_str().into(),
+            actual_out.as_str().into(),
+            estimated_in.as_str().into(),
+            billed.as_str().into(),
+        ],
     )?;
     write_rule(output, '╰', '┴', '╯', &columns)?;
     if !report.economic_claim_ready {
@@ -639,11 +879,78 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
     let traffic = &report.traffic_coverage;
     writeln!(
         output,
-        "├─ reduction ratio covers {} of {} observed operations ({:.1}%)",
+        "├─ accounting policy {} · scope {}",
+        report.accounting_policy_version, report.accounting_version_scope
+    )?;
+    // The single most important line in this section after an upgrade. Without it the operator
+    // sees a healthy-looking `100.0%` computed over ten rows while tens of thousands sit outside
+    // the scope, and has no way to learn that from the output.
+    if report.excluded_legacy_operations > 0 {
+        writeln!(
+            output,
+            "├─ {} operation(s) written by an earlier accounting policy are EXCLUDED from every",
+            format_count(report.excluded_legacy_operations)
+        )?;
+        writeln!(
+            output,
+            "├─ figure above; see them with `hzr stats --accounting-version all`"
+        )?;
+    }
+    writeln!(
+        output,
+        "├─ reduction ratio covers {} of {} observed operations ({:.1}%) in the measured stages",
         traffic.accounted_operations,
         traffic.total_observed_operations,
         traffic.accounted_share_pct
     )?;
+    // The re-run tax used to be zero by omission. Stating it beside the coverage figures is what
+    // makes it arguable: an operator can now see whether filtering is paying for itself or being
+    // undone by repeats, instead of being told a number nothing measured.
+    if report.rerun_tax.operations > 0 {
+        writeln!(
+            output,
+            "├─ RERUN TAX: {} operation(s) / {} token(s) repeated a command already filtered in",
+            format_count(report.rerun_tax.operations),
+            format_count(report.rerun_tax.tokens_estimated)
+        )?;
+        writeln!(
+            output,
+            "├─ the same session (within {} operations). Net avoided reads {} once that cost is",
+            report.rerun_tax.detection_window_operations,
+            format_count(
+                report
+                    .rerun_tax
+                    .net_avoided_after_rerun_tax_estimated
+                    .max(0)
+                    .unsigned_abs()
+            )
+        )?;
+        writeln!(
+            output,
+            "├─ subtracted; the headline does not subtract it, because a repeat has other causes"
+        )?;
+    } else {
+        writeln!(
+            output,
+            "├─ RERUN TAX: 0 measured repeats of an already-filtered command (measured, not assumed)"
+        )?;
+    }
+    if report.stage_exclusion.operations > 0 {
+        writeln!(
+            output,
+            "├─ {} further operation(s) / {} delivered token(s) are delivery or control-plane",
+            format_count(report.stage_exclusion.operations),
+            format_count(report.stage_exclusion.delivered_tokens_estimated)
+        )?;
+        writeln!(
+            output,
+            "├─ stages: visible in OPERATION MODES, outside the ratio so a delivery cannot"
+        )?;
+        writeln!(
+            output,
+            "├─ double-count the internal_transport row that measured it"
+        )?;
+    }
     if traffic.native_unaccounted_operations > 0 {
         writeln!(
             output,
@@ -692,22 +999,118 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
     )
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Align {
+    Left,
+    Right,
+}
+
+/// One table column: a content width and an alignment, declared once.
+///
+/// 0.6.3 wrote every row as a hand-built `format!` whose padding specifiers had to be kept in
+/// sync with a separate array of rule widths. They drifted — the mode table formatted its family
+/// cell as `{:<8}` and never truncated it, so a 13-character `observability` pushed every column
+/// after it out of the frame. Declaring the column once and truncating through it makes that
+/// class of defect unrepresentable rather than merely tested for.
+#[derive(Clone, Copy)]
+struct Column {
+    width: usize,
+    align: Align,
+}
+
+impl Column {
+    const fn left(width: usize) -> Self {
+        Self {
+            width,
+            align: Align::Left,
+        }
+    }
+
+    const fn right(width: usize) -> Self {
+        Self {
+            width,
+            align: Align::Right,
+        }
+    }
+}
+
+/// A table cell.
+///
+/// `Styled` exists for the one case a width cannot be measured from the string: an ANSI-coloured
+/// progress bar, whose escape bytes are not visible columns. Its visible width is the column
+/// width by construction, so it is emitted verbatim instead of being padded or truncated.
+enum Cell<'a> {
+    Text(&'a str),
+    Styled(&'a str),
+}
+
+impl<'a> From<&'a str> for Cell<'a> {
+    fn from(value: &'a str) -> Self {
+        Self::Text(value)
+    }
+}
+
+fn write_row(output: &mut impl Write, columns: &[Column], cells: &[Cell<'_>]) -> io::Result<()> {
+    debug_assert_eq!(
+        columns.len(),
+        cells.len(),
+        "every cell must belong to a declared column"
+    );
+    let mut line = String::from("│");
+    for (column, cell) in columns.iter().zip(cells) {
+        line.push(' ');
+        match cell {
+            Cell::Text(text) => {
+                let text = truncate(text, column.width);
+                let padding = " ".repeat(column.width.saturating_sub(text.chars().count()));
+                match column.align {
+                    Align::Left => {
+                        line.push_str(&text);
+                        line.push_str(&padding);
+                    }
+                    Align::Right => {
+                        line.push_str(&padding);
+                        line.push_str(&text);
+                    }
+                }
+            }
+            Cell::Styled(text) => line.push_str(text),
+        }
+        line.push_str(" │");
+    }
+    writeln!(output, "{line}")
+}
+
 fn write_rule(
     output: &mut impl Write,
     left: char,
     joint: char,
     right: char,
-    columns: &[usize],
+    columns: &[Column],
 ) -> io::Result<()> {
     let mut line = String::from(left);
-    for (index, width) in columns.iter().enumerate() {
+    for (index, column) in columns.iter().enumerate() {
         if index > 0 {
             line.push(joint);
         }
-        line.push_str(&"─".repeat(*width));
+        // Two cells of padding surround every column's content.
+        line.push_str(&"─".repeat(column.width + 2));
     }
     line.push(right);
     writeln!(output, "{line}")
+}
+
+/// Money an operator can read at a glance without a rounding lie.
+///
+/// Two decimals for anything at or above a cent; full micro-unit precision below it, because
+/// rendering a real 0.000123 as `0.00` states that HZR saved nothing when it did not.
+fn format_money(currency: &str, microunits: u64) -> String {
+    let units = microunits as f64 / 1_000_000.0;
+    if microunits > 0 && microunits < 10_000 {
+        format!("{currency} {units:.6}")
+    } else {
+        format!("{currency} {units:.2}")
+    }
 }
 
 fn style(text: &str, code: &str, enabled: bool) -> String {
@@ -760,8 +1163,9 @@ mod tests {
 
     use crate::hook_runner::AccountingCoverage;
     use crate::stats::{
-        BypassReport, BypassToolReport, CommandSavings, DirectSavings, StatsReport,
-        SubsystemSavings, TrafficCoverage,
+        BypassReport, BypassToolReport, CommandSavings, DirectSavings, EconomicScopeRow,
+        EconomicsReport, MoneyAmount, PricingIdentity, RerunTax, StageExclusion, StatsReport,
+        SubsystemSavings, TrafficCoverage, ZeroReductionCause,
     };
 
     use super::write_stats;
@@ -832,6 +1236,42 @@ mod tests {
             economic_claim_ready: false,
             raw_public_estimate: None,
             raw_public_estimate_unavailable_reason: Some("opt-in disabled".into()),
+            economics: EconomicsReport {
+                rows: vec![
+                    EconomicScopeRow {
+                        scope: "this project",
+                        scope_resolved: true,
+                        avoided_input_tokens_estimated: 8_000,
+                        potential_saved: None,
+                        billed_actual: None,
+                        billed_receipts: 0,
+                        notes: Vec::new(),
+                    },
+                    EconomicScopeRow {
+                        scope: "global lifetime",
+                        scope_resolved: true,
+                        avoided_input_tokens_estimated: 8_000,
+                        potential_saved: None,
+                        billed_actual: None,
+                        billed_receipts: 0,
+                        notes: Vec::new(),
+                    },
+                ],
+                pricing: None,
+                unavailable_reason: Some("opt-in disabled".into()),
+                enable_steps: Vec::new(),
+            },
+            stage_exclusion: StageExclusion {
+                operations: 0,
+                delivered_tokens_estimated: 0,
+            },
+            rerun_tax: RerunTax {
+                operations: 0,
+                tokens_estimated: 0,
+                net_avoided_after_rerun_tax_estimated: 8_000,
+                detection_window_operations: 8,
+            },
+            zero_reduction_cause: ZeroReductionCause::NotZero,
             notes: Vec::new(),
         }
     }
@@ -1227,8 +1667,273 @@ mod tests {
 
         assert!(rendered.contains("OPERATION MODES"));
         assert!(rendered.contains("search_exact"));
-        assert!(rendered.contains("final_delivery"));
+        // The stage vocabulary is closed, so it renders as a stable short label rather than a
+        // mid-word ellipsis. What the reader needs from it is whether the row is counted.
+        assert!(rendered.contains("delivery"));
+        assert!(
+            rendered.contains("RAT = counted in the reduction ratio"),
+            "a stage column is useless unless the reader learns which stages count"
+        );
         assert!(rendered.contains("1 more mode/stage groups"));
+        assert_aligned(&rendered);
+    }
+
+    /// Every column must bound its own cell.
+    ///
+    /// The mode table formatted its family cell as `{:<8}` with no truncation, so the
+    /// 13-character `observability` shifted every column after it out of the frame. The gate
+    /// existed; no fixture ever fed it a name long enough to fail. This one feeds every table
+    /// the longest value its column can receive.
+    #[test]
+    fn acceptance_gate_no_cell_can_exceed_its_column() {
+        let mut report = report(
+            LedgerSummary::default(),
+            vec![command(
+                "an extremely long recorded command line that must not escape its column",
+                4_000,
+                62.5,
+            )],
+        );
+        report.by_mode = vec![
+            OperationModeSummary {
+                operation: AccountingOperationKind::Observability,
+                mode: AccountingOperationMode::ObservabilitySnapshot,
+                stage: AccountingStage::ControlPlane,
+                operations: 1,
+                delivered_tokens_estimated: 150,
+            },
+            OperationModeSummary {
+                operation: AccountingOperationKind::Search,
+                mode: AccountingOperationMode::SearchSemantic,
+                stage: AccountingStage::StandaloneDelivery,
+                operations: 987_654_321,
+                delivered_tokens_estimated: 987_654_321_000,
+            },
+        ];
+        report.by_family = vec![OperationFamilySummary {
+            family: "a-family-name-far-wider-than-its-column".into(),
+            route: OperationRoute::NativeUnaccounted,
+            operations: 987_654_321,
+            delivered_tokens_estimated: 987_654_321_000,
+            replacement_capability: ReplacementCapability::Unknown,
+        }];
+        report.by_subsystem = vec![SubsystemSavings {
+            subsystem: "an-oversized-subsystem-label",
+            operations: 987_654_321,
+            gross_avoided_tokens_estimated: 987_654_321_000,
+            regression_tokens_estimated: 0,
+            net_avoided_tokens_estimated: 987_654_321_000,
+            share_pct: 100.0,
+        }];
+        report.observed_model_usage = LedgerSummary {
+            tasks: 987_654_321,
+            accepted: 1,
+            actual_input_tokens: 987_654_321_000,
+            actual_output_tokens: 987_654_321_000,
+            estimated_input_tokens: 987_654_321_000,
+            cost_microusd: 987_654_321_000_000,
+        };
+        report.economics.rows = vec![EconomicScopeRow {
+            scope: "global lifetime",
+            scope_resolved: true,
+            avoided_input_tokens_estimated: 987_654_321_000,
+            potential_saved: Some(MoneyAmount {
+                currency: "USD".into(),
+                microunits: 987_654_321_000_000,
+            }),
+            billed_actual: Some(MoneyAmount {
+                currency: "USD".into(),
+                microunits: 987_654_321_000_000,
+            }),
+            billed_receipts: 3,
+            notes: Vec::new(),
+        }];
+
+        assert_aligned(&render(&report));
+    }
+
+    /// A default view that hides recorded history must say so, on the same screen.
+    ///
+    /// 0.6.3 bumped the accounting-policy version, which removed every previously recorded
+    /// operation from the default scope. The renderer went on printing `0 TOKENS AVOIDED /
+    /// 0.0%` and never mentioned the exclusion, so a working install read as a dead one.
+    #[test]
+    fn acceptance_gate_excluded_history_is_disclosed_with_its_recovery() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.direct_savings.net_avoided_tokens_estimated = 0;
+        report.direct_savings.gross_avoided_tokens_estimated = 0;
+        report.direct_savings.reduction_pct = 0.0;
+        report.excluded_legacy_operations = 76_682;
+        report.zero_reduction_cause = ZeroReductionCause::ExcludedHistory;
+
+        let rendered = render(&report);
+
+        assert!(
+            rendered.contains("scope artifact"),
+            "a zero produced by a scope boundary must not read as a measurement"
+        );
+        assert!(
+            rendered.contains("76.7K"),
+            "the excluded count must be shown"
+        );
+        assert!(
+            rendered.contains("hzr stats --accounting-version all"),
+            "the recovery command is the whole remedy and must be spelled out"
+        );
+        assert!(rendered.contains("EXCLUDED from every"));
+        assert_aligned(&rendered);
+    }
+
+    /// A clean zero and a scope-artifact zero are different claims.
+    #[test]
+    fn acceptance_gate_a_zero_credit_scope_is_distinguished_from_excluded_history() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.direct_savings.net_avoided_tokens_estimated = 0;
+        report.direct_savings.reduction_pct = 0.0;
+        report.excluded_legacy_operations = 0;
+        report.zero_reduction_cause = ZeroReductionCause::OnlyZeroCreditOperations;
+
+        let rendered = render(&report);
+
+        assert!(rendered.contains("no savings"));
+        assert!(rendered.contains("clean zero, not a lost measurement"));
+        assert!(!rendered.contains("scope artifact"));
+        assert_aligned(&rendered);
+    }
+
+    /// A re-run tax of zero must be a measurement, not an omission.
+    ///
+    /// Before this existed, a filtered result that made the model re-issue the same command cost
+    /// real tokens and appeared nowhere: the second run looked like ordinary traffic. Reporting
+    /// the zero explicitly is what distinguishes "measured none" from "never looked".
+    #[test]
+    fn acceptance_gate_rerun_tax_is_measured_rather_than_assumed() {
+        let clean = report(LedgerSummary::default(), Vec::new());
+        let rendered = render(&clean);
+        assert!(rendered.contains("RERUN TAX: 0 measured repeats"));
+        assert!(rendered.contains("measured, not assumed"));
+
+        let mut taxed = report(LedgerSummary::default(), Vec::new());
+        taxed.rerun_tax = RerunTax {
+            operations: 12,
+            tokens_estimated: 3_400,
+            net_avoided_after_rerun_tax_estimated: 4_600,
+            detection_window_operations: 8,
+        };
+        let rendered = render(&taxed);
+        assert!(rendered.contains("RERUN TAX: 12 operation(s) / 3.4K token(s)"));
+        assert!(
+            rendered.contains("4.6K"),
+            "the pessimistic reading must be stated, not left to the reader"
+        );
+        assert!(
+            rendered.contains("the headline does not subtract it"),
+            "a metric that shipped must not be silently redefined"
+        );
+        assert_aligned(&rendered);
+    }
+
+    /// The stage-excluded rows must reconcile the two panels that disagree without them.
+    #[test]
+    fn acceptance_gate_stage_excluded_rows_are_reported() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.stage_exclusion = StageExclusion {
+            operations: 205,
+            delivered_tokens_estimated: 38_707,
+        };
+
+        let rendered = render(&report);
+
+        assert!(rendered.contains("205"));
+        assert!(rendered.contains("delivery or control-plane"));
+        assert!(rendered.contains("double-count"));
+    }
+
+    /// Money is rendered for both scopes, and the two kinds of money never merge.
+    #[test]
+    fn acceptance_gate_economics_renders_both_scopes_without_summing_evidence() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.economics = EconomicsReport {
+            rows: vec![
+                EconomicScopeRow {
+                    scope: "this project",
+                    scope_resolved: true,
+                    avoided_input_tokens_estimated: 26_691_000,
+                    potential_saved: Some(MoneyAmount {
+                        currency: "USD".into(),
+                        microunits: 133_455_000,
+                    }),
+                    billed_actual: None,
+                    billed_receipts: 0,
+                    notes: Vec::new(),
+                },
+                EconomicScopeRow {
+                    scope: "global lifetime",
+                    scope_resolved: true,
+                    avoided_input_tokens_estimated: 252_654_876,
+                    potential_saved: Some(MoneyAmount {
+                        currency: "USD".into(),
+                        microunits: 1_263_274_380,
+                    }),
+                    billed_actual: Some(MoneyAmount {
+                        currency: "USD".into(),
+                        microunits: 412_000,
+                    }),
+                    billed_receipts: 2,
+                    notes: Vec::new(),
+                },
+            ],
+            pricing: Some(PricingIdentity {
+                harness: "claude_code".into(),
+                provider: "anthropic".into(),
+                model: "claude-opus-5".into(),
+                method: "standard".into(),
+                pricing_basis: "input".into(),
+                price_table_identity: "hzr-public-api-pricing-2026-08-26-v1".into(),
+                retrieved_at: "2026-08-26".into(),
+            }),
+            unavailable_reason: None,
+            enable_steps: Vec::new(),
+        };
+
+        let rendered = render(&report);
+
+        assert!(rendered.contains("ECONOMICS"));
+        assert!(rendered.contains("this project"));
+        assert!(rendered.contains("global lifetime"));
+        assert!(rendered.contains("USD 1263.27"));
+        assert!(rendered.contains("USD 0.41"));
+        assert!(
+            rendered.contains("not measured"),
+            "a scope with no receipt must not render a currency zero"
+        );
+        assert!(rendered.contains("never summed"));
+        assert!(
+            rendered.find("ECONOMICS") < rendered.find("LOCAL OUTPUT REDUCTION"),
+            "money belongs above the token headline, not at the bottom of the output"
+        );
+        assert_aligned(&rendered);
+    }
+
+    /// A disabled money view must state how to enable it, not merely that it is off.
+    #[test]
+    fn acceptance_gate_unavailable_pricing_names_the_steps_that_enable_it() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.economics.unavailable_reason = Some("public pricing estimate is opt-in".into());
+        report.economics.enable_steps = vec![
+            "1. `hzr billing catalog` — find the exact harness/provider/model/method row",
+            "2. set [billing] public_estimate_enabled = true in the HZR config",
+        ];
+
+        let rendered = render(&report);
+
+        assert!(rendered.contains("potential value unavailable"));
+        assert!(rendered.contains("hzr billing catalog"));
+        assert!(rendered.contains("public_estimate_enabled = true"));
+        assert!(
+            rendered.contains("unavailable"),
+            "an unpriced scope states that it is unpriced rather than showing a zero"
+        );
         assert_aligned(&rendered);
     }
 }

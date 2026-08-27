@@ -6,7 +6,7 @@ use std::time::Duration;
 use hzr_agent::{IntegrationLayout, preflight};
 use hzr_codec::ResponseCodecCoverageState;
 use hzr_core::{
-    Config, DEFAULT_FIDELITY_OPERATION_ALLOWANCE, DEFAULT_FIDELITY_TOKEN_ALLOWANCE,
+    Config, DEFAULT_FIDELITY_OPERATION_ALLOWANCE, DEFAULT_FIDELITY_TOKEN_ALLOWANCE, Ledger,
     RawPublicEstimateRequest, load_pricing_catalog, locked_engines, price_avoided_input_tokens,
 };
 use hzr_index::{
@@ -98,12 +98,12 @@ pub async fn repair_legacy_index(
 }
 
 fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
-    if status.conflict || status.hzr_entries > 6 {
+    if status.conflict || status.hzr_entries > 7 {
         check(
             "hook_ownership",
             CheckStatus::Error,
             format!(
-                "HZR={} RTK={}; exactly six HZR handlers and zero RTK handlers are allowed",
+                "HZR={} RTK={}; exactly six HZR hooks plus one accounting status line and zero RTK handlers are allowed",
                 status.hzr_entries, status.rtk_entries
             ),
         )
@@ -111,7 +111,7 @@ fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
         check(
             "hook_ownership",
             CheckStatus::Pass,
-            "native-aware dispatcher, SessionStart, observer, prompt nudge, and bounded stop scorecards",
+            "native-aware dispatcher, SessionStart, observer, prompt nudge, bounded stop scorecards, and accounting status line",
         )
     } else {
         check(
@@ -199,6 +199,36 @@ fn fidelity_durability_check(config: &Config) -> DoctorCheck {
             "fidelity_durability",
             CheckStatus::Error,
             format!("cannot inspect {}: {error}", directory.display()),
+        ),
+    }
+}
+
+fn host_permission_grant_propagation_check(config: &Config) -> DoctorCheck {
+    let path = config.data_dir.join("ledger/hzr.sqlite");
+    if !path.is_file() {
+        return check(
+            "host_permission_grant_propagation",
+            CheckStatus::Pass,
+            "no ledger rows exist yet",
+        );
+    }
+    match Ledger::open(&path).and_then(|ledger| ledger.host_permission_grant_propagation_drift()) {
+        Ok(0) => check(
+            "host_permission_grant_propagation",
+            CheckStatus::Pass,
+            "no hook-approved command was re-refused by exec run",
+        ),
+        Ok(count) => check(
+            "host_permission_grant_propagation",
+            CheckStatus::Error,
+            format!(
+                "{count} command/session pair(s) were host-approved but later recorded an HZR approval refusal"
+            ),
+        ),
+        Err(error) => check(
+            "host_permission_grant_propagation",
+            CheckStatus::Error,
+            format!("cannot verify host grant propagation: {error}"),
         ),
     }
 }
@@ -1114,6 +1144,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     }
     checks.push(fidelity_allowance_check());
     checks.push(fidelity_durability_check(config));
+    checks.push(host_permission_grant_propagation_check(config));
     checks.push(billing_pricing_check(config));
     if let Ok(status) = adoption::default_settings_path().and_then(|path| adoption::status(&path)) {
         if status.external_icm_entries > 0 {
@@ -2467,8 +2498,15 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use hzr_core::{Config, builtin_pricing_catalog};
+    use hzr_core::{
+        Config, DetailedOperationAttribution, Ledger, OperationAttribution, OperationChannel,
+        OperationMeasurement, OperationRoute, PolicyEvent, builtin_pricing_catalog,
+    };
     use hzr_index::{Deadlines, IndexMigrationOutcome, IndexPlacement, IndexStatus, Workspace};
+    use hzr_protocol::{
+        EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, FidelityValidation,
+        PolicyDecision,
+    };
     use sha2::{Digest, Sha256};
 
     use crate::client_config::{Client, ClientMcpStatus, RegistrationScope};
@@ -2479,11 +2517,11 @@ mod tests {
         audited_codec_instruction_surfaces, billing_pricing_check, bounded, claude_code_mcp_check,
         contract_is_portable, direct_icm_registration_detail, effective_workspace_mcp_statuses,
         fidelity_allowance_check, fidelity_durability_status_check,
-        fleet_instruction_health_checks, hook_ownership_check, index_readiness_check,
-        install_transaction_check, instruction_health_check,
-        instruction_health_check_with_exemptions, integration_layout, reconcile_fleet_contracts,
-        repair_legacy_index, response_codec_coverage, workspace_binding_check,
-        workspace_instruction_health_check,
+        fleet_instruction_health_checks, hook_ownership_check,
+        host_permission_grant_propagation_check, index_readiness_check, install_transaction_check,
+        instruction_health_check, instruction_health_check_with_exemptions, integration_layout,
+        reconcile_fleet_contracts, repair_legacy_index, response_codec_coverage,
+        workspace_binding_check, workspace_instruction_health_check,
     };
 
     fn enabled_billing_config() -> Config {
@@ -2832,6 +2870,68 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         let check = hook_ownership_check(status);
         assert_eq!(check.status, CheckStatus::Pass);
         assert!(check.detail.contains("observer"));
+    }
+
+    #[test]
+    fn acceptance_gate_doctor_fails_on_host_grant_propagation_drift() {
+        let directory = tempfile::tempdir().expect("fixture directory");
+        let config = Config {
+            data_dir: directory.path().to_path_buf(),
+            ..Config::default()
+        };
+        let ledger_path = config.data_dir.join("ledger/hzr.sqlite");
+        let ledger = Ledger::open(&ledger_path).expect("ledger");
+        let command = "hzr stats --accounting-version all";
+        let evasion = EvasionAttribution {
+            class: EvasionClass::E9DiagnosticBypass,
+            wrapper_depth: 0,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 1,
+            hatch_marker: false,
+            avoidable: true,
+            tier: EnforcementTier::T2DenyWithPrescription,
+            fidelity_reason: None,
+            fidelity_validation: FidelityValidation::NotRequested,
+        };
+        ledger
+            .record_operation_attributed_with_detail(
+                command,
+                command,
+                8,
+                8,
+                1,
+                DetailedOperationAttribution {
+                    attribution: OperationAttribution {
+                        project_path: directory.path().to_str().expect("UTF-8 path"),
+                        agent: Some("claude-code"),
+                        session_id: Some("granted-session"),
+                        channel: OperationChannel::HookCli,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Bypassed,
+                    },
+                    detail: None,
+                    evasion: Some(&evasion),
+                    host_grant_applied: true,
+                },
+            )
+            .expect("granted operation");
+        ledger
+            .record_policy_event(PolicyEvent {
+                project_path: directory.path().to_str().expect("UTF-8 path"),
+                agent: Some("claude-code"),
+                session_id: Some("granted-session"),
+                evasion,
+                decision: PolicyDecision::Ask,
+                replacement_family: Some("stats"),
+                command_identity: Some(command),
+            })
+            .expect("approval refusal");
+
+        let result = host_permission_grant_propagation_check(&config);
+        assert_eq!(result.status, CheckStatus::Error);
+        assert!(result.detail.contains("1 command/session pair"));
+        assert!(result.detail.contains("host-approved"));
     }
 
     fn registration(client: Client, pinned: Option<&str>) -> ClientMcpStatus {

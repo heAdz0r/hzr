@@ -2,6 +2,175 @@
 
 All notable HZR changes are documented here. HZR follows semantic versioning while the public API is in `0.x` development.
 
+## [0.6.4] - 2026-08-27
+
+0.6.3 made HZR's efficiency measurable. 0.6.4 fixes the part that mattered most and was easiest
+to miss: **the surface that reports it.** Upgrading to 0.6.3 moved the accounting-policy version
+forward, which silently pushed every previously recorded operation out of the default view. On a
+workspace holding 252.65 million avoided tokens, `hzr stats` rendered `0 TOKENS AVOIDED / 0.0%`
+and explained nothing.
+
+Nothing was lost and nothing was miscounted. The evidence existed the whole time and the renderer
+never mentioned it. That is the class of defect this release closes, in both directions: numbers
+that exist and are not shown, and answers that exist and are not carried to the process that
+needs them.
+
+### Fixed — a zero now explains itself
+
+- **A scope-narrowed view says so.** When the selected accounting-policy scope excludes recorded
+  history, `hzr stats` states the excluded count and prints the exact recovery command
+  (`hzr stats --accounting-version all`) inside the panel showing the zero. A `0.0%` produced by
+  a scope boundary is labelled a scope artifact, never a measurement.
+- **Three zeros are three different claims.** A scope artifact, a scope in which every operation
+  earns no savings credit by policy, and an empty ledger are now distinguished and worded
+  differently. A clean zero says it is clean.
+- **The panels reconcile.** `OPERATION MODES` counted delivery and control-plane stages that the
+  reduction ratio deliberately excludes, so a table reporting 202 searches sat under a headline
+  claiming 10 operations with nothing connecting them. Each mode row now carries whether it is
+  inside the ratio, the excluded totals are reported, and the reason — a delivery stage must not
+  double-count the row that measured it — is stated where the numbers disagree.
+- **Every recorded row belongs to exactly one counter.** `excluded_legacy_operations` carried a
+  stage filter, so a row that was both earlier-policy and delivery-stage appeared in no counter
+  at all and the figures could not be reconciled against the ledger. The three counters now
+  partition every row in scope, enforced by a property gate.
+
+### Fixed — tables that stay inside their columns
+
+- Table cells are bounded by their own column by construction. The mode panel formatted its
+  family cell without truncation, so a 13-character `observability` shifted every column after it
+  out of the frame. Columns are now declared once with a width and an alignment, and every cell
+  is rendered through that declaration — the alignment gate exists for all five tables and is fed
+  the longest value each column can receive.
+- Closed vocabularies render as stable short labels instead of mid-word ellipsis.
+  `standalone_delive…` told a reader less than `standalone` and looked like a fault.
+
+### Added — money, for the two scopes an operator compares
+
+- **A new `ECONOMICS` block opens the output.** It reports estimated avoided input tokens, their
+  preliminary public-list value, and imported provider receipts — for **this project** and for
+  **global lifetime**, always both rows.
+- Potential and billed are adjacent columns and never a sum. A scope with no receipt reads
+  `not measured`, never a currency zero.
+- When pricing is not configured, the block states the reason **and** the exact steps that enable
+  it, and still reports the token figure, which does not depend on pricing.
+- The money rows share the headline's own SQL expression for avoided tokens, so the two can never
+  state different totals. Both scopes are read from one snapshot.
+- The standalone `POTENTIAL COST` section is subsumed by `ECONOMICS`. No JSON field was removed.
+
+### Fixed — one intent, one verdict
+
+HZR evaluated the same command twice, in two processes, with two different amounts of
+information. The `PreToolUse` hook received the harness permission mode and allowed a command;
+the `hzr exec run` that the approval had just launched re-derived the verdict without it and
+refused. An operator running in `bypassPermissions` was prompted for approvals they had already
+granted, and approved commands exited 77.
+
+- **The host's execution grant is now typed and propagated.** `HostExecutionGrant` travels to
+  every descendant of an approved command over the same channel that already carries session
+  identity, so the hook, `hzr exec run`, `hzr exec rewrite` and the daemon all read one answer.
+- **One reconciliation authority.** The logic moved out of the hook and next to the decision type;
+  a private copy in one caller is what allowed two callers to disagree.
+- **Fail-closed on every axis.** A grant is honoured only for the session it names, within a
+  bounded lifetime, from a mode that actually grants execution. A malformed grant is refused, not
+  partially trusted. A value copied into a script or left in a stale shell approves nothing.
+- **Routing, denial and evidence all survive.** A grant removes the prompt, never the managed
+  route. An explicit deny stands. A grant-approved operation is recorded as such and still counts
+  as avoidable leakage with zero savings credit.
+- **Drift is a check, not a document.** `hzr doctor` fails when a session shows hook-allowed
+  operations beside `exec run` approval refusals for the same command.
+- An attachment guard matched a bare variable name rather than the export it writes, so a command
+  that merely *mentioned* the variable was treated as already carrying it.
+
+### Fixed — session identity reached the ledger
+
+`hzr exec run` and both MCP surfaces resolved the session from the harness-native variables only
+and ignored the `HZR_SESSION_ID` the hook exports. Operations started *by* an approved command
+therefore recorded no session, so per-session figures read zero for exactly the traffic HZR had
+just routed. Session resolution is now one helper that reads the exported value first.
+
+### Added — fail-open is visible while it matters
+
+Bypass was already typed, priced at zero, and reported. What was missing was timing: if the
+daemon stopped at minute 20, the operator learned it from `hzr doctor` or the end-of-session card
+— after the session whose numbers were now partial.
+
+- The transition from complete to unknown accounting is announced in-session, once, when it
+  happens, with the recovery command. Once per transition, not once per command.
+- A status-line fragment keeps the state on screen for as long as it is true.
+- Recovery is announced once as well.
+- A session that spent time degraded says so and withholds partial totals rather than presenting
+  them as complete.
+
+This is a visibility change. Daemon fault tolerance is deliberately out of scope: `hzrd` is one
+supervised local process, and real fault tolerance would be a different architecture rather than
+more supervision patches. 0.6.4 detects the flip and says so; it does not try to prevent it.
+
+### Added — completeness contracts are now executable
+
+- **`MustKeep` and `CompletenessContract`.** "Command families need explicit completeness
+  contracts" was documented prose, and prose does not fail. Every filtered route HZR owns now
+  declares what it will never drop — exit status, failure lines, warnings, changed files — in a
+  compiled-in table, and a route that reaches an agent without an entry fails its gate.
+- **The contract is proved by running the filters.** `fork-core/rtk/tests/must_keep_contract.rs`
+  feeds the real routes output that carries every undroppable class, plus noise a filter is
+  expected to remove, and asserts each class survives.
+- This immediately caught two live defects. `rtk summary` returned exit `0` for a child that
+  exited `3` — a filter that turns a red run green is worse than no filter, because the summary
+  is believed; it now propagates the child's status as `rtk test` and `rtk err` always did. And
+  the `write` route promised to keep its exit status and changed-file list but not its failure
+  lines, so a refused patch could read as a completed one.
+
+### Added — the re-run tax is measured instead of assumed
+
+- A filtered result can make the model re-issue the command it just ran, and those tokens are a
+  real cost of filtering that nothing counted: the second run looked like ordinary traffic.
+  `RERUN TAX` now reports repeats of an already-filtered command within a bounded window of the
+  same session, de-duplicated, alongside the pessimistic net the headline would show if the cost
+  were subtracted.
+- The headline keeps its definition. Silently redefining a metric that shipped in 0.6.3 would be
+  a worse fault than the one being fixed, and a repeat has causes other than filtering — so the
+  figure sits next to the headline and `hzr stats --json` carries
+  `net_avoided_after_rerun_tax_estimated` for the pessimistic reading.
+
+### Added — filter placement is a policy dimension
+
+- Delivered bytes and provider-billed input are different axes. A harness that caches the request
+  prefix bills a cached read far below a fresh one, and a filter firing mid-turn rewrites content
+  the prefix already carries. `[policy] filter_placement` makes *where a filter may fire* explicit:
+  `anywhere` (the shipped default, unchanged) or `turn_boundary`.
+- Under `turn_boundary` a mid-turn filter is declined and the reduction given up is counted, so
+  protecting the cached prefix reads as a trade rather than a free improvement.
+
+### Added — a benchmark that measures what is actually paid
+
+- `benchmarks/hzr-billed-input-prefix-cache-v0.6.4/` runs the same 14 cases with the metric
+  changed from delivered bytes to **provider-billed input**, cache-read and cache-write reported
+  separately, across both placement arms.
+- It refuses to emit a comparison without a paired provider receipt for every case in both arms,
+  lists every unmeasured case with its reason, and exits non-zero. A modelled billed-input figure
+  is precisely what this benchmark exists to replace, so it will not produce one.
+- No numbers are claimed yet. The hypothesis under test is stated and falsifiable: mid-turn
+  filtering may raise billed input even while delivered bytes fall sharply.
+
+### Fixed — a wrapped path is still a path
+
+- Managed prose is word-wrapped after interpolation, which keeps rendered width independent of how
+  long an install path happens to be. The contract-path parser read one line at a time and needed
+  the introducing phrase and the quoted path together, so a long absolute path split across the
+  wrap made `hzr doctor` report no contract at all — a presentation layer silently destroying a
+  machine-readable reference. It now matches across the wrap.
+
+### Fixed — the session scorecard tells the same truth as `hzr stats`
+
+- A zero on the card explains its cause instead of printing a bare `0 tokens (0.0%)`.
+- The `Saved` line carries the priced value inline, with the same rule that potential and billed
+  never merge.
+- `Measured commands` no longer sits beside a larger hook-event count with nothing accounting for
+  the difference; the card itemizes stage-excluded, unmeasured/native, earlier-policy and
+  hook-only events, and the five figures partition the total.
+- An ask recorded in a session that carries a host grant is reported as a propagation failure
+  rather than as ordinary policy activity, because under a grant the expected count is zero.
+
 ## [0.6.3] - 2026-08-26
 
 0.6.3 turns HZR's efficiency evidence into a product loop: choose the efficient route, see what

@@ -40,8 +40,10 @@ use std::sync::OnceLock; // H4: project_path cache
 use std::time::Instant;
 
 const INTERNAL_EVASION_ENV: &str = "HZR_INTERNAL_EVASION_JSON";
+const HOST_GRANT_APPLIED_ENV: &str = "HZR_INTERNAL_HOST_GRANT_APPLIED";
 const MAX_INTERNAL_EVASION_BYTES: usize = 1_024;
 static INTERNAL_EVASION: OnceLock<Option<InternalEvasionAttribution>> = OnceLock::new();
+static HOST_GRANT_APPLIED: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,11 +128,22 @@ pub fn initialize_internal_evasion() {
         unsafe { std::env::remove_var(INTERNAL_EVASION_ENV) };
         value.as_deref().and_then(parse_internal_evasion)
     });
+    let _ = HOST_GRANT_APPLIED.get_or_init(|| {
+        let applied = std::env::var(HOST_GRANT_APPLIED_ENV).ok().as_deref() == Some("1");
+        // SAFETY: main calls this before RTK creates threads or child processes.
+        unsafe { std::env::remove_var(HOST_GRANT_APPLIED_ENV) };
+        applied
+    });
 }
 
 fn current_evasion_attribution() -> Option<&'static InternalEvasionAttribution> {
     initialize_internal_evasion();
     INTERNAL_EVASION.get().and_then(Option::as_ref)
+}
+
+fn current_host_grant_applied() -> bool {
+    initialize_internal_evasion();
+    *HOST_GRANT_APPLIED.get().unwrap_or(&false)
 }
 
 fn parse_internal_evasion(value: &str) -> Option<InternalEvasionAttribution> {
@@ -676,6 +689,7 @@ impl Tracker {
             "enforcement_tier TEXT",
             "fidelity_reason TEXT",
             "fidelity_validation TEXT",
+            "host_grant_applied INTEGER NOT NULL DEFAULT 0",
         ] {
             let _ = conn.execute(&format!("ALTER TABLE commands ADD COLUMN {column}"), []);
         }
@@ -841,12 +855,13 @@ impl Tracker {
                 range_to, source_bytes, producer_version, accounting_policy_version,
                 operation_family, replacement_capability, replacement_route, replacement_reason,
                 evasion_class, wrapper_depth, interpreter_kind, path_form, stage_count,
-                hatch_marker, avoidable, enforcement_tier, fidelity_reason, fidelity_validation
+                hatch_marker, avoidable, host_grant_applied, enforcement_tier, fidelity_reason,
+                fidelity_validation
              ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
                 'hook_cli', ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
                 ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37,
-                ?38, ?39, ?40, ?41, ?42, ?43
+                ?38, ?39, ?40, ?41, ?42, ?43, ?44
              )",
             params![
                 Utc::now().to_rfc3339(),
@@ -903,6 +918,7 @@ impl Tracker {
                 evasion.map(|value| value.stage_count),
                 evasion.map(|value| value.hatch_marker),
                 evasion.map(|value| value.avoidable),
+                current_host_grant_applied(),
                 evasion.map(|value| value.tier.as_str()),
                 evasion.and_then(|value| value.fidelity_reason.as_deref()),
                 evasion.map(|value| value.fidelity_validation.as_str()),
