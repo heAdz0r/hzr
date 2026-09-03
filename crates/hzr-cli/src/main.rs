@@ -1543,12 +1543,11 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
         },
     )?;
     if hooks.changed {
-        let transaction = adoption_transaction
-            .as_mut()
-            .context("adoption transaction")?;
-        transaction.mark_written(&hooks.settings_path)?;
-        if let Some(backup) = &hooks.backup_path {
-            transaction.mark_written(backup)?;
+        if let Some(transaction) = adoption_transaction.as_mut() {
+            transaction.mark_written(&hooks.settings_path)?;
+            if let Some(backup) = &hooks.backup_path {
+                transaction.mark_written(backup)?;
+            }
         }
     }
     if let Some(journal) = journal.as_mut() {
@@ -1574,12 +1573,11 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             instruction_reports.extend(applied.reports);
             if applied.exclude.changed {
                 if let Some(path) = applied.exclude.path {
-                    let transaction = adoption_transaction
-                        .as_mut()
-                        .context("adoption transaction")?;
-                    transaction.mark_written(&path)?;
-                    if let Some(backup) = applied.exclude.backup_path {
-                        transaction.mark_written(&backup)?;
+                    if let Some(transaction) = adoption_transaction.as_mut() {
+                        transaction.mark_written(&path)?;
+                        if let Some(backup) = applied.exclude.backup_path {
+                            transaction.mark_written(&backup)?;
+                        }
                     }
                 }
             }
@@ -1626,10 +1624,9 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     )?;
     client_reports.push(project_mcp);
     if let Some(report) = client_reports.last().filter(|report| report.changed) {
-        let transaction = adoption_transaction
-            .as_mut()
-            .context("adoption transaction")?;
-        transaction.mark_written(&report.path)?;
+        if let Some(transaction) = adoption_transaction.as_mut() {
+            transaction.mark_written(&report.path)?;
+        }
     }
     if let Some(journal) = journal.as_mut() {
         journal.stage(&journal_path, "project_mcp")?;

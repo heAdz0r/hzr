@@ -19,6 +19,8 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   real client configs from development/smoke writes, and added missing-workspace remediation.
 - Allocated the daemon-owned ICM transport on a private loopback port so isolated release smokes
   can run alongside the user's live daemon without colliding with its memory service.
+- Kept `hzr install --dry-run` transaction-free when hooks, instructions, or project MCP files
+  would change; previews now report those changes without requiring a write transaction.
 - Updated the bundled Caveman dependency lock to `fast-uri` 3.1.7; the production release audit
   now reports zero high-severity vulnerabilities.
 - Refused project initialization at home or filesystem root, inherited identical managed

@@ -38,6 +38,8 @@ hooks, instructions, and installer smoke tests.
 - The daemon now allocates its private ICM HTTP transport on an available loopback port. An
   isolated release smoke can therefore run beside the live user daemon without a fixed-port
   collision or a second writer to the same store.
+- `hzr install --dry-run` remains a read-only preview when it detects hook, instruction, or
+  project MCP changes; it no longer asks a nonexistent write transaction to receipt them.
 - The bundled Caveman dependency lock upgrades `fast-uri` to 3.1.7, closing the high-severity
   host-confusion and SSRF advisories reported by the release audit.
 

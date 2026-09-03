@@ -37,6 +37,37 @@ fn install_command(
 }
 
 #[test]
+fn install_dry_run_reports_changes_without_opening_a_write_transaction() {
+    let fixture = tempdir().expect("fixture");
+    let home = fixture.path().join("home");
+    let workspace = fixture.path().join("workspace");
+    let data = fixture.path().join("data");
+    let prefix = fixture.path().join("bin");
+    fs::create_dir_all(&home).expect("home");
+    fs::create_dir_all(&workspace).expect("workspace");
+    let config = fixture.path().join("config.toml");
+    let config_text =
+        format!("data_dir = {data:?}\n\n[engines]\nauto_start_icm = false\nauto_index = false\n");
+    fs::write(&config, &config_text).expect("config fixture");
+
+    let preview = install_command(&home, &workspace, &config, &prefix)
+        .arg("--dry-run")
+        .output()
+        .expect("dry-run install");
+
+    assert!(
+        preview.status.success(),
+        "{}",
+        String::from_utf8_lossy(&preview.stderr)
+    );
+    assert_eq!(fs::read_to_string(&config).expect("config"), config_text);
+    assert!(!prefix.exists());
+    assert!(!home.join("claude/settings.json").exists());
+    assert!(!workspace.join(".codex/config.toml").exists());
+    assert!(!data.join("runtime/install-transaction.json").exists());
+}
+
+#[test]
 fn every_install_stage_is_forward_recoverable() {
     for stage in [
         "config",
