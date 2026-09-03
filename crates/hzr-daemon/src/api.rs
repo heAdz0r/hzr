@@ -2069,6 +2069,7 @@ pub async fn exec_run(
                                 plan.evasion.as_ref(),
                             ),
                             evasion: plan.evasion,
+                            accounting_correlation_id: plan.accounting_correlation_id.clone(),
                             cwd,
                             timeout_ms,
                             caller_path: request.caller_path,
@@ -2104,6 +2105,13 @@ pub async fn exec_run(
         }
         decision => decision,
     };
+    register_accounting_context(
+        &state,
+        plan.accounting_correlation_id.as_deref(),
+        &cwd,
+        request.agent.as_deref(),
+        request.session_id.as_deref(),
+    )?;
     let mut envelope = ExecutionEnvelope::allow_raw(command);
     envelope.decision = decision;
     envelope.cwd = Some(cwd.clone());
@@ -2448,6 +2456,14 @@ pub async fn exec_approval(
     } else {
         None
     };
+    register_accounting_context(
+        &state,
+        pending.accounting_correlation_id.as_deref(),
+        &pending.cwd,
+        pending.agent.as_deref(),
+        pending.session_id.as_deref(),
+    )?;
+    let accounting_correlation_id = pending.accounting_correlation_id.clone();
     let mut envelope = ExecutionEnvelope::allow_raw(pending.requested);
     envelope.decision = pending.approved_decision;
     envelope.cwd = Some(pending.cwd);
@@ -2455,7 +2471,7 @@ pub async fn exec_approval(
     RtkRewriteOutcome {
         decision: envelope.decision.clone(),
         evasion: pending.evasion,
-        accounting_correlation_id: None,
+        accounting_correlation_id,
     }
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
@@ -3113,18 +3129,13 @@ pub async fn exec_rewrite(
     let accounting_correlation_id = outcome
         .accounting_correlation_id
         .filter(|_| accounted_command.as_ref() == final_command);
-    if let Some(correlation_id) = accounting_correlation_id.as_deref() {
-        crate::accounting_sweeper::register(
-            &state,
-            correlation_id,
-            &cwd,
-            request.agent.as_deref(),
-            request.session_id.as_deref(),
-        )
-        .map_err(|error| {
-            ApiError::internal(format!("accounting receipt registration failed: {error}"))
-        })?;
-    }
+    register_accounting_context(
+        &state,
+        accounting_correlation_id.as_deref(),
+        &cwd,
+        request.agent.as_deref(),
+        request.session_id.as_deref(),
+    )?;
     record_exec_policy_event(&state, &request, &cwd, outcome.evasion.as_ref(), &decision).await?;
     // The attribution travels with the decision: the hook forwards it to the process that will
     // execute and record the command, which has no other way to learn how it was classified.
@@ -3133,6 +3144,22 @@ pub async fn exec_rewrite(
         evasion: outcome.evasion,
         accounting_correlation_id,
     }))
+}
+
+fn register_accounting_context(
+    state: &AppState,
+    correlation_id: Option<&str>,
+    workspace: &Path,
+    agent: Option<&str>,
+    session_id: Option<&str>,
+) -> Result<(), ApiError> {
+    let Some(correlation_id) = correlation_id else {
+        return Ok(());
+    };
+    crate::accounting_sweeper::register(state, correlation_id, workspace, agent, session_id)
+        .map_err(|error| {
+            ApiError::internal(format!("accounting receipt registration failed: {error}"))
+        })
 }
 
 async fn daemon_fidelity_preflight(

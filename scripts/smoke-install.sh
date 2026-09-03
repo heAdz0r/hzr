@@ -116,6 +116,11 @@ if [[ ! -f "${HZR_SMOKE_CONFIG}" ]]; then
   echo "installer did not create ${HZR_SMOKE_CONFIG}" >&2
   exit 1
 fi
+HZR_SMOKE_DATA_ROOT="$(sed -n 's/^data_dir = "\(.*\)"$/\1/p' "${HZR_SMOKE_CONFIG}")"
+if [[ -z "${HZR_SMOKE_DATA_ROOT}" || ! -d "${HZR_SMOKE_DATA_ROOT}" ]]; then
+  echo "installer did not create the configured HZR data root" >&2
+  exit 1
+fi
 HZR_SMOKE_CONFIG_NEXT="${HZR_SMOKE_CONFIG}.smoke-next"
 while IFS= read -r HZR_CONFIG_LINE || [[ -n "${HZR_CONFIG_LINE}" ]]; do
   if [[ "${HZR_CONFIG_LINE}" == bind\ =* ]]; then
@@ -302,6 +307,35 @@ run_hzr memory store smoke installed-bundle-memory \
 run_hzr memory recall installed-bundle-memory \
   --workspace "${HZR_SMOKE_TEMP}/workspace" --json >/dev/null
 run_hzr stats --json >/dev/null
+stats_operation_count() {
+  run_hzr stats --workspace "${HZR_SMOKE_TEMP}/workspace" --json \
+    | "${HZR_INSTALLED_ROOT}/engines/node" -e '
+        const fs = require("node:fs");
+        const report = JSON.parse(fs.readFileSync(0, "utf8"));
+        process.stdout.write(String(report.direct_savings.operations));
+      '
+}
+HZR_ACCOUNTING_OPERATIONS_BEFORE="$(stats_operation_count)"
+run_hzr exec run --cwd "${HZR_SMOKE_TEMP}/workspace" \
+  'printf hzr-accounting-smoke' --json >"${HZR_SMOKE_TEMP}/exec-accounting.json"
+HZR_EXEC_ACCOUNTING_READY=0
+for _ in {1..100}; do
+  HZR_ACCOUNTING_OPERATIONS_AFTER="$(stats_operation_count)"
+  if (( HZR_ACCOUNTING_OPERATIONS_AFTER > HZR_ACCOUNTING_OPERATIONS_BEFORE )) && \
+    ! find "${HZR_SMOKE_DATA_ROOT}/fork" \
+      -name 'accounting-receipts-*.jsonl' -type f -size +0 -print -quit \
+      | grep -q .; then
+    HZR_EXEC_ACCOUNTING_READY=1
+    break
+  fi
+  sleep 0.1
+done
+if [[ "${HZR_EXEC_ACCOUNTING_READY}" != 1 ]]; then
+  echo "hzr exec run did not drain its receipt into the ledger" >&2
+  find "${HZR_SMOKE_DATA_ROOT}/fork" \
+    -name 'accounting-receipts-*.jsonl' -type f -size +0 -print >&2 || true
+  exit 1
+fi
 run_hzr mcp --help >/dev/null
 printf '{"cwd":"%s","tool_name":"Bash","tool_input":{"command":"cat main.rs"}}\n' \
   "${HZR_SMOKE_TEMP}/workspace" \

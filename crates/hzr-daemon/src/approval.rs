@@ -16,6 +16,7 @@ pub struct PendingApproval {
     pub requested: CanonicalCommand,
     pub approved_decision: RewriteDecision,
     pub evasion: Option<EvasionAttribution>,
+    pub accounting_correlation_id: Option<String>,
     pub cwd: PathBuf,
     pub timeout_ms: Option<u64>,
     pub caller_path: Option<String>,
@@ -84,6 +85,7 @@ mod tests {
             requested: CanonicalCommand::shell("cargo test"),
             approved_decision: RewriteDecision::allow_raw("approved fixture"),
             evasion: None,
+            accounting_correlation_id: Some("accounting-correlation".into()),
             cwd: std::env::current_dir().expect("current directory"),
             timeout_ms: Some(1_000),
             caller_path: Some("/toolchain/bin:/usr/bin".into()),
@@ -93,7 +95,15 @@ mod tests {
         };
         let decision_id = store.insert(pending).await;
 
-        assert!(store.take(&decision_id).await.is_some());
+        assert_eq!(
+            store
+                .take(&decision_id)
+                .await
+                .expect("stored approval")
+                .accounting_correlation_id
+                .as_deref(),
+            Some("accounting-correlation")
+        );
         assert!(store.take(&decision_id).await.is_none());
     }
 }
