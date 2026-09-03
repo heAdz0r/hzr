@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-agent"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "http",
  "nix",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-codec"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "hzr-protocol",
  "regex",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-context"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "hex",
  "hzr-core",
@@ -690,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "directories",
  "fs2",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-daemon"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "axum",
  "fs2",
@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-exec"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "fs2",
@@ -765,7 +765,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-index"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "fs2",
  "hex",
@@ -780,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-memory"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -802,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-protocol"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "hzr-engine-contract",
  "serde",

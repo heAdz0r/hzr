@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 use crate::cli::McpClientArg;
 
 use super::{
-    INVALID_REQUEST, LATEST_MCP_PROTOCOL_VERSION, METHOD_NOT_FOUND, PARSE_ERROR, SessionState,
-    ToolKind, apply_workspace_policy, bounded_usize, cancelled_request_id,
+    INVALID_PARAMS, INVALID_REQUEST, LATEST_MCP_PROTOCOL_VERSION, METHOD_NOT_FOUND, PARSE_ERROR,
+    SessionState, ToolKind, apply_workspace_policy, bounded_usize, cancelled_request_id,
     classify_workspace_binding, file_uri_path, fork_result, handle_line, initialize_result,
     initialize_workspace_root, lifecycle_metadata, mcp_operation_request, optional_enum,
     parse_mode, read_fork_request, registration_snippet, tool_definitions, tool_error,
@@ -569,6 +569,29 @@ async fn test_tools_are_rejected_before_initialization() {
     .await
     .expect("request receives a response");
     assert_eq!(response["error"]["code"], INVALID_REQUEST);
+}
+
+#[tokio::test]
+async fn pinned_workspace_conflict_rejects_initialization_before_tools_are_exposed() {
+    let mut session = SessionState::default();
+    let mut binding = classify_workspace_binding(std::path::Path::new("/configured-project"), None);
+    let response = handle_line(
+        &Config::default(),
+        &mut binding,
+        true,
+        &mut session,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","roots":[{"uri":"file:///current-project"}]}}"#,
+    )
+    .await
+    .expect("request receives a response");
+
+    assert_eq!(response["error"]["code"], INVALID_PARAMS);
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("conflicts with client root"))
+    );
+    assert!(!session.initialized);
 }
 
 #[test]

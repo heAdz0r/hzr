@@ -1,7 +1,7 @@
-# HZR 0.7.0 — fork-core parity ledger
+# HZR 0.7.1 — fork-core parity ledger
 
 **Audit date:** 2026-09-03
-**Status:** HZR 0.7.0 preserves the complete imported command surface and adds bounded defaults and truthful bypass accounting to the current HZR-owned engine
+**Status:** HZR 0.7.1 preserves the complete imported command surface and adds bounded defaults and truthful bypass accounting to the current HZR-owned engine
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -42,9 +42,9 @@ The 0.6.0 gate verified current engine manifest
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
 
-### 0.7.0 bounded-output and accounting delta
+### 0.7.1 bounded-output and accounting delta
 
-HZR 0.7.0 changes three current-engine surfaces without changing the immutable import baseline.
+HZR 0.7.1 changes three current-engine surfaces without changing the immutable import baseline.
 Unsupported native `find` predicates and actions still execute through the system `find`, retain
 the child exit status, and remain recoverable, but model-visible output is now bounded to 200 lines
 and 16 KiB. Because this path is not an HZR transform, its receipt is passthrough, unmeasured, and

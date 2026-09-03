@@ -1450,7 +1450,8 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
         if options.wire_instructions {
             let contract = contract_asset_path(&source_dir);
             for root in roots {
-                let preview = apply_agent_instruction_state(&config, &root, &contract, true, true)?;
+                let preview =
+                    apply_agent_instruction_state(&config, &root, &contract, false, true, true)?;
                 for report in preview.reports {
                     adoption::validate_lifecycle_target(&report.path)?;
                     transaction.capture(&report.path)?;
@@ -1567,6 +1568,7 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
                 &config,
                 &root,
                 &contract,
+                false,
                 options.dry_run,
                 options.force,
             )?;
@@ -1678,6 +1680,7 @@ fn apply_agent_instruction_state(
     config: &Config,
     workspace_root: &Path,
     contract: &Path,
+    preserve_tracked_shared: bool,
     dry_run: bool,
     confirmed: bool,
 ) -> Result<AgentInstructionApplication> {
@@ -1691,13 +1694,14 @@ fn apply_agent_instruction_state(
         .iter()
         .map(|target| instructions::install_target(target, contract, dry_run, confirmed))
         .collect::<Result<Vec<_>>>()?;
-    reports.extend(
-        state
-            .obsolete
-            .iter()
-            .map(|target| instructions::uninstall_target(target, dry_run, confirmed))
-            .collect::<Result<Vec<_>>>()?,
-    );
+    for target in &state.obsolete {
+        if preserve_tracked_shared
+            && activation::is_tracked_shared_instruction(workspace_root, target)?
+        {
+            continue;
+        }
+        reports.push(instructions::uninstall_target(target, dry_run, confirmed)?);
+    }
     let exclude =
         activation::reconcile_local_instruction_excludes(workspace_root, &state, dry_run)?;
     Ok(AgentInstructionApplication { reports, exclude })
@@ -1708,7 +1712,7 @@ fn reconcile_agent_instructions(
     workspace_root: &Path,
 ) -> Result<AgentInstructionApplication> {
     let contract = agent_instruction_contract()?;
-    apply_agent_instruction_state(config, workspace_root, &contract, false, true)
+    apply_agent_instruction_state(config, workspace_root, &contract, true, false, true)
 }
 
 fn plan_agent_instructions(
@@ -1716,7 +1720,7 @@ fn plan_agent_instructions(
     workspace_root: &Path,
 ) -> Result<AgentInstructionApplication> {
     let contract = agent_instruction_contract()?;
-    apply_agent_instruction_state(config, workspace_root, &contract, true, true)
+    apply_agent_instruction_state(config, workspace_root, &contract, true, true, true)
 }
 
 fn agent_instruction_contract() -> Result<PathBuf> {
@@ -3208,7 +3212,14 @@ async fn set_workspace_activation(
         config.instructions.scope,
     )?;
     let instruction_plan = if enabled {
-        apply_agent_instruction_state(&config, &workspace.identity.root, &contract, true, true)?
+        apply_agent_instruction_state(
+            &config,
+            &workspace.identity.root,
+            &contract,
+            false,
+            true,
+            true,
+        )?
     } else {
         let reports = state
             .desired
@@ -3361,6 +3372,7 @@ async fn set_workspace_activation(
                 &config,
                 &workspace.identity.root,
                 &contract,
+                false,
                 false,
                 true,
             )?

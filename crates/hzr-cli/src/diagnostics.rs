@@ -822,6 +822,19 @@ pub async fn reconcile_fleet_contracts(
             }
         }
         for target in &instruction_state.obsolete {
+            match activation::is_tracked_shared_instruction(&registration.root, target) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => {
+                    report.rewritten.push(FleetContractRewrite {
+                        path: target.path.clone(),
+                        surface: target.surface.as_str(),
+                        changed: false,
+                        error: Some(format!("{error:#}")),
+                    });
+                    continue;
+                }
+            }
             if target.path.starts_with(&registration.root) {
                 if let Err(error) = confined_workspace_target(&registration.root, &target.path) {
                     report.rewritten.push(FleetContractRewrite {
@@ -1147,6 +1160,15 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
             .iter()
             .filter(|target| target.path.starts_with(&registration.root))
         {
+            match activation::is_tracked_shared_instruction(&registration.root, target) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => checks.push(check(
+                    "fleet_instruction_tracking",
+                    CheckStatus::Warning,
+                    format!("{}: {error:#}", target.path.display()),
+                )),
+            }
             let surface = target.surface;
             let path = target.path.clone();
             let audit = match bounded_instruction_audit(surface, &path) {
@@ -1208,6 +1230,15 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
             .iter()
             .filter(|target| target.path.starts_with(&registration.root))
         {
+            match activation::is_tracked_shared_instruction(&registration.root, target) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => checks.push(check(
+                    "fleet_instruction_tracking",
+                    CheckStatus::Warning,
+                    format!("{}: {error:#}", target.path.display()),
+                )),
+            }
             match bounded_instruction_audit(target.surface, &target.path) {
                 Ok(audit) if audit.installed => stale_paths.push(target.path.clone()),
                 Ok(_) => {}
@@ -1423,6 +1454,28 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                     checks.push(finding);
                 }
                 for target in &state.obsolete {
+                    match activation::is_tracked_shared_instruction(workspace, target) {
+                        Ok(true) => {
+                            checks.push(check(
+                                format!("tracked_{}_instructions", target.surface.as_str()),
+                                CheckStatus::Pass,
+                                format!(
+                                    "preserved repository-owned HZR block in {}",
+                                    target.path.display()
+                                ),
+                            ));
+                            continue;
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            checks.push(check(
+                                format!("tracked_{}_instructions", target.surface.as_str()),
+                                CheckStatus::Warning,
+                                format!("{error:#}"),
+                            ));
+                            continue;
+                        }
+                    }
                     match bounded_instruction_audit(target.surface, &target.path) {
                         Ok(audit) if audit.installed => checks.push(check(
                             format!("obsolete_{}_instructions", target.surface.as_str()),
@@ -3433,6 +3486,55 @@ justification = "This repository measures upstream RTK as the explicit benchmark
             reconcile_fleet_contracts(&config, &checkout_contract, fixture.path(), true, false)
                 .await;
         assert!(planned.refused.is_none());
+    }
+
+    #[tokio::test]
+    async fn cross_workspace_audit_preserves_tracked_shared_contracts() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let current = fixture.path().join("current");
+        let fleet = fixture.path().join("fleet");
+        fs::create_dir_all(&current).expect("current workspace");
+        fs::create_dir_all(&fleet).expect("fleet workspace");
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&fleet)
+            .status()
+            .expect("git init");
+        assert!(status.success());
+
+        let contract = fixture.path().join("HZR.md");
+        fs::write(&contract, "contract").expect("contract fixture");
+        let target = fleet.join("AGENTS.md");
+        instructions::install(Surface::Codex, &target, &contract, false, true)
+            .expect("managed instruction fixture");
+        let status = std::process::Command::new("git")
+            .args(["add", "AGENTS.md"])
+            .current_dir(&fleet)
+            .status()
+            .expect("git add");
+        assert!(status.success());
+
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Config::default()
+        };
+        let workspace = Workspace::discover_managed(
+            &fleet,
+            Path::new("git"),
+            &config.data_dir,
+            Deadlines::default().version,
+        )
+        .await
+        .expect("workspace discovery");
+        workspace.register().expect("workspace registration");
+
+        let checks = fleet_instruction_health_checks(&config, &current);
+        assert!(
+            checks
+                .iter()
+                .all(|check| check.name != "fleet_stale_managed_contracts"),
+            "repository-owned shared contracts must not poison another workspace's doctor"
+        );
     }
 
     #[tokio::test]

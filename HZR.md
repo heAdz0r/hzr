@@ -98,7 +98,7 @@ Density  -> hzr codec compile --profile shadow|adaptive|compact
 Exact raw -> HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'
 TDD      -> hzr tdd                  (optional; strict when selected)
 MCP      -> hzr mcp serve            (launched by a client, never by hand)
-Config   -> hzr mcp config --client codex|claude-desktop  (prints a snippet)
+Config   -> hzr mcp config --client codex|claude-desktop  (prints a snippet; --apply selects explicitly)
 MCP state -> hzr mcp status
 Health   -> hzr doctor [--fix]     (--fix migrates one unambiguous legacy .grepai with backup)
 Enable   -> hzr enable [--workspace DIR]
@@ -111,6 +111,12 @@ HZR release   -> hzr release --force (rebuild and reinstall HZR itself)
 Managed execution forwards the caller's validated `PATH` to the daemon, including through an
 approval, but does not copy the rest of the caller environment. Commands that need explicit
 environment values must continue to declare them in the command itself.
+
+Codex keeps exact workspace pins in each repository and uses an unpinned user registration only
+as a dynamic client-root fallback. Claude Desktop has one explicit selected workspace; ordinary
+global installation preserves a valid selection rather than retargeting it to the install cwd.
+Automatic `init --if-needed` and fleet reconciliation preserve Git-tracked shared instruction
+contracts; changing instruction scope explicitly remains authoritative.
 
 ## Update notices
 

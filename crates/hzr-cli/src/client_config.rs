@@ -283,11 +283,16 @@ impl Registration {
             .cloned()
     }
 
-    /// Binary and `mcp serve` alone are not enough: an unpinned Desktop entry still
-    /// "matches" while binding `/`, so desired state also requires the workspace pin.
-    fn matches_desired(&self, binary: &Path, workspace: &Path) -> bool {
+    /// A project registration requires the exact workspace pin. A user fallback is
+    /// deliberately unpinned so the client can provide its current root at initialization.
+    fn matches_desired(&self, binary: &Path, workspace: Option<&Path>) -> bool {
         self.matches(binary)
-            && self.pinned_workspace().as_deref() == Some(workspace_arg(workspace).as_str())
+            && match workspace {
+                Some(workspace) => {
+                    self.pinned_workspace().as_deref() == Some(workspace_arg(workspace).as_str())
+                }
+                None => self.args == ["mcp", "serve"],
+            }
     }
 }
 
@@ -353,7 +358,21 @@ pub fn install_all(
 ) -> Result<Vec<ClientConfigReport>> {
     default_paths()?
         .into_iter()
-        .map(|(client, path)| install(client, &path, binary, workspace, dry_run, confirmed))
+        .map(|(client, path)| match client {
+            Client::Codex => {
+                install_with_workspace(client, &path, binary, None, false, dry_run, confirmed)
+            }
+            Client::ClaudeDesktop => install_with_workspace(
+                client,
+                &path,
+                binary,
+                Some(workspace),
+                true,
+                dry_run,
+                confirmed,
+            ),
+            Client::ClaudeCode => unreachable!("Claude Code is not a writable client"),
+        })
         .collect()
 }
 
@@ -386,14 +405,23 @@ pub fn install_project_codex(
     dry_run: bool,
     confirmed: bool,
 ) -> Result<ClientConfigReport> {
-    install(
-        Client::Codex,
-        &project_codex_path(workspace),
-        binary,
-        workspace,
-        dry_run,
-        confirmed,
-    )
+    let path = project_codex_path(workspace);
+    let global_path = default_paths()?
+        .into_iter()
+        .find_map(|(client, path)| (client == Client::Codex).then_some(path))
+        .context("Codex has no writable user configuration path on this platform")?;
+    if canonical_or_owned(&path) == canonical_or_owned(&global_path) {
+        return install_with_workspace(
+            Client::Codex,
+            &path,
+            binary,
+            None,
+            false,
+            dry_run,
+            confirmed,
+        );
+    }
+    install(Client::Codex, &path, binary, workspace, dry_run, confirmed)
 }
 
 pub fn uninstall_project_codex(
@@ -656,10 +684,36 @@ pub fn install(
     dry_run: bool,
     confirmed: bool,
 ) -> Result<ClientConfigReport> {
+    install_with_workspace(
+        client,
+        path,
+        binary,
+        Some(workspace),
+        false,
+        dry_run,
+        confirmed,
+    )
+}
+
+fn install_with_workspace(
+    client: Client,
+    path: &Path,
+    binary: &Path,
+    workspace: Option<&Path>,
+    preserve_desktop_selection: bool,
+    dry_run: bool,
+    confirmed: bool,
+) -> Result<ClientConfigReport> {
     let before = read_optional(path)?;
     let (after, direct_icm_removed, hzr_registered) = match client {
         Client::Codex => migrate_codex(path, &before, binary, workspace)?,
-        Client::ClaudeDesktop => migrate_claude_desktop(path, &before, binary, workspace)?,
+        Client::ClaudeDesktop => migrate_claude_desktop(
+            path,
+            &before,
+            binary,
+            workspace.context("Claude Desktop requires a selected workspace")?,
+            preserve_desktop_selection,
+        )?,
         // Claude Code's state file is audit-only. Refusing here rather than silently
         // skipping keeps the "HZR owns its own files" rule a checked invariant instead of a
         // convention that a future caller can quietly break.
@@ -677,7 +731,7 @@ pub fn install(
     let backup = state.as_ref().map(|(backup, _)| backup.clone());
 
     if changed && !dry_run {
-        refuse_dev_client_write(binary)?;
+        refuse_dev_client_write(binary, path)?;
         if !confirmed {
             bail!(
                 "installation changes {}; inspect `hzr install --dry-run`, then rerun with `--force` to confirm",
@@ -709,21 +763,25 @@ pub fn install(
     })
 }
 
-fn refuse_dev_client_write(binary: &Path) -> Result<()> {
+fn refuse_dev_client_write(binary: &Path, path: &Path) -> Result<()> {
+    let override_enabled = std::env::var_os("HZR_ALLOW_DEV_CLIENT_WRITE").as_deref()
+        == Some(std::ffi::OsStr::new("1"));
+    if !development_client_write_allowed(binary, path, override_enabled) {
+        bail!(
+            "refusing to write {} with development binary {}; HZR_ALLOW_DEV_CLIENT_WRITE=1 is accepted only when the client configuration is inside the system temporary directory",
+            path.display(),
+            binary.display(),
+        );
+    }
+    Ok(())
+}
+
+fn development_client_write_allowed(binary: &Path, path: &Path, override_enabled: bool) -> bool {
     let normalized = binary.to_string_lossy().replace('\\', "/");
     let is_dev = ["/target/debug/", "/target/release/"]
         .iter()
         .any(|marker| normalized.contains(marker));
-    if is_dev
-        && std::env::var_os("HZR_ALLOW_DEV_CLIENT_WRITE").as_deref()
-            != Some(std::ffi::OsStr::new("1"))
-    {
-        bail!(
-            "refusing to write a client configuration with development binary {}; set HZR_ALLOW_DEV_CLIENT_WRITE=1 only for an isolated fixture",
-            binary.display()
-        );
-    }
-    Ok(())
+    !is_dev || (override_enabled && path.parent().is_some_and(path_is_in_system_temp))
 }
 
 fn command_launches_icm(command: &str) -> bool {
@@ -775,7 +833,7 @@ fn migrate_codex(
     path: &Path,
     before: &[u8],
     binary: &Path,
-    workspace: &Path,
+    workspace: Option<&Path>,
 ) -> Result<(String, usize, bool)> {
     let text = if before.is_empty() {
         String::new()
@@ -791,14 +849,24 @@ fn migrate_codex(
     let hzr_matches = codex_hzr_registration(&document)
         .as_ref()
         .is_some_and(|registration| registration.matches_desired(binary, workspace))
-        && document
-            .get("mcp_servers")
-            .and_then(Item::as_table)
-            .and_then(|servers| servers.get("hzr"))
-            .and_then(Item::as_table)
-            .and_then(|hzr| hzr.get("cwd"))
-            .and_then(Item::as_str)
-            == Some(workspace_arg(workspace).as_str());
+        && match workspace {
+            Some(workspace) => {
+                document
+                    .get("mcp_servers")
+                    .and_then(Item::as_table)
+                    .and_then(|servers| servers.get("hzr"))
+                    .and_then(Item::as_table)
+                    .and_then(|hzr| hzr.get("cwd"))
+                    .and_then(Item::as_str)
+                    == Some(workspace_arg(workspace).as_str())
+            }
+            None => document
+                .get("mcp_servers")
+                .and_then(Item::as_table)
+                .and_then(|servers| servers.get("hzr"))
+                .and_then(Item::as_table)
+                .is_some_and(|hzr| !hzr.contains_key("cwd")),
+        };
     if direct_before == 0 && hzr_matches {
         return Ok((text, 0, true));
     }
@@ -829,9 +897,16 @@ fn migrate_codex(
         .as_table_mut()
         .with_context(|| format!("mcp_servers.hzr in {} is not a table", path.display()))?;
     hzr["command"] = value(binary.to_string_lossy().as_ref());
-    hzr["cwd"] = value(workspace_arg(workspace));
+    if let Some(workspace) = workspace {
+        hzr["cwd"] = value(workspace_arg(workspace));
+    } else {
+        hzr.remove("cwd");
+    }
     let mut args = Array::new();
-    for argument in mcp_serve_args(workspace) {
+    let desired_args = workspace
+        .map(mcp_serve_args)
+        .unwrap_or_else(|| vec!["mcp".to_owned(), "serve".to_owned()]);
+    for argument in desired_args {
         args.push(argument);
     }
     hzr["args"] = value(args);
@@ -1053,11 +1128,32 @@ fn canonical_or_owned(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn path_is_in_system_temp(path: &Path) -> bool {
+    let mut cursor = path;
+    let mut missing = Vec::new();
+    while !cursor.exists() {
+        let Some(name) = cursor.file_name() else {
+            return false;
+        };
+        missing.push(name.to_owned());
+        let Some(parent) = cursor.parent() else {
+            return false;
+        };
+        cursor = parent;
+    }
+    let mut resolved = canonical_or_owned(cursor);
+    for component in missing.into_iter().rev() {
+        resolved.push(component);
+    }
+    resolved.starts_with(canonical_or_owned(&std::env::temp_dir()))
+}
+
 fn migrate_claude_desktop(
     path: &Path,
     before: &[u8],
     binary: &Path,
     workspace: &Path,
+    preserve_existing_selection: bool,
 ) -> Result<(String, usize, bool)> {
     let mut document = if before.is_empty() {
         json!({})
@@ -1066,10 +1162,19 @@ fn migrate_claude_desktop(
             .with_context(|| format!("failed to parse {}", path.display()))?
     };
     let direct_before = json_direct_icm_count(&document);
-    let hzr_matches = json_hzr_registration(&document)
+    let existing = json_hzr_registration(&document);
+    let hzr_matches = existing
         .as_ref()
-        .is_some_and(|registration| registration.matches_desired(binary, workspace));
-    if direct_before == 0 && hzr_matches {
+        .is_some_and(|registration| registration.matches_desired(binary, Some(workspace)));
+    let preserve_existing = preserve_existing_selection
+        && existing.as_ref().is_some_and(|registration| {
+            registration.matches(binary)
+                && registration
+                    .pinned_workspace()
+                    .map(PathBuf::from)
+                    .is_some_and(|selected| selected.exists() && !path_is_in_system_temp(&selected))
+        });
+    if direct_before == 0 && (hzr_matches || preserve_existing) {
         let text = std::str::from_utf8(before)
             .with_context(|| format!("{} is not UTF-8", path.display()))?
             .to_owned();
@@ -1096,15 +1201,17 @@ fn migrate_claude_desktop(
     for name in &direct {
         servers.remove(name);
     }
-    let hzr = servers.entry("hzr").or_insert_with(|| json!({}));
-    let hzr = hzr
-        .as_object_mut()
-        .with_context(|| format!("mcpServers.hzr in {} is not an object", path.display()))?;
-    hzr.insert(
-        "command".to_owned(),
-        Value::String(binary.to_string_lossy().into_owned()),
-    );
-    hzr.insert("args".to_owned(), json!(mcp_serve_args(workspace)));
+    if !preserve_existing {
+        let hzr = servers.entry("hzr").or_insert_with(|| json!({}));
+        let hzr = hzr
+            .as_object_mut()
+            .with_context(|| format!("mcpServers.hzr in {} is not an object", path.display()))?;
+        hzr.insert(
+            "command".to_owned(),
+            Value::String(binary.to_string_lossy().into_owned()),
+        );
+        hzr.insert("args".to_owned(), json!(mcp_serve_args(workspace)));
+    }
 
     let mut rendered = serde_json::to_string_pretty(&document)?;
     rendered.push('\n');
@@ -1146,7 +1253,8 @@ mod tests {
     use super::{
         Client, ClientMcpStatus, MCP_LIFECYCLE, RegistrationScope, WorkspaceAvailability,
         WorkspaceBindingCapability, audit_paths, claude_code_workspace_status_at, default_paths,
-        evaluate_workspace_binding, install, install_project_codex, status, uninstall,
+        development_client_write_allowed, evaluate_workspace_binding, install,
+        install_project_codex, install_with_workspace, status, uninstall,
     };
 
     fn binary() -> &'static Path {
@@ -1341,6 +1449,127 @@ mod tests {
             status.pinned_workspace.as_deref(),
             Some(project.to_string_lossy().as_ref())
         );
+    }
+
+    #[test]
+    fn global_codex_registration_is_dynamic_and_has_no_foreign_workspace() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("config.toml");
+        fs::write(
+            &path,
+            "[mcp_servers.hzr]\ncommand = '/opt/hzr/current/bin/hzr'\n\
+             cwd = '/Users/andrew/old-project'\n\
+             args = ['mcp', 'serve', '--workspace', '/Users/andrew/old-project']\n",
+        )
+        .expect("fixture");
+
+        install_with_workspace(Client::Codex, &path, binary(), None, false, false, true)
+            .expect("dynamic user fallback");
+        let document = fs::read_to_string(&path)
+            .expect("updated config")
+            .parse::<DocumentMut>()
+            .expect("valid TOML");
+        let hzr = document["mcp_servers"]["hzr"]
+            .as_table()
+            .expect("HZR registration");
+        let status = status(Client::Codex, &path).expect("status");
+
+        assert_eq!(status.args, ["mcp", "serve"]);
+        assert!(status.pinned_workspace.is_none());
+        assert!(!hzr.contains_key("cwd"));
+        assert_eq!(
+            status.workspace_binding_capability,
+            WorkspaceBindingCapability::DynamicClientWorkspace
+        );
+    }
+
+    #[test]
+    fn global_install_preserves_an_existing_desktop_selection() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("claude.json");
+        let selected = std::env::current_dir().expect("current directory");
+        let requested = selected.join("other-project");
+        fs::write(
+            &path,
+            json!({"mcpServers":{"hzr":{
+                "command": binary(),
+                "args": ["mcp", "serve", "--workspace", selected]
+            }}})
+            .to_string(),
+        )
+        .expect("fixture");
+
+        let report = install_with_workspace(
+            Client::ClaudeDesktop,
+            &path,
+            binary(),
+            Some(&requested),
+            true,
+            false,
+            true,
+        )
+        .expect("preserve Desktop selection");
+        let status = status(Client::ClaudeDesktop, &path).expect("status");
+
+        assert!(!report.changed);
+        assert_eq!(
+            status.pinned_workspace.as_deref(),
+            Some(selected.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn global_install_repairs_a_temporary_desktop_selection() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("claude.json");
+        let requested = std::env::current_dir().expect("current directory");
+        fs::write(
+            &path,
+            json!({"mcpServers":{"hzr":{
+                "command": binary(),
+                "args": ["mcp", "serve", "--workspace", directory.path()]
+            }}})
+            .to_string(),
+        )
+        .expect("fixture");
+
+        install_with_workspace(
+            Client::ClaudeDesktop,
+            &path,
+            binary(),
+            Some(&requested),
+            true,
+            false,
+            true,
+        )
+        .expect("repair Desktop selection");
+        let status = status(Client::ClaudeDesktop, &path).expect("status");
+
+        assert_eq!(
+            status.pinned_workspace.as_deref(),
+            Some(requested.to_string_lossy().as_ref())
+        );
+    }
+
+    #[test]
+    fn development_override_cannot_write_a_real_client_configuration() {
+        let directory = tempdir().expect("temporary directory");
+        let development_binary = directory.path().join("target/debug/hzr");
+        let isolated_config = directory.path().join("home/.codex/config.toml");
+        let real_config = std::env::current_dir()
+            .expect("current directory")
+            .join(".codex/config.toml");
+
+        assert!(development_client_write_allowed(
+            &development_binary,
+            &isolated_config,
+            true
+        ));
+        assert!(!development_client_write_allowed(
+            &development_binary,
+            &real_config,
+            true
+        ));
     }
 
     #[test]

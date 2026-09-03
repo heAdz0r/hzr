@@ -8,10 +8,53 @@ fn command(home: &std::path::Path, workspace: &std::path::Path) -> Command {
     command
         .current_dir(workspace)
         .env("HOME", home)
+        .env("CODEX_HOME", home.join(".codex"))
         .env("XDG_CONFIG_HOME", home.join("xdg-config"))
         .env("XDG_DATA_HOME", home.join("xdg-data"))
         .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1");
     command
+}
+
+#[test]
+fn if_needed_from_home_cannot_pin_the_user_codex_fallback() {
+    let fixture = tempdir().expect("fixture");
+    let home = fixture.path().join("home");
+    let data = fixture.path().join("data");
+    let engines = fixture.path().join("engines");
+    fs::create_dir_all(home.join(".codex")).expect("Codex home");
+    fs::create_dir_all(&engines).expect("engines fixture");
+    let config = fixture.path().join("config.toml");
+    fs::write(&config, custom_config(&data, &engines)).expect("config fixture");
+    let codex = home.join(".codex/config.toml");
+    fs::write(
+        &codex,
+        format!(
+            "[mcp_servers.hzr]\ncommand = {:?}\nargs = [\"mcp\", \"serve\", \"--workspace\", {:?}]\ncwd = {:?}\n",
+            env!("CARGO_BIN_EXE_hzr"), home, home
+        ),
+    )
+    .expect("stale global Codex registration");
+
+    let status = command(&home, &home)
+        .args([
+            "--config",
+            config.to_str().expect("config path"),
+            "init",
+            "--if-needed",
+            "--skip-service",
+            "--quiet",
+        ])
+        .status()
+        .expect("conditional init runs");
+    assert!(status.success());
+
+    let updated = fs::read_to_string(codex).expect("updated Codex registration");
+    assert!(
+        updated.contains("args = [\"mcp\", \"serve\"]"),
+        "unexpected Codex registration: {updated}"
+    );
+    assert!(!updated.contains("--workspace"));
+    assert!(!updated.contains("cwd ="));
 }
 
 fn custom_config(data_dir: &std::path::Path, engines: &std::path::Path) -> String {
@@ -56,6 +99,55 @@ fn init_force_preserves_existing_config_bytes() {
     assert_eq!(
         fs::read_to_string(config).expect("preserved config"),
         original
+    );
+}
+
+#[test]
+fn if_needed_preserves_a_tracked_shared_contract() {
+    let fixture = tempdir().expect("fixture");
+    let workspace = fixture.path().join("workspace");
+    let home = fixture.path().join("home");
+    let data = fixture.path().join("data");
+    let engines = fixture.path().join("engines");
+    for directory in [&workspace, &home, &engines] {
+        fs::create_dir_all(directory).expect("fixture directory");
+    }
+    let status = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&workspace)
+        .status()
+        .expect("git init");
+    assert!(status.success());
+    let tracked = "# Team rules\n\n<!-- hzr:begin managed agent contract — do not edit inside -->\nold contract\n<!-- hzr:end managed agent contract -->\n";
+    fs::write(workspace.join("AGENTS.md"), tracked).expect("tracked instructions");
+    let status = Command::new("git")
+        .args(["add", "AGENTS.md"])
+        .current_dir(&workspace)
+        .status()
+        .expect("git add");
+    assert!(status.success());
+    let config = fixture.path().join("config.toml");
+    fs::write(&config, custom_config(&data, &engines)).expect("config fixture");
+
+    let output = command(&home, &workspace)
+        .args([
+            "--config",
+            config.to_str().expect("config path"),
+            "init",
+            "--if-needed",
+            "--skip-service",
+        ])
+        .output()
+        .expect("init runs");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("AGENTS.md")).expect("preserved instructions"),
+        tracked
     );
 }
 

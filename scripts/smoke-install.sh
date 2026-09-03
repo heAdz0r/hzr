@@ -83,7 +83,7 @@ for HZR_INSTALL_OUTPUT in \
   '[3/5] Unpacking and checking the bundle contents' \
   '[4/5] Placing the files and command-line entry points' \
   '[5/5] Registering this project and starting the background service' \
-  'HZR v0.7.0 is installed.' \
+  'HZR v0.7.1 is installed.' \
   'What went where' \
   'Next steps' \
   'hzr doctor --workspace .'; do
@@ -138,7 +138,7 @@ run_hzr() {
   PATH="${HZR_INSTALLED_BIN}:${HZR_SMOKE_TEMP}/tools:/usr/bin:/bin" \
     "${HZR_INSTALLED_BIN}/hzr" "$@"
 }
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.7.0" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.7.1" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/grepai" version | grep -F "0.35.0" >/dev/null
@@ -503,7 +503,7 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) HZR_SMOKE_PLATFORM="linux-x64" ;;
   *) echo "unsupported upgrade-smoke platform" >&2; exit 1 ;;
 esac
-HZR_UPGRADE_VERSION="0.7.0-upgrade-smoke"
+HZR_UPGRADE_VERSION="0.7.1-upgrade-smoke"
 HZR_UPGRADE_ARTIFACT="hzr-v${HZR_UPGRADE_VERSION}-${HZR_SMOKE_PLATFORM}.tar.gz"
 HZR_UPGRADE_CHECKSUMS="${HZR_SMOKE_TEMP}/SHA256SUMS.upgrade"
 awk -v artifact="${HZR_UPGRADE_ARTIFACT}" \
@@ -546,7 +546,7 @@ if [[ "${HZR_RESOLVED_ENGINES}" != "${HZR_EXPECTED_ENGINES}" ]]; then
   exit 1
 fi
 
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.7.0" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.7.1" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_CURRENT_LINK}/engines/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null

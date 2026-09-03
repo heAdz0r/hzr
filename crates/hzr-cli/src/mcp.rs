@@ -449,20 +449,34 @@ async fn handle_line(
             "MCP session is already initialized",
         )),
         "initialize" => {
-            if !pinned_workspace {
-                match initialize_workspace_root(&request) {
-                    Ok(Some(root)) => {
-                        let root = std::fs::canonicalize(&root).unwrap_or(root);
-                        let candidate = classify_workspace_binding(
-                            &root,
-                            BaseDirs::new().as_ref().map(|base| base.home_dir()),
-                        );
-                        *binding = apply_workspace_policy(config, candidate).await;
+            match initialize_workspace_root(&request) {
+                Ok(Some(root)) if pinned_workspace => {
+                    let root = std::fs::canonicalize(&root).unwrap_or(root);
+                    let selected = std::fs::canonicalize(binding.resolved_path())
+                        .unwrap_or_else(|_| binding.resolved_path().to_path_buf());
+                    if root != selected {
+                        return Some(error_response(
+                            id,
+                            INVALID_PARAMS,
+                            &format!(
+                                "configured MCP workspace {} conflicts with client root {}; no HZR tool was exposed. Re-register this client for the current workspace and reconnect.",
+                                selected.display(),
+                                root.display()
+                            ),
+                        ));
                     }
-                    Ok(None) => {}
-                    Err(error) => {
-                        return Some(error_response(id, INVALID_PARAMS, &error.to_string()));
-                    }
+                }
+                Ok(Some(root)) => {
+                    let root = std::fs::canonicalize(&root).unwrap_or(root);
+                    let candidate = classify_workspace_binding(
+                        &root,
+                        BaseDirs::new().as_ref().map(|base| base.home_dir()),
+                    );
+                    *binding = apply_workspace_policy(config, candidate).await;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    return Some(error_response(id, INVALID_PARAMS, &error.to_string()));
                 }
             }
             match initialize_result(&request, binding) {

@@ -4,6 +4,30 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-04
+
+### Fixed
+
+- Prevented development and smoke binaries from writing real Codex or Claude Desktop
+  configuration even when the fixture override is present; that override is now accepted only
+  for configuration files inside the system temporary directory.
+- Stopped global installation from retargeting a valid Claude Desktop workspace whenever HZR is
+  installed from another repository. Missing, development, and temporary selections are still
+  repaired, while deliberate selection remains available through `hzr mcp config --apply`.
+- Rejected MCP initialization before exposing tools when an explicit workspace conflicts with the
+  single root supplied by the client, preventing reads or memory calls in a foreign namespace.
+- Prevented `init --if-needed` launched from the user home from treating the user-level Codex
+  registration as a project file and reintroducing a home-directory workspace pin.
+- Preserved Git-tracked shared `AGENTS.md` and `CLAUDE.md` contracts during automatic
+  `init --if-needed`, fleet reconciliation, and cross-workspace health audits instead of treating
+  repository-owned policy as obsolete managed state or poisoning every other workspace's doctor.
+
+### Changed
+
+- Codex's user-level HZR registration is now an unpinned dynamic fallback. Exact workspace pins
+  remain in each repository's `.codex/config.toml`, while the fallback resolves the current client
+  root instead of carrying whichever repository last ran the global installer.
+
 ## [0.7.0] - 2026-09-03
 
 ### Fixed
@@ -1526,5 +1550,6 @@ First public HZR release.
 [0.6.2]: https://github.com/heAdz0r/hzr/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/heAdz0r/hzr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0
+[0.7.1]: https://github.com/heAdz0r/hzr/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/heAdz0r/hzr/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/heAdz0r/hzr/compare/v0.6.5...v0.6.6

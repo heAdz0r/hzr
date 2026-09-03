@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use hzr_core::{ActivationConfig, ActivationMode, Config, EnabledWorkspace, InstructionScope};
 use hzr_index::{Deadlines, Workspace};
 use serde::Serialize;
@@ -152,6 +152,36 @@ pub fn instruction_desired_state(
         obsolete,
         excluded,
     })
+}
+
+pub fn is_tracked_shared_instruction(root: &Path, target: &InstructionTarget) -> Result<bool> {
+    if target.location != InstructionLocation::WorkspaceShared || !root.join(".git").exists() {
+        return Ok(false);
+    }
+    let relative = target.path.strip_prefix(root).with_context(|| {
+        format!(
+            "instruction target {} is outside workspace {}",
+            target.path.display(),
+            root.display()
+        )
+    })?;
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "--error-unmatch", "--"])
+        .arg(relative)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("failed to inspect tracked workspace instructions")?;
+    match status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => bail!(
+            "git could not determine whether {} is tracked",
+            target.path.display()
+        ),
+    }
 }
 
 const LOCAL_EXCLUDE_BEGIN: &str = "# hzr:begin local instructions";
@@ -326,7 +356,8 @@ mod tests {
 
     use super::{
         ActivationStatusReport, InstructionLocation, discover, instruction_desired_state,
-        is_enabled, reconcile_local_instruction_excludes, record, render_status_text,
+        is_enabled, is_tracked_shared_instruction, reconcile_local_instruction_excludes, record,
+        render_status_text,
     };
 
     #[test]
@@ -423,6 +454,50 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&exclude).expect("removed exclude"),
             "user-pattern\n"
+        );
+    }
+
+    #[test]
+    fn tracked_shared_instructions_are_repository_owned() {
+        let directory = tempdir().expect("temporary directory");
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .expect("git init");
+        assert!(status.success());
+        std::fs::write(directory.path().join("AGENTS.md"), "tracked contract\n")
+            .expect("AGENTS fixture");
+        let status = std::process::Command::new("git")
+            .args(["add", "AGENTS.md"])
+            .current_dir(directory.path())
+            .status()
+            .expect("git add");
+        assert!(status.success());
+        let state = instruction_desired_state(
+            directory.path(),
+            ActivationMode::All,
+            InstructionScope::Shared,
+        )
+        .expect("global desired state");
+        let agents = state
+            .obsolete
+            .iter()
+            .find(|target| target.path.ends_with("AGENTS.md"))
+            .expect("shared Codex target");
+        let claude = state
+            .obsolete
+            .iter()
+            .find(|target| target.path.ends_with("CLAUDE.md"))
+            .expect("shared Claude target");
+
+        assert!(
+            is_tracked_shared_instruction(directory.path(), agents)
+                .expect("tracked instruction check")
+        );
+        assert!(
+            !is_tracked_shared_instruction(directory.path(), claude)
+                .expect("untracked instruction check")
         );
     }
 
