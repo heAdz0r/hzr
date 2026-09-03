@@ -282,7 +282,12 @@ hzr memory prune --threshold 0.1 --apply           # explicit deletion
 Recall defaults to `project-and-global`, so standing preferences arrive alongside this
 project's history. Another repository's memory is never reachable from any scope — that
 isolation is enforced by a positive filter, not by omission. A store targets exactly one
-namespace; there is no "both" for writes.
+namespace; there is no "both" for writes. Global writes are limited to `preferences`,
+`architecture-global`, and `user-*` topics; project context and decisions must remain in the
+project namespace.
+
+Recall deliberately uses ICM FTS5 lexical retrieval. Embeddings are disabled in this release;
+`memory status` reports that as a capability boundary, not as a health failure.
 
 Update, forget, and prune enumerate typed ICM records first and apply the same positive
 namespace filter as recall. A project command therefore cannot mutate another repository or

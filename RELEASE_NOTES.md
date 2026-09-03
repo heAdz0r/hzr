@@ -1,50 +1,58 @@
-# HZR 0.6.6
+# HZR 0.7.0
 
-HZR 0.6.6 makes the orchestrator's accounting and lifecycle decisions single-owned and
-release-gated. It also ships the approved bundle-build workstream.
+HZR 0.7.0 restores end-to-end accounting for commands executed by Claude Code and makes
+token-economy claims reflect what the host can actually show to the model. It also puts hard
+bounds on previously unbounded read and find paths and repairs workspace ownership across MCP,
+hooks, instructions, and installer smoke tests.
 
-## Accounting and stats
+## Accounting integrity
 
-- Fork-core emits invocation-scoped, privacy-safe accounting receipts with exact engine identity,
-  correlation and sequence. HZR commits them idempotently through the daemon ledger writer and
-  acknowledges their journals only after the durable write.
-- Producer failures remain fail-open for command execution but open a durable accounting gap.
-  Live status becomes degraded; historical incompleteness remains visible after recovery.
-- Bypassed and unmeasured receipts cannot carry positive savings credit.
-- Stats aggregate on one typed public key before sorting or limiting. Private commands that share
-  a public family/mode/route/stage now form one row instead of duplicate-looking labels.
-- MCP delivery stages, search attribution, session precedence and daemon-down evasion attribution
-  use shared typed owners.
+- Hook rewrites register a correlation context with the daemon. A daemon-owned sweeper commits
+  fork receipts through the same idempotent ledger writer used by `hzr exec run`, acknowledges
+  journals only after the durable write, and retires empty denied-command contexts after 24 hours.
+- Undrained fork receipts are part of the live coverage model. `doctor` warns while they exist,
+  stats cannot claim complete coverage, and old 0.6.6 journals remain an explicit historical gap
+  rather than being reconstructed into unverifiable operations.
+- Stats report raw estimated tokens separately from host-visible capped estimates. Potential
+  pricing is unavailable when an operation host has no validated output cap; raw totals are
+  labelled upper bounds instead of billed savings.
+- Passthrough `find` executions are bypassed and unmeasured, never optimized. Their visible output
+  is limited to 200 lines and 16 KiB with an explicit exact-fidelity recovery command.
+- `hzr read <file>` now has a smart default budget of 400 lines and 44 KiB. Explicit outlines,
+  ranges, and exact-fidelity reads retain their existing semantics.
 
-## Lifecycle and local instructions
+## Workspace and client safety
 
-- Shared instruction files remain the default.
-- Local instruction mode uses repository-local ignored surfaces and never modifies shared
-  `AGENTS.md` or `CLAUDE.md` for HZR users who opted into local scope.
-- Scope changes, local excludes, activation state, hooks, project MCP registration and uninstall
-  run as one serialized desired-state transaction with rollback and no-follow writes.
-- Hook dispatch, observation, feedback and statusline use the workspace carried by hook input, so
-  one host session cannot leak HZR state into a disabled workspace.
+- Unpinned MCP servers resolve exactly one workspace at initialization: one client root,
+  `CLAUDE_PROJECT_DIR`, then cwd. Filesystem root, home, multi-root, and uninitialized workspaces
+  remain fail-closed; explicit `--workspace` pins still win.
+- Global memory writes accept only `preferences`, `architecture-global`, and non-empty `user-*`
+  topics. Recall is compact by default with explicit expansion, and the FTS5-only retrieval
+  boundary is documented.
+- Home and filesystem root cannot be initialized as projects. Managed instruction placement
+  inherits an identical ancestor block instead of injecting duplicates, and doctor identifies
+  legacy user-instruction conflicts.
+- Legacy SessionStart hooks are migrated to one current owner. Client-config writes reject
+  development binaries unless explicitly authorized, smoke tests isolate every real user config,
+  and stale missing-workspace registrations get actionable repair guidance.
+- The daemon now allocates its private ICM HTTP transport on an available loopback port. An
+  isolated release smoke can therefore run beside the live user daemon without a fixed-port
+  collision or a second writer to the same store.
+- The bundled Caveman dependency lock upgrades `fast-uri` to 3.1.7, closing the high-severity
+  host-confusion and SSRF advisories reported by the release audit.
 
-## Bundle and platform contract
+## Routing and fork-core
 
-Intel macOS (`darwin-x64`) is no longer supported. HZR 0.6.6 publishes exactly three native
-platform archives:
+- Top-level `hzr` commands are first-class native operations instead of recursively proxying
+  through the fork. No-equivalent shell constructs are not labelled avoidable, and their recipe
+  states that tracked fallback carries zero savings credit.
+- Search hides the full generation digest unless verbose output is requested. Native `read` and
+  `write` help now expose their important fork options.
+- Empty `.rtk-lock` artifacts were removed from the current engine manifest. The immutable
+  `v0.1.0` import snapshot is unchanged; the current fork identity was regenerated and verified.
 
-- `linux-x64`;
-- `linux-arm64`;
-- `darwin-arm64`.
+## Release contract
 
-Component builds are cached by their semantic inputs and verified by version, license and hashes
-before reuse. On the measured machine, the reusable component stage changed from 372.92 seconds
-cold to 16.27 seconds warm (22.9x). The measured macOS arm64 bundle is 354204 KiB and the archive
-is 101056087 bytes.
-
-The bundled Node runtime contains the executable and license only. Caveman production packages
-omit optional dependencies. Independent preflight branches run in parallel, CI warms the same
-verified cache, and the reduced smoke matrix retains OS-specific and per-archive proof.
-
-## Release safety
-
-CI and release publishing invoke the same complete source gate. Native bundle and publish jobs
-cannot run after an ordinary test, Clippy, fork provenance or source-gate failure.
+HZR 0.7.0 publishes the same three native archives as 0.6.6: `linux-x64`, `linux-arm64`, and
+`darwin-arm64`. CI builds each bundle, runs the platform smoke contract, publishes aggregate
+`SHA256SUMS`, and marks the stable release Latest only after the complete source gate passes.

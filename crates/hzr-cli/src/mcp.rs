@@ -227,7 +227,7 @@ async fn apply_workspace_policy(config: &Config, binding: WorkspaceBinding) -> W
 pub async fn serve(
     config: &Config,
     config_path: &std::path::Path,
-    workspace: &std::path::Path,
+    workspace: Option<&std::path::Path>,
 ) -> Result<()> {
     // A terminal stdin means a human ran this by hand; an MCP server would then hang
     // forever looking like a wedged session. Fail fast and say what it is for.
@@ -238,15 +238,17 @@ pub async fn serve(
         );
     }
 
-    // Classify the client-chosen launch directory once, before any tool can use it. A
-    // refused binding still serves: `hzr_codec` is a pure text transform and stays usable,
-    // while the project-scoped tools report the refusal instead of writing to a namespace
-    // no CLI recall will ever read.
+    let pinned_workspace = workspace.is_some();
+    let launch_workspace = workspace
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| std::env::var_os("CLAUDE_PROJECT_DIR").map(std::path::PathBuf::from))
+        .unwrap_or(std::env::current_dir()?);
+    let launch_workspace = std::fs::canonicalize(&launch_workspace).unwrap_or(launch_workspace);
     let binding = classify_workspace_binding(
-        workspace,
+        &launch_workspace,
         BaseDirs::new().as_ref().map(|base| base.home_dir()),
     );
-    let binding = apply_workspace_policy(config, binding).await;
+    let mut binding = apply_workspace_policy(config, binding).await;
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
     let mut stdout = tokio::io::stdout();
@@ -347,7 +349,15 @@ pub async fn serve(
                         }
                     }
                 }
-                if let Some(response) = handle_line(config, &binding, &mut session, line).await {
+                if let Some(response) = handle_line(
+                    config,
+                    &mut binding,
+                    pinned_workspace,
+                    &mut session,
+                    line,
+                )
+                .await
+                {
                     write_response(&mut stdout, &response).await?;
                 }
             }
@@ -395,7 +405,8 @@ fn cancelled_request_id(request: &Value) -> Option<Value> {
 /// Returns `None` for notifications, which must never be answered.
 async fn handle_line(
     config: &Config,
-    binding: &WorkspaceBinding,
+    binding: &mut WorkspaceBinding,
+    pinned_workspace: bool,
     session: &mut SessionState,
     line: &str,
 ) -> Option<Value> {
@@ -437,13 +448,31 @@ async fn handle_line(
             INVALID_REQUEST,
             "MCP session is already initialized",
         )),
-        "initialize" => match initialize_result(&request, binding) {
-            Ok(result) => {
-                session.initialized = true;
-                Some(success(id, result))
+        "initialize" => {
+            if !pinned_workspace {
+                match initialize_workspace_root(&request) {
+                    Ok(Some(root)) => {
+                        let root = std::fs::canonicalize(&root).unwrap_or(root);
+                        let candidate = classify_workspace_binding(
+                            &root,
+                            BaseDirs::new().as_ref().map(|base| base.home_dir()),
+                        );
+                        *binding = apply_workspace_policy(config, candidate).await;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        return Some(error_response(id, INVALID_PARAMS, &error.to_string()));
+                    }
+                }
             }
-            Err(error) => Some(error_response(id, INVALID_PARAMS, &error.to_string())),
-        },
+            match initialize_result(&request, binding) {
+                Ok(result) => {
+                    session.initialized = true;
+                    Some(success(id, result))
+                }
+                Err(error) => Some(error_response(id, INVALID_PARAMS, &error.to_string())),
+            }
+        }
         "ping" => Some(success(id, json!({}))),
         "tools/list" if session.initialized => {
             Some(success(id, json!({"tools": tool_definitions()})))
@@ -471,6 +500,78 @@ async fn handle_line(
     }
 }
 
+fn initialize_workspace_root(request: &Value) -> Result<Option<std::path::PathBuf>> {
+    let Some(roots) = request
+        .pointer("/params/roots")
+        .or_else(|| request.pointer("/params/_meta/roots"))
+    else {
+        return Ok(None);
+    };
+    let roots = roots
+        .as_array()
+        .context("initialize params.roots must be an array")?;
+    if roots.is_empty() {
+        return Ok(None);
+    }
+    if roots.len() != 1 {
+        anyhow::bail!(
+            "initialize supplied {} roots; pin one workspace with `--workspace <dir>`",
+            roots.len()
+        );
+    }
+    let uri = roots[0]
+        .get("uri")
+        .and_then(Value::as_str)
+        .context("initialize root requires a string uri")?;
+    file_uri_path(uri).map(Some)
+}
+
+fn file_uri_path(uri: &str) -> Result<std::path::PathBuf> {
+    let encoded = uri
+        .strip_prefix("file://")
+        .context("initialize root uri must use the file scheme")?;
+    let encoded = encoded.strip_prefix("localhost").unwrap_or(encoded);
+    if !encoded.starts_with("/") {
+        anyhow::bail!("initialize root uri must not name a remote host");
+    }
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == 37 {
+            let Some(high) = bytes.get(index + 1).and_then(|byte| hex_value(*byte)) else {
+                anyhow::bail!("initialize root uri has invalid percent encoding");
+            };
+            let Some(low) = bytes.get(index + 2).and_then(|byte| hex_value(*byte)) else {
+                anyhow::bail!("initialize root uri has invalid percent encoding");
+            };
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    if decoded.contains(&0) {
+        anyhow::bail!("initialize root uri contains a null byte");
+    }
+    let decoded = String::from_utf8(decoded).context("initialize root uri is not UTF-8")?;
+    let path = std::path::PathBuf::from(decoded);
+    if !path.is_absolute() {
+        anyhow::bail!("initialize root uri must resolve to an absolute path");
+    }
+    Ok(path)
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        48..=57 => Some(byte - 48),
+        65..=70 => Some(byte - 65 + 10),
+        97..=102 => Some(byte - 97 + 10),
+        _ => None,
+    }
+}
+
 fn initialize_result(request: &Value, binding: &WorkspaceBinding) -> Result<Value> {
     let requested = request
         .pointer("/params/protocolVersion")
@@ -491,8 +592,7 @@ fn initialize_result(request: &Value, binding: &WorkspaceBinding) -> Result<Valu
         "bound": binding.refusal().is_none(),
         "project": binding.project_root().map(|root| root.to_string_lossy()),
         "resolved_from": binding.resolved_path().to_string_lossy(),
-        "note": "The project memory namespace is derived from this directory. It is fixed at \
-                 registration and cannot be changed per call.",
+        "note": "The project memory namespace is selected at initialization from one client root, CLAUDE_PROJECT_DIR, cwd, or an explicit --workspace pin. It cannot change per call.",
     });
 
     const GUIDANCE: &str = "Use hzr_context_plan first for unfamiliar or cross-cutting work, \
@@ -1204,11 +1304,10 @@ fn error_response(id: Value, code: i64, message: &str) -> Value {
 /// Claude Desktop registrations the same way install does. Print mode remains for paste
 /// workflows and clients HZR must not rewrite.
 ///
-/// `workspace` pins the project the server's memory is scoped to. It matters because the
-/// fallback is the client's own working directory, and clients choose it badly: the Claude
-/// desktop app launches from `/`, so an unpinned registration binds the namespace of the
-/// filesystem root and every store there is unreachable from the repository it describes.
-/// Pinning it here is the only fix that happens before the first bad write.
+/// `workspace` pins the project the server's memory is scoped to. Dynamic clients can omit it
+/// when they provide exactly one root during initialization or set `CLAUDE_PROJECT_DIR`; the
+/// process working directory is the final fallback. Claude Desktop remains a singleton and
+/// launches from `/`, so its registration must be pinned before project tools can run.
 pub fn registration_snippet(
     client: McpClientArg,
     binary: &std::path::Path,
@@ -1235,9 +1334,8 @@ pub fn registration_snippet(
     match client {
         McpClientArg::Codex => {
             let hint = if unpinned_warning {
-                "# Without `--workspace <dir>` the project namespace comes from the directory\n\
-                 # Codex launched from, which is a per-session scratch directory — memory then\n\
-                 # never accumulates for the repository. Re-run with `--workspace <dir>`.\n"
+                "# Without `--workspace <dir>` HZR requires exactly one client root during\n\
+                 # initialize; the process working directory is the final fallback.\n"
             } else {
                 ""
             };
@@ -1265,9 +1363,8 @@ pub fn registration_snippet(
         }
         McpClientArg::ClaudeCode => {
             let hint = if unpinned_warning {
-                "// Claude Code linked worktrees may share a local identity. Re-run with\n\
-                 // `--workspace <dir>` and put the result in that worktree's `.mcp.json`;\n\
-                 // until then use the workspace-pinned HZR CLI.\n"
+                "// HZR resolves this session from one initialize root, then\n\
+                 // `CLAUDE_PROJECT_DIR`, then the process working directory.\n"
             } else {
                 ""
             };

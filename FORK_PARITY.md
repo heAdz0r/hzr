@@ -1,7 +1,7 @@
-# HZR 0.6.3 — fork-core parity ledger
+# HZR 0.7.0 — fork-core parity ledger
 
-**Audit date:** 2026-08-26
-**Status:** HZR 0.6.3 retains the 0.6.1 guard correction on the 0.6.0 audit delta; 0.6.3 changes only the surrounding HZR control plane and leaves fork-core identity unchanged
+**Audit date:** 2026-09-03
+**Status:** HZR 0.7.0 preserves the complete imported command surface and adds bounded defaults and truthful bypass accounting to the current HZR-owned engine
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -41,6 +41,24 @@ The 0.6.0 gate verified current engine manifest
 `be0459b8d4dde1a76dcfe836afd77fe0432cf5cb22e83845c522c4568f6a3f53`, 1,940 passed tests,
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
+
+### 0.7.0 bounded-output and accounting delta
+
+HZR 0.7.0 changes three current-engine surfaces without changing the immutable import baseline.
+Unsupported native `find` predicates and actions still execute through the system `find`, retain
+the child exit status, and remain recoverable, but model-visible output is now bounded to 200 lines
+and 16 KiB. Because this path is not an HZR transform, its receipt is passthrough, unmeasured, and
+ineligible for savings credit. Native filtered `find` behavior is unchanged.
+
+An unqualified `rtk read <file>` now applies a 400-line and 44-KiB safety budget. Explicit ranges,
+outlines, batch reads, and exact-fidelity operation retain their prior semantics. The delivered
+receipt includes the recovery notice, so the accounting measure matches the bytes shown.
+
+Rewrite discovery treats a no-equivalent pipeline or control-flow construct as non-avoidable and
+recognizes top-level `hzr` commands as native HZR operations instead of recommending recursive
+proxying. The 50 empty `.rtk-lock` artifacts were removed from the current file set. The refreshed
+current engine manifest is `e7f747d624f563eff93647aa605569789b902b6e9caee8e976dc320ebd8989a4`
+over 483 files; the complete fork regression gate and inherited warning ratchet remain required.
 
 ### 0.6.1 guard delta
 

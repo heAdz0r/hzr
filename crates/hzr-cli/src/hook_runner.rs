@@ -232,6 +232,15 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
             return write_decision(input, decision, None);
         }
     };
+    if fidelity_evasion.is_none() && hzr_core::is_direct_hzr_command(raw) {
+        return write_decision(
+            input,
+            RewriteDecision::allow_raw(
+                "command already enters the HZR control plane; no fork proxy is needed",
+            ),
+            None,
+        );
+    }
     let request = ExecApiRequest {
         cwd: cwd.to_string_lossy().into_owned(),
         command: raw.to_owned(),
@@ -1065,6 +1074,7 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RtkRewrite
                     reason: "HZR_RAW_FIDELITY=1 requires a closed HZR_RAW_FIDELITY_REASON".into(),
                 },
                 evasion: None,
+                accounting_correlation_id: None,
             };
         }
         RawFidelityRequest::InvalidReason => {
@@ -1074,6 +1084,7 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RtkRewrite
                     reason: "HZR_RAW_FIDELITY_REASON is not an allowed fidelity reason".into(),
                 },
                 evasion: None,
+                accounting_correlation_id: None,
             };
         }
         RawFidelityRequest::Authorized { payload, .. } => {
@@ -1081,6 +1092,7 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RtkRewrite
                 return RtkRewriteOutcome {
                     decision: hzr_policy_rewrite(replacement),
                     evasion: None,
+                    accounting_correlation_id: None,
                 };
             }
             payload
@@ -2257,10 +2269,14 @@ fn degraded_rewrite_coverage_at(config: &Config, now_unix: u64) -> Result<Accoun
         }
     }
     let snapshot = store.snapshot(now_unix)?;
-    let lifetime_rewrites =
-        usize::try_from(snapshot.lifetime_missing_operations).unwrap_or(usize::MAX);
-    let unreconciled_rewrites =
-        usize::try_from(snapshot.open_missing_operations).unwrap_or(usize::MAX);
+    let inventory = hzr_exec::accounting_journal_inventory(&config.data_dir)?;
+    let undrained = inventory.undrained_receipts;
+    let lifetime_rewrites = usize::try_from(snapshot.lifetime_missing_operations)
+        .unwrap_or(usize::MAX)
+        .saturating_add(undrained);
+    let unreconciled_rewrites = usize::try_from(snapshot.open_missing_operations)
+        .unwrap_or(usize::MAX)
+        .saturating_add(undrained);
     let daemon_unavailable_operations = usize::try_from(
         snapshot
             .hook_missing_operations
@@ -2269,24 +2285,33 @@ fn degraded_rewrite_coverage_at(config: &Config, now_unix: u64) -> Result<Accoun
             .saturating_add(snapshot.fork_producer_missing_operations),
     )
     .unwrap_or(usize::MAX);
+    let gap_started_at_unix = match (
+        snapshot.gap_started_at_unix,
+        inventory.oldest_modified_at_unix,
+    ) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (left, right) => left.or(right),
+    };
     Ok(AccountingCoverage {
         unreconciled_rewrites,
         lifetime_rewrites,
         daemon_unavailable_operations,
-        complete: snapshot.live_complete && snapshot.historical_complete,
-        live_complete: snapshot.live_complete,
-        historical_complete: snapshot.historical_complete,
-        open_intervals: snapshot.open_intervals,
+        complete: snapshot.live_complete && snapshot.historical_complete && undrained == 0,
+        live_complete: snapshot.live_complete && undrained == 0,
+        historical_complete: snapshot.historical_complete && undrained == 0,
+        open_intervals: snapshot.open_intervals + usize::from(undrained > 0),
         closed_intervals: snapshot.closed_intervals,
         last_degraded_at_unix: snapshot.last_failure_at_unix,
-        gap_started_at_unix: snapshot.gap_started_at_unix,
+        gap_started_at_unix,
         last_recovered_at_unix: snapshot.last_recovered_at_unix,
-        open_gap_seconds: snapshot.open_gap_seconds,
+        open_gap_seconds: gap_started_at_unix.map(|started| now_unix.saturating_sub(started)),
         closed_gap_seconds: snapshot.closed_gap_seconds,
         hook_missing_operations: snapshot.hook_missing_operations,
         cli_missing_operations: snapshot.cli_missing_operations,
         mcp_missing_operations: snapshot.mcp_missing_operations,
-        fork_producer_missing_operations: snapshot.fork_producer_missing_operations,
+        fork_producer_missing_operations: snapshot
+            .fork_producer_missing_operations
+            .saturating_add(u64::try_from(undrained).unwrap_or(u64::MAX)),
     })
 }
 

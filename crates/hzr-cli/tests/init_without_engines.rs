@@ -45,6 +45,7 @@ fn init_succeeds_when_the_index_engine_is_not_installed() {
         .current_dir(&workspace)
         .env("HOME", &home)
         .env("XDG_CONFIG_HOME", home.join("xdg"))
+        .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1")
         .status()
         .expect("hzr init runs");
 
@@ -101,6 +102,7 @@ fn acceptance_gate_local_instruction_scope_never_mutates_shared_repository_rules
         .current_dir(&workspace)
         .env("HOME", &home)
         .env("XDG_CONFIG_HOME", home.join("xdg"))
+        .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1")
         .status()
         .expect("local init runs");
     assert!(status.success());

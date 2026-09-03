@@ -15,6 +15,86 @@ use crate::{ExecError, expected_engine_identity};
 
 const MAX_DRAIN_BYTES: u64 = 16 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AccountingJournalInventory {
+    pub undrained_receipt_journals: usize,
+    pub undrained_receipts: usize,
+    pub oldest_modified_at_unix: Option<u64>,
+}
+
+pub fn accounting_journal_inventory(
+    data_root: &Path,
+) -> Result<AccountingJournalInventory, ExecError> {
+    let directory = data_root.join("fork");
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            return Ok(AccountingJournalInventory::default());
+        }
+        Err(source) => {
+            return Err(ExecError::PrepareForkRuntime {
+                path: directory,
+                source,
+            });
+        }
+    };
+    let mut inventory = AccountingJournalInventory::default();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("accounting-receipts-")
+            || !(name.ends_with(".jsonl") || name.ends_with(".jsonl.pending"))
+        {
+            continue;
+        }
+        let correlation_id = name
+            .strip_prefix("accounting-receipts-")
+            .and_then(|name| name.strip_suffix(".pending").or(Some(name)))
+            .and_then(|name| name.strip_suffix(".jsonl"));
+        if correlation_id.is_some_and(|correlation_id| {
+            directory
+                .join(format!("accounting-context-{correlation_id}.json"))
+                .is_file()
+        }) {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() == 0 {
+            continue;
+        }
+        inventory.undrained_receipt_journals += 1;
+        inventory.undrained_receipts = inventory
+            .undrained_receipts
+            .saturating_add(receipt_line_count(&path));
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs());
+        inventory.oldest_modified_at_unix = match (inventory.oldest_modified_at_unix, modified) {
+            (Some(current), Some(candidate)) => Some(current.min(candidate)),
+            (None, candidate) => candidate,
+            (current, None) => current,
+        };
+    }
+    Ok(inventory)
+}
+
+fn receipt_line_count(path: &Path) -> usize {
+    let Ok(bytes) = fs::read(path) else {
+        return 1;
+    };
+    bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| line.iter().any(|byte| !byte.is_ascii_whitespace()))
+        .count()
+        .max(1)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AccountingJournalKind {
@@ -452,6 +532,37 @@ mod tests {
             }
         ));
         assert!(pending_path(&journal).exists());
+        Ok(())
+    }
+
+    #[test]
+    fn inventory_counts_only_orphaned_nonempty_receipt_journals() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let paths = ForkRuntimePaths::from_data_root(directory.path());
+        paths.ensure_layout()?;
+        let orphan = "0123456789abcdef0123456789abcdef";
+        let registered = "fedcba9876543210fedcba9876543210";
+        fs::write(
+            correlated_fixture_path(&paths.accounting_receipt_journal, orphan)?,
+            b"receipt one\nreceipt two\n",
+        )?;
+        fs::write(
+            correlated_fixture_path(&paths.accounting_receipt_journal, registered)?,
+            b"receipt\n",
+        )?;
+        fs::write(
+            directory
+                .path()
+                .join("fork")
+                .join(format!("accounting-context-{registered}.json")),
+            b"{}\n",
+        )?;
+
+        let inventory = accounting_journal_inventory(directory.path())?;
+
+        assert_eq!(inventory.undrained_receipt_journals, 1);
+        assert_eq!(inventory.undrained_receipts, 2);
+        assert!(inventory.oldest_modified_at_unix.is_some());
         Ok(())
     }
 

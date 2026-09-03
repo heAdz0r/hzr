@@ -571,8 +571,11 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Agent { command } => execute_agent(&config, command, cli.json).await,
         Command::Mcp { command } => match command {
             McpCommand::Serve { workspace } => {
-                let workspace = canonical_directory(workspace.as_deref())?;
-                mcp::serve(&config, &config_path, &workspace).await?;
+                let workspace = workspace
+                    .as_deref()
+                    .map(|path| canonical_directory(Some(path)))
+                    .transpose()?;
+                mcp::serve(&config, &config_path, workspace.as_deref()).await?;
                 Ok(ExitCode::SUCCESS)
             }
             McpCommand::Config {
@@ -1379,6 +1382,7 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
     }
     let _install_lock = acquire_install_lock()?;
     let workspace_root = canonical_directory(options.workspace.as_deref())?;
+    validate_activation_workspace(&workspace_root)?;
     let config_path = if config_path.is_absolute() {
         config_path.to_path_buf()
     } else {
@@ -1988,6 +1992,7 @@ async fn initialize(
     let instruction_scope_changed =
         existed && !reset && config.instructions.scope != original_instruction_scope;
     let workspace_root = canonical_directory(None)?;
+    validate_activation_workspace(&workspace_root)?;
     let instruction_plan = plan_agent_instructions(&config, &workspace_root)?;
     let planned_workspace = Workspace::discover_managed(
         &workspace_root,
@@ -3144,6 +3149,9 @@ async fn set_workspace_activation(
     let _adoption_lock = acquire_install_lock()?;
     adoption::validate_lifecycle_target(config_path)?;
     let root = canonical_directory(workspace_path)?;
+    if enabled {
+        validate_activation_workspace(&root)?;
+    }
     let mut config = Config::load_or_default(config_path)?;
     config.activation.mode = hzr_core::ActivationMode::Selected;
     let workspace = Workspace::discover_managed(
@@ -3687,7 +3695,7 @@ async fn execute_search(
         output.push(b'\n');
         output
     } else {
-        render_search(&response)?
+        render_search(&response, arguments.verbose)?
     };
     io::stdout().lock().write_all(&output)?;
     record_search_delivery(
@@ -3907,6 +3915,7 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             topic,
             keyword,
             limit,
+            expand,
             scope,
         } => {
             let workspace = canonical_directory(workspace.as_deref())?;
@@ -3916,7 +3925,7 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
                     workspace: workspace_text.clone(),
                     query,
                     topic,
-                    limit,
+                    limit: if expand.is_some() { 100 } else { limit },
                     keyword,
                     scope: scope.into(),
                 })
@@ -3924,7 +3933,17 @@ async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> 
             if json {
                 print_json(&response)?;
             } else {
-                print_memories(&response.memories)?;
+                let memories = if let Some(id) = expand.as_deref() {
+                    let matched = response
+                        .memories
+                        .iter()
+                        .find(|memory| memory.id == id)
+                        .with_context(|| format!("memory {id} was not returned by this recall"))?;
+                    std::slice::from_ref(matched)
+                } else {
+                    response.memories.as_slice()
+                };
+                print_memories(memories, expand.is_some())?;
                 if response.count < response.total_matches {
                     println!(
                         "showing {} of {} matches; rerun with --limit {}",
@@ -4390,6 +4409,31 @@ fn canonical_directory(path: Option<&Path>) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+fn validate_activation_workspace(root: &Path) -> Result<()> {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| BaseDirs::new().map(|base| base.home_dir().to_path_buf()))
+        .context("cannot determine the user home directory")?;
+    validate_activation_workspace_against_home(root, &home)
+}
+
+fn validate_activation_workspace_against_home(root: &Path, home: &Path) -> Result<()> {
+    if root.parent().is_none() {
+        bail!(
+            "refusing to activate filesystem root {}; choose a repository or project directory",
+            root.display()
+        );
+    }
+    let canonical_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    if root == canonical_home {
+        bail!(
+            "refusing to activate user home {}; choose a repository or project directory",
+            root.display()
+        );
+    }
+    Ok(())
+}
+
 fn path_text(path: &Path, label: &str) -> Result<String> {
     path.to_str()
         .map(str::to_owned)
@@ -4422,8 +4466,29 @@ mod tests {
         contract_asset_path, executable_source_directory, format_pricing_entry,
         forwarded_fork_args, instruction_drift_alert_for_targets, parse_provider_receipt_import,
         payload_limit, reject_direct_fork_bypass, response_codec_session_notice,
-        session_instruction_drift_alert, session_start_payload,
+        session_instruction_drift_alert, session_start_payload, validate_activation_workspace,
+        validate_activation_workspace_against_home,
     };
+
+    #[test]
+    fn activation_rejects_filesystem_root() {
+        let root = Path::new(std::path::MAIN_SEPARATOR_STR);
+
+        let error = validate_activation_workspace(root).expect_err("root must be refused");
+
+        assert!(error.to_string().contains("filesystem root"));
+    }
+
+    #[test]
+    fn activation_rejects_user_home() {
+        let fixture = tempdir().expect("fixture");
+        let home = fixture.path().canonicalize().expect("canonical fixture");
+
+        let error = validate_activation_workspace_against_home(&home, &home)
+            .expect_err("home must be refused");
+
+        assert!(error.to_string().contains("user home"));
+    }
 
     #[test]
     fn human_pricing_catalog_row_exposes_bounded_audit_dimensions() {

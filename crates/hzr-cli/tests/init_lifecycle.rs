@@ -9,7 +9,8 @@ fn command(home: &std::path::Path, workspace: &std::path::Path) -> Command {
         .current_dir(workspace)
         .env("HOME", home)
         .env("XDG_CONFIG_HOME", home.join("xdg-config"))
-        .env("XDG_DATA_HOME", home.join("xdg-data"));
+        .env("XDG_DATA_HOME", home.join("xdg-data"))
+        .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1");
     command
 }
 

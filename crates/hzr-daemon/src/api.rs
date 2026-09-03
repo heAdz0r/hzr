@@ -1956,6 +1956,7 @@ pub async fn exec_run(
                 reason: reason.clone(),
             },
             evasion: Some(*evasion),
+            accounting_correlation_id: None,
         },
         FidelityPreflight::NotRequested | FidelityPreflight::Allow { .. } => {
             if request.fidelity_requested {
@@ -2110,6 +2111,7 @@ pub async fn exec_run(
     RtkRewriteOutcome {
         decision: envelope.decision.clone(),
         evasion: plan.evasion,
+        accounting_correlation_id: plan.accounting_correlation_id.clone(),
     }
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
@@ -2453,6 +2455,7 @@ pub async fn exec_approval(
     RtkRewriteOutcome {
         decision: envelope.decision.clone(),
         evasion: pending.evasion,
+        accounting_correlation_id: None,
     }
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
@@ -3084,6 +3087,7 @@ pub async fn exec_rewrite(
                 reason: reason.clone(),
             },
             evasion: Some(*evasion),
+            accounting_correlation_id: None,
         },
         FidelityPreflight::NotRequested | FidelityPreflight::Allow { .. } => {
             fork_outcome_with_managed_unwrap(&state.rtk, &request.command, &cwd).await
@@ -3092,16 +3096,42 @@ pub async fn exec_rewrite(
     if let FidelityPreflight::Allow { evasion, .. } = preflight {
         outcome.evasion = Some(evasion);
     }
+    let accounted_command = match &outcome.decision {
+        RewriteDecision::AllowRewrite { command, .. } => Some(command.clone()),
+        RewriteDecision::Ask { proposed, .. } => proposed.clone(),
+        RewriteDecision::AllowRaw { .. } | RewriteDecision::Deny { .. } => None,
+    };
     let decision = apply_host_grant(
         &request,
         enforce_first_class(&request.command, outcome.decision),
     );
+    let final_command = match &decision {
+        RewriteDecision::AllowRewrite { command, .. } => Some(command),
+        RewriteDecision::Ask { proposed, .. } => proposed.as_ref(),
+        RewriteDecision::AllowRaw { .. } | RewriteDecision::Deny { .. } => None,
+    };
+    let accounting_correlation_id = outcome
+        .accounting_correlation_id
+        .filter(|_| accounted_command.as_ref() == final_command);
+    if let Some(correlation_id) = accounting_correlation_id.as_deref() {
+        crate::accounting_sweeper::register(
+            &state,
+            correlation_id,
+            &cwd,
+            request.agent.as_deref(),
+            request.session_id.as_deref(),
+        )
+        .map_err(|error| {
+            ApiError::internal(format!("accounting receipt registration failed: {error}"))
+        })?;
+    }
     record_exec_policy_event(&state, &request, &cwd, outcome.evasion.as_ref(), &decision).await?;
     // The attribution travels with the decision: the hook forwards it to the process that will
     // execute and record the command, which has no other way to learn how it was classified.
     Ok(Json(RtkRewriteOutcome {
         decision,
         evasion: outcome.evasion,
+        accounting_correlation_id,
     }))
 }
 
@@ -3255,6 +3285,7 @@ async fn fork_outcome_with_managed_unwrap(
                     reason: "HZR_RAW_FIDELITY=1 requires a closed HZR_RAW_FIDELITY_REASON".into(),
                 },
                 evasion: policy_evasion,
+                accounting_correlation_id: None,
             };
         }
         RawFidelityRequest::InvalidReason => {
@@ -3264,6 +3295,7 @@ async fn fork_outcome_with_managed_unwrap(
                     reason: "HZR_RAW_FIDELITY_REASON is not an allowed fidelity reason".into(),
                 },
                 evasion: policy_evasion,
+                accounting_correlation_id: None,
             };
         }
         RawFidelityRequest::Authorized { payload, .. } => {
@@ -3275,6 +3307,7 @@ async fn fork_outcome_with_managed_unwrap(
                 return RtkRewriteOutcome {
                     decision: hzr_policy_rewrite(replacement),
                     evasion: policy_evasion,
+                    accounting_correlation_id: None,
                 };
             }
             payload
@@ -4282,6 +4315,7 @@ mod tests {
         RtkRewriteOutcome {
             decision,
             evasion: Some(evasion),
+            accounting_correlation_id: None,
         }
         .apply_evasion_environment(&mut envelope.environment)
         .expect("closed evasion environment");
@@ -4600,6 +4634,7 @@ exit 64
         RtkRewriteOutcome {
             decision: envelope.decision.clone(),
             evasion: Some(evasion),
+            accounting_correlation_id: None,
         }
         .apply_evasion_environment(&mut envelope.environment)
         .expect("closed evasion environment");

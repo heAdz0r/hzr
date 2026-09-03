@@ -10,9 +10,10 @@ use crate::cli::McpClientArg;
 use super::{
     INVALID_REQUEST, LATEST_MCP_PROTOCOL_VERSION, METHOD_NOT_FOUND, PARSE_ERROR, SessionState,
     ToolKind, apply_workspace_policy, bounded_usize, cancelled_request_id,
-    classify_workspace_binding, fork_result, handle_line, initialize_result, lifecycle_metadata,
-    mcp_operation_request, optional_enum, parse_mode, read_fork_request, registration_snippet,
-    tool_definitions, tool_error, tool_success, validate_tool_arguments, write_fork_request,
+    classify_workspace_binding, file_uri_path, fork_result, handle_line, initialize_result,
+    initialize_workspace_root, lifecycle_metadata, mcp_operation_request, optional_enum,
+    parse_mode, read_fork_request, registration_snippet, tool_definitions, tool_error,
+    tool_success, validate_tool_arguments, write_fork_request,
 };
 
 #[test]
@@ -253,6 +254,32 @@ fn test_initialize_negotiates_latest_stable_for_unknown_revision() {
             .expect("instructions")
             .contains("hzr_context_plan"),
         "clients must be told why not to call icm/grepai directly"
+    );
+}
+
+#[test]
+fn test_initialize_can_select_one_percent_encoded_client_root() {
+    let request = json!({
+        "params": {
+            "roots": [{"uri": "file:///Users/andrew/My%20Project", "name": "workspace"}]
+        }
+    });
+
+    assert_eq!(
+        initialize_workspace_root(&request).expect("valid root"),
+        Some(std::path::PathBuf::from("/Users/andrew/My Project"))
+    );
+    assert!(
+        initialize_workspace_root(&json!({"params": {"roots": []}}))
+            .expect("empty roots")
+            .is_none()
+    );
+    assert!(file_uri_path("https://example.com/repo").is_err());
+    assert!(
+        initialize_workspace_root(&json!({
+            "params": {"roots": [{"uri": "file:///one"}, {"uri": "file:///two"}]}
+        }))
+        .is_err()
     );
 }
 
@@ -531,9 +558,11 @@ fn test_notifications_are_never_answered() {
 #[tokio::test]
 async fn test_tools_are_rejected_before_initialization() {
     let mut session = SessionState::default();
+    let mut binding = classify_workspace_binding(std::path::Path::new("/repo"), None);
     let response = handle_line(
         &Config::default(),
-        &classify_workspace_binding(std::path::Path::new("/repo"), None),
+        &mut binding,
+        true,
         &mut session,
         r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
     )
@@ -748,6 +777,52 @@ fn test_initialize_states_the_resolved_workspace_binding() {
             .expect("instructions")
             .contains("--workspace"),
         "a refused session must say how to fix itself in the text every client reads"
+    );
+}
+
+#[tokio::test]
+async fn test_initialize_rebinds_an_unpinned_server_to_the_client_root() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let project = directory.path().join("project");
+    std::fs::create_dir(&project).expect("project directory");
+    let config = Config {
+        data_dir: directory.path().join("data"),
+        ..Config::default()
+    };
+    config.ensure_layout().expect("data layout");
+    let workspace = crate::activation::discover(&config, &project)
+        .await
+        .expect("workspace identity");
+    workspace
+        .ensure_managed_location()
+        .expect("managed workspace");
+
+    let mut binding = classify_workspace_binding(std::path::Path::new("/"), None);
+    let mut session = SessionState::default();
+    let request = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "roots": [{"uri": format!("file://{}", project.display())}]
+        }
+    });
+    let response = handle_line(
+        &config,
+        &mut binding,
+        false,
+        &mut session,
+        &request.to_string(),
+    )
+    .await
+    .expect("initialize response");
+
+    assert_eq!(response["result"]["serverInfo"]["workspace"]["bound"], true);
+    let canonical_project = std::fs::canonicalize(&project).expect("canonical project");
+    assert_eq!(
+        response["result"]["serverInfo"]["workspace"]["project"],
+        canonical_project.to_string_lossy().as_ref()
     );
 }
 

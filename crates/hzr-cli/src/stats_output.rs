@@ -187,7 +187,7 @@ fn write_evasion(output: &mut impl Write, report: &StatsReport, color: bool) -> 
     ) {
         writeln!(
             output,
-            "   ACCOUNTING GAP OPEN · started unix {} · missing last {}s · {} rewrite(s) absent from ledger",
+            "   ACCOUNTING GAP OPEN · started unix {} · missing last {}s · {} operation(s) absent from ledger",
             started,
             seconds,
             format_count(report.coverage.unreconciled_rewrites as u64),
@@ -413,7 +413,8 @@ fn write_local_reduction(
     color: bool,
 ) -> io::Result<()> {
     let savings = &report.direct_savings;
-    let avoided = savings.net_avoided_tokens_estimated;
+    let host_visible = &report.host_visible_savings;
+    let avoided = host_visible.net_avoided_tokens_estimated;
 
     writeln!(output)?;
     writeln!(
@@ -430,7 +431,7 @@ fn write_local_reduction(
     writeln!(
         output,
         "│  {:<22}{:<22}{:<24}  │",
-        "TOOL OUTPUT BEFORE", "DELIVERED TO MODEL", "OPERATIONS"
+        "RAW BEFORE (UPPER)", "RAW AFTER (UPPER)", "OPERATIONS"
     )?;
     writeln!(
         output,
@@ -439,21 +440,31 @@ fn write_local_reduction(
         format_count(savings.delivered_tokens_estimated),
         format_count(savings.operations)
     )?;
+    writeln!(
+        output,
+        "│  {:<22}{:<22}{:<24}  │",
+        "HOST-VISIBLE BEFORE", "HOST-VISIBLE AFTER", "UNCAPPED HOST OPS"
+    )?;
+    writeln!(
+        output,
+        "│  {:<22}{:<22}{:<24}  │",
+        format_count(host_visible.baseline_tokens_estimated),
+        format_count(host_visible.delivered_tokens_estimated),
+        format_count(host_visible.uncapped_operations)
+    )?;
     writeln!(output, "│{}│", " ".repeat(WIDTH))?;
     let (avoided_line, ratio) = if !report.coverage.complete && savings.operations == 0 {
         (
             "ACCOUNTING UNKNOWN".to_owned(),
             "unknown · incomplete ledger".to_owned(),
         )
-    } else if !report.coverage.complete {
+    } else if !report.coverage.complete || !host_visible.complete {
         (
+            format!("{} HOST-CAPPED NET (PARTIAL)", format_signed_count(avoided)),
             format!(
-                "{} KNOWN NET TOKENS (PARTIAL)",
-                format_signed_count(avoided)
-            ),
-            format!(
-                "{} of known tool output",
-                format_truthful_percentage(savings.reduction_pct)
+                "{} · {} uncapped op(s)",
+                format_truthful_percentage(host_visible.reduction_pct),
+                host_visible.uncapped_operations
             ),
         )
     } else {
@@ -461,7 +472,7 @@ fn write_local_reduction(
             format!("{} NET TOKEN CHANGE", format_signed_count(avoided)),
             format!(
                 "{} of tool output",
-                format_truthful_percentage(savings.reduction_pct)
+                format_truthful_percentage(host_visible.reduction_pct)
             ),
         )
     };
@@ -469,7 +480,11 @@ fn write_local_reduction(
     writeln!(
         output,
         "│  {}  │",
-        style(&progress_bar(savings.reduction_pct, 68), "38;5;208", color)
+        style(
+            &progress_bar(host_visible.reduction_pct, 68),
+            "38;5;208",
+            color
+        )
     )?;
     // A zero headline has three very different meanings and 0.6.3 rendered all of them
     // identically. The upgrade case is the dangerous one: a policy-version bump moved the entire
@@ -641,7 +656,7 @@ fn write_optimizer_bypass(
                 output,
                 "     {}",
                 style(
-                    "→ no HZR filter yet; use hzr exec run (tracked fallback, zero savings credit)",
+                    "→ no HZR filter exists; tracked fallback has zero savings credit",
                     "2;37",
                     color
                 )
@@ -1037,12 +1052,12 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
     if coverage.unreconciled_rewrites > 0 {
         writeln!(
             output,
-            "├─ {} daemon-free rewrite(s) are absent from the ledger",
+            "├─ {} operation(s) are absent from the ledger",
             coverage.unreconciled_rewrites
         )?;
         writeln!(
             output,
-            "├─ start the daemon (`hzr daemon service status`); the next managed rewrite closes this gap"
+            "├─ start the daemon (`hzr daemon service status`); its receipt sweeper closes live fork gaps"
         )?;
     } else if coverage.lifetime_rewrites > 0 {
         writeln!(
@@ -1264,8 +1279,8 @@ mod tests {
     use crate::hook_runner::AccountingCoverage;
     use crate::stats::{
         BypassReport, BypassToolReport, CommandSavings, DirectSavings, EconomicScopeRow,
-        EconomicsReport, MoneyAmount, PricingIdentity, RerunTax, StageExclusion, StatsReport,
-        SubsystemSavings, TrafficCoverage, ZeroReductionCause,
+        EconomicsReport, HostVisibleSavings, MoneyAmount, PricingIdentity, RerunTax,
+        StageExclusion, StatsReport, SubsystemSavings, TrafficCoverage, ZeroReductionCause,
     };
 
     use super::write_stats;
@@ -1307,6 +1322,16 @@ mod tests {
                 reduction_pct: 80.0,
                 total_execution_ms: 100,
                 measurement: "estimated_utf8_bytes_div_4_v1",
+            },
+            host_visible_savings: HostVisibleSavings {
+                operations: 42,
+                baseline_tokens_estimated: 10_000,
+                delivered_tokens_estimated: 2_000,
+                net_avoided_tokens_estimated: 8_000,
+                reduction_pct: 80.0,
+                uncapped_operations: 0,
+                complete: true,
+                method: "fixture",
             },
             by_subsystem: vec![SubsystemSavings {
                 subsystem: "search",
@@ -1421,7 +1446,7 @@ mod tests {
         assert!(rendered.contains("ACCOUNTING GAP OPEN"));
         assert!(rendered.contains("started unix 1785531400"));
         assert!(rendered.contains("missing last 32s"));
-        assert!(rendered.contains("3 rewrite(s) absent from ledger"));
+        assert!(rendered.contains("3 operation(s) absent from ledger"));
     }
 
     /// The headline ratio is only honest when the bypass share is next to it, so the
@@ -1502,7 +1527,7 @@ mod tests {
         }));
 
         assert!(rendered.contains("hzr rtk -- git status"));
-        assert!(rendered.contains("no HZR filter yet; use hzr exec run"));
+        assert!(rendered.contains("no HZR filter exists; tracked fallback"));
         assert!(rendered.contains("capability unknown"));
         assert!(!rendered.contains("raw is correct"));
     }
@@ -1602,8 +1627,10 @@ mod tests {
             .expect("ratio line");
         assert!(ratio_line.contains("NET TOKEN CHANGE"));
         // And the inputs it derives from appear above it.
-        assert!(rendered.contains("TOOL OUTPUT BEFORE"));
-        assert!(rendered.contains("DELIVERED TO MODEL"));
+        assert!(rendered.contains("RAW BEFORE (UPPER)"));
+        assert!(rendered.contains("RAW AFTER (UPPER)"));
+        assert!(rendered.contains("HOST-VISIBLE BEFORE"));
+        assert!(rendered.contains("HOST-VISIBLE AFTER"));
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use std::net::{Ipv4Addr, TcpListener};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -55,7 +56,7 @@ impl AppState {
         let ledger = LedgerWriter::open(&config.data_dir.join("ledger/hzr.sqlite"))
             .map_err(|error| DaemonError::Ledger(error.to_string()))?;
 
-        let icm_config = managed_icm_config(&config);
+        let icm_config = managed_icm_config(&config)?;
         let memory = Arc::new(IcmSupervisor::new(icm_config).map_err(DaemonError::Memory)?);
         let memory_start = if config.engines.auto_start_icm {
             MemoryStartState::Starting
@@ -164,13 +165,27 @@ impl AppState {
     }
 }
 
-fn managed_icm_config(config: &Config) -> IcmConfig {
+fn managed_icm_config(config: &Config) -> Result<IcmConfig, DaemonError> {
+    // The HTTP transport is private to this daemon. Reserving a fresh loopback port
+    // avoids collisions with another isolated daemon, such as release smoke tests,
+    // while the per-data-root lock still prevents duplicate writers to one store.
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|error| {
+        DaemonError::Config(format!(
+            "failed to reserve a loopback port for ICM: {error}"
+        ))
+    })?;
+    let bind_addr = listener.local_addr().map_err(|error| {
+        DaemonError::Config(format!("failed to resolve the reserved ICM port: {error}"))
+    })?;
+    drop(listener);
+
     let mut icm_config =
         IcmConfig::from_data_root(config.engines.binary("icm"), config.data_dir.clone());
+    icm_config.bind_addr = bind_addr;
     icm_config.embeddings = config.engines.icm_embeddings;
     icm_config.transport = IcmTransport::Http;
     icm_config.cli_fallback = false;
-    icm_config
+    Ok(icm_config)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -365,10 +380,12 @@ mod tests {
 
     #[test]
     fn daemon_icm_transport_is_typed_and_has_no_cli_fallback() {
-        let config = managed_icm_config(&Config::default());
+        let config = managed_icm_config(&Config::default()).expect("managed ICM config");
 
         assert_eq!(config.transport, IcmTransport::Http);
         assert!(!config.cli_fallback);
+        assert!(config.bind_addr.ip().is_loopback());
+        assert_ne!(config.bind_addr.port(), 0);
     }
 
     #[test]

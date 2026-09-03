@@ -2,6 +2,53 @@ use crate::tracking;
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 
+const PASSTHROUGH_MAX_LINES: usize = 200;
+const PASSTHROUGH_MAX_BYTES: usize = 16 * 1024;
+
+struct BoundedPassthrough {
+    shown_lines: usize,
+    shown_bytes: usize,
+    omitted_lines: usize,
+    recovery_command: String,
+}
+
+impl BoundedPassthrough {
+    fn new(recovery_command: String) -> Self {
+        Self {
+            shown_lines: 0,
+            shown_bytes: 0,
+            omitted_lines: 0,
+            recovery_command,
+        }
+    }
+}
+
+impl crate::stream::StreamFilter for BoundedPassthrough {
+    fn feed_line(&mut self, line: &str) -> Option<String> {
+        let bytes = line.len().saturating_add(1);
+        if self.shown_lines >= PASSTHROUGH_MAX_LINES
+            || self.shown_bytes.saturating_add(bytes) > PASSTHROUGH_MAX_BYTES
+        {
+            self.omitted_lines = self.omitted_lines.saturating_add(1);
+            return None;
+        }
+        self.shown_lines += 1;
+        self.shown_bytes += bytes;
+        Some(format!("{line}\n"))
+    }
+
+    fn flush(&mut self) -> String {
+        if self.omitted_lines == 0 {
+            String::new()
+        } else {
+            format!(
+                "[{} line(s) omitted; recovery: HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=complete_log hzr exec run {}]\n",
+                self.omitted_lines, self.recovery_command
+            )
+        }
+    }
+}
+
 /// Match a filename against a glob pattern (supports `*` and `?`).
 fn glob_match(pattern: &str, name: &str) -> bool {
     glob_match_inner(pattern.as_bytes(), name.as_bytes())
@@ -180,7 +227,7 @@ pub fn run_from_args(args: &[String], verbose: u8) -> Result<()> {
     // Compound predicates and actions have no filtered equivalent. Erroring here
     // was a dead end: once the hook has rewritten `find … -exec …` into
     // `rtk find …`, the agent cannot reach the real binary any more. Run the
-    // caller's command verbatim and keep its output and exit code untouched.
+    // caller's command verbatim, preserve its exit code, and bound visible output.
     if has_unsupported_find_flags(args) {
         return run_find_passthrough(args, verbose);
     }
@@ -342,7 +389,7 @@ fn run_display(
     Ok(())
 }
 
-/// Run the caller's `find` verbatim, preserving stdout, stderr and exit code.
+/// Run the caller's `find` predicates verbatim while bounding model-visible output.
 fn run_find_passthrough(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
     if verbose > 0 {
@@ -350,10 +397,16 @@ fn run_find_passthrough(args: &[String], verbose: u8) -> Result<()> {
     }
     let mut cmd = std::process::Command::new("find");
     cmd.args(args);
+    let original = std::iter::once("find".to_owned())
+        .chain(args.iter().map(|argument| shell_quote(argument)))
+        .collect::<Vec<_>>()
+        .join(" ");
     let result = crate::stream::run_streaming(
         &mut cmd,
         crate::stream::StdinMode::Inherit,
-        crate::stream::FilterMode::Passthrough,
+        crate::stream::FilterMode::Streaming(Box::new(BoundedPassthrough::new(shell_quote(
+            &original,
+        )))),
     )
     .context("Failed to run find")?;
 
@@ -366,6 +419,10 @@ fn run_find_passthrough(args: &[String], verbose: u8) -> Result<()> {
         std::process::exit(result.exit_code);
     }
     Ok(())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn format_grouped_results(files: &[String], max_results: usize) -> String {
@@ -639,5 +696,23 @@ mod tests {
         let args: Vec<String> = vec!["*.rs".into(), "src".into()];
         let result = run_from_args(&args, 0);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn unsupported_find_output_is_bounded_and_names_exact_recovery() {
+        use crate::stream::StreamFilter;
+
+        let mut filter = BoundedPassthrough::new("'find . -newer marker'".into());
+        let line = "x".repeat(100);
+        let shown = (0..400)
+            .filter_map(|_| filter.feed_line(&line))
+            .collect::<String>();
+        let notice = filter.flush();
+
+        assert!(shown.len() <= PASSTHROUGH_MAX_BYTES);
+        assert!(shown.lines().count() <= PASSTHROUGH_MAX_LINES);
+        assert!(notice.contains("line(s) omitted"));
+        assert!(notice.contains("HZR_RAW_FIDELITY_REASON=complete_log"));
+        assert!(notice.contains("hzr exec run 'find . -newer marker'"));
     }
 }

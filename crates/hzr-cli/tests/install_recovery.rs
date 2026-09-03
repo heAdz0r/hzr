@@ -18,6 +18,7 @@ fn install_command(
         .env("CLAUDE_CONFIG_DIR", home.join("claude"))
         .env("CODEX_HOME", home.join("codex"))
         .env("CLAUDE_DESKTOP_CONFIG", home.join("claude-desktop.json"))
+        .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1")
         .args([
             "--config",
             config.to_str().expect("config path"),

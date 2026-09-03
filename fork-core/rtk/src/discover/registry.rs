@@ -656,7 +656,8 @@ pub fn canonical_attribution(
         EvasionClass::E7FidelityHatch
             | EvasionClass::E10CapabilityGap
             | EvasionClass::E11PrivilegedPrefix
-    );
+    ) && (class != EvasionClass::E5PipelineOrRedirect
+        || matches!(outcome, RewriteOutcome::Rewritten(_)));
     let tier = if class == EvasionClass::E7FidelityHatch {
         EnforcementTier::T4HatchQuarantine
     } else if matches!(
@@ -6322,6 +6323,17 @@ mod tests {
                 "workflow was blocked: {command}"
             );
         }
+    }
+
+    #[test]
+    fn pipeline_without_filtered_equivalent_is_not_avoidable() {
+        let command = "for file in *.txt; do printf '%s\\n' \"$file\"; done";
+        let outcome = rewrite_command_outcome(command, &[], &[]);
+        let attribution = canonical_attribution(command, &outcome).expect("pipeline attribution");
+
+        assert_eq!(outcome, RewriteOutcome::NoEquivalent);
+        assert_eq!(attribution.class, EvasionClass::E5PipelineOrRedirect);
+        assert!(!attribution.avoidable);
     }
 
     #[test]

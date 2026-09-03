@@ -46,6 +46,10 @@ export XDG_CONFIG_HOME="${HOME}/.config"
 export XDG_DATA_HOME="${HOME}/.local/share"
 export XDG_CACHE_HOME="${HOME}/.cache"
 export XDG_STATE_HOME="${HOME}/.local/state"
+export CODEX_HOME="${HOME}/.codex"
+export CLAUDE_CONFIG_DIR="${HOME}/.claude"
+export CLAUDE_CONFIG_PATH="${HOME}/.claude.json"
+export CLAUDE_DESKTOP_CONFIG="${HOME}/Library/Application Support/Claude/claude_desktop_config.json"
 HZR_SERVICE_LOG="${HZR_SMOKE_TEMP}/service-manager.log"
 HZR_INSTALL_LOG="${HZR_SMOKE_TEMP}/install.log"
 HZR_SERVICE_STUB="${HZR_SMOKE_TEMP}/tools/service-manager"
@@ -79,7 +83,7 @@ for HZR_INSTALL_OUTPUT in \
   '[3/5] Unpacking and checking the bundle contents' \
   '[4/5] Placing the files and command-line entry points' \
   '[5/5] Registering this project and starting the background service' \
-  'HZR v0.6.6 is installed.' \
+  'HZR v0.7.0 is installed.' \
   'What went where' \
   'Next steps' \
   'hzr doctor --workspace .'; do
@@ -129,7 +133,7 @@ run_hzr() {
   PATH="${HZR_INSTALLED_BIN}:${HZR_SMOKE_TEMP}/tools:/usr/bin:/bin" \
     "${HZR_INSTALLED_BIN}/hzr" "$@"
 }
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.6.6" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.7.0" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/grepai" version | grep -F "0.35.0" >/dev/null
@@ -192,7 +196,7 @@ if ! integration_contains_stable_path "${HZR_CLAUDE_SETTINGS}" "${HZR_INSTALLED_
   echo "integrations do not use HZR's stable binary and contract paths" >&2
   exit 1
 fi
-HZR_CLAUDE_DESKTOP_CONFIG="${HZR_SMOKE_TEMP}/home/Library/Application Support/Claude/claude_desktop_config.json"
+HZR_CLAUDE_DESKTOP_CONFIG="${CLAUDE_DESKTOP_CONFIG}"
 if [[ -f "${HZR_CLAUDE_DESKTOP_CONFIG}" ]] && \
   grep -F "/versions/" "${HZR_CLAUDE_DESKTOP_CONFIG}" >/dev/null; then
   echo "Claude Desktop MCP is pinned to an immutable release" >&2
@@ -465,7 +469,7 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) HZR_SMOKE_PLATFORM="linux-x64" ;;
   *) echo "unsupported upgrade-smoke platform" >&2; exit 1 ;;
 esac
-HZR_UPGRADE_VERSION="0.6.6-upgrade-smoke"
+HZR_UPGRADE_VERSION="0.7.0-upgrade-smoke"
 HZR_UPGRADE_ARTIFACT="hzr-v${HZR_UPGRADE_VERSION}-${HZR_SMOKE_PLATFORM}.tar.gz"
 HZR_UPGRADE_CHECKSUMS="${HZR_SMOKE_TEMP}/SHA256SUMS.upgrade"
 awk -v artifact="${HZR_UPGRADE_ARTIFACT}" \
@@ -508,7 +512,7 @@ if [[ "${HZR_RESOLVED_ENGINES}" != "${HZR_EXPECTED_ENGINES}" ]]; then
   exit 1
 fi
 
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.6.6" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.7.0" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_CURRENT_LINK}/engines/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null

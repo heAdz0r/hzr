@@ -34,6 +34,7 @@ const VERSION_SURFACES: &[&str] = &[
 
 const CAVEMAN_PACKAGE_LOCK: &str = "integrations/caveman-code/package-lock.json";
 const CARGO_LOCK: &str = "Cargo.lock";
+const FIXED_VERSION_WORKSPACE_PACKAGES: &[(&str, &str)] = &[("hzr-engine-contract", "0.0.0")];
 
 const CURRENT_VERSION_MARKERS: &[(&str, &str)] = &[
     ("AGENTS.md", "Product version is "),
@@ -290,6 +291,17 @@ fn replace_cargo_lock_versions(before: &str, previous: &str, target: &str) -> Re
             .get("version")
             .and_then(toml_edit::Item::as_str)
             .with_context(|| format!("Cargo.lock workspace package {name:?} has no version"))?;
+        if let Some((_, fixed)) = FIXED_VERSION_WORKSPACE_PACKAGES
+            .iter()
+            .find(|(fixed_name, _)| *fixed_name == name)
+        {
+            if version != *fixed {
+                bail!(
+                    "Cargo.lock fixed-version workspace package {name:?} is {version:?}, expected {fixed:?}"
+                );
+            }
+            continue;
+        }
         if version != previous {
             bail!("Cargo.lock workspace package {name:?} is {version:?}, expected {previous:?}");
         }
@@ -541,6 +553,9 @@ mod tests {
             "name = \"hzr-core\"\n",
             "version = \"0.3.2\"\n\n",
             "[[package]]\n",
+            "name = \"hzr-engine-contract\"\n",
+            "version = \"0.0.0\"\n\n",
+            "[[package]]\n",
             "name = \"third-party\"\n",
             "version = \"0.3.2\"\n",
             "source = \"registry+https://example.invalid\"\n",
@@ -549,6 +564,7 @@ mod tests {
             replace_cargo_lock_versions(before, "0.3.2", "0.3.3").expect("Cargo.lock update");
 
         assert!(after.contains("name = \"hzr-core\"\nversion = \"0.3.3\""));
+        assert!(after.contains("name = \"hzr-engine-contract\"\nversion = \"0.0.0\""));
         assert!(after.contains("name = \"third-party\"\nversion = \"0.3.2\""));
     }
 

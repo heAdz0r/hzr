@@ -126,6 +126,7 @@ where
     let address = listener.local_addr().map_err(DaemonError::Io)?;
     eprintln!("hzrd listening on {address}; index coordinators start on demand");
     let state = AppState::initialize(config).await?;
+    let accounting_task = tokio::spawn(crate::accounting_sweeper::run(state.clone()));
     let shutdown_state = state.clone();
     let serve_result = axum::serve(listener, router(state, token))
         .with_graceful_shutdown(shutdown)
@@ -135,6 +136,8 @@ where
         stop_memory_supervision(&shutdown_state),
         stop_index_maintenance(&shutdown_state)
     );
+    accounting_task.abort();
+    let _ = accounting_task.await;
     serve_result?;
     memory_stop.map_err(DaemonError::Memory)?;
     context_stop.map_err(DaemonError::Context)

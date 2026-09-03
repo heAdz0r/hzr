@@ -4,6 +4,38 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-03
+
+### Fixed
+
+- Restored hook-command accounting with daemon-owned correlation contexts and receipt sweeping.
+  Undrained journals now make live coverage incomplete, denied-command contexts expire safely,
+  and the 0.6.6 loss interval remains explicitly historical instead of being fabricated.
+- Bounded unsupported `find` passthrough at 200 lines and 16 KiB and records it as unmeasured
+  bypass. Default `hzr read` output is bounded at 400 lines and 44 KiB with exact recovery.
+- Replaced raw-output savings headlines with separately reported host-visible capped estimates;
+  unknown host caps disable potential pricing and leave raw estimates labelled as upper bounds.
+- Deduplicated legacy SessionStart hooks, fixed the historical-coverage false warning, protected
+  real client configs from development/smoke writes, and added missing-workspace remediation.
+- Allocated the daemon-owned ICM transport on a private loopback port so isolated release smokes
+  can run alongside the user's live daemon without colliding with its memory service.
+- Updated the bundled Caveman dependency lock to `fast-uri` 3.1.7; the production release audit
+  now reports zero high-severity vulnerabilities.
+- Refused project initialization at home or filesystem root, inherited identical managed
+  instruction blocks, and diagnosed stale user-global HZR instruction conflicts.
+
+### Changed
+
+- Unpinned Codex and Claude Code MCP sessions can resolve one workspace from initialize roots,
+  `CLAUDE_PROJECT_DIR`, or cwd; explicit pins remain authoritative and unsafe roots fail closed.
+- Global memory stores accept only user-wide topic classes. Recall is compact by default with
+  explicit expansion, and FTS5-only retrieval is now a documented capability boundary.
+- Top-level `hzr` commands bypass recursive fork proxying. No-equivalent shell constructs are not
+  called avoidable, exact search output hides generation hashes unless verbose, and read/write
+  help exposes the supported native options.
+- Removed empty `.rtk-lock` files from the current fork manifest without changing the immutable
+  import snapshot.
+
 ## [0.6.6] - 2026-08-28
 
 ### Fixed
@@ -1485,4 +1517,5 @@ First public HZR release.
 [0.6.2]: https://github.com/heAdz0r/hzr/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/heAdz0r/hzr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0
+[0.7.0]: https://github.com/heAdz0r/hzr/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/heAdz0r/hzr/compare/v0.6.5...v0.6.6

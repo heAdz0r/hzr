@@ -129,9 +129,9 @@ pub fn instruction_desired_state(
     let local = workspace_targets(root, InstructionLocation::WorkspaceLocal);
     let desired = match (activation, scope) {
         (_, InstructionScope::Local) => local.to_vec(),
-        (ActivationMode::All, InstructionScope::Shared) => {
-            globals.iter().chain(shared.iter()).cloned().collect()
-        }
+        // Global activation is inherited by every workspace. Installing the same managed
+        // contract into each workspace as well makes Claude and Codex ingest duplicate policy.
+        (ActivationMode::All, InstructionScope::Shared) => globals.to_vec(),
         (ActivationMode::Selected, InstructionScope::Shared) => shared.to_vec(),
     };
     let mut obsolete = globals
@@ -364,6 +364,26 @@ mod tests {
         assert!(shared.obsolete.iter().any(|target| {
             target.location == InstructionLocation::WorkspaceLocal && target.is_local_codex()
         }));
+
+        let global = instruction_desired_state(
+            directory.path(),
+            ActivationMode::All,
+            InstructionScope::Shared,
+        )
+        .expect("global desired state");
+        assert_eq!(global.desired.len(), 2);
+        assert!(
+            global
+                .desired
+                .iter()
+                .all(|target| target.location == InstructionLocation::UserGlobal)
+        );
+        assert!(
+            global
+                .obsolete
+                .iter()
+                .any(|target| target.location == InstructionLocation::WorkspaceShared)
+        );
     }
 
     #[test]

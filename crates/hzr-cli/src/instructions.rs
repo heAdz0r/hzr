@@ -538,7 +538,7 @@ pub fn is_installed(path: &Path) -> Result<bool> {
 /// These are matched outside the managed region only, because the HZR block itself
 /// legitimately mentions `rtk` (as `hzr rtk -- ...`) and names the engines it forbids
 /// calling directly. Matching the whole file would flag HZR's own text.
-const LEGACY_MANDATES: [(&str, &str); 7] = [
+const LEGACY_MANDATES: [(&str, &str); 10] = [
     ("rtk-managed-block", LEGACY_RTK_BEGIN),
     (
         "rtk-instead-of-native-tools",
@@ -549,6 +549,12 @@ const LEGACY_MANDATES: [(&str, &str); 7] = [
     ("rtk-search-mandate", "Always use `rtk rgai`"),
     ("icm-recall-mandate", "`icm_memory_recall`"),
     ("icm-store-mandate", "`icm_memory_store`"),
+    ("legacy-hzr-rtk-read", "hzr rtk -- read"),
+    ("legacy-hzr-rtk-write", "hzr rtk -- write"),
+    (
+        "stale-pretooluse-matcher",
+        "PreToolUse matcher is Bash|Agent|Task only",
+    ),
 ];
 
 fn conflicting_mandates(text: &str) -> Vec<String> {
@@ -922,6 +928,8 @@ pub fn uninstall(
     let existing = String::from_utf8(before.clone())
         .with_context(|| format!("{} is not UTF-8; HZR will not rewrite it", path.display()))?;
     let stripped = strip_local_codex_bridge(&strip_managed_block(&existing));
+    let (stripped, legacy_blocks_removed) = strip_legacy_rtk_blocks(&stripped);
+    let (stripped, legacy_imports_removed) = strip_legacy_imports(&stripped);
     let after = if stripped.trim().is_empty() {
         String::new()
     } else {
@@ -934,8 +942,8 @@ pub fn uninstall(
         path,
         &before,
         after,
-        0,
-        0,
+        legacy_imports_removed,
+        legacy_blocks_removed,
         0,
         dry_run,
         confirmed,
@@ -1456,5 +1464,25 @@ mod tests {
         );
         assert_eq!(mixed.len(), 1);
         assert!(mixed[0].contains("direct-rtk at line 1"));
+    }
+
+    #[test]
+    fn audit_reports_obsolete_hzr_wrappers_and_hook_scope() {
+        let conflicts = super::conflicting_mandates(concat!(
+            "Use hzr rtk -- read for files.\n",
+            "Use hzr rtk -- write for edits.\n",
+            "PreToolUse matcher is Bash|Agent|Task only.\n",
+        ));
+
+        for expected in [
+            "legacy-hzr-rtk-read at line 1",
+            "legacy-hzr-rtk-write at line 2",
+            "stale-pretooluse-matcher at line 3",
+        ] {
+            assert!(
+                conflicts.iter().any(|finding| finding.contains(expected)),
+                "missing {expected}: {conflicts:?}"
+            );
+        }
     }
 }

@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use hzr_core::{
     BypassSummary, CURRENT_ACCOUNTING_POLICY_VERSION, Config, EconomicScopeSummary,
-    EfficiencySummary, EvasionSummary, Ledger, LedgerSummary, OperationChannel,
-    OperationFamilySummary, OperationModeSummary, OperationRoute, PricingCatalog,
+    EfficiencySummary, EvasionSummary, HostVisibleEfficiencySummary, Ledger, LedgerSummary,
+    OperationChannel, OperationFamilySummary, OperationModeSummary, OperationRoute, PricingCatalog,
     PrivacySafeOperationKey, RawPublicEstimate, RawPublicEstimateRequest, ReadPipelineSummary,
     ReplacementCapability, StatsQuery, load_pricing_catalog, price_avoided_input_tokens,
     privacy_identity_hash,
@@ -108,6 +108,7 @@ pub enum ZeroReductionCause {
 
 struct ReportInputs {
     gain: EfficiencySummary,
+    host_visible_gain: HostVisibleEfficiencySummary,
     observed_model_usage: LedgerSummary,
     observed_model_usage_scope: &'static str,
     coverage: AccountingCoverage,
@@ -128,6 +129,7 @@ pub struct StatsReport {
     pub hzr_version: &'static str,
     pub scope: String,
     pub direct_savings: DirectSavings,
+    pub host_visible_savings: HostVisibleSavings,
     pub by_subsystem: Vec<SubsystemSavings>,
     pub by_mode: Vec<OperationModeSummary>,
     pub read_pipeline: ReadPipelineSummary,
@@ -244,6 +246,18 @@ pub struct DirectSavings {
     pub measurement: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct HostVisibleSavings {
+    pub operations: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub reduction_pct: f64,
+    pub uncapped_operations: u64,
+    pub complete: bool,
+    pub method: &'static str,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct SubsystemSavings {
     pub subsystem: &'static str,
@@ -336,6 +350,7 @@ pub async fn collect(
     let mut report = build_report_with_command_limit(
         ReportInputs {
             gain: snapshot.efficiency,
+            host_visible_gain: snapshot.host_visible_efficiency,
             observed_model_usage: snapshot.provider_usage,
             observed_model_usage_scope,
             coverage,
@@ -350,16 +365,24 @@ pub async fn collect(
             recovery: Some(recovery),
         },
     );
-    let catalog = if config.billing.public_estimate_enabled {
-        match load_pricing_catalog(config.billing.pricing_file.as_deref()) {
-            Ok(catalog) => Some(catalog),
-            Err(error) => {
-                report.raw_public_estimate_unavailable_reason = Some(error.to_string());
-                None
+    let catalog = if report.host_visible_savings.complete {
+        if config.billing.public_estimate_enabled {
+            match load_pricing_catalog(config.billing.pricing_file.as_deref()) {
+                Ok(catalog) => Some(catalog),
+                Err(error) => {
+                    report.raw_public_estimate_unavailable_reason = Some(error.to_string());
+                    None
+                }
             }
+        } else {
+            report.raw_public_estimate_unavailable_reason = Some(PRICING_OPT_IN_REASON.to_owned());
+            None
         }
     } else {
-        report.raw_public_estimate_unavailable_reason = Some(PRICING_OPT_IN_REASON.to_owned());
+        report.raw_public_estimate_unavailable_reason = Some(
+            "potential pricing is disabled because one or more operation hosts have no validated visible-output cap; raw byte estimates are upper bounds"
+                .to_owned(),
+        );
         None
     };
     if let Some(catalog) = catalog.as_ref() {
@@ -532,6 +555,7 @@ fn build_report(
     build_report_with_command_limit(
         ReportInputs {
             gain,
+            host_visible_gain: HostVisibleEfficiencySummary::default(),
             observed_model_usage,
             observed_model_usage_scope,
             coverage,
@@ -551,6 +575,7 @@ fn build_report(
 fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions) -> StatsReport {
     let ReportInputs {
         gain,
+        host_visible_gain,
         observed_model_usage,
         observed_model_usage_scope,
         coverage,
@@ -723,6 +748,19 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
             ),
             total_execution_ms: gain.total_execution_ms,
             measurement: "estimated_utf8_bytes_div_4_v1",
+        },
+        host_visible_savings: HostVisibleSavings {
+            operations: host_visible_gain.operations,
+            baseline_tokens_estimated: host_visible_gain.baseline_tokens_estimated,
+            delivered_tokens_estimated: host_visible_gain.delivered_tokens_estimated,
+            net_avoided_tokens_estimated: host_visible_gain.net_avoided_tokens_estimated,
+            reduction_pct: signed_percentage(
+                host_visible_gain.net_avoided_tokens_estimated,
+                host_visible_gain.baseline_tokens_estimated,
+            ),
+            uncapped_operations: host_visible_gain.uncapped_operations,
+            complete: host_visible_gain.uncapped_operations == 0,
+            method: "known_host_visible_caps_v1; claude-code=512 tokens; unknown hosts remain raw upper bounds",
         },
         by_subsystem,
         by_mode,
@@ -1004,7 +1042,8 @@ mod tests {
     use crate::hook_runner::AccountingCoverage;
     use hzr_core::{
         BypassSummary, BypassTool, BypassWindow, EfficiencyOperationSummary, EfficiencySummary,
-        OperationModeSummary, OperationRoute, PrivacySafeOperationKey, ReplacementCapability,
+        HostVisibleEfficiencySummary, OperationModeSummary, OperationRoute,
+        PrivacySafeOperationKey, ReplacementCapability,
     };
     use hzr_protocol::{AccountingOperationKind, AccountingOperationMode, AccountingStage};
 
@@ -1438,6 +1477,7 @@ mod tests {
                         }],
                         ..EfficiencySummary::default()
                     },
+                    host_visible_gain: HostVisibleEfficiencySummary::default(),
                     observed_model_usage: LedgerSummary::default(),
                     observed_model_usage_scope: "global_lifetime",
                     coverage: AccountingCoverage::default_complete(),

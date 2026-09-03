@@ -178,7 +178,8 @@ fn stdio_tools_call_executes_bounded_read_write_and_accounts_success_once() {
             .env("XDG_CONFIG_HOME", home.join("xdg"))
             .env("XDG_DATA_HOME", home.join("xdg-data"))
             .env("CLAUDE_CONFIG_DIR", home.join("claude"))
-            .env("CODEX_HOME", home.join("codex"));
+            .env("CODEX_HOME", home.join("codex"))
+            .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1");
     };
     let mut init = Command::new(env!("CARGO_BIN_EXE_hzr"));
     common_env(&mut init);

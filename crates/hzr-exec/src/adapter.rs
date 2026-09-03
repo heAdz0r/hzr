@@ -186,9 +186,12 @@ impl ForkRuntimePaths {
         Ok(())
     }
 
-    fn shell_exports(&self, binary_directory: &Path) -> Result<String, ExecError> {
+    fn shell_exports(
+        &self,
+        binary_directory: &Path,
+        accounting: &ForkAccountingHandle,
+    ) -> Result<String, ExecError> {
         self.validate_shell_paths()?;
-        let accounting = self.new_accounting_context()?;
         let binary_directory =
             binary_directory
                 .to_str()
@@ -317,6 +320,8 @@ pub struct RtkRewriteOutcome {
     pub decision: RewriteDecision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evasion: Option<EvasionAttribution>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounting_correlation_id: Option<String>,
 }
 
 impl RtkRewriteOutcome {
@@ -387,6 +392,7 @@ fn outcome_without_evasion(decision: RewriteDecision) -> RtkRewriteOutcome {
     RtkRewriteOutcome {
         decision,
         evasion: None,
+        accounting_correlation_id: None,
     }
 }
 
@@ -454,6 +460,14 @@ impl ForkCoreRunner {
     #[must_use]
     pub fn runtime_paths(&self) -> &ForkRuntimePaths {
         &self.runtime_paths
+    }
+
+    pub fn accounting_handle(
+        &self,
+        correlation_id: &str,
+    ) -> Result<ForkAccountingHandle, ExecError> {
+        self.runtime_paths
+            .accounting_context(correlation_id.to_owned())
     }
 
     pub fn managed_command(&self, args: &[String]) -> Result<CanonicalCommand, ExecError> {
@@ -783,39 +797,55 @@ impl PinnedRtkAdapter {
                     .to_owned(),
             });
         }
-        let decision = match plan.decision {
+        let (decision, accounting_correlation_id) = match plan.decision {
             RewritePlanDecision::Rewrite => match plan.proposed {
                 Some(proposed) => self.rewritten_decision(command, proposed.as_bytes(), false),
-                None => RewriteDecision::Deny {
-                    reason: "fork-core rewrite plan omitted its proposed command".to_owned(),
-                },
+                None => (
+                    RewriteDecision::Deny {
+                        reason: "fork-core rewrite plan omitted its proposed command".to_owned(),
+                    },
+                    None,
+                ),
             },
             RewritePlanDecision::Proxy if plan.proposed.is_none() => self.proxy_decision(command),
-            RewritePlanDecision::Proxy => RewriteDecision::Deny {
-                reason: "fork-core proxy plan unexpectedly included a command".to_owned(),
-            },
+            RewritePlanDecision::Proxy => (
+                RewriteDecision::Deny {
+                    reason: "fork-core proxy plan unexpectedly included a command".to_owned(),
+                },
+                None,
+            ),
             RewritePlanDecision::Ask => {
                 let prescribed = plan.proposed.clone();
-                let proposed = plan
+                let managed = plan
                     .proposed
                     .and_then(|proposed| self.managed_shell_command(command, &proposed).ok());
-                RewriteDecision::Ask {
-                    proposed,
-                    reason: policy_reason(
-                        "ask",
-                        plan.reason,
-                        plan.attribution.as_ref(),
-                        prescribed.as_deref(),
-                    ),
-                }
+                let correlation_id = managed
+                    .as_ref()
+                    .map(|(_, accounting)| accounting.correlation_id().to_owned());
+                (
+                    RewriteDecision::Ask {
+                        proposed: managed.map(|(command, _)| command),
+                        reason: policy_reason(
+                            "ask",
+                            plan.reason,
+                            plan.attribution.as_ref(),
+                            prescribed.as_deref(),
+                        ),
+                    },
+                    correlation_id,
+                )
             }
-            RewritePlanDecision::Deny => RewriteDecision::Deny {
-                reason: policy_reason("deny", plan.reason, plan.attribution.as_ref(), None),
-            },
+            RewritePlanDecision::Deny => (
+                RewriteDecision::Deny {
+                    reason: policy_reason("deny", plan.reason, plan.attribution.as_ref(), None),
+                },
+                None,
+            ),
         };
         RtkRewriteOutcome {
             decision,
             evasion: plan.attribution,
+            accounting_correlation_id,
         }
     }
 
@@ -824,69 +854,91 @@ impl PinnedRtkAdapter {
         original: &CanonicalCommand,
         stdout: &[u8],
         approval_required: bool,
-    ) -> RewriteDecision {
+    ) -> (RewriteDecision, Option<String>) {
         let rewritten = match std::str::from_utf8(stdout) {
             Ok(rewritten) if !rewritten.is_empty() => rewritten,
             Ok(_) => {
-                return RewriteDecision::Deny {
-                    reason: "fork-core returned an empty rewrite".to_owned(),
-                };
+                return (
+                    RewriteDecision::Deny {
+                        reason: "fork-core returned an empty rewrite".to_owned(),
+                    },
+                    None,
+                );
             }
             Err(_) => {
-                return RewriteDecision::Deny {
-                    reason: "fork-core rewrite was not valid UTF-8".to_owned(),
-                };
+                return (
+                    RewriteDecision::Deny {
+                        reason: "fork-core rewrite was not valid UTF-8".to_owned(),
+                    },
+                    None,
+                );
             }
         };
         let proposed = match self.managed_shell_command(original, rewritten) {
             Ok(command) => command,
             Err(error) => {
-                return RewriteDecision::Deny {
-                    reason: format!("fork-core rewrite could not be anchored: {error}"),
-                };
+                return (
+                    RewriteDecision::Deny {
+                        reason: format!("fork-core rewrite could not be anchored: {error}"),
+                    },
+                    None,
+                );
             }
         };
+        let correlation_id = proposed.1.correlation_id().to_owned();
         if approval_required {
-            RewriteDecision::Ask {
-                proposed: Some(proposed),
-                reason: "fork-core permission policy requires approval".to_owned(),
-            }
-        } else {
-            RewriteDecision::AllowRewrite {
-                command: proposed,
-                source: RewriteSource::Rtk {
-                    version: PINNED_RTK_VERSION.to_owned(),
-                    route: crate::RtkRewriteRoute::Optimized,
+            (
+                RewriteDecision::Ask {
+                    proposed: Some(proposed.0),
+                    reason: "fork-core permission policy requires approval".to_owned(),
                 },
-                reason: "fork-core approved and produced the managed command".to_owned(),
-            }
+                Some(correlation_id),
+            )
+        } else {
+            (
+                RewriteDecision::AllowRewrite {
+                    command: proposed.0,
+                    source: RewriteSource::Rtk {
+                        version: PINNED_RTK_VERSION.to_owned(),
+                        route: crate::RtkRewriteRoute::Optimized,
+                    },
+                    reason: "fork-core approved and produced the managed command".to_owned(),
+                },
+                Some(correlation_id),
+            )
         }
     }
 
-    fn proxy_decision(&self, original: &CanonicalCommand) -> RewriteDecision {
+    fn proxy_decision(&self, original: &CanonicalCommand) -> (RewriteDecision, Option<String>) {
         let proxy = match self.managed_proxy_command(original) {
             Ok(command) => command,
             Err(error) => {
-                return RewriteDecision::Deny {
-                    reason: format!("fork-core proxy could not be anchored: {error}"),
-                };
+                return (
+                    RewriteDecision::Deny {
+                        reason: format!("fork-core proxy could not be anchored: {error}"),
+                    },
+                    None,
+                );
             }
         };
-        RewriteDecision::AllowRewrite {
-            command: proxy,
-            source: RewriteSource::Rtk {
-                version: PINNED_RTK_VERSION.to_owned(),
-                route: crate::RtkRewriteRoute::Proxy,
+        (
+            RewriteDecision::AllowRewrite {
+                command: proxy.0,
+                source: RewriteSource::Rtk {
+                    version: PINNED_RTK_VERSION.to_owned(),
+                    route: crate::RtkRewriteRoute::Proxy,
+                },
+                reason: "fork-core selected tracked raw proxy execution".to_owned(),
             },
-            reason: "fork-core selected tracked raw proxy execution".to_owned(),
-        }
+            Some(proxy.1.correlation_id().to_owned()),
+        )
     }
 
     fn managed_shell_command(
         &self,
         original: &CanonicalCommand,
         rewritten: &str,
-    ) -> Result<CanonicalCommand, ExecError> {
+    ) -> Result<(CanonicalCommand, ForkAccountingHandle), ExecError> {
         let shell = execution_shell(original);
         let runtime = self
             .config
@@ -900,14 +952,19 @@ impl PinnedRtkAdapter {
                 .ok_or_else(|| ExecError::InvalidForkBinaryPath {
                     path: self.config.binary.clone(),
                 })?;
-        let script = format!("{}{}", runtime.shell_exports(binary_directory)?, rewritten);
-        CanonicalCommand::with_shell(shell, script)
+        let accounting = runtime.new_accounting_context()?;
+        let script = format!(
+            "{}{}",
+            runtime.shell_exports(binary_directory, &accounting)?,
+            rewritten
+        );
+        Ok((CanonicalCommand::with_shell(shell, script)?, accounting))
     }
 
     fn managed_proxy_command(
         &self,
         original: &CanonicalCommand,
-    ) -> Result<CanonicalCommand, ExecError> {
+    ) -> Result<(CanonicalCommand, ForkAccountingHandle), ExecError> {
         let proxy_args = match original {
             CanonicalCommand::Argv { program, args } => {
                 let mut proxy = Vec::with_capacity(args.len() + 2);
@@ -945,12 +1002,16 @@ impl PinnedRtkAdapter {
         let mut argv = Vec::with_capacity(proxy_args.len() + 1);
         argv.push(binary.to_owned());
         argv.extend(proxy_args);
+        let accounting = runtime.new_accounting_context()?;
         let script = format!(
             "{}{}",
-            runtime.shell_exports(binary_directory)?,
+            runtime.shell_exports(binary_directory, &accounting)?,
             render_argv(&argv)
         );
-        CanonicalCommand::with_shell(execution_shell(original), script)
+        Ok((
+            CanonicalCommand::with_shell(execution_shell(original), script)?,
+            accounting,
+        ))
     }
 }
 

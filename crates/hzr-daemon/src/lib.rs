@@ -1,3 +1,4 @@
+mod accounting_sweeper;
 mod api;
 mod approval;
 mod auth;

@@ -262,6 +262,13 @@ pub fn first_class_replacement(command: &str) -> Option<RawReplacement> {
     managed_hzr_replacement(command)
 }
 
+/// A top-level HZR invocation already enters the control plane and must not be wrapped in
+/// fork-core's generic shell proxy by the Claude hook.
+pub fn is_direct_hzr_command(command: &str) -> bool {
+    let (_, command) = exact_fidelity_command(command);
+    command_suffix(command.trim_start_matches([' ', '\t']), "hzr").is_some()
+}
+
 /// Keep the public read/write aliases on HZR's typed path when fork-core does not know
 /// about the outer `hzr` control-plane command.
 ///
@@ -960,6 +967,14 @@ mod tests {
         ] {
             assert_eq!(classify_operation(command).operation, expected, "{command}");
         }
+    }
+
+    #[test]
+    fn direct_hzr_detection_does_not_match_shell_prose() {
+        assert!(is_direct_hzr_command("hzr stats"));
+        assert!(is_direct_hzr_command("  hzr read README.md"));
+        assert!(!is_direct_hzr_command("echo hzr stats"));
+        assert!(!is_direct_hzr_command("hzrd --version"));
     }
 
     #[test]

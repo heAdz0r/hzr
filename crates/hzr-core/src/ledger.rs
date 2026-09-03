@@ -109,6 +109,17 @@ pub struct EfficiencySummary {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct HostVisibleEfficiencySummary {
+    pub operations: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    /// Rows whose host has no validated visible-output cap. Their raw values remain in the
+    /// totals, so the summary is an upper bound and cannot support a monetary claim.
+    pub uncapped_operations: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReadPipelineSummary {
     pub operations: u64,
     pub source_tokens_estimated: u64,
@@ -158,6 +169,7 @@ pub struct StatsQuery<'a> {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StatsSnapshot {
     pub efficiency: EfficiencySummary,
+    pub host_visible_efficiency: HostVisibleEfficiencySummary,
     pub bypass: BypassSummary,
     pub provider_usage: LedgerSummary,
     pub by_family: Vec<OperationFamilySummary>,
@@ -984,7 +996,9 @@ fn infer_legacy_evasion(command: &str, route: OperationRoute) -> Option<EvasionA
     };
     let avoidable = !matches!(
         class,
-        EvasionClass::E10CapabilityGap | EvasionClass::E11PrivilegedPrefix
+        EvasionClass::E5PipelineOrRedirect
+            | EvasionClass::E10CapabilityGap
+            | EvasionClass::E11PrivilegedPrefix
     );
     let fidelity_reason = [
         ("binary", FidelityReason::Binary),
@@ -2053,6 +2067,11 @@ impl Ledger {
                     query.since_unix_seconds,
                     query.include_legacy_versions,
                 )?,
+                host_visible_efficiency: self.host_visible_efficiency_summary(
+                    query.project_path,
+                    query.since_unix_seconds,
+                    query.include_legacy_versions,
+                )?,
                 bypass: self.bypass_summary_scoped(
                     query.project_path,
                     query.since_unix_seconds,
@@ -2976,6 +2995,78 @@ impl Ledger {
                     |row| row.get(0),
                 )
                 .map_err(LedgerError::Database)?;
+        }
+        Ok(summary)
+    }
+
+    fn host_visible_efficiency_summary(
+        &self,
+        project_path: Option<&str>,
+        since_unix_seconds: Option<i64>,
+        include_legacy_versions: bool,
+    ) -> Result<HostVisibleEfficiencySummary, LedgerError> {
+        // Claude Code exposes a 2 KiB preview when command output is moved to a host-side file.
+        // HZR's v1 estimator is UTF-8 bytes / 4, so the matching visible-output cap is 512.
+        const CLAUDE_CODE_VISIBLE_TOKENS: u64 = 512;
+
+        let neutral_predicate = savings_neutral_sql_predicate("rtk_cmd");
+        let version_predicate = accounting_policy_predicate(include_legacy_versions);
+        let query = format!(
+            "SELECT agent,
+                    CASE WHEN ({neutral_predicate}) THEN output_tokens ELSE input_tokens END,
+                    output_tokens
+               FROM commands
+              WHERE measurement = 'estimated'
+                AND COALESCE(route, '') != 'native_unaccounted'
+                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                AND ({version_predicate})
+                AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
+                AND length(?2) = 1
+                AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
+        );
+        let mut statement = self
+            .connection
+            .prepare(&query)
+            .map_err(LedgerError::Database)?;
+        let rows = statement
+            .query_map(
+                params![
+                    project_path.map(|value| privacy_identity_hash("project", value)),
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, u64>(1)?,
+                        row.get::<_, u64>(2)?,
+                    ))
+                },
+            )
+            .map_err(LedgerError::Database)?;
+        let mut summary = HostVisibleEfficiencySummary::default();
+        for row in rows {
+            let (agent, baseline, delivered) = row.map_err(LedgerError::Database)?;
+            let cap = match agent.as_deref() {
+                Some("claude-code") => Some(CLAUDE_CODE_VISIBLE_TOKENS),
+                _ => None,
+            };
+            let (baseline, delivered) = match cap {
+                Some(cap) => (baseline.min(cap), delivered.min(cap)),
+                None => {
+                    summary.uncapped_operations = summary.uncapped_operations.saturating_add(1);
+                    (baseline, delivered)
+                }
+            };
+            summary.operations = summary.operations.saturating_add(1);
+            summary.baseline_tokens_estimated =
+                summary.baseline_tokens_estimated.saturating_add(baseline);
+            summary.delivered_tokens_estimated =
+                summary.delivered_tokens_estimated.saturating_add(delivered);
+            summary.net_avoided_tokens_estimated = summary
+                .net_avoided_tokens_estimated
+                .saturating_add(i64::try_from(baseline).unwrap_or(i64::MAX))
+                .saturating_sub(i64::try_from(delivered).unwrap_or(i64::MAX));
         }
         Ok(summary)
     }
@@ -6622,6 +6713,47 @@ mod tests {
                 .expect("drift query"),
             1
         );
+    }
+
+    #[test]
+    fn host_visible_summary_caps_claude_and_marks_unknown_hosts() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        for (agent, baseline, delivered) in [("claude-code", 10_000, 2_000), ("codex", 1_000, 100)]
+        {
+            ledger
+                .record_operation_attributed_with_detail(
+                    "cargo test",
+                    "rtk cargo test",
+                    baseline,
+                    delivered,
+                    1,
+                    DetailedOperationAttribution {
+                        attribution: OperationAttribution {
+                            project_path: "/tmp/project",
+                            agent: Some(agent),
+                            session_id: Some("host-cap-session"),
+                            channel: OperationChannel::HookCli,
+                            measurement: OperationMeasurement::Estimated,
+                            route: OperationRoute::Optimized,
+                        },
+                        detail: None,
+                        evasion: None,
+                        host_grant_applied: false,
+                    },
+                )
+                .expect("operation");
+        }
+
+        let summary = ledger
+            .host_visible_efficiency_summary(None, None, false)
+            .expect("host-visible summary");
+
+        assert_eq!(summary.operations, 2);
+        assert_eq!(summary.baseline_tokens_estimated, 1_512);
+        assert_eq!(summary.delivered_tokens_estimated, 612);
+        assert_eq!(summary.net_avoided_tokens_estimated, 900);
+        assert_eq!(summary.uncapped_operations, 1);
     }
 
     #[test]

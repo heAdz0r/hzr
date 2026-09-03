@@ -19,8 +19,8 @@ use crate::cli_subcommand_help::{
     MEMORY_FORGET_AFTER_HELP, MEMORY_FORGET_LONG_ABOUT, MEMORY_PRUNE_AFTER_HELP,
     MEMORY_PRUNE_LONG_ABOUT, MEMORY_RECALL_AFTER_HELP, MEMORY_RECALL_LONG_ABOUT,
     MEMORY_STATUS_AFTER_HELP, MEMORY_STATUS_LONG_ABOUT, MEMORY_STORE_AFTER_HELP,
-    MEMORY_STORE_LONG_ABOUT, MEMORY_UPDATE_AFTER_HELP, MEMORY_UPDATE_LONG_ABOUT, STATS_AFTER_HELP,
-    STATS_LONG_ABOUT, UPDATE_AFTER_HELP, UPDATE_LONG_ABOUT,
+    MEMORY_STORE_LONG_ABOUT, MEMORY_UPDATE_AFTER_HELP, MEMORY_UPDATE_LONG_ABOUT, READ_AFTER_HELP,
+    STATS_AFTER_HELP, STATS_LONG_ABOUT, UPDATE_AFTER_HELP, UPDATE_LONG_ABOUT, WRITE_AFTER_HELP,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -369,9 +369,9 @@ pub enum Command {
     Build(ForkForwardArgs),
     #[command(about = "Run tests through the inherited failure-first filter")]
     Test(ForkForwardArgs),
-    #[command(about = "Read files through bounded HZR filtering")]
+    #[command(about = "Read files through bounded HZR filtering", after_help = READ_AFTER_HELP)]
     Read(ForkForwardArgs),
-    #[command(about = "Write files atomically through HZR")]
+    #[command(about = "Write files atomically through HZR", after_help = WRITE_AFTER_HELP)]
     Write(ForkForwardArgs),
     #[command(
         about = "Show cumulative efficiency gains",
@@ -618,6 +618,9 @@ pub struct SearchArgs {
     /// Include matching file content snippets in the response
     #[arg(long)]
     pub include_content: bool,
+    /// Include diagnostic provenance such as the full index generation hash
+    #[arg(long)]
+    pub verbose: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -676,6 +679,9 @@ pub enum MemoryCommand {
         /// Maximum number of memories to return (1-100)
         #[arg(long, default_value_t = 10, value_parser = parse_limit)]
         limit: usize,
+        /// Print the complete record for one returned memory id
+        #[arg(long, value_name = "ID")]
+        expand: Option<String>,
         /// Which namespaces to reach. Defaults to this project plus your global memory
         #[arg(long, value_enum, default_value_t = RecallScopeArg::ProjectAndGlobal)]
         scope: RecallScopeArg,

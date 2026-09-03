@@ -195,6 +195,7 @@ fn test_stdio_mcp_cancels_in_flight_tool_without_late_response() -> anyhow::Resu
         .current_dir(&workspace_dir)
         .env("HOME", &home_dir)
         .env("XDG_CONFIG_HOME", home_dir.join("xdg"))
+        .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1")
         .status()?;
     assert!(initialized.success(), "workspace initialization failed");
 

@@ -92,8 +92,9 @@ Examples:
 
 pub const MCP_SERVE_LONG_ABOUT: &str = "\
 Serve stdio MCP until the parent agent closes stdin. Routes tools to the one HZR \
-store and does not spawn orphan engines. Pin `--workspace` when the client cwd \
-is not the project root.";
+store and does not spawn orphan engines. Workspace precedence is an explicit \
+`--workspace` pin, one client root from initialize, `CLAUDE_PROJECT_DIR`, then cwd; \
+filesystem root and the user home are refused.";
 
 pub const MCP_SERVE_AFTER_HELP: &str = "\
 Examples:
@@ -140,7 +141,7 @@ Examples:
 
 pub const MEMORY_STORE_LONG_ABOUT: &str = "\
 Store or update a centralized ICM memory under TOPIC. Pass CONTENT, `--file`, or \
-stdin. Use `--scope global` for user-wide preferences; default is project-only.";
+stdin. Use `--scope global` only with `preferences`, `architecture-global`, or `user-*`; default is project-only.";
 
 pub const MEMORY_STORE_AFTER_HELP: &str = "\
 Examples:
@@ -187,4 +188,28 @@ pub const MEMORY_STATUS_AFTER_HELP: &str = "\
 Examples:
   hzr memory status
   hzr memory status --json
+";
+
+pub const READ_AFTER_HELP: &str = "\
+Forwarded fork-core options:
+  --outline                     headings or code symbols with line spans
+  --from N --to N               exact inclusive source range
+  --max-lines N                 bounded exact head
+  --tail-lines N                bounded exact tail
+  --level none|minimal|aggressive
+  --batch --max-tokens N        several files under one total budget
+
+An unqualified file read uses the smart filter and a 400-line / 12K-token safety budget.
+Exact unbounded recovery requires --level none and HZR_EXACT_FIDELITY=1.
+";
+
+pub const WRITE_AFTER_HELP: &str = "\
+Forwarded fork-core operations:
+  patch PATH --old @FILE --new @FILE --cas --retry N
+  replace PATH PATTERN REPLACEMENT
+  set PATH KEY VALUE
+  create PATH --content TEXT
+  batch --file PLAN.json
+
+Run `hzr rtk -- write --help` for the complete inherited option reference.
 ";

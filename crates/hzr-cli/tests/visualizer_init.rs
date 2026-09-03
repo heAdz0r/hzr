@@ -18,6 +18,7 @@ fn run_init(workspace: &std::path::Path, config: &std::path::Path, arguments: &[
             "CODEX_HOME",
             config.parent().expect("config parent").join("codex"),
         )
+        .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1")
         .current_dir(workspace)
         .output()
         .expect("run hzr init");
@@ -86,8 +87,8 @@ fn init_is_idempotent_and_registers_the_visualizer_workspace() {
     assert!(registration.is_file(), "registration is missing");
     assert!(directory.path().join("claude/CLAUDE.md").is_file());
     assert!(directory.path().join("codex/AGENTS.md").is_file());
-    assert!(workspace.join("CLAUDE.md").is_file());
-    assert!(workspace.join("AGENTS.md").is_file());
+    assert!(!workspace.join("CLAUDE.md").exists());
+    assert!(!workspace.join("AGENTS.md").exists());
     assert_eq!(
         second["instructions"]
             .as_array()
@@ -116,14 +117,12 @@ fn acceptance_gate_init_repairs_stale_managed_instructions() {
         &config,
         &["--data-dir", data.to_str().expect("UTF-8 data path")],
     );
-    let migrated_local =
-        std::fs::read_to_string(&local_claude).expect("migrated local instructions");
-    assert!(migrated_local.contains("# Project rules"));
-    assert!(migrated_local.contains("`hzr read <file>`"));
-    assert!(migrated_local.contains("<!-- hzr:begin managed agent contract"));
-    let local_codex =
-        std::fs::read_to_string(workspace.join("AGENTS.md")).expect("local Codex instructions");
-    assert!(local_codex.contains("<!-- hzr:begin managed agent contract"));
+    let preserved_local =
+        std::fs::read_to_string(&local_claude).expect("preserved local instructions");
+    assert!(preserved_local.contains("# Project rules"));
+    assert!(preserved_local.contains("`rtk read <file>`"));
+    assert!(!preserved_local.contains("<!-- hzr:begin managed agent contract"));
+    assert!(!workspace.join("AGENTS.md").exists());
     let codex = directory.path().join("codex/AGENTS.md");
     let stale = std::fs::read_to_string(&codex)
         .expect("managed Codex instructions")
@@ -247,6 +246,7 @@ fn acceptance_gate_init_repairs_instructions_before_legacy_migration() {
         .args(["--skip-service", "--json"])
         .env("CLAUDE_CONFIG_DIR", directory.path().join("claude"))
         .env("CODEX_HOME", directory.path().join("codex"))
+        .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1")
         .current_dir(&workspace)
         .output()
         .expect("run legacy hzr init");
@@ -262,5 +262,6 @@ fn acceptance_gate_init_repairs_instructions_before_legacy_migration() {
     let migrated = std::fs::read_to_string(local_claude).expect("migrated instructions");
     assert!(migrated.contains("# Project rules"));
     assert!(!migrated.contains("rtk-instructions"));
-    assert!(migrated.contains("<!-- hzr:begin managed agent contract"));
+    assert!(!migrated.contains("<!-- hzr:begin managed agent contract"));
+    assert!(directory.path().join("claude/CLAUDE.md").is_file());
 }

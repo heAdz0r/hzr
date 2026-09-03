@@ -39,6 +39,15 @@ pub fn namespaced_topic(kind: &str, project: &str) -> Result<String> {
 /// Topic for a user-global record: `<kind>-global`.
 pub fn global_topic(kind: &str) -> Result<String> {
     validate_memory_kind(kind)?;
+    if kind != "preferences"
+        && kind != "architecture-global"
+        && kind.strip_prefix("user-").is_none_or(str::is_empty)
+    {
+        return Err(MemoryError::InvalidRequest(
+            "global memory topic must be `preferences`, `architecture-global`, or start with `user-`"
+                .into(),
+        ));
+    }
     Ok(format!("{kind}-{GLOBAL_SCOPE_TOKEN}"))
 }
 
@@ -270,8 +279,20 @@ mod tests {
     }
 
     #[test]
-    fn test_global_topic_rejects_the_same_lossy_kinds_as_project_topics() {
-        for kind in ["Preferences", "foo_bar", "foo--bar", "-foo", "foo-", ""] {
+    fn test_global_topic_accepts_only_user_wide_kinds() {
+        for kind in ["preferences", "architecture-global", "user-editor"] {
+            assert!(global_topic(kind).is_ok(), "rejected {kind:?}");
+        }
+        for kind in [
+            "context",
+            "decisions",
+            "Preferences",
+            "foo_bar",
+            "foo--bar",
+            "-foo",
+            "foo-",
+            "",
+        ] {
             assert!(global_topic(kind).is_err(), "accepted {kind:?}");
         }
     }

@@ -1598,12 +1598,38 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 coverage.lifetime_rewrites
             ),
         )),
-        Ok(coverage) => checks.push(check(
+        Ok(coverage) if coverage.fork_producer_missing_operations > 0 => {
+            checks.push(check(
+                "undrained_receipts",
+                CheckStatus::Warning,
+                format!(
+                    "{} fork receipt operation(s) await daemon drain",
+                    coverage.fork_producer_missing_operations
+                ),
+            ));
+            checks.push(check(
+                "degraded_rewrites",
+                CheckStatus::Warning,
+                format!(
+                    "{} operation(s) are not in the ledger",
+                    coverage.unreconciled_rewrites
+                ),
+            ));
+        }
+        Ok(coverage) if coverage.unreconciled_rewrites > 0 => checks.push(check(
             "degraded_rewrites",
             CheckStatus::Warning,
             format!(
                 "{} daemon-free rewrite(s) are not in the ledger; the next managed rewrite reconciles them",
                 coverage.unreconciled_rewrites
+            ),
+        )),
+        Ok(coverage) => checks.push(check(
+            "degraded_rewrites",
+            CheckStatus::Pass,
+            format!(
+                "{} historical daemon-free rewrite(s); live accounting is complete",
+                coverage.lifetime_rewrites
             ),
         )),
         Err(error) => checks.push(check("degraded_rewrites", CheckStatus::Warning, error)),
@@ -2571,7 +2597,7 @@ fn workspace_binding_check(
         return check(
             "client_mcp_workspace",
             CheckStatus::Pass,
-            "every registered MCP server pins its project workspace",
+            "every registered MCP server pins or dynamically resolves its project workspace",
         );
     }
 
@@ -2806,7 +2832,7 @@ mod tests {
         fs::create_dir_all(&current).expect("current workspace");
         fs::create_dir_all(&fleet).expect("fleet workspace");
         fs::write(&contract, "contract").expect("contract fixture");
-        let config = Config {
+        let mut config = Config {
             data_dir: fixture.path().join("data"),
             ..Default::default()
         };
@@ -2822,6 +2848,10 @@ mod tests {
             .ensure_managed_location()
             .expect("managed placement");
         workspace.register().expect("workspace registration");
+        config.activation.mode = hzr_core::ActivationMode::Selected;
+        config
+            .activation
+            .enable(crate::activation::record(&workspace));
         let target = fleet.join("CLAUDE.md");
         fs::write(
             &target,
@@ -3359,7 +3389,7 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         let binary = fixture.path().join("bin/hzr");
         fs::create_dir_all(binary.parent().expect("binary parent")).expect("binary layout");
         fs::write(&binary, "binary").expect("binary fixture");
-        let config = Config {
+        let mut config = Config {
             data_dir: fixture.path().join("data"),
             ..Config::default()
         };
@@ -3372,6 +3402,10 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         .await
         .expect("workspace discovery");
         discovered.register().expect("workspace registration");
+        config.activation.mode = hzr_core::ActivationMode::Selected;
+        config
+            .activation
+            .enable(crate::activation::record(&discovered));
         let deep_duplicate =
             workspace.join("vendor/deep/tree/that/default/reconcile/must/not/walk/.grepai");
         fs::create_dir_all(&deep_duplicate).expect("deep duplicate sentinel");

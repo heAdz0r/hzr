@@ -24,6 +24,7 @@ pub enum Client {
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceBindingCapability {
     ProjectScoped,
+    DynamicClientWorkspace,
     SingletonSelectedWorkspace,
 }
 
@@ -31,6 +32,7 @@ impl WorkspaceBindingCapability {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ProjectScoped => "project_scoped",
+            Self::DynamicClientWorkspace => "dynamic_client_workspace",
             Self::SingletonSelectedWorkspace => "singleton_selected_workspace",
         }
     }
@@ -140,9 +142,9 @@ pub struct ClientMcpStatus {
     pub command: Option<String>,
     pub args: Vec<String>,
     pub direct_icm_registrations: usize,
-    /// The project pinned with `--workspace`, when the registration pins one. Unpinned means
-    /// the memory namespace is decided by whatever directory the client launches from, which
-    /// is `/` for the Claude desktop app and a per-session directory for Codex.
+    /// The project pinned with `--workspace`, when the registration pins one. Dynamic clients
+    /// can instead resolve one root during initialization; singleton Desktop registrations
+    /// still require an explicit pin.
     pub pinned_workspace: Option<String>,
     pub workspace_binding_capability: WorkspaceBindingCapability,
     pub registration_scope: RegistrationScope,
@@ -173,8 +175,13 @@ pub fn evaluate_workspace_binding(
     let expected = canonical_or_owned(workspace);
     let selected = status.pinned_workspace.as_deref().map(PathBuf::from);
     let selected_canonical = selected.as_deref().map(canonical_or_owned);
+    let selected_workspace_is_missing = selected.as_deref().is_some_and(|path| !path.exists());
     let availability = if !status.registered {
         WorkspaceAvailability::Unregistered
+    } else if selected.is_none()
+        && status.workspace_binding_capability == WorkspaceBindingCapability::DynamicClientWorkspace
+    {
+        WorkspaceAvailability::Available
     } else if selected.is_none() {
         WorkspaceAvailability::UnsafeUnpinned
     } else if selected_canonical.as_ref() == Some(&expected) {
@@ -188,6 +195,13 @@ pub fn evaluate_workspace_binding(
     };
     let action = match availability {
         WorkspaceAvailability::Available => "none".to_owned(),
+        WorkspaceAvailability::UnavailableForThisWorkspace if selected_workspace_is_missing => {
+            format!(
+                "remove the stale MCP workspace selection and re-register with `hzr mcp config --client {} --workspace {} --apply`, or use the workspace-pinned HZR CLI",
+                status.client.as_str(),
+                expected.display()
+            )
+        }
         WorkspaceAvailability::UnavailableForThisWorkspace => format!(
             "select this workspace with `hzr mcp config --client {} --workspace {} --apply`, or use the workspace-pinned HZR CLI",
             status.client.as_str(),
@@ -566,6 +580,14 @@ fn status_with_scope(
     let (command, args) = registration
         .map(|registration| (Some(registration.command), registration.args))
         .unwrap_or_default();
+    let workspace_binding_capability = if registration_scope == RegistrationScope::UserFallback
+        && pinned_workspace.is_none()
+        && matches!(client, Client::Codex | Client::ClaudeCode)
+    {
+        WorkspaceBindingCapability::DynamicClientWorkspace
+    } else {
+        client.workspace_binding_capability()
+    };
 
     Ok(ClientMcpStatus {
         client,
@@ -576,7 +598,7 @@ fn status_with_scope(
         args,
         direct_icm_registrations,
         pinned_workspace,
-        workspace_binding_capability: client.workspace_binding_capability(),
+        workspace_binding_capability,
         registration_scope,
         lifecycle: MCP_LIFECYCLE,
         started_by_init: false,
@@ -655,6 +677,7 @@ pub fn install(
     let backup = state.as_ref().map(|(backup, _)| backup.clone());
 
     if changed && !dry_run {
+        refuse_dev_client_write(binary)?;
         if !confirmed {
             bail!(
                 "installation changes {}; inspect `hzr install --dry-run`, then rerun with `--force` to confirm",
@@ -684,6 +707,23 @@ pub fn install(
         before_sha256: sha256(&before),
         after_sha256: sha256(after.as_bytes()),
     })
+}
+
+fn refuse_dev_client_write(binary: &Path) -> Result<()> {
+    let normalized = binary.to_string_lossy().replace('\\', "/");
+    let is_dev = ["/target/debug/", "/target/release/"]
+        .iter()
+        .any(|marker| normalized.contains(marker));
+    if is_dev
+        && std::env::var_os("HZR_ALLOW_DEV_CLIENT_WRITE").as_deref()
+            != Some(std::ffi::OsStr::new("1"))
+    {
+        bail!(
+            "refusing to write a client configuration with development binary {}; set HZR_ALLOW_DEV_CLIENT_WRITE=1 only for an isolated fixture",
+            binary.display()
+        );
+    }
+    Ok(())
 }
 
 fn command_launches_icm(command: &str) -> bool {
@@ -1104,8 +1144,9 @@ mod tests {
     use toml_edit::DocumentMut;
 
     use super::{
-        Client, MCP_LIFECYCLE, RegistrationScope, audit_paths, claude_code_workspace_status_at,
-        default_paths, install, install_project_codex, status, uninstall,
+        Client, ClientMcpStatus, MCP_LIFECYCLE, RegistrationScope, WorkspaceAvailability,
+        WorkspaceBindingCapability, audit_paths, claude_code_workspace_status_at, default_paths,
+        evaluate_workspace_binding, install, install_project_codex, status, uninstall,
     };
 
     fn binary() -> &'static Path {
@@ -1510,6 +1551,80 @@ mod tests {
         assert!(!status.registered);
         assert!(!status.started_by_init);
         assert_eq!(status.lifecycle, "client_managed_stdio");
+    }
+
+    #[test]
+    fn development_binary_cannot_write_a_client_configuration() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("claude.json");
+        let project = directory.path().join("app");
+        fs::create_dir_all(&project).expect("project");
+        let binary = directory.path().join("target/debug/hzr");
+
+        let error = install(Client::ClaudeDesktop, &path, &binary, &project, false, true)
+            .expect_err("development write must be refused");
+
+        assert!(error.to_string().contains("HZR_ALLOW_DEV_CLIENT_WRITE=1"));
+        assert!(
+            !path.exists(),
+            "refusal must happen before the config write"
+        );
+    }
+
+    #[test]
+    fn unpinned_user_fallback_uses_dynamic_client_workspace_binding() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("claude.json");
+        let workspace = directory.path().join("project");
+        fs::create_dir(&workspace).expect("project");
+        fs::write(
+            &path,
+            r#"{"mcpServers":{"hzr":{"command":"/opt/hzr/current/bin/hzr","args":["mcp","serve"]}}}"#,
+        )
+        .expect("fixture");
+
+        let status = status(Client::ClaudeCode, &path).expect("status");
+        let binding = evaluate_workspace_binding(&status, &workspace);
+
+        assert_eq!(
+            status.workspace_binding_capability,
+            WorkspaceBindingCapability::DynamicClientWorkspace
+        );
+        assert_eq!(binding.availability, WorkspaceAvailability::Available);
+    }
+
+    #[test]
+    fn missing_selected_workspace_has_stale_registration_remediation() {
+        let directory = tempdir().expect("temporary directory");
+        let workspace = directory.path().join("current");
+        fs::create_dir(&workspace).expect("current workspace");
+        let missing = directory.path().join("deleted-smoke-workspace");
+        let status = ClientMcpStatus {
+            client: Client::ClaudeDesktop,
+            path: directory.path().join("claude.json"),
+            config_exists: true,
+            registered: true,
+            command: Some(binary().to_string_lossy().into_owned()),
+            args: Vec::new(),
+            direct_icm_registrations: 0,
+            pinned_workspace: Some(missing.to_string_lossy().into_owned()),
+            workspace_binding_capability: WorkspaceBindingCapability::SingletonSelectedWorkspace,
+            registration_scope: RegistrationScope::UserFallback,
+            lifecycle: MCP_LIFECYCLE,
+            started_by_init: false,
+        };
+
+        let binding = evaluate_workspace_binding(&status, &workspace);
+
+        assert_eq!(
+            binding.availability,
+            WorkspaceAvailability::UnavailableForThisWorkspace
+        );
+        assert!(
+            binding
+                .action
+                .contains("remove the stale MCP workspace selection")
+        );
     }
 
     #[test]

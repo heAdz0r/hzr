@@ -21,6 +21,8 @@ const HZR_INIT_SKIP_SERVICE_SUFFIX: &str =
 const HZR_INIT_ENABLED_SUFFIX: &str = " init --if-enabled --quiet --session-start-hook";
 const HZR_INIT_ENABLED_SKIP_SERVICE_SUFFIX: &str =
     " init --if-enabled --quiet --session-start-hook --skip-service";
+const HZR_LEGACY_INIT_SUFFIX: &str = " init --if-needed --quiet";
+const HZR_LEGACY_INIT_SKIP_SERVICE_SUFFIX: &str = " init --if-needed --quiet --skip-service";
 
 /// What "settings.json is absent" means, so a first install is not mistaken for a
 /// concurrent modification during compare-and-swap.
@@ -326,6 +328,8 @@ impl HookIdentity {
                     HZR_INIT_SKIP_SERVICE_SUFFIX,
                     HZR_INIT_ENABLED_SUFFIX,
                     HZR_INIT_ENABLED_SKIP_SERVICE_SUFFIX,
+                    HZR_LEGACY_INIT_SUFFIX,
+                    HZR_LEGACY_INIT_SKIP_SERVICE_SUFFIX,
                 ]
                 .iter()
                 .any(|suffix| command.ends_with(suffix))
@@ -351,6 +355,10 @@ fn owner(command: &str) -> HookOwner {
         || command
             .trim_end()
             .ends_with(HZR_INIT_ENABLED_SKIP_SERVICE_SUFFIX)
+        || command.trim_end().ends_with(HZR_LEGACY_INIT_SUFFIX)
+        || command
+            .trim_end()
+            .ends_with(HZR_LEGACY_INIT_SKIP_SERVICE_SUFFIX)
     {
         HookOwner::Hzr
     } else if command.contains("rtk-rewrite.sh")
@@ -1069,6 +1077,34 @@ mod tests {
             installed.status.native_tool_mode,
             Some(NativeToolMode::Steer)
         );
+    }
+
+    #[test]
+    fn install_replaces_the_legacy_session_start_hook() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("settings.json");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "hooks": {
+                    "SessionStart": [{
+                        "hooks": [{
+                            "type": "command",
+                            "command": "/opt/hzr/bin/hzr init --if-needed --quiet"
+                        }]
+                    }]
+                }
+            }))
+            .expect("settings JSON"),
+        )
+        .expect("settings write");
+
+        install(&path, binary(), true, true, false, policy(false, true)).expect("legacy migration");
+        let installed = fs::read_to_string(&path).expect("installed settings");
+
+        assert_eq!(installed.matches("init --if-needed --quiet").count(), 1);
+        assert!(installed.contains("init --if-needed --quiet --session-start-hook"));
+        assert!(status(&path).expect("hook status").installed);
     }
 
     #[test]

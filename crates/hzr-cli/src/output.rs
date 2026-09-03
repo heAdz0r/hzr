@@ -79,13 +79,17 @@ pub fn print_index_init(outcome: InitOutcome, status: &IndexStatus) -> io::Resul
     writeln!(output, "watcher: not started; hzrd owns watcher lifecycle")
 }
 
-pub fn render_search(response: &SearchApiResponse) -> io::Result<Vec<u8>> {
+pub fn render_search(response: &SearchApiResponse, verbose: bool) -> io::Result<Vec<u8>> {
     let mut output = Vec::new();
-    write_search(&mut output, response)?;
+    write_search(&mut output, response, verbose)?;
     Ok(output)
 }
 
-fn write_search(output: &mut impl Write, response: &SearchApiResponse) -> io::Result<()> {
+fn write_search(
+    output: &mut impl Write,
+    response: &SearchApiResponse,
+    verbose: bool,
+) -> io::Result<()> {
     for hit in &response.hits {
         writeln!(
             output,
@@ -117,7 +121,7 @@ fn write_search(output: &mut impl Write, response: &SearchApiResponse) -> io::Re
         response.skipped_large,
         response.skipped_binary
     )?;
-    if let Some(generation) = &response.index_generation {
+    if verbose && let Some(generation) = &response.index_generation {
         write!(output, " generation={generation}")?;
     }
     if let Some(reason) = &response.fallback_reason {
@@ -190,7 +194,7 @@ pub fn print_context(response: &ContextPlanApiResponse) -> io::Result<()> {
     Ok(())
 }
 
-pub fn print_memories(memories: &[MemoryRecord]) -> io::Result<()> {
+pub fn print_memories(memories: &[MemoryRecord], expanded: bool) -> io::Result<()> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
     for memory in memories {
@@ -203,8 +207,13 @@ pub fn print_memories(memories: &[MemoryRecord]) -> io::Result<()> {
             write!(output, " score={score:.4}")?;
         }
         writeln!(output)?;
-        writeln!(output, "{}", memory.summary)?;
-        if let Some(raw) = &memory.raw_excerpt {
+        let summary = if expanded {
+            memory.summary.clone()
+        } else {
+            compact_memory_summary(&memory.summary)
+        };
+        writeln!(output, "{summary}")?;
+        if expanded && let Some(raw) = &memory.raw_excerpt {
             writeln!(output, "raw: {raw}")?;
         }
     }
@@ -212,6 +221,16 @@ pub fn print_memories(memories: &[MemoryRecord]) -> io::Result<()> {
         writeln!(output, "no memories")?;
     }
     Ok(())
+}
+
+fn compact_memory_summary(value: &str) -> String {
+    let single_line = value.replace(['\r', '\n'], " ");
+    if single_line.chars().count() <= 140 {
+        return single_line;
+    }
+    let mut compact = single_line.chars().take(137).collect::<String>();
+    compact.push_str("...");
+    compact
 }
 
 pub fn print_memory_health(engine: &EngineHealth) -> io::Result<()> {

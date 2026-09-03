@@ -2133,6 +2133,13 @@ fn main() -> Result<()> {
                     read::run_changed(&file, Some(rev), diff_context, cli.verbose)?;
                 }
                 read::ReadMode::Full => {
+                    let default_budget = level.is_none()
+                        && from.is_none()
+                        && to.is_none()
+                        && max_lines.is_none()
+                        && tail_lines.is_none()
+                        && !line_numbers
+                        && file != Path::new("-");
                     // Resolve smart default level (US-007) // changed: auto-select level
                     let level = level.unwrap_or_else(|| {
                         if from.is_some()
@@ -2163,6 +2170,7 @@ fn main() -> Result<()> {
                             from,
                             to,
                             max_lines,
+                            default_budget,
                             tail_lines,
                             line_numbers,
                             dedup,

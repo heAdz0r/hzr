@@ -13,6 +13,8 @@ use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
 
 const MIN_BATCH_FILE_TOKENS: usize = 64;
+pub const DEFAULT_READ_MAX_LINES: usize = 400;
+const BOUNDED_READ_MAX_OUTPUT_BYTES: usize = 44 * 1024;
 
 fn tracked_filter_level(level: FilterLevel) -> tracking::ReadFilterLevel {
     match level {
@@ -82,11 +84,17 @@ pub fn run(
     from: Option<usize>,
     to: Option<usize>,
     max_lines: Option<usize>,
+    default_output_budget: bool,
     tail_lines: Option<usize>,
     line_numbers: bool,
     dedup: bool,
     verbose: u8,
 ) -> Result<()> {
+    let preserve_special_digest = default_output_budget
+        && level != FilterLevel::None
+        && read_digest::has_special_digest(file);
+    let max_lines = max_lines
+        .or((default_output_budget && !preserve_special_digest).then_some(DEFAULT_READ_MAX_LINES));
     let run_start = std::time::Instant::now();
     let timer = tracking::TimedExecution::start();
     let attribution = read_attribution(
@@ -401,7 +409,20 @@ pub fn run(
             std::borrow::Cow::Borrowed(filtered.as_str()),
         )
     };
-    let shown = crate::guard::never_worse(&raw, &rtk_output).to_string();
+    let mut shown = crate::guard::never_worse(&raw, &rtk_output).to_string();
+    if (max_lines.is_some() || default_output_budget) && shown.len() > BOUNDED_READ_MAX_OUTPUT_BYTES
+    {
+        let boundary = shown
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= BOUNDED_READ_MAX_OUTPUT_BYTES)
+            .last()
+            .unwrap_or(0);
+        shown.truncate(boundary);
+        if !shown.ends_with('\n') {
+            shown.push('\n');
+        }
+    }
     if let Some(key) = cache_key.as_deref() {
         read_cache::store_read_cache(key, &shown);
     }
@@ -913,6 +934,7 @@ fn main() {{
             None,
             None,
             None,
+            false,
             None,
             false,
             false,
