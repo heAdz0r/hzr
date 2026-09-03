@@ -1,21 +1,3 @@
-# HZR engineering rules
-
-- HZR is a new product. Upstream RTK, ICM, grepai and Caveman are engines with preserved provenance.
-- `fork-core/rtk` is the HZR-owned evolvable engine. Develop inherited RTK functionality here, never in `/Users/andrew/Programming/rtk`.
-- Tag `v0.1.0` and snapshot v2 `f4296ec4...` are the immutable import baseline. Preserve their provenance while recording and testing every later engine delta.
-- Never replace inherited engine behavior with a reduced reimplementation. Engine changes require parity documentation and the complete deterministic regression gate.
-- The workspace `Cargo.toml` owns the current product version; `v0.1.0` remains the immutable import baseline.
-- Internal component communication uses typed protocol structures; never parse human CLI output when JSON is available.
-- Exactly one canonical workspace and one grepai index owner are allowed per worktree.
-- ICM is supervised centrally; adapters must not spawn independent long-lived instances.
-- User intent, code, commands, JSON, paths, symbols, errors and security text are exact content.
-- Semantic compression creates a versioned derivative and never overwrites canonical data.
-- Provider usage and estimates are separate fields. Never present estimated counters as billed savings.
-- Public HZR documentation and user-facing text are written in English. Preserve imported fork-core audit and provenance artifacts in their original form unless a dedicated migration updates current-engine identity and passes the complete fork regression gate.
-- Production Rust must pass cargo fmt, cargo clippy --all-targets --all-features -- -D warnings, and cargo test --all-targets --all-features.
-- TDD is optional. Use it when the user requests it or regression risk justifies the extra cycle; otherwise use proportionate verification to conserve tokens and time. Required quality gates still apply.
-- Do not add placeholders, TODOs, dead abstractions or suppressed lints.
-
 <!-- hzr:begin managed agent contract — do not edit inside -->
 
 # HZR tool contract (managed)
@@ -100,18 +82,26 @@ but never starts it. `isError: true` confirms no
 success and no fallback store. Recall before retrying an ambiguously completed write.
 Never register `rtk`, `grepai`, `icm` as separate MCP servers.
 
-Codex does not run HZR's Claude `PreToolUse` or `PostToolUse` hooks. Follow the
-routes above explicitly, and prefer registered HZR MCP tools when they are available.
-Native operations not routed through HZR are outside HZR accounting.
+The Claude Code `PreToolUse` hook routes Bash through the managed daemon and
+falls back to the same pinned fork-core when the daemon is down. A degraded
+rewrite keeps command policy but is absent from the usage ledger; `hzr doctor`
+and `hzr stats` report that incomplete accounting rather than hiding it.
+
+The failure-open `PreToolUse` hook sees native `Read`, `Grep`, `Glob`, `Edit` and
+`Write`. In `steer` mode it prescribes `hzr read`/`hzr search`; `Glob` and native
+edits remain allowed. `strict` additionally prescribes `hzr write`, while `observe`
+retains measurement-only compatibility. The `PostToolUse` observer stores no tool
+content and grants no savings credit. In `steer`/`strict`, policy-allowed native
+calls are accounted as typed E10 bypasses, not hidden as `native_unaccounted`.
 
 ## Response codec coverage
 
 This host cannot let HZR replace every final response. Coverage is `instructed` via
-`managed_instruction`. Before delivering long low- or medium-risk prose where
-compression is useful, call `hzr_codec` once and use its returned `content`. If the tool
-is not available, keep the response concise and report codec coverage as unavailable. An
-explicit tool result is not proof that the host delivered it: HZR grants zero economic
-credit unless a trusted host confirms replacement. Shadow results are counterfactual
-measurements only.
+`managed_instruction_and_session_start`. Before delivering long low- or medium-risk
+prose where compression is useful, call `hzr_codec` once and use its returned `content`.
+If the tool is not available, keep the response concise and report codec coverage as
+unavailable. An explicit tool result is not proof that the host delivered it: HZR grants
+zero economic credit unless a trusted host confirms replacement. Shadow results are
+counterfactual measurements only.
 
 <!-- hzr:end managed agent contract -->
