@@ -1,6 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -10,6 +11,9 @@ use thiserror::Error;
 const COVERAGE_SCHEMA_VERSION: u32 = 1;
 const MAX_IDENTITY_BYTES: usize = 256;
 const MAX_INTERVALS: usize = 100_000;
+const ACCOUNTING_CONTEXT_PREFIX: &str = "accounting-context-";
+const ACCOUNTING_CONTEXT_SUFFIX: &str = ".json";
+const MAX_ACCOUNTING_CONTEXT_BYTES: u64 = 16 * 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,6 +104,126 @@ impl Default for AccountingCoverageState {
 pub struct AccountingCoverageStore {
     state_path: PathBuf,
     lock_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountingReceiptContext {
+    pub correlation_id: String,
+    pub project_path: String,
+    pub agent: Option<String>,
+    pub session_id: Option<String>,
+    pub registered_at_unix: u64,
+}
+
+impl AccountingReceiptContext {
+    #[must_use]
+    pub fn gap_event(&self) -> AccountingGapEvent {
+        AccountingGapEvent {
+            surface: AccountingGapSurface::ForkProducer,
+            workspace_hash: Some(crate::privacy_identity_hash(
+                "workspace",
+                &self.project_path,
+            )),
+            session_hash: self
+                .session_id
+                .as_deref()
+                .map(|session| crate::privacy_identity_hash("session", session)),
+            operation_family: None,
+            at_unix: unix_now(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountingReceiptContextStore {
+    data_root: PathBuf,
+}
+
+impl AccountingReceiptContextStore {
+    #[must_use]
+    pub fn new(data_root: &Path) -> Self {
+        Self {
+            data_root: data_root.to_owned(),
+        }
+    }
+
+    pub fn register(
+        &self,
+        correlation_id: &str,
+        project_path: &Path,
+        agent: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Result<(), AccountingCoverageError> {
+        validate_correlation_id(correlation_id)?;
+        let context = AccountingReceiptContext {
+            correlation_id: correlation_id.to_owned(),
+            project_path: project_path.to_string_lossy().into_owned(),
+            agent: agent.map(str::to_owned),
+            session_id: session_id.map(str::to_owned),
+            registered_at_unix: unix_now(),
+        };
+        let path = self.context_path(correlation_id);
+        let parent = path.parent().ok_or_else(|| {
+            AccountingCoverageError::Invalid("accounting context path has no parent".into())
+        })?;
+        fs::create_dir_all(parent).map_err(|source| context_io(&path, source))?;
+        let mut temporary =
+            NamedTempFile::new_in(parent).map_err(|source| context_io(&path, source))?;
+        serde_json::to_writer(&mut temporary, &context)?;
+        temporary
+            .write_all(b"\n")
+            .map_err(|source| context_io(&path, source))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|source| context_io(&path, source))?;
+        temporary
+            .persist(&path)
+            .map_err(|error| context_io(&path, error.error))?;
+        if let Err(error) =
+            AccountingCoverageStore::new(&self.data_root).record_missing(context.gap_event())
+        {
+            let _ = fs::remove_file(&path);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn context_path(&self, correlation_id: &str) -> PathBuf {
+        self.data_root.join("fork").join(format!(
+            "{ACCOUNTING_CONTEXT_PREFIX}{correlation_id}{ACCOUNTING_CONTEXT_SUFFIX}"
+        ))
+    }
+
+    #[must_use]
+    pub fn is_context_path(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.starts_with(ACCOUNTING_CONTEXT_PREFIX)
+                    && name.ends_with(ACCOUNTING_CONTEXT_SUFFIX)
+            })
+    }
+
+    pub fn read(&self, path: &Path) -> Result<AccountingReceiptContext, AccountingCoverageError> {
+        let metadata = fs::metadata(path).map_err(|source| context_io(path, source))?;
+        if metadata.len() > MAX_ACCOUNTING_CONTEXT_BYTES {
+            return Err(AccountingCoverageError::Invalid(format!(
+                "accounting context exceeds {MAX_ACCOUNTING_CONTEXT_BYTES} bytes"
+            )));
+        }
+        let bytes = fs::read(path).map_err(|source| context_io(path, source))?;
+        let context: AccountingReceiptContext = serde_json::from_slice(&bytes)?;
+        validate_correlation_id(&context.correlation_id)?;
+        if self.context_path(&context.correlation_id) != path {
+            return Err(AccountingCoverageError::Invalid(
+                "accounting context correlation does not match its path".into(),
+            ));
+        }
+        Ok(context)
+    }
 }
 
 impl AccountingCoverageStore {
@@ -301,6 +425,34 @@ impl AccountingCoverageStore {
             source,
         }
     }
+}
+
+fn validate_correlation_id(correlation_id: &str) -> Result<(), AccountingCoverageError> {
+    if correlation_id.len() != 32
+        || !correlation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(AccountingCoverageError::Invalid(
+            "accounting correlation id must be 32 lowercase hexadecimal characters".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn context_io(path: &Path, source: std::io::Error) -> AccountingCoverageError {
+    AccountingCoverageError::Io {
+        path: path.to_owned(),
+        source,
+    }
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .max(1)
 }
 
 fn validate_event(event: &AccountingGapEvent) -> Result<(), AccountingCoverageError> {

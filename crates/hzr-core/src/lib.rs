@@ -10,7 +10,8 @@ mod operation;
 
 pub use accounting_coverage::{
     AccountingCoverageError, AccountingCoverageSnapshot, AccountingCoverageStore,
-    AccountingGapEvent, AccountingGapInterval, AccountingGapSurface,
+    AccountingGapEvent, AccountingGapInterval, AccountingGapSurface, AccountingReceiptContext,
+    AccountingReceiptContextStore,
 };
 pub use billing::{
     BUILTIN_PRICING_CATALOG_IDENTITY, BillingError, EconomicAmount, EconomicScopeSummary,

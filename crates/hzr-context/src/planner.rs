@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, btree_map::Entry};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use hzr_core::{BudgetPlanner, Config, FusionInput};
+use hzr_core::{AccountingReceiptContextStore, BudgetPlanner, Config, FusionInput};
 use hzr_exec::{
     CaptureConfig, CaptureOverflow, CapturedContent, ExecutionOutcome, ForkCoreInvocation,
     ForkCoreRunner, TerminationCause,
@@ -107,6 +107,7 @@ pub struct ContextPlanner {
     indexes: IndexCoordinator,
     fork: Option<ForkCoreRunner>,
     fork_unavailable: Option<String>,
+    accounting_contexts: AccountingReceiptContextStore,
     memory: IcmClient,
     hard_token_limit: u64,
     fork_timeout_ms: u64,
@@ -136,6 +137,7 @@ impl ContextPlanner {
             ),
             fork,
             fork_unavailable,
+            accounting_contexts: AccountingReceiptContextStore::new(&config.data_dir),
             memory,
             hard_token_limit: config.policy.input_token_budget(),
             fork_timeout_ms: config
@@ -768,6 +770,13 @@ impl ContextPlanner {
         let mut invocation = ForkCoreInvocation::new(args);
         if !account_usage {
             invocation = invocation.without_accounting();
+        } else {
+            self.accounting_contexts.register(
+                invocation.accounting_correlation_id(),
+                cwd,
+                None,
+                None,
+            )?;
         }
         invocation.cwd = Some(cwd.to_owned());
         invocation.timeout_ms = Some(self.fork_timeout_ms);
@@ -1487,7 +1496,7 @@ mod tests {
     use std::time::Duration;
 
     #[cfg(unix)]
-    use hzr_core::Config;
+    use hzr_core::{AccountingReceiptContextStore, Config};
     #[cfg(unix)]
     use hzr_exec::{ForkCoreConfig, ForkRuntimePaths, PinnedRtkAdapter, expected_engine_identity};
     #[cfg(unix)]
@@ -1669,6 +1678,61 @@ mod tests {
             5,
             "one subprocess must refresh all concurrent callers"
         );
+        planner.shutdown().await.expect("index shutdown");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn accounted_fork_invocation_registers_its_receipt_context() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace_root = directory.path().join("workspace");
+        fs::create_dir(&workspace_root).expect("workspace");
+        let config_path = directory.path().join("rtk-config.toml");
+        let counter_path = directory.path().join("config-invocations");
+        let binary = directory.path().join("rtk");
+        write_config_probe(&binary, &config_path, &counter_path);
+
+        let mut config = Config {
+            data_dir: directory.path().join("data"),
+            ..Config::default()
+        };
+        config.engines.directory = Some(directory.path().to_path_buf());
+        config.ensure_layout().expect("HZR data layout");
+        let adapter = PinnedRtkAdapter::detect(ForkCoreConfig {
+            binary,
+            runtime_paths: Some(ForkRuntimePaths::from_data_root(&config.data_dir)),
+            probe_timeout_ms: 20_000,
+            ..ForkCoreConfig::default()
+        })
+        .await;
+        let planner = ContextPlanner::from_config(
+            &config,
+            unavailable_memory(directory.path()),
+            adapter.runner(),
+        );
+
+        planner
+            .run_fork_output(
+                vec!["--version".into()],
+                &workspace_root,
+                1024,
+                "accounting registration test",
+                true,
+            )
+            .await
+            .expect("accounted fork invocation");
+
+        let contexts = AccountingReceiptContextStore::new(&config.data_dir);
+        let paths = fs::read_dir(config.data_dir.join("fork"))
+            .expect("fork directory")
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| AccountingReceiptContextStore::is_context_path(path))
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), 1);
+        let context = contexts.read(&paths[0]).expect("registered context");
+        assert_eq!(context.project_path, workspace_root.to_string_lossy());
+
         planner.shutdown().await.expect("index shutdown");
     }
 

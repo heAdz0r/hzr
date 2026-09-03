@@ -9,9 +9,10 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 ### Fixed
 
 - Restored hook-command accounting with daemon-owned correlation contexts and receipt sweeping.
-  Hook rewrites, direct `hzr exec run`, and approved continuations all register their correlation
-  before execution. Undrained journals now make live coverage incomplete, denied-command contexts
-  expire safely, and the 0.6.6 loss interval remains explicitly historical instead of fabricated.
+  Hook rewrites, direct `hzr exec run`, approved continuations, and daemon-owned fork operations
+  such as search all register their correlation before execution. Undrained journals now make live
+  coverage incomplete, denied-command contexts expire safely, and the 0.6.6 loss interval remains
+  explicitly historical instead of fabricated.
 - Bounded unsupported `find` passthrough at 200 lines and 16 KiB and records it as unmeasured
   bypass. Default `hzr read` output is bounded at 400 lines and 44 KiB with exact recovery.
 - Replaced raw-output savings headlines with separately reported host-visible capped estimates;

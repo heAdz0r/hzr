@@ -20,6 +20,9 @@ pub enum ContextError {
     #[error("managed fork-core invocation failed: {0}")]
     Fork(#[from] hzr_exec::ExecError),
 
+    #[error("fork-core accounting registration failed: {0}")]
+    Accounting(#[from] hzr_core::AccountingCoverageError),
+
     #[error("fork-core {operation} failed with exit code {exit_code:?}: {stderr}")]
     ForkCommand {
         operation: &'static str,

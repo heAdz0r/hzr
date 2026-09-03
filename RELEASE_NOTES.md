@@ -8,9 +8,9 @@ hooks, instructions, and installer smoke tests.
 ## Accounting integrity
 
 - Hook rewrites register a correlation context with the daemon. A daemon-owned sweeper commits
-  fork receipts from hook rewrites, direct `hzr exec run`, and approved continuations through one
-  idempotent ledger writer, acknowledges journals only after the durable write, and retires empty
-  denied-command contexts after 24 hours.
+  fork receipts from hook rewrites, direct `hzr exec run`, approved continuations, and daemon-owned
+  fork operations such as search through one idempotent ledger writer, acknowledges journals only
+  after the durable write, and retires empty denied-command contexts after 24 hours.
 - Undrained fork receipts are part of the live coverage model. `doctor` warns while they exist,
   stats cannot claim complete coverage, and old 0.6.6 journals remain an explicit historical gap
   rather than being reconstructed into unverifiable operations.

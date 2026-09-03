@@ -4010,6 +4010,9 @@ fn context_error(error: ContextError) -> ApiError {
         | ContextError::InvalidForkOutput { .. }) => {
             ApiError::service("fork_core_failed", error.to_string(), true)
         }
+        ContextError::Accounting(error) => {
+            ApiError::service("context_accounting_failed", error.to_string(), true)
+        }
         ContextError::Invariant(message) => {
             ApiError::internal(format!("context planning invariant failed: {message}"))
         }
