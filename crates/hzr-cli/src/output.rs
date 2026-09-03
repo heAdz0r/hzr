@@ -121,8 +121,10 @@ fn write_search(
         response.skipped_large,
         response.skipped_binary
     )?;
-    if verbose && let Some(generation) = &response.index_generation {
-        write!(output, " generation={generation}")?;
+    if verbose {
+        if let Some(generation) = &response.index_generation {
+            write!(output, " generation={generation}")?;
+        }
     }
     if let Some(reason) = &response.fallback_reason {
         write!(output, " fallback={reason}")?;
@@ -213,8 +215,10 @@ pub fn print_memories(memories: &[MemoryRecord], expanded: bool) -> io::Result<(
             compact_memory_summary(&memory.summary)
         };
         writeln!(output, "{summary}")?;
-        if expanded && let Some(raw) = &memory.raw_excerpt {
-            writeln!(output, "raw: {raw}")?;
+        if expanded {
+            if let Some(raw) = &memory.raw_excerpt {
+                writeln!(output, "raw: {raw}")?;
+            }
         }
     }
     if memories.is_empty() {

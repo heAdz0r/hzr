@@ -40,6 +40,9 @@ hooks, instructions, and installer smoke tests.
   collision or a second writer to the same store.
 - `hzr install --dry-run` remains a read-only preview when it detects hook, instruction, or
   project MCP changes; it no longer asks a nonexistent write transaction to receipt them.
+- The new output paths continue to compile on the declared Rust 1.85 minimum toolchain.
+- Instruction audits now time out with an explicit diagnostic when a cloud-backed contract cannot
+  be opened, instead of blocking `doctor` and the rest of the registered workspace fleet.
 - The bundled Caveman dependency lock upgrades `fast-uri` to 3.1.7, closing the high-severity
   host-confusion and SSRF advisories reported by the release audit.
 

@@ -21,6 +21,9 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   can run alongside the user's live daemon without colliding with its memory service.
 - Kept `hzr install --dry-run` transaction-free when hooks, instructions, or project MCP files
   would change; previews now report those changes without requiring a write transaction.
+- Kept the new bounded output rendering compatible with the declared Rust 1.85 MSRV.
+- Bounded instruction-file audits so an unavailable cloud-backed workspace contract cannot hang
+  `doctor`, fleet reconciliation, or diagnostics for every other registered workspace.
 - Updated the bundled Caveman dependency lock to `fast-uri` 3.1.7; the production release audit
   now reports zero high-severity vulnerabilities.
 - Refused project initialization at home or filesystem root, inherited identical managed

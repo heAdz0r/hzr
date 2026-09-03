@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread;
 use std::time::Duration;
 
 use hzr_agent::{IntegrationLayout, preflight};
@@ -25,6 +27,48 @@ use crate::fleet_exemption;
 use crate::{
     activation, adoption, client_config, foreign, hook_runner, instructions, prefix, service,
 };
+
+const INSTRUCTION_AUDIT_TIMEOUT: Duration = Duration::from_secs(2);
+
+fn receive_instruction_audit(
+    receiver: &Receiver<anyhow::Result<instructions::InstructionAudit>>,
+    path: &Path,
+    deadline: Duration,
+) -> anyhow::Result<instructions::InstructionAudit> {
+    match receiver.recv_timeout(deadline) {
+        Ok(result) => result,
+        Err(RecvTimeoutError::Timeout) => anyhow::bail!(
+            "instruction audit timed out after {} ms while reading {}",
+            deadline.as_millis(),
+            path.display()
+        ),
+        Err(RecvTimeoutError::Disconnected) => anyhow::bail!(
+            "instruction audit worker stopped before reading {}",
+            path.display()
+        ),
+    }
+}
+
+fn bounded_instruction_audit(
+    surface: instructions::Surface,
+    path: &Path,
+) -> anyhow::Result<instructions::InstructionAudit> {
+    let owned_path = path.to_path_buf();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::Builder::new()
+        .name("hzr-instruction-audit".to_owned())
+        .spawn(move || {
+            let result = instructions::audit(surface, &owned_path);
+            let _ = sender.send(result);
+        })
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "cannot start instruction audit worker for {}: {error}",
+                path.display()
+            )
+        })?;
+    receive_instruction_audit(&receiver, path, INSTRUCTION_AUDIT_TIMEOUT)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -289,7 +333,7 @@ fn instruction_health_check_with_exemptions(
     path: &Path,
     exemptions: &fleet_exemption::FleetExemptions,
 ) -> DoctorCheck {
-    match instructions::audit(surface, path) {
+    match bounded_instruction_audit(surface, path) {
         Ok(mut report) => {
             let waived = report
                 .conflicting_mandates
@@ -380,7 +424,7 @@ fn workspace_instruction_health_check(
     path: &Path,
     exemptions: &fleet_exemption::FleetExemptions,
 ) -> DoctorCheck {
-    match instructions::audit(surface, path) {
+    match bounded_instruction_audit(surface, path) {
         Ok(report)
             if !report.installed
                 && report
@@ -738,7 +782,7 @@ pub async fn reconcile_fleet_contracts(
                     continue;
                 }
             }
-            let audit = match instructions::audit(target.surface, &target.path) {
+            let audit = match bounded_instruction_audit(target.surface, &target.path) {
                 Ok(audit) => audit,
                 Err(error) => {
                     report.rewritten.push(FleetContractRewrite {
@@ -1105,7 +1149,7 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
         {
             let surface = target.surface;
             let path = target.path.clone();
-            let audit = match instructions::audit(surface, &path) {
+            let audit = match bounded_instruction_audit(surface, &path) {
                 Ok(audit) => audit,
                 Err(error) => {
                     checks.push(check(
@@ -1164,7 +1208,7 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
             .iter()
             .filter(|target| target.path.starts_with(&registration.root))
         {
-            match instructions::audit(target.surface, &target.path) {
+            match bounded_instruction_audit(target.surface, &target.path) {
                 Ok(audit) if audit.installed => stale_paths.push(target.path.clone()),
                 Ok(_) => {}
                 Err(error) => checks.push(check(
@@ -1379,7 +1423,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                     checks.push(finding);
                 }
                 for target in &state.obsolete {
-                    match instructions::audit(target.surface, &target.path) {
+                    match bounded_instruction_audit(target.surface, &target.path) {
                         Ok(audit) if audit.installed => checks.push(check(
                             format!("obsolete_{}_instructions", target.surface.as_str()),
                             CheckStatus::Error,
@@ -1928,12 +1972,12 @@ fn audited_codec_instruction_surfaces(
             instructions::Surface::Claude => workspace.join("CLAUDE.md"),
             instructions::Surface::Codex => workspace.join("AGENTS.md"),
         };
-        instructions::audit(surface, &local).is_ok_and(|audit| audit.healthy())
+        bounded_instruction_audit(surface, &local).is_ok_and(|audit| audit.healthy())
             || (mode == hzr_core::ActivationMode::All
                 && surface
                     .default_path()
                     .ok()
-                    .and_then(|path| instructions::audit(surface, &path).ok())
+                    .and_then(|path| bounded_instruction_audit(surface, &path).ok())
                     .is_some_and(|audit| audit.healthy()))
     };
     CodecInstructionSurfaces {
@@ -2685,6 +2729,8 @@ fn is_executable(path: &Path) -> bool {
 mod tests {
     use std::fs;
     use std::path::Path;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     use hzr_core::{
         Config, DetailedOperationAttribution, Ledger, OperationAttribution, OperationChannel,
@@ -2711,6 +2757,19 @@ mod tests {
         reconcile_fleet_contracts, repair_legacy_index, response_codec_coverage,
         workspace_binding_check, workspace_instruction_health_check,
     };
+
+    #[test]
+    fn instruction_audit_deadline_returns_an_actionable_error() {
+        let (_sender, receiver) = mpsc::sync_channel(1);
+        let path = Path::new("/unavailable/AGENTS.md");
+
+        let error = super::receive_instruction_audit(&receiver, path, Duration::from_millis(1))
+            .expect_err("an unavailable instruction file must not block doctor forever");
+
+        let detail = error.to_string();
+        assert!(detail.contains("timed out after 1 ms"));
+        assert!(detail.contains("/unavailable/AGENTS.md"));
+    }
 
     fn enabled_billing_config() -> Config {
         let mut config = Config::default();
