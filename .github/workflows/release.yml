@@ -140,7 +140,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(find release-assets -maxdepth 1 -name '*.tar.gz' -type f | wc -l | tr -d ' ')" = 3
-          (cd release-assets && sha256sum ./*.tar.gz | sed 's# \./#  #' | LC_ALL=C sort > SHA256SUMS)
+          (cd release-assets && sha256sum *.tar.gz | LC_ALL=C sort > SHA256SUMS)
       - uses: actions/attest-build-provenance@v4
         with:
           subject-path: release-assets/*.tar.gz

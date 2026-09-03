@@ -28,6 +28,8 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   `doctor`, fleet reconciliation, or diagnostics for every other registered workspace.
 - Updated the bundled Caveman dependency lock to `fast-uri` 3.1.7; the production release audit
   now reports zero high-severity vulnerabilities.
+- Generated the aggregate release `SHA256SUMS` with standard two-space separators so both GNU
+  `sha256sum -c` and BSD `shasum -a 256 -c` resolve every archive filename correctly.
 - Refused project initialization at home or filesystem root, inherited identical managed
   instruction blocks, and diagnosed stale user-global HZR instruction conflicts.
 

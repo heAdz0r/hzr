@@ -96,6 +96,16 @@ def verify_release(workflow: str) -> None:
     )
     forbid(native, "run: scripts/build-bundle.sh", "release native-bundles job")
     require(publish, "needs: [preflight, native-bundles]", "release publish job")
+    require(
+        publish,
+        "sha256sum *.tar.gz | LC_ALL=C sort > SHA256SUMS",
+        "release aggregate checksum step",
+    )
+    forbid(
+        publish,
+        "sha256sum ./*.tar.gz",
+        "release aggregate checksum step",
+    )
     if workflow.count("platform: linux-x64") != 1:
         raise GateError("release matrix must contain linux-x64 exactly once")
     if workflow.count("platform: linux-arm64") != 1:
@@ -174,6 +184,16 @@ class ReleaseGateRegressionTests(unittest.TestCase):
     def test_static_gate_rejects_missing_native_preflight_dependency(self) -> None:
         release = (REPOSITORY / ".github/workflows/release.yml").read_text()
         mutated = release.replace("    needs: preflight\n", "", 1)
+        with self.assertRaises(GateError):
+            verify_release(mutated)
+
+    def test_static_gate_rejects_checksum_filenames_with_a_leading_space(self) -> None:
+        release = (REPOSITORY / ".github/workflows/release.yml").read_text()
+        mutated = release.replace(
+            "sha256sum *.tar.gz | LC_ALL=C sort > SHA256SUMS",
+            "sha256sum ./*.tar.gz | sed 's# \\./#  #' | LC_ALL=C sort > SHA256SUMS",
+            1,
+        )
         with self.assertRaises(GateError):
             verify_release(mutated)
 

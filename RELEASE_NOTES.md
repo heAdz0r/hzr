@@ -44,6 +44,8 @@ hooks, instructions, and installer smoke tests.
 - The new output paths continue to compile on the declared Rust 1.85 minimum toolchain.
 - Instruction audits now time out with an explicit diagnostic when a cloud-backed contract cannot
   be opened, instead of blocking `doctor` and the rest of the registered workspace fleet.
+- Aggregate release checksums use the standard two-space filename separator and verify with both
+  GNU `sha256sum -c` and BSD `shasum -a 256 -c`.
 - The bundled Caveman dependency lock upgrades `fast-uri` to 3.1.7, closing the high-severity
   host-confusion and SSRF advisories reported by the release audit.
 
