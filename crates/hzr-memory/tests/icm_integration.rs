@@ -439,7 +439,8 @@ async fn test_cancelled_start_is_fenced_by_final_stop() -> anyhow::Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn test_supervisor_recovers_orphan_without_spawning_duplicate() -> anyhow::Result<()> {
+async fn test_supervisor_rejects_unverified_legacy_pid_without_spawning_duplicate()
+-> anyhow::Result<()> {
     let temp = TempDir::new()?;
     let executable = fake_icm_script(&temp, "0.10.61")?;
     let (listener, address) = bind_loopback().await?;
@@ -453,10 +454,17 @@ async fn test_supervisor_recovers_orphan_without_spawning_duplicate() -> anyhow:
     std::fs::write(&supervisor.layout().pid_file, "4242")?;
     let server = spawn_fake_server(listener, read_token(temp.path())?);
 
-    let outcome = supervisor.start().await?;
-    assert!(matches!(outcome, StartOutcome::Attached { .. }));
+    // A reachable server and an arbitrary PID do not establish ownership.
+    std::fs::write(
+        &supervisor.layout().pid_file,
+        std::process::id().to_string(),
+    )?;
+    assert!(matches!(
+        supervisor.start().await,
+        Err(hzr_memory::MemoryError::OwnershipUncertain(_))
+    ));
     assert!(!supervisor.layout().log_file.exists());
-    assert_eq!(supervisor.stop().await?, StopOutcome::Detached);
+    assert_eq!(supervisor.stop().await?, StopOutcome::AlreadyStopped);
     drop(server);
     Ok(())
 }
@@ -542,7 +550,7 @@ async fn test_installation_verifier_rejects_wrong_executable_checksum() -> anyho
     let Err(error) = verify_installation(&config).await else {
         anyhow::bail!("installation verifier accepted the wrong executable checksum");
     };
-    assert!(error.to_string().contains("checksum mismatch"));
+    assert!(error.to_string().contains("checksum mismatch"), "{error}");
     Ok(())
 }
 

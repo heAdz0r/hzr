@@ -13,8 +13,7 @@ use hzr_protocol::{
 
 use crate::operation::{
     OperationChannel, OperationMeasurement, OperationRoute, ReplacementCapability,
-    classify_operation, efficient_route_replacement, first_class_replacement,
-    raw_route_sql_predicate,
+    classify_operation, first_class_replacement, raw_route_sql_predicate,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -25,6 +24,14 @@ use crate::billing::{
     BillingError, EconomicAmount, EconomicScopeSummary, PricingCatalog, ProviderEconomicReceipt,
     ProviderReceiptRecordResult, ReceiptProvenance, SessionEconomicSummary, price_receipt,
     receipt_payload_hash, validate_receipt, validate_receipt_observed_at,
+};
+
+mod fleet;
+mod delivery;
+pub use delivery::DeliverySummary;
+pub use fleet::{
+    FleetDimension, FleetMetrics, FleetOperationGroup, FleetProject, FleetStatsQuery,
+    FleetStatsSnapshot,
 };
 
 pub const CURRENT_ACCOUNTING_POLICY_VERSION: &str = "privacy_typed_v2";
@@ -168,6 +175,8 @@ pub struct StatsQuery<'a> {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct StatsSnapshot {
+    #[serde(default)]
+    pub explicit_delivery: DeliverySummary,
     pub efficiency: EfficiencySummary,
     pub host_visible_efficiency: HostVisibleEfficiencySummary,
     pub bypass: BypassSummary,
@@ -241,6 +250,8 @@ pub struct SessionEvasionSummary {
 /// accounting policy before they can reach this view.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SessionEfficiencySummary {
+    #[serde(default)]
+    pub explicit_delivery: DeliverySummary,
     pub operations: u64,
     pub baseline_tokens_estimated: u64,
     pub delivered_tokens_estimated: u64,
@@ -916,8 +927,7 @@ fn privacy_safe_agent(agent: Option<&str>) -> Option<String> {
 fn infer_legacy_evasion(command: &str, route: OperationRoute) -> Option<EvasionAttribution> {
     let lower = command.to_ascii_lowercase();
     let hatch_marker = lower.contains("hzr_raw_fidelity=1");
-    let proven_equivalent = first_class_replacement(command).is_some()
-        || efficient_route_replacement(command).is_some();
+    let proven_equivalent = first_class_replacement(command).is_some();
     let shell_wrapper = [
         "sh -c", "sh -lc", "bash -c", "bash -lc", "zsh -c", "zsh -lc",
     ]
@@ -1472,6 +1482,8 @@ impl Ledger {
                     host_grant_applied INTEGER NOT NULL DEFAULT 0
                  );
                  CREATE INDEX IF NOT EXISTS idx_timestamp ON commands(timestamp);
+                 CREATE INDEX IF NOT EXISTS idx_commands_unix_timestamp
+                    ON commands(CAST(strftime('%s', timestamp) AS INTEGER));
                  CREATE INDEX IF NOT EXISTS idx_project_path_timestamp
                     ON commands(project_path, timestamp);
                  CREATE TABLE IF NOT EXISTS engine_accounting_receipts (
@@ -2055,13 +2067,20 @@ impl Ledger {
     }
 
     pub fn stats_collection(&self, query: StatsQuery<'_>) -> Result<StatsCollection, LedgerError> {
+        let transaction = self
+            .connection
+            .is_autocommit()
+            .then(|| self.connection.unchecked_transaction())
+            .transpose()
+            .map_err(LedgerError::Database)?;
         let by_family = self.operation_family_summary(
             query.project_path,
             query.since_unix_seconds,
             query.include_legacy_versions,
         )?;
-        Ok(StatsCollection {
+        let collection = StatsCollection {
             snapshot: StatsSnapshot {
+                explicit_delivery: self.delivery_summary(query, None)?,
                 efficiency: self.efficiency_summary_scoped(
                     query.project_path,
                     query.since_unix_seconds,
@@ -2097,7 +2116,11 @@ impl Ledger {
                 project_economics: self.economic_scope_summary(query.economics_project_path)?,
                 global_economics: self.economic_scope_summary(None)?,
             },
-        })
+        };
+        if let Some(transaction) = transaction {
+            transaction.commit().map_err(LedgerError::Database)?;
+        }
+        Ok(collection)
     }
 
     /// Aggregate evasion evidence without returning commands, paths, arguments, or identities.
@@ -2285,7 +2308,7 @@ impl Ledger {
                AND accounting_policy_version = ?3
                AND measurement = 'estimated'
                AND COALESCE(route, '') != 'native_unaccounted'
-               AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+               AND accounting_stage = 'internal_transport'
                AND (?4 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?4 || '|') > 0)";
         let totals_query = format!(
             "SELECT
@@ -2313,6 +2336,7 @@ impl Ledger {
                 ],
                 |row| {
                     Ok(SessionEfficiencySummary {
+                        explicit_delivery: DeliverySummary::default(),
                         operations: row.get(0)?,
                         baseline_tokens_estimated: row.get(1)?,
                         delivered_tokens_estimated: row.get(2)?,
@@ -2333,8 +2357,7 @@ impl Ledger {
                 "SELECT
                     COALESCE(SUM(accounting_policy_version = ?3), 0),
                     COALESCE(SUM(accounting_policy_version = ?3 AND
-                        COALESCE(accounting_stage, 'internal_transport') IN
-                        ('final_delivery', 'control_plane')), 0),
+                        COALESCE(accounting_stage, 'unknown') != 'internal_transport'), 0),
                     COALESCE(SUM(COALESCE(accounting_policy_version, '') != ?3), 0)
                    FROM commands
                   WHERE session_hash IN (?1, ?2)
@@ -2348,6 +2371,7 @@ impl Ledger {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(LedgerError::Database)?;
+        summary.explicit_delivery = self.delivery_summary_for_scope(project_hash, None, false, Some((session_hash, legacy_session_hash)))?;
         summary.total_observed_operations = total_observed;
         summary.stage_excluded_operations = stage_excluded;
         summary.excluded_legacy_operations = excluded_legacy;
@@ -2585,6 +2609,7 @@ impl Ledger {
                   FROM commands
                  WHERE command_hash IS NOT NULL
                    AND session_hash IS NOT NULL
+                   AND accounting_stage = 'internal_transport'
                    AND measurement = 'estimated'
                    AND ({version_predicate})
                    AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
@@ -2639,7 +2664,7 @@ impl Ledger {
                FROM commands
               WHERE measurement = 'estimated'
                 AND COALESCE(route, '') != 'native_unaccounted'
-                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                AND accounting_stage = 'internal_transport'
                 AND ({version_predicate})
                 AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND length(?2) = 1
@@ -2682,7 +2707,7 @@ impl Ledger {
              FROM commands
              WHERE measurement = 'estimated'
                AND COALESCE(route, '') != 'native_unaccounted'
-               AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+               AND accounting_stage = 'internal_transport'
                AND ({version_predicate})
                AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                AND length(?2) = 1
@@ -2773,7 +2798,7 @@ impl Ledger {
                 FROM commands
                 WHERE measurement = 'estimated'
                   AND COALESCE(route, '') != 'native_unaccounted'
-                  AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                  AND accounting_stage = 'internal_transport'
                   AND ({version_predicate})
                   AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                   AND length(?2) = 1
@@ -2834,7 +2859,7 @@ impl Ledger {
                FROM commands
               WHERE (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND length(?2) = 1
-                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                AND accounting_stage = 'internal_transport'
                 AND ({version_predicate})
                 AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
         );
@@ -2866,7 +2891,7 @@ impl Ledger {
         let stage_excluded_query = format!(
             "SELECT COUNT(*), COALESCE(SUM(output_tokens), 0)
                FROM commands
-              WHERE COALESCE(accounting_stage, 'internal_transport') IN ('final_delivery', 'control_plane')
+              WHERE COALESCE(accounting_stage, 'unknown') != 'internal_transport'
                 AND ({version_predicate})
                 AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND length(?2) = 1
@@ -2894,7 +2919,7 @@ impl Ledger {
             "SELECT channel, COUNT(*) FROM commands
               WHERE (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND length(?2) = 1
-                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                AND accounting_stage = 'internal_transport'
                 AND ({version_predicate})
                 AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
               GROUP BY channel"
@@ -2938,7 +2963,7 @@ impl Ledger {
                 AND source_bytes IS NOT NULL
                 AND measurement = 'estimated'
                 AND COALESCE(route, '') = 'optimized'
-                AND COALESCE(accounting_stage, 'internal_transport') = 'internal_transport'
+                AND accounting_stage = 'internal_transport'
                 AND ({version_predicate})
                 AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND length(?2) = 1
@@ -3018,7 +3043,7 @@ impl Ledger {
                FROM commands
               WHERE measurement = 'estimated'
                 AND COALESCE(route, '') != 'native_unaccounted'
-                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                AND accounting_stage = 'internal_transport'
                 AND ({version_predicate})
                 AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND length(?2) = 1
@@ -3275,11 +3300,11 @@ impl Ledger {
         let classification = classify_operation(recorded_command);
         let family = privacy_safe_family(
             detail
+                .filter(|detail| detail.operation != AccountingOperationKind::Exec)
                 .map(|detail| detail.operation.as_str())
                 .unwrap_or(&classification.operation),
         );
-        let replacement = first_class_replacement(recorded_command)
-            .or_else(|| efficient_route_replacement(recorded_command));
+        let replacement = first_class_replacement(recorded_command);
         let replacement_capability =
             if attribution.route == OperationRoute::Optimized || replacement.is_some() {
                 ReplacementCapability::Available
@@ -3343,7 +3368,7 @@ impl Ledger {
                     attribution.route.as_str(),
                     detail.map(|detail| detail.operation.as_str()),
                     detail.map(|detail| detail.mode.as_str()),
-                    detail.map(|detail| detail.stage.as_str()),
+                    detail.map_or("internal_transport", |detail| detail.stage.as_str()),
                     detail.and_then(|detail| detail.requested_mode.map(|mode| mode.as_str())),
                     detail.and_then(|detail| detail.effective_mode.map(|mode| mode.as_str())),
                     detail.and_then(|detail| {
@@ -3651,7 +3676,7 @@ impl Ledger {
                FROM commands
               WHERE (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND (?2 IS NULL OR ?2 IS NOT NULL)
-                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                AND accounting_stage = 'internal_transport'
                 AND ({version_predicate})
                 AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
         );
@@ -3672,7 +3697,7 @@ impl Ledger {
                     COUNT(*), COALESCE(SUM(output_tokens), 0)
              FROM commands
              WHERE ({})
-               AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+               AND accounting_stage = 'internal_transport'
                AND ({version_predicate})
                AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                AND (?2 IS NULL OR ?2 IS NOT NULL)
@@ -3786,7 +3811,7 @@ impl Ledger {
               WHERE (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                 AND (?2 IS NULL OR ?2 IS NOT NULL)
                 AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
-                AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                AND accounting_stage = 'internal_transport'
                 AND ({version_predicate})
               GROUP BY rtk_cmd, route, COALESCE(operation_family, operation_kind),
                        replacement_capability"
@@ -3832,8 +3857,7 @@ impl Ledger {
             let stored_capability = parse_replacement_capability(stored_capability.as_deref());
             let capability = if stored_capability == ReplacementCapability::Unknown
                 && (route == OperationRoute::Optimized
-                    || first_class_replacement(&command).is_some()
-                    || efficient_route_replacement(&command).is_some())
+                    || first_class_replacement(&command).is_some())
             {
                 ReplacementCapability::Available
             } else {
@@ -3874,7 +3898,7 @@ impl Ledger {
         let raw_predicate = raw_route_sql_predicate("rtk_cmd");
         let measured_predicate =
             "measurement = 'estimated' AND COALESCE(route, '') != 'native_unaccounted'";
-        let headline_stage_predicate = "COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')";
+        let headline_stage_predicate = "accounting_stage = 'internal_transport'";
         let activity_query = format!(
             "SELECT
                 COUNT(*),
@@ -3931,7 +3955,7 @@ impl Ledger {
                   WHERE project_path = ''
                     AND accounting_policy_version = ?1
                     AND command_hash IS NOT NULL
-                    AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')",
+                    AND accounting_stage = 'internal_transport'",
                 [CURRENT_ACCOUNTING_POLICY_VERSION],
                 |row| row.get(0),
             )
@@ -3987,7 +4011,7 @@ impl Ledger {
                  WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
                    AND accounting_policy_version = ?2
                    AND command_hash IS NOT NULL
-                   AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')",
+                   AND accounting_stage = 'internal_transport'",
                 params![project_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -3999,7 +4023,7 @@ impl Ledger {
                   WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
                     AND accounting_policy_version != ?2
                     AND command_hash IS NOT NULL
-                    AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')",
+                    AND accounting_stage = 'internal_transport'",
                 params![project_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
                 |row| row.get(0),
             )
@@ -4014,7 +4038,7 @@ impl Ledger {
                  WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
                    AND accounting_policy_version = ?2
                    AND command_hash IS NOT NULL
-                   AND COALESCE(accounting_stage, 'internal_transport') NOT IN ('final_delivery', 'control_plane')
+                   AND accounting_stage = 'internal_transport'
                  ORDER BY id DESC
                  LIMIT 24",
             )
@@ -5179,6 +5203,62 @@ mod tests {
             assert_eq!(current.operations, 0);
             assert_eq!(current.excluded_legacy_operations, 1);
         }
+    }
+
+    #[test]
+    fn typed_exec_keeps_safe_executable_family_without_retaining_arguments() {
+        let directory = tempdir().expect("temporary directory");
+        let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
+        let detail = AccountingAttribution {
+            operation: AccountingOperationKind::Exec,
+            mode: AccountingOperationMode::ExecRun,
+            stage: AccountingStage::FinalDelivery,
+            requested_mode: None,
+            effective_mode: None,
+            search_strategy: None,
+            search_fallback_code: None,
+            include_content: None,
+            limit: None,
+            path_scope_count: None,
+            filter_level: None,
+            from_line: None,
+            to_line: None,
+            source_bytes: None,
+            evasion: None,
+        };
+        ledger
+            .record_operation_attributed_with_detail(
+                "git log --author=private-person",
+                "rtk git log --author=private-person",
+                100,
+                20,
+                1,
+                DetailedOperationAttribution {
+                    attribution: OperationAttribution {
+                        project_path: "/work",
+                        agent: Some("test"),
+                        session_id: Some("session"),
+                        channel: OperationChannel::HookCli,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Optimized,
+                    },
+                    detail: Some(&detail),
+                    evasion: None,
+                    host_grant_applied: false,
+                },
+            )
+            .expect("record typed exec");
+        let (family, command, kind): (String, String, String) = ledger
+            .connection
+            .query_row(
+                "SELECT operation_family, rtk_cmd, operation_kind FROM commands",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("record");
+        assert_eq!(family, "git");
+        assert_eq!(kind, "exec");
+        assert!(!command.contains("private-person"));
     }
 
     #[test]

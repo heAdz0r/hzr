@@ -616,8 +616,8 @@ pub fn canonical_attribution(
         )
     });
     let quoted = command.contains(['\'', '"']);
-    let nested_dump = aggregate_dump_requires_ask(command);
-    let diagnostic = ledger_sqlite_requires_ask(command);
+    let nested_dump = aggregate_dump(command);
+    let diagnostic = ledger_sqlite_query(command);
 
     let class = if privilege_prefix(command).is_some() {
         EvasionClass::E11PrivilegedPrefix
@@ -627,7 +627,7 @@ pub fn canonical_attribution(
         EvasionClass::E9DiagnosticBypass
     } else if nested_dump {
         EvasionClass::E6NestedUnboundedReader
-    } else if interpreter.is_some() && interpreter_read_requires_ask(command) {
+    } else if interpreter.is_some() && interpreter_reads_or_launches_children(command) {
         EvasionClass::E3InterpreterRead
     } else if wrapper_depth > 0 {
         EvasionClass::E2ShellWrapper
@@ -656,8 +656,7 @@ pub fn canonical_attribution(
         EvasionClass::E7FidelityHatch
             | EvasionClass::E10CapabilityGap
             | EvasionClass::E11PrivilegedPrefix
-    ) && (class != EvasionClass::E5PipelineOrRedirect
-        || matches!(outcome, RewriteOutcome::Rewritten(_)));
+    ) && matches!(outcome, RewriteOutcome::Rewritten(_));
     let tier = if class == EvasionClass::E7FidelityHatch {
         EnforcementTier::T4HatchQuarantine
     } else if matches!(
@@ -2079,9 +2078,6 @@ fn segment_requires_ask(segment: &str, transparent_prefixes: &[String], depth: u
     }
 
     typed_gap_requires_ask(command)
-        || interpreter_read_requires_ask(command)
-        || aggregate_dump_requires_ask(command)
-        || ledger_sqlite_requires_ask(command)
 }
 
 fn rewrite_typed_gap(command: &str) -> Option<String> {
@@ -2113,12 +2109,21 @@ fn looks_like_remote_logs(words: &[String]) -> bool {
 
 fn rewrite_sqlite_select(command: &str) -> Option<String> {
     let words = shell_split(command);
-    if words.len() != 3 || executable_name(&words[0]) != "sqlite3" {
+    if words
+        .first()
+        .is_none_or(|word| executable_name(word) != "sqlite3")
+    {
         return None;
     }
-    if words[1].is_empty()
-        || words[1].starts_with('-')
-        || crate::sqlite_cmd::validate_single_select(&words[2]).is_err()
+    let database_index = if words.get(1).is_some_and(|word| word == "-readonly") {
+        2
+    } else {
+        1
+    };
+    if words.len() != database_index + 2
+        || words[database_index].is_empty()
+        || words[database_index].starts_with('-')
+        || crate::sqlite_cmd::validate_single_select(&words[database_index + 1]).is_err()
     {
         return None;
     }
@@ -2127,8 +2132,8 @@ fn rewrite_sqlite_select(command: &str) -> Option<String> {
         .iter()
         .filter(|token| token.kind == TokenKind::Arg)
         .collect();
-    let database = raw_token(command, args.get(1)?)?;
-    let query = raw_token(command, args.get(2)?)?;
+    let database = raw_token(command, args.get(database_index)?)?;
+    let query = raw_token(command, args.get(database_index + 1)?)?;
     Some(format!(
         "rtk sqlite3 {database} {query} --max-rows 50 --max-tokens 2048"
     ))
@@ -2225,7 +2230,7 @@ fn raw_token<'a>(command: &'a str, token: &ParsedToken) -> Option<&'a str> {
     command.get(token.offset..token.offset + token.value.len())
 }
 
-fn interpreter_read_requires_ask(command: &str) -> bool {
+fn interpreter_reads_or_launches_children(command: &str) -> bool {
     let words = shell_split(command);
     let Some(program) = words.first() else {
         return false;
@@ -2287,7 +2292,7 @@ fn python_code_requires_ask(code: &str) -> bool {
     emits_file || launches_child
 }
 
-fn aggregate_dump_requires_ask(command: &str) -> bool {
+fn aggregate_dump(command: &str) -> bool {
     let words = shell_split(command);
     let Some(program) = words.first().map(|word| executable_name(word)) else {
         return false;
@@ -2319,7 +2324,7 @@ fn aggregate_dump_requires_ask(command: &str) -> bool {
     }
 }
 
-fn ledger_sqlite_requires_ask(command: &str) -> bool {
+fn ledger_sqlite_query(command: &str) -> bool {
     let words = shell_split(command);
     words
         .first()
@@ -6337,7 +6342,7 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_gate_python_file_reads_and_managed_children_require_approval() {
+    fn interpreter_operations_without_an_equivalent_do_not_require_optimizer_approval() {
         for command in [
             "python -c 'print(open(\"README.md\").read())'",
             "python3 -c 'import json; print(json.load(open(\"data.json\")))'",
@@ -6346,10 +6351,29 @@ mod tests {
         ] {
             assert_eq!(
                 rewrite_command_outcome(command, &[], &[]),
-                RewriteOutcome::PolicyAsk,
-                "opaque bypass silently reached proxy: {command}"
+                RewriteOutcome::NoEquivalent,
+                "optimizer added a denial for an authorized native workflow: {command}"
             );
         }
+    }
+
+    #[test]
+    fn read_only_diagnostics_and_native_readers_do_not_add_optimizer_approval() {
+        let command = "sqlite3 -readonly /tmp/ledger/hzr.sqlite 'SELECT count(*) FROM commands'";
+        assert_eq!(
+            rewrite_command_outcome(command, &[], &[]),
+            RewriteOutcome::Rewritten("rtk sqlite3 /tmp/ledger/hzr.sqlite 'SELECT count(*) FROM commands' --max-rows 50 --max-tokens 2048".into())
+        );
+        let command = "python3 -c 'print(open(\"README.md\").read())'";
+        let outcome = rewrite_command_outcome(command, &[], &[]);
+        assert_eq!(outcome, RewriteOutcome::NoEquivalent);
+        let attribution = canonical_attribution(command, &outcome).expect("reader attribution");
+        assert!(!attribution.avoidable);
+        assert_eq!(attribution.tier, EnforcementTier::T0TransparentRewrite);
+        assert_eq!(
+            rewrite_command_outcome("sqlite3 /tmp/data.db 'DELETE FROM commands'", &[], &[]),
+            RewriteOutcome::PolicyAsk
+        );
     }
 
     #[test]

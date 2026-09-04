@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "head": "fbf204d48704160407e3f06035ac32b9cf0bc67a",
+  "probe": "scoped semantic search",
+  "effective_mode": "semantic",
+  "strategy": "fork_rgai_grepai",
+  "total_hits": 3,
+  "shown_hits": 3,
+  "hits": [
+    {
+      "path": "crates/crates/hzr-exec/src/accounting.rs",
+      "score": 0.647952
+    },
+    {
+      "path": "crates/crates/hzr-cli/src/stats_output.rs",
+      "score": 0.6309852
+    },
+    {
+      "path": "crates/crates/hzr-daemon/src/accounting_sweeper.rs",
+      "score": 0.6270738
+    }
+  ],
+  "index_generation": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6"
+}

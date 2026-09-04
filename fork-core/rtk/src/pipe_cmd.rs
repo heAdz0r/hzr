@@ -215,9 +215,11 @@ fn apply_filter(filter_fn: fn(&str) -> String, input: &str) -> String {
 }
 
 pub fn run(filter_name: Option<&str>, passthrough: bool) -> Result<()> {
+    let timer = crate::tracking::TimedExecution::start();
     if passthrough {
         std::io::copy(&mut std::io::stdin(), &mut std::io::stdout())
             .map_err(|e| anyhow::anyhow!("Failed to relay stdin: {}", e))?;
+        let _ = timer.track_passthrough("pipe <stdin omitted>", "rtk pipe --passthrough");
         return Ok(());
     }
 
@@ -243,7 +245,10 @@ pub fn run(filter_name: Option<&str>, passthrough: bool) -> Result<()> {
     };
 
     let output = apply_filter(filter_fn, &buf);
-    print!("{}", crate::guard::never_worse(&buf, &output));
+    let shown = crate::guard::never_worse(&buf, &output);
+    print!("{shown}");
+    // This measures an internal transform; it never acknowledges host delivery.
+    let _ = timer.track("pipe <stdin omitted>", "rtk pipe", &buf, shown);
     Ok(())
 }
 

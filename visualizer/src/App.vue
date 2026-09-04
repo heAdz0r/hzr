@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { version as uiVersion } from "../package.json";
 import CommandCard from "./components/CommandCard.vue";
 import AppIcon from "./components/AppIcon.vue";
 import MetricCard from "./components/MetricCard.vue";
+import EvidenceOverview from "./components/EvidenceOverview.vue";
 import MemoryGraph from "./components/MemoryGraph.vue";
 import ObservabilityTimeline from "./components/ObservabilityTimeline.vue";
 import IndexPipeline from "./components/IndexPipeline.vue";
@@ -40,6 +42,18 @@ const error = ref<string | null>(null);
 const manualRefreshing = ref(false);
 const loadingProjects = ref(false);
 const query = ref("");
+const projectPageError = ref<string | null>(null);
+const section = ref<"overview" | "projects" | "knowledge" | "system">("overview");
+const navigation = [
+  { id: "overview", label: "Overview" },
+  { id: "projects", label: "Projects" },
+  { id: "knowledge", label: "Memory & index" },
+  { id: "system", label: "System" },
+] as const;
+const selectedProjectLabel = computed(() =>
+  snapshot.value?.projects.find((project) => project.worktree_id === selectedProjectId.value)?.name ??
+  (selectedProjectId.value ? "Selected project" : "Choose a workspace"),
+);
 const projectFilter = ref<ProjectState | "all">("all");
 const toast = ref<string | null>(null);
 const liveMessage = ref("");
@@ -67,10 +81,6 @@ const projects = computed(() =>
   filterProjects(snapshot.value?.projects ?? [], query.value, projectFilter.value),
 );
 
-const readyProjectCount = computed(
-  () => snapshot.value?.projects.filter((project) => project.state === "ready").length ?? 0,
-);
-
 // `Standby` covers two different situations. Say which one this is, so an idle daemon is
 // never read as a stalled one.
 const postureLabel = computed(() =>
@@ -88,12 +98,6 @@ const projectSnapshotCurrent = computed(
 const totalProviderTokens = computed(() => {
   const usage = snapshot.value?.provider_receipts;
   return usage ? usage.actual_input_tokens + usage.actual_output_tokens : 0;
-});
-
-const localReduction = computed(() => {
-  const activity = snapshot.value?.local_activity;
-  if (!activity || activity.baseline_tokens_estimated === 0) return 0;
-  return (activity.net_avoided_tokens_estimated * 100) / activity.baseline_tokens_estimated;
 });
 
 async function refresh(manual = false): Promise<void> {
@@ -161,12 +165,13 @@ async function refresh(manual = false): Promise<void> {
   await refreshPromise;
 }
 
-async function selectProject(worktreeId: string): Promise<void> {
+async function selectProject(worktreeId: string | null): Promise<void> {
   refreshRequests.switchProject(worktreeId);
   observabilityRequests.switchProject(worktreeId);
   selectedProjectId.value = worktreeId;
   error.value = null;
-  window.localStorage.setItem("hzr.dashboard.project", worktreeId);
+  if (worktreeId) window.localStorage.setItem("hzr.dashboard.project", worktreeId);
+  else window.localStorage.removeItem("hzr.dashboard.project");
   liveMessage.value = "Loading selected project observatory";
   await refresh(true);
 }
@@ -174,6 +179,7 @@ async function selectProject(worktreeId: string): Promise<void> {
 async function loadMoreProjects(): Promise<void> {
   if (snapshot.value?.projects_next_offset === null || !snapshot.value || loadingProjects.value) return;
   loadingProjects.value = true;
+  projectPageError.value = null;
   try {
     const response = await fetch(
       `/v1/dashboard/projects?offset=${snapshot.value.projects_next_offset}&limit=100`,
@@ -187,7 +193,8 @@ async function loadMoreProjects(): Promise<void> {
     snapshot.value.projects_next_offset = page.next_offset;
     liveMessage.value = `${snapshot.value.projects.length} of ${page.total} projects loaded`;
   } catch (cause) {
-    liveMessage.value = cause instanceof Error ? cause.message : "Project page failed";
+    projectPageError.value = cause instanceof Error ? cause.message : "Project page failed";
+    liveMessage.value = projectPageError.value;
   } finally {
     loadingProjects.value = false;
   }
@@ -297,8 +304,21 @@ async function copyCommand(command: string): Promise<void> {
     textarea.className = "clipboard-fallback";
     document.body.appendChild(textarea);
     textarea.select();
-    document.execCommand("copy");
-    textarea.remove();
+    let copied = false;
+    try {
+      copied = document.execCommand("copy");
+    } catch {
+      copied = false;
+    } finally {
+      textarea.remove();
+    }
+    if (!copied) {
+      toast.value = "Copy failed. Clipboard access is unavailable.";
+      liveMessage.value = toast.value;
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(() => { toast.value = null; }, 5_000);
+      return;
+    }
   }
   window.clearTimeout(toastTimer);
   toast.value = "Command copied";
@@ -342,65 +362,38 @@ onBeforeUnmount(() => {
 <template>
   <a class="skip-link" href="#main-content">Skip to dashboard</a>
   <div class="app-shell">
-    <header class="hero-header">
-      <div class="hero-art" aria-hidden="true"></div>
-      <div class="ember-line ember-line-one" aria-hidden="true"></div>
-      <div class="ember-line ember-line-two" aria-hidden="true"></div>
-
-      <nav class="topbar" aria-label="Product">
-        <a class="wordmark" href="#main-content" aria-label="HZR dashboard home">
+    <header class="dashboard-header">
+      <div class="dashboard-topbar">
+        <a class="wordmark" href="#main-content" aria-label="HZR dashboard home" @click="section = 'overview'">
           <span class="wordmark-glyph" aria-hidden="true">H</span>
-          <span class="wordmark-copy">
-            <strong>HZR</strong>
-            <small>Local control plane</small>
-          </span>
+          <span class="wordmark-copy"><strong>HZR</strong><small>Agent control plane</small></span>
         </a>
-        <div class="topbar-meta" v-if="snapshot">
-          <span class="version-pill">v{{ snapshot.hzr_version }}</span>
-          <span class="endpoint-pill"><span></span>{{ snapshot.daemon_endpoint }}</span>
-        </div>
-      </nav>
-
-      <div class="hero-content">
-        <div class="hero-copy">
-          <span class="eyebrow">Zero redundancy · full signal</span>
-          <h1>One owner.<br /><span>Everything visible.</span></h1>
-          <p>
-            Projects, managed engines, health, and accounting — one local surface,
-            served by the same HZR daemon.
-          </p>
-        </div>
-
-        <div class="hero-status" v-if="snapshot && projectSnapshotCurrent">
-          <div class="hero-status-head">
-            <span>System posture</span>
-            <StatusChip :state="snapshot.overall_state" :label="postureLabel" />
-          </div>
-          <strong>{{ readyProjectCount }}/{{ snapshot.projects.length }}</strong>
-          <span>projects index-ready</span>
-          <div class="hero-status-foot">
-            <span><AppIcon name="clock" :size="16" /> Uptime {{ formatDuration(snapshot.uptime_ms) }}</span>
-            <button
-              class="refresh-action"
-              :class="{ 'is-loading': manualRefreshing }"
-              type="button"
-              :disabled="manualRefreshing"
-              @click="refresh(true)"
-            >
-              <AppIcon name="refresh" :size="18" />
-              <span>{{ manualRefreshing ? "Refreshing" : "Refresh" }}</span>
-            </button>
-          </div>
-        </div>
-        <div class="hero-status" v-else-if="snapshot" aria-live="polite" aria-busy="true">
-          <div class="hero-status-head">
-            <span>Project boundary</span>
-            <span class="spinner"></span>
-          </div>
-          <strong>Switching</strong>
-          <span>Scoped status is hidden until verified</span>
+        <div v-if="snapshot" class="dashboard-status">
+          <span class="version-pill">Daemon v{{ snapshot.hzr_version }}</span>
+          <StatusChip v-if="projectSnapshotCurrent" :state="snapshot.overall_state" :label="postureLabel" />
+          <span v-else class="loading-scope">Switching project…</span>
+          <button class="refresh-action" type="button" :disabled="manualRefreshing" :aria-busy="manualRefreshing" @click="refresh(true)">
+            <AppIcon name="refresh" :size="16" /><span>{{ manualRefreshing ? "Refreshing…" : "Refresh" }}</span>
+          </button>
         </div>
       </div>
+      <div class="workspace-toolbar">
+        <div><span class="eyebrow">Workspace intelligence</span><h1>{{ selectedProjectLabel }}</h1><p>Useful output. Visible gaps. Evidence before savings claims.</p></div>
+        <label v-if="snapshot" class="workspace-select">
+          <span>Project scope</span>
+          <select :value="selectedProjectId ?? ''" @change="selectProject(($event.target as HTMLSelectElement).value || null)">
+            <option value="">Select a workspace</option>
+            <option v-for="project in snapshot.projects" :key="project.worktree_id" :value="project.worktree_id">{{ project.name }} · {{ projectStateLabel[project.state] }}</option>
+          </select>
+          <small>{{ snapshot.projects.length }} of {{ snapshot.projects_total }} loaded · private identities</small>
+        </label>
+      </div>
+      <nav class="dashboard-navigation" aria-label="Dashboard sections">
+        <button v-for="item in navigation" :key="item.id" type="button" :class="{ active: section === item.id }" :aria-current="section === item.id ? 'page' : undefined" @click="section = item.id">
+          {{ item.label }}<span v-if="item.id === 'projects' && snapshot">{{ snapshot.projects_total }}</span>
+        </button>
+        <span v-if="snapshot" class="snapshot-freshness">{{ error ? "Last snapshot" : "Snapshot" }} {{ relativeTime(snapshot.generated_at_ms) }}</span>
+      </nav>
     </header>
 
     <main id="main-content">
@@ -432,7 +425,7 @@ onBeforeUnmount(() => {
       </section>
 
       <template v-else-if="snapshot">
-        <section v-if="projectSnapshotCurrent" class="section-block system-section" aria-labelledby="system-title">
+        <section v-if="projectSnapshotCurrent && section === 'system'" class="section-block system-section" aria-labelledby="system-title">
           <div class="section-heading">
             <div>
               <span class="eyebrow">Live topology</span>
@@ -443,8 +436,8 @@ onBeforeUnmount(() => {
               Readiness comes from live protocol, managed watcher, and artifact evidence.
             </p>
           </div>
+          <p class="health-boundary">Component readiness and accounting coverage are independent. A ready engine does not establish complete interception or savings.</p>
           <div class="service-flow">
-            <div class="flow-rail" aria-hidden="true"><span></span></div>
             <ServiceNode
               v-for="service in snapshot.services"
               :key="service.id"
@@ -454,7 +447,7 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section v-if="projectSnapshotCurrent" id="memory-observatory" class="observatory-grid" aria-label="Project memory and index observatories">
+        <section v-if="projectSnapshotCurrent && section === 'knowledge'" id="memory-observatory" class="observatory-grid" aria-label="Project memory and index observatories">
           <article class="observatory-panel memory-panel">
             <div class="observatory-head">
               <div>
@@ -531,7 +524,7 @@ onBeforeUnmount(() => {
           </article>
         </section>
 
-        <section v-else class="loading-layout project-transition" aria-live="polite" aria-busy="true">
+        <section v-if="!projectSnapshotCurrent" class="loading-layout project-transition" aria-live="polite" aria-busy="true">
           <div class="loading-panel">
             <span class="spinner"></span>
             <strong>Loading the selected project boundary</strong>
@@ -539,60 +532,32 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section v-if="projectSnapshotCurrent" id="activity-observatory" class="metrics-section" aria-labelledby="metrics-title">
+        <section v-if="projectSnapshotCurrent && section === 'overview'" id="activity-observatory" class="metrics-section" aria-labelledby="metrics-title">
           <div class="section-heading metrics-heading">
             <div>
               <span class="eyebrow">Verifiable accounting</span>
-              <h2 id="metrics-title">This project. This ledger.</h2>
+              <h2 id="metrics-title">What the evidence shows</h2>
             </div>
             <p>
-            Privacy-scoped ledger records for <strong>{{ snapshot.local_activity.project ?? "the selected project" }}</strong>.
-              Estimates remain named; provider receipts remain separate.
+              Output observations for the selected workspace.
+              Provider receipts and global estimates have separate sections below.
             </p>
           </div>
 
+          <div class="component-strip" aria-label="Component states">
+            <button v-for="service in snapshot.services" :key="service.id" type="button" @click="section = 'system'">
+              <span>{{ service.name }}</span><StatusChip :state="service.state" compact />
+            </button>
+          </div>
           <div class="metric-group local-group">
             <div class="metric-group-title">
               <span class="metric-group-mark local-mark"><AppIcon name="activity" :size="18" /></span>
-              <div><strong>Verified local activity</strong><span>{{ snapshot.local_activity.measurement }} · {{ snapshot.local_activity.accounting_policy_version }}</span></div>
+              <div><strong>Project output ledger</strong><span>Estimated output sizes · {{ snapshot.local_activity.accounting_policy_version }}</span></div>
               <span class="metric-legend">Project-scoped · {{ formatCount(snapshot.local_activity.excluded_legacy_operations) }} legacy excluded</span>
             </div>
-            <div class="metric-grid metric-grid-four">
-              <MetricCard
-                eyebrow="Ledger rows"
-                :value="formatCount(snapshot.local_activity.operations)"
-                label="Recorded operations"
-                :detail="`${formatDuration(snapshot.local_activity.total_execution_ms)} measured execution`"
-                icon="activity"
-                tone="estimated"
-              />
-              <MetricCard
-                eyebrow="Estimate"
-                :value="formatSignedCount(snapshot.local_activity.net_avoided_tokens_estimated)"
-                label="Net avoided tokens"
-                :detail="`${formatCount(snapshot.local_activity.regression_tokens_estimated)} regression tokens accounted`"
-                icon="memory"
-                tone="estimated"
-              />
-              <MetricCard
-                eyebrow="Estimate"
-                :value="formatPercent(localReduction)"
-                label="Project reduction"
-                detail="Deterministic output sizing, not billing"
-                icon="database"
-                tone="estimated"
-              />
-              <MetricCard
-                eyebrow="Delivered"
-                :value="formatCount(snapshot.local_activity.delivered_tokens_estimated)"
-                label="Delivered token estimate"
-                :detail="`${formatCount(snapshot.local_activity.baseline_tokens_estimated)} baseline`"
-                icon="clock"
-                tone="estimated"
-              />
-            </div>
-            <SessionRoi :roi="snapshot.session_roi" />
+            <EvidenceOverview :activity="snapshot.local_activity" :receipts="snapshot.provider_receipts" :selected="selectedProjectId !== null" />
             <LiveActivity
+              :key="snapshot.selected_worktree_id ?? 'unselected'"
               :operations="snapshot.local_activity.recent_operations"
               :optimized-count="snapshot.local_activity.optimized_operations"
               :raw-count="snapshot.local_activity.raw_operations"
@@ -600,10 +565,11 @@ onBeforeUnmount(() => {
               :unmeasured-count="snapshot.local_activity.unmeasured_bypass_operations"
               :measurement="snapshot.local_activity.measurement"
             />
-            <ObservabilityTimeline :observability="snapshot.observability" />
+            <SessionRoi :roi="snapshot.session_roi" />
+            <details class="detail-disclosure"><summary>Request traces & lifecycle events</summary><ObservabilityTimeline :observability="snapshot.observability" /></details>
           </div>
 
-          <div class="metric-group estimate-group">
+          <details class="metric-group estimate-group detail-disclosure"><summary>All-workspace output estimates <span>Global scope</span></summary>
             <div class="metric-group-title">
               <span class="metric-group-mark estimate-mark"><AppIcon name="cpu" :size="18" /></span>
               <div><strong>All-workspace efficiency ledger</strong><span>Global operational context · {{ snapshot.estimated_efficiency.accounting_policy_version }}</span></div>
@@ -643,9 +609,9 @@ onBeforeUnmount(() => {
                 tone="estimated"
               />
             </div>
-          </div>
+          </details>
 
-          <div class="metric-group provider-group">
+          <details class="metric-group provider-group detail-disclosure"><summary>Provider receipts <span>Separately attributed usage</span></summary>
             <div class="metric-group-title">
               <span class="metric-group-mark observed-mark"><AppIcon name="database" :size="18" /></span>
               <div><strong>Provider receipt coverage</strong><span>Externally attributed usage only; not project-scoped unless the provider supplies attribution</span></div>
@@ -685,10 +651,10 @@ onBeforeUnmount(() => {
               </div>
               <span class="receipt-state">No data ≠ zero usage</span>
             </div>
-          </div>
+          </details>
         </section>
 
-        <section class="section-block projects-section" aria-labelledby="projects-title">
+        <section v-if="section === 'projects'" class="section-block projects-section" aria-labelledby="projects-title">
           <div class="section-heading projects-heading">
             <div>
               <span class="eyebrow">Workspace registry</span>
@@ -701,7 +667,7 @@ onBeforeUnmount(() => {
                 id="project-search"
                 v-model="query"
                 type="search"
-                placeholder="Search project digest or stable ID"
+                placeholder="Search project or stable ID"
                 autocomplete="off"
               />
               <span
@@ -724,6 +690,8 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
+          <p class="loaded-scope">{{ projects.length }} matching of {{ snapshot.projects.length }} loaded projects · {{ snapshot.projects_total }} registered. Filters apply to loaded projects.</p>
+          <p v-if="projectPageError" class="inline-error" role="alert">{{ projectPageError }}. Use Load more to retry.</p>
           <div v-if="snapshot.registry_warnings > 0" class="registry-warning" role="status">
             <AppIcon name="warning" :size="18" />
             {{ snapshot.registry_warnings }} invalid or unsafe registry entr{{ snapshot.registry_warnings === 1 ? "y was" : "ies were" }} ignored.
@@ -736,7 +704,7 @@ onBeforeUnmount(() => {
               :project="project"
               :selected="snapshot.selected_worktree_id === project.worktree_id"
               @copy="copyCommand"
-              @select="selectProject"
+              @select="(worktreeId) => { section = 'overview'; selectProject(worktreeId); }"
             />
           </div>
           <button
@@ -758,7 +726,7 @@ onBeforeUnmount(() => {
               <AppIcon name="copy" :size="16" /> Copy <code>hzr init --if-needed</code>
             </button>
           </div>
-          <div v-else class="empty-state">
+          <div v-else-if="!projects.length" class="empty-state">
             <span class="empty-icon"><AppIcon name="search" :size="24" /></span>
             <span class="eyebrow">No match</span>
             <h3>No project matches these filters.</h3>
@@ -769,7 +737,7 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section class="help-section" aria-labelledby="help-title">
+        <section v-if="section === 'system'" class="help-section" aria-labelledby="help-title">
           <div class="section-heading">
             <div>
               <span class="eyebrow">Operator deck</span>
@@ -795,7 +763,7 @@ onBeforeUnmount(() => {
         <div><strong>HZR Visualizer</strong><span>Private · local · loopback only</span></div>
       </div>
       <div class="footer-meta">
-        <span>UI v{{ snapshot.visualizer_version }}</span>
+        <span>UI v{{ uiVersion }}</span>
         <span>Protocol {{ snapshot.protocol_version }}</span>
         <span>Snapshot {{ relativeTime(snapshot.generated_at_ms) }}</span>
       </div>
@@ -803,7 +771,7 @@ onBeforeUnmount(() => {
 
     <Transition name="toast">
       <div v-if="toast" class="copy-toast" role="status">
-        <span><AppIcon name="check" :size="18" /></span>{{ toast }}
+        <span><AppIcon :name="toast.startsWith('Copy failed') ? 'warning' : 'check'" :size="18" /></span>{{ toast }}
       </div>
     </Transition>
     <p class="sr-only" aria-live="polite">{{ liveMessage }}</p>

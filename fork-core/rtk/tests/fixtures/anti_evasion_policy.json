@@ -229,77 +229,43 @@
     "layer": "root",
     "command": "hzr read README.md --level none",
     "decision": "rewrite",
-    "route": "hzr rtk -- read README.md"
+    "route": "hzr read README.md --level none"
   },
   {
     "id": "python-read",
     "command": "python3 -c 'print(open(\"README.md\").read())'",
-    "decision": "ask",
-    "expect_reason_contains": [
-      "e3",
-      "requires approval",
-      "read files with `hzr read <file>`"
-    ]
+    "decision": "proxy"
   },
   {
     "id": "node-read",
     "command": "node -e 'console.log(readFileSync(\"README.md\",\"utf8\"))'",
-    "decision": "ask",
-    "expect_reason_contains": [
-      "e3",
-      "requires approval",
-      "read files with `hzr read <file>`"
-    ]
+    "decision": "proxy"
   },
   {
     "id": "ruby-read",
     "command": "ruby -e 'puts File.read(\"README.md\")'",
-    "decision": "ask",
-    "expect_reason_contains": [
-      "e3",
-      "requires approval",
-      "read files with `hzr read <file>`"
-    ]
+    "decision": "proxy"
   },
   {
     "id": "perl-read",
     "command": "perl -ne 'print' README.md",
-    "decision": "ask",
-    "expect_reason_contains": [
-      "e3",
-      "requires approval",
-      "read files with `hzr read <file>`"
-    ]
+    "decision": "proxy"
   },
   {
     "id": "awk-read",
     "command": "awk '{print}' README.md",
-    "decision": "ask",
-    "expect_reason_contains": [
-      "e3",
-      "requires approval",
-      "read files with `hzr read <file>`"
-    ]
+    "decision": "proxy"
   },
   {
     "id": "find-exec-cat",
     "command": "find . -name '*.rs' -exec cat {} +",
-    "decision": "ask",
-    "expect_reason_contains": [
-      "e6",
-      "requires approval",
-      "read the matched files with `hzr read <file>`"
-    ]
+    "decision": "rewrite",
+    "route": "rtk find . -name '*.rs' -exec cat {} +"
   },
   {
     "id": "xargs-cat",
     "command": "xargs -a /dev/null cat README.md",
-    "decision": "ask",
-    "expect_reason_contains": [
-      "e6",
-      "requires approval",
-      "read the matched files with `hzr read <file>`"
-    ]
+    "decision": "proxy"
   },
   {
     "id": "tar-stdout",
@@ -324,12 +290,8 @@
   {
     "id": "ledger-sqlite",
     "command": "/usr/bin/sqlite3 /tmp/ledger/hzr.sqlite 'select * from operations'",
-    "decision": "ask",
-    "expect_reason_contains": [
-      "e9",
-      "requires approval",
-      "use `hzr stats`"
-    ]
+    "decision": "rewrite",
+    "route": "rtk sqlite3 /tmp/ledger/hzr.sqlite 'select * from operations' --max-rows 50 --max-tokens 2048"
   },
   {
     "id": "malformed-shell",
@@ -344,12 +306,7 @@
   {
     "id": "missing-inline-code",
     "command": "python3 -c",
-    "decision": "ask",
-    "expect_reason_contains": [
-      "e3",
-      "requires approval",
-      "read files with `hzr read <file>`"
-    ]
+    "decision": "proxy"
   },
   {
     "id": "generic-sqlite",

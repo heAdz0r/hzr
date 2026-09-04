@@ -27,6 +27,55 @@ use crate::stats::{
 /// tests stays meaningful.
 const WIDTH: usize = 72;
 
+pub fn print_fleet(report: &hzr_core::FleetStatsSnapshot) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    writeln!(
+        output,
+        "Fleet snapshot [{}..{}) Unix seconds; {}",
+        report.since_unix_seconds, report.until_unix_seconds, report.consistency
+    )?;
+    writeln!(
+        output,
+        "{} projects; {} recorded operations; {} measured operations; {} net tokens avoided (estimate)",
+        report.by_project.len(),
+        report.totals.recorded_operations,
+        report.totals.measured_operations,
+        report.totals.net_avoided_tokens_estimated
+    )?;
+    writeln!(
+        output,
+        "Host coverage: {}. Economic claim ready: {}.",
+        report.host_coverage, report.economic_claim_ready
+    )?;
+    writeln!(
+        output,
+        "Repeated after filtering: {} operations, {} delivered tokens (association, not causation).",
+        report.totals.repeated_after_filter_operations,
+        report.totals.repeated_after_filter_tokens_estimated
+    )?;
+    for project in report
+        .by_project
+        .iter()
+        .filter(|project| project.metrics.recorded_operations > 0)
+        .take(20)
+    {
+        writeln!(
+            output,
+            "{}  operations={}  measured={}  net_estimated={}  workspace_exists={:?}",
+            project.project_id,
+            project.metrics.recorded_operations,
+            project.metrics.measured_operations,
+            project.metrics.net_avoided_tokens_estimated,
+            project.workspace_exists
+        )?;
+    }
+    writeln!(
+        output,
+        "Use --json or --export <file> for all projects, hosts and command families."
+    )
+}
+
 pub fn print(report: &StatsReport) -> io::Result<()> {
     let stdout = io::stdout();
     let mut output = stdout.lock();

@@ -30,6 +30,8 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         .route("/v1/search/readiness", post(api::semantic_readiness))
         .route("/v1/context/plan", post(api::context_plan))
         .route("/v1/memory/recall", post(api::memory_recall))
+        .route("/v1/memory/get", post(api::memory_get))
+        .route("/v1/read", post(api::read_files))
         .route("/v1/memory/store", post(api::memory_store))
         .route("/v1/memory/forget", post(api::memory_forget))
         .route("/v1/memory/update", post(api::memory_update))
@@ -40,6 +42,10 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         )
         .route("/v1/exec/rewrite", post(api::exec_rewrite))
         .route("/v1/exec/run", post(api::exec_run))
+        .route("/v1/exec/start", post(crate::exec_jobs::start))
+        .route("/v1/exec/wait", post(crate::exec_jobs::wait))
+        .route("/v1/exec/cancel", post(crate::exec_jobs::cancel))
+        .route("/v1/exec/output", post(crate::exec_jobs::read_output))
         .route("/v1/exec/approval", post(api::exec_approval))
         .route("/v1/fidelity/reconcile", post(api::fidelity_reconcile))
         .route("/v1/fork/run", post(api::fork_run))
@@ -132,6 +138,7 @@ where
         .with_graceful_shutdown(shutdown)
         .await
         .map_err(DaemonError::Io);
+    shutdown_state.exec_jobs.shutdown().await;
     let (memory_stop, context_stop) = tokio::join!(
         stop_memory_supervision(&shutdown_state),
         stop_index_maintenance(&shutdown_state)

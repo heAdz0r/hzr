@@ -242,22 +242,21 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
         .join(", ");
     let harness_guidance = if harness.native_hook_routing {
         concat!(
-            "The Claude Code `PreToolUse` hook routes Bash through the managed daemon and\n",
-            "falls back to the same pinned fork-core when the daemon is down. A degraded\n",
-            "rewrite keeps command policy but is absent from the usage ledger; `hzr doctor`\n",
-            "and `hzr stats` report that incomplete accounting rather than hiding it.\n\n",
-            "The failure-open `PreToolUse` hook sees native `Read`, `Grep`, `Glob`, `Edit` and\n",
-            "`Write`. In `steer` mode it prescribes `hzr read`/`hzr search`; `Glob` and native\n",
-            "edits remain allowed. `strict` additionally prescribes `hzr write`, while `observe`\n",
-            "retains measurement-only compatibility. The `PostToolUse` observer stores no tool\n",
-            "content and grants no savings credit. In `steer`/`strict`, policy-allowed native\n",
-            "calls are accounted as typed E10 bypasses, not hidden as `native_unaccounted`.\n"
+            "Claude Code hooks route supported Bash calls through HZR without granting new\n",
+            "permissions. Native Read/Grep/Glob/Edit/Write retain exact host semantics in all\n",
+            "legacy modes; no optimization-only deny/retry is emitted. The PostToolUse observer\n",
+            "stores no content and grants no savings credit. Missing accounting stays visible.\n",
+            "Run `hzr hooks capabilities --host claude --probe` for local adapter checks; these\n",
+            "checks do not prove installation, trusted activation or model-visible delivery.\n"
         )
     } else {
         concat!(
-            "Codex does not run HZR's Claude `PreToolUse` or `PostToolUse` hooks. Follow the\n",
-            "routes above explicitly, and prefer registered HZR MCP tools when they are available.\n",
-            "Native operations not routed through HZR are outside HZR accounting.\n"
+            "Codex supports hooks, but HZR does not install Codex hooks automatically. Use the\n",
+            "routes above and registered HZR MCP tools explicitly. The optional\n",
+            "`hzr hooks dispatch --host codex` adapter accepts canonical Bash inputs only and\n",
+            "requires an explicit host bypassPermissions grant before rewriting arguments.\n",
+            "Unsupported shapes retain normal host permissions. Native operations not routed\n",
+            "through HZR lack HZR accounting; local probes do not verify host delivery.\n"
         )
     };
     let codec = harness
@@ -318,11 +317,14 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          For plain argv commands with known output intent,\n\
          `hzr rtk -- test`, `err`, `summary` and `log` routes provide bounded\n\
          filtering. Keep pipes, redirects and other shell grammar on `hzr exec run`.\n\n\
-         Unbounded `read --level none` defeats the smart default and is automatically reduced.\n\
-         Prefer `--outline` for structure and `--from`/`--to` for exact evidence. Use\n\
-         `HZR_EXACT_FIDELITY=1 hzr read <file> --level none` only when the whole file\n\
-         is authoritative input that cannot be bounded. Multi-file reads use\n\
-         `hzr read --batch --max-tokens N <files...>`.\n\n\
+         Choose reads by total task cost: exact full content is appropriate when repeated\n\
+         fragments would cost more or the whole file is needed. Use `hzr --json read <file>`\n\
+         for exact content with completeness and hashes; `--batch --max-tokens N` shares a\n\
+         budget across files. Continue from `next_line` with `--expected-sha256` to detect\n\
+         changes. Use `--outline` for structure and `--from`/`--to` for focused evidence\n\
+         when that reduces total work. Never treat a truncated response as complete.\n\
+         For repeated typed reads, `--context-epoch` and `--session-id` enable scoped\n\
+         cost advice. Change epoch after compaction/fork/resume; advice never hides text.\n\n\
          TDD is opt-in, not the default. When token or time efficiency matters, skip it\n\
          and use proportionate verification; repository-required quality gates still apply.\n\n\
          ## Memory scopes\n\n\
@@ -1306,17 +1308,14 @@ mod tests {
         }
 
         let claude = compose("", Surface::Claude, contract()).0;
-        assert!(claude.contains("failure-open `PreToolUse` hook sees native"));
-        assert!(claude.contains("`Glob` and native"));
-        assert!(claude.contains("`strict` additionally prescribes `hzr write`"));
-        assert!(claude.contains("typed E10 bypasses"));
+        assert!(claude.contains("no optimization-only deny/retry"));
+        assert!(claude.contains("without granting new"));
+        assert!(claude.contains("grants no savings credit"));
 
         let codex = compose("", Surface::Codex, contract()).0;
-        assert!(codex.contains("Codex does not run HZR's Claude `PreToolUse`"));
-        assert!(!codex.contains("failure-open `PreToolUse` hook sees native"));
-        assert!(
-            codex.contains("Native operations not routed through HZR are outside HZR accounting")
-        );
+        assert!(codex.contains("Codex supports hooks"));
+        assert!(codex.contains("does not install Codex hooks automatically"));
+        assert!(codex.contains("local probes do not verify host delivery"));
     }
 
     #[test]
@@ -1326,10 +1325,11 @@ mod tests {
 
             assert!(out.contains("`hzr search \"<intent>\" --mode auto`"));
             assert!(out.contains("--mode exact only for a known literal"));
-            assert!(out.contains("Prefer `--outline` for structure"));
-            assert!(out.contains("`--from`/`--to` for exact evidence"));
-            assert!(out.contains("`HZR_EXACT_FIDELITY=1 hzr read"));
-            assert!(out.contains("`hzr read --batch --max-tokens N <files...>`"));
+            assert!(out.contains("exact full content is appropriate"));
+            assert!(out.contains("Never treat a truncated response as complete"));
+            assert!(out.contains("--expected-sha256"));
+            assert!(out.contains("`hzr --json read <file>`"));
+            assert!(out.contains("`--batch --max-tokens N`"));
             assert!(!out.contains("Markdown defaults to a digest, `--level none` is exact"));
             assert!(!out.contains("\n@/opt/hzr"));
             assert!(!out.contains("Bootstrap by reading"));

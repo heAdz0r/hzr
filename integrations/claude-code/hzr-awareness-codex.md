@@ -37,8 +37,8 @@ Then prefer these tools — they reach the same single store and index as the CL
 - `hzr_exec` — execute through daemon policy and accounting without direct fallback.
 - `hzr_observability` — inspect typed daemon, engine, capability and workspace health.
 - `hzr_doctor` — run desired-state diagnostics for the exact MCP workspace.
-- `hzr_memory_recall` — recall decisions, resolved errors and prior context
-  *before* re-reading files analysed in an earlier session.
+- `hzr_memory_recall` — recall relevant decisions, resolved errors and prior context.
+- `hzr_memory_get` — retrieve one exact memory ID within its namespace.
 - `hzr_memory_store` — persist a decision, resolved error, preference or finished
   work. Not for ephemeral session state.
 - `hzr_memory_update` — replace one superseded memory after namespace verification.
@@ -48,7 +48,7 @@ Then prefer these tools — they reach the same single store and index as the CL
   cannot expose global final-response replacement, so instructed global coverage receives zero
   credit until a trusted host confirms delivery.
 
-Inputs reject invalid types, enums, unknown fields and limits outside 1–50.
+Inputs reject invalid types, enums, unknown fields and each tool's documented limits.
 Successful calls return typed `structuredContent` and a text copy for older
 clients. `isError: true` means no success was confirmed and no fallback store
 was used. If store transport fails after dispatch, recall before retrying because

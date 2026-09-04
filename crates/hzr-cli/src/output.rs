@@ -499,6 +499,20 @@ fn write_doctor(output: &mut impl Write, report: &DoctorReport) -> io::Result<()
         report.hzr_version,
         if report.healthy { "healthy" } else { "failed" }
     )?;
+    writeln!(
+        output,
+        "Readiness: installation={:?}, process={:?}, retrieval={:?}, accounting={:?}, host_delivery={:?}; economic_claim_ready={}",
+        report.readiness.installation.status,
+        report.readiness.process.status,
+        report.readiness.retrieval.status,
+        report.readiness.accounting.status,
+        report.readiness.host_delivery.status,
+        report.readiness.economic_claim_ready
+    )?;
+    writeln!(
+        output,
+        "The compatibility healthy flag means no error checks; it does not prove full readiness or token savings."
+    )?;
     if let Some(receipt) = &report.fidelity_reconcile {
         writeln!(
             output,
@@ -713,6 +727,7 @@ mod tests {
             data_dir: PathBuf::from("/tmp/hzr-data"),
             workspace: PathBuf::from("/tmp/project"),
             healthy: false,
+            readiness: crate::diagnostics::ReadinessReport::default(),
             checks: vec![
                 DoctorCheck {
                     name: "hook_ownership".into(),

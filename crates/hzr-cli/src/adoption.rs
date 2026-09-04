@@ -459,6 +459,10 @@ fn hzr_dispatch_mode(command: &str) -> Option<NativeToolMode> {
 }
 
 fn hzr_observe_mode(command: &str) -> Option<NativeToolMode> {
+    let command = command
+        .trim_end()
+        .strip_suffix(" --replace-output")
+        .unwrap_or(command);
     hzr_native_mode(command, HZR_OBSERVE_SUFFIX)
 }
 
@@ -707,7 +711,7 @@ fn add_hzr_hooks(document: &mut Value, commands: &ManagedCommands) -> Result<()>
         hooks,
         "PostToolUse",
         json!({
-            "matcher": "Read|Grep|Glob|Edit|Write",
+            "matcher": "Bash|Read|Grep|Glob|Edit|Write",
             "hooks": [{"type": "command", "command": commands.observe, "timeout": 10}]
         }),
     )?;

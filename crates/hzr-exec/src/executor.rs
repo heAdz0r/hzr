@@ -137,6 +137,10 @@ impl ExecutionHandle {
         self.cancellation.cancel();
     }
 
+    pub fn cancellation(&self) -> ExecutionCancellation {
+        ExecutionCancellation(self.cancellation.clone())
+    }
+
     pub async fn wait(mut self) -> Result<ExecutionOutcome, ExecError> {
         let completion = self.completion.take().ok_or(ExecError::CompletionClosed)?;
         let task = self.task.take().ok_or(ExecError::CompletionClosed)?;
@@ -152,6 +156,15 @@ impl ExecutionHandle {
 impl Drop for ExecutionHandle {
     fn drop(&mut self) {
         self.cancellation.cancel();
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExecutionCancellation(Cancellation);
+
+impl ExecutionCancellation {
+    pub fn cancel(&self) {
+        self.0.cancel();
     }
 }
 

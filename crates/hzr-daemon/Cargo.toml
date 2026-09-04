@@ -18,6 +18,8 @@ hzr-index = { path = "../hzr-index" }
 hzr-memory = { path = "../hzr-memory" }
 hzr-protocol = { path = "../hzr-protocol" }
 libc = "0.2.174"
+sha2.workspace = true
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

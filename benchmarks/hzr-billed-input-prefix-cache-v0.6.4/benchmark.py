@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
-"""Paired billed-input benchmark across the two `filter_placement` arms.
+"""Legacy local-output comparison across filter-placement arms.
 
-Every earlier HZR benchmark measures delivered command-output size. This one measures what an
-operator actually pays: provider-billed input tokens, taken from imported receipts. The two are
-different axes, and a filter that fires mid-turn can invalidate a cached request prefix — cutting
-delivered bytes while raising billed input.
-
-The runner reports `not_measured` for any run without a paired provider receipt. It never models
-a billed-input figure: a modelled number is precisely what this benchmark exists to replace.
+This runner launches CLI commands, not agent tasks. Aggregate stats have no per-case request
+binding and cannot establish provider-billed usage. Every economic comparison therefore fails
+closed as not_measured. Use ../hzr-task-economics-v0.8.0 for request-correlated task evidence.
+Filtering newly appended output does not itself invalidate an existing cached prefix.
 """
 
 from __future__ import annotations
@@ -21,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 TOKEN_METHOD_DELIVERED = "ceil(UTF-8 bytes / 4); approximate, not a provider tokenizer"
-TOKEN_METHOD_BILLED = "provider receipt input/cache tokens; no estimation, no FX conversion"
+TOKEN_METHOD_BILLED = "not_measured: no per-case provider request receipt channel"
 
 # The same matrix as hzr-vs-rtk-upstream-v0.44.1, so the two benchmarks stay comparable.
 CASES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -97,7 +94,7 @@ def parse_args() -> argparse.Namespace:
         "--repetitions",
         type=int,
         default=3,
-        help="runs per case per arm; medians are reported, never bests",
+        help="local command repetitions per case; delivered ledger deltas are totals, not medians",
     )
     return parser.parse_args()
 
@@ -148,14 +145,15 @@ def stats_json(hzr: Path, config: Path, repo_root: Path) -> dict | str:
         return f"hzr stats emitted unparseable JSON: {error}"
 
 
-def run_case(hzr: Path, config: Path, repo_root: Path, argv: tuple[str, ...]) -> None:
-    subprocess.run(
+def run_case(hzr: Path, config: Path, repo_root: Path, argv: tuple[str, ...]) -> int:
+    completed = subprocess.run(
         [str(hzr), "--config", str(config), *argv],
         cwd=repo_root,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
     )
+    return completed.returncode
 
 
 def collect_receipt(stats: dict) -> tuple[int | None, int | None, int | None, str | None]:
@@ -164,14 +162,10 @@ def collect_receipt(stats: dict) -> tuple[int | None, int | None, int | None, st
     `observed_model_usage.tasks == 0` means no provider-billed task was recorded. That is not a
     zero-cost run; it is an unmeasured one, and the distinction is the whole point.
     """
-    usage = stats.get("observed_model_usage") or {}
-    if not usage.get("tasks"):
-        return None, None, None, "no provider-billed task recorded for this run"
-    return (
-        usage.get("actual_input_tokens"),
-        usage.get("cache_read_tokens"),
-        usage.get("cache_write_tokens"),
-        None,
+    del stats
+    return None, None, None, (
+        "aggregate stats cannot identify this case or repetition; "
+        "use the v0.8.0 task harness with per-request provider receipts"
     )
 
 
@@ -180,8 +174,8 @@ def run_arm(args: argparse.Namespace, config: Path, arm: str) -> ArmResult:
     result = ArmResult(arm=arm)
     for label, argv in CASES:
         before = stats_json(args.hzr_binary, config, args.repo_root)
-        for _ in range(args.repetitions):
-            run_case(args.hzr_binary, config, args.repo_root, argv)
+        exit_codes = [run_case(args.hzr_binary, config, args.repo_root, argv)
+                      for _ in range(args.repetitions)]
         after = stats_json(args.hzr_binary, config, args.repo_root)
 
         if isinstance(before, str) or isinstance(after, str):
@@ -196,6 +190,8 @@ def run_arm(args: argparse.Namespace, config: Path, arm: str) -> ArmResult:
         )
         delivered_after = (after.get("direct_savings") or {}).get("delivered_tokens_estimated", 0)
         fresh, cache_read, cache_write, reason = collect_receipt(after)
+        if any(exit_codes):
+            reason = f"command repetitions failed with exit codes {exit_codes}; no economic comparison"
         result.cases.append(
             CaseResult(
                 label=label,
@@ -216,7 +212,7 @@ def compare(arms: dict[str, ArmResult]) -> dict:
     A partial comparison is worse than none: it would be read as evidence about prefix-cache
     behaviour while resting on whichever cases happened to produce a receipt.
     """
-    if not all(arm.complete for arm in arms.values()):
+    if set(arms) != set(ARMS) or not all(arm.complete for arm in arms.values()):
         missing = {
             name: [case.label for case in arm.cases if not case.measured]
             for name, arm in arms.items()
@@ -236,23 +232,19 @@ def compare(arms: dict[str, ArmResult]) -> dict:
         }
         for name, arm in arms.items()
     }
-    a, b = totals["anywhere"], totals["turn_boundary"]
+    # Do not infer prefix causality from two scalar totals.
     return {
         "status": "measured",
         "totals": totals,
-        "hypothesis_supported": b["billed_input_fresh"] < a["billed_input_fresh"]
-        and b["delivered_tokens_estimated"] > a["delivered_tokens_estimated"],
-        "reading": (
-            "billed input fell while delivered bytes rose, so mid-turn filtering was paying a "
-            "prefix-invalidation cost"
-            if b["billed_input_fresh"] < a["billed_input_fresh"]
-            else "mid-turn filtering did not raise billed input in this matrix"
-        ),
+        "hypothesis_supported": None,
+        "reading": "Descriptive arm totals cannot establish cache invalidation causality.",
     }
 
 
 def main() -> int:
     args = parse_args()
+    if args.repetitions < 1:
+        raise ValueError("repetitions must be positive")
     args.work_root.mkdir(parents=True, exist_ok=True)
     config = args.work_root / "config.toml"
     if not config.exists():

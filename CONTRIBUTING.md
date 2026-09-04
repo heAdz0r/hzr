@@ -27,8 +27,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets --all-features
 bun install --cwd visualizer --frozen-lockfile
 bun --cwd visualizer test
-bun --cwd visualizer run typecheck
-bun --cwd visualizer run build
+bun run --cwd visualizer typecheck
+bun run --cwd visualizer build
 ```
 
 Before merging or tagging, run the same fail-closed source gate used by CI and the release

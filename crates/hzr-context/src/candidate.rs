@@ -153,9 +153,7 @@ pub(crate) fn normalize_plan(
                 line_end,
                 source_rank: rank,
                 relevance: finite_score(candidate.score),
-                tokens: TokenCount::estimate(
-                    evidence_tokens.max(u64::from(candidate.estimated_tokens)),
-                ),
+                tokens: TokenCount::estimate(evidence_tokens),
                 freshness: generation.to_owned(),
                 trust: "workspace:untrusted".into(),
                 provenance: Provenance {
@@ -341,7 +339,7 @@ fn bounded_memory_content(content: String, memory_id: &str) -> String {
         return content;
     }
     let marker_budget = format!(
-        "\n\n[memory content bounded; {} bytes omitted; fetch full memory id {memory_id} with `hzr memory show {memory_id}`]\n\n",
+        "\n\n[memory content bounded; {} bytes omitted; fetch full memory id {memory_id} with `hzr memory get {memory_id}`]\n\n",
         content.len()
     );
     let available = MAX_MEMORY_CONTENT_BYTES.saturating_sub(marker_budget.len());
@@ -354,7 +352,7 @@ fn bounded_memory_content(content: String, memory_id: &str) -> String {
         tail_start += 1;
     }
     let marker = format!(
-        "\n\n[memory content bounded; {} bytes omitted; fetch full memory id {memory_id} with `hzr memory show {memory_id}`]\n\n",
+        "\n\n[memory content bounded; {} bytes omitted; fetch full memory id {memory_id} with `hzr memory get {memory_id}`]\n\n",
         tail_start.saturating_sub(head_end)
     );
     format!(
@@ -504,13 +502,14 @@ mod tests {
 
         assert!(content.len() <= MAX_MEMORY_CONTENT_BYTES);
         assert!(content.contains("bytes omitted"));
-        assert!(content.contains("hzr memory show memory-1"));
+        assert!(content.contains("hzr memory get memory-1"));
         assert!(content.ends_with("LATEST_DECISION"));
     }
 
     #[test]
     fn test_search_candidate_resolves_the_smallest_enclosing_symbol() {
         let response = SearchApiResponse {
+            page: None,
             query: "record_operation".into(),
             path: "crates".into(),
             total_hits: 1,

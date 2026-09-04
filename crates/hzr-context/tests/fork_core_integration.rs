@@ -95,12 +95,14 @@ async fn test_search_and_context_use_managed_fork_core_commands() {
 
     let context = planner
         .plan(PlanRequest {
-            workspace,
+            workspace: workspace.clone(),
             intent: "find managed fork hit".into(),
             path: Some(PathBuf::from("src")),
             topic: Some("hzr-test".into()),
             search_limit: 5,
             memory_limit: 5,
+            max_tokens: None,
+            no_memory: false,
         })
         .await
         .expect("fork memory plan");
@@ -119,6 +121,36 @@ async fn test_search_and_context_use_managed_fork_core_commands() {
             .warnings
             .iter()
             .any(|warning| warning.code == ContextWarningCode::MemoryUnavailable)
+    );
+
+    let code_only = planner
+        .plan(PlanRequest {
+            workspace,
+            intent: "find managed fork hit".into(),
+            path: Some(PathBuf::from("src")),
+            topic: None,
+            search_limit: 5,
+            memory_limit: 5,
+            max_tokens: Some(1000),
+            no_memory: true,
+        })
+        .await
+        .expect("code-only bounded plan");
+    assert!(
+        !code_only
+            .warnings
+            .iter()
+            .any(|warning| warning.code == ContextWarningCode::MemoryUnavailable)
+    );
+    assert!(!code_only.pack.selected.is_empty());
+    assert!(
+        code_only
+            .pack
+            .selected
+            .iter()
+            .map(|candidate| candidate.tokens.value)
+            .sum::<u64>()
+            <= 1000
     );
 
     let legacy_workspace = fixture.path().join("legacy-workspace");
@@ -158,6 +190,8 @@ async fn test_search_and_context_use_managed_fork_core_commands() {
             topic: Some("hzr-test".into()),
             search_limit: 5,
             memory_limit: 5,
+            max_tokens: None,
+            no_memory: false,
         })
         .await
         .expect("legacy index planning falls back internally");
@@ -242,7 +276,7 @@ case "$1" in
     if [ "$4" != "src" ]; then
       exit 68
     fi
-    printf '%s\n' '{"selected":[{"rel_path":"src/lib.rs","features":{},"score":0.9,"sources":["tier_a","call_graph"],"estimated_tokens":200}],"dropped":[],"budget_report":{"token_budget":12000,"estimated_used":200,"candidates_total":1,"candidates_selected":1,"efficiency_score":0.0167},"decision_trace":[],"pipeline_version":"graph_first_v1","semantic_backend_used":"rg-files","graph_candidate_count":1,"semantic_hit_count":1}'
+    printf '%s\n' '{"selected":[{"rel_path":"lib.rs","features":{},"score":0.9,"sources":["tier_a","call_graph"],"estimated_tokens":200}],"dropped":[],"budget_report":{"token_budget":12000,"estimated_used":200,"candidates_total":1,"candidates_selected":1,"efficiency_score":0.0167},"decision_trace":[],"pipeline_version":"graph_first_v1","semantic_backend_used":"rg-files","graph_candidate_count":1,"semantic_hit_count":1}'
     ;;
   *)
     exit 67

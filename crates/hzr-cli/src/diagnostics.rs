@@ -70,6 +70,9 @@ fn bounded_instruction_audit(
     receive_instruction_audit(&receiver, path, INSTRUCTION_AUDIT_TIMEOUT)
 }
 
+mod readiness;
+pub use readiness::ReadinessReport;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckStatus {
@@ -91,7 +94,9 @@ pub struct DoctorReport {
     pub config_path: PathBuf,
     pub data_dir: PathBuf,
     pub workspace: PathBuf,
+    /// Compatibility summary: no Error checks. Warnings do not establish readiness.
     pub healthy: bool,
+    pub readiness: ReadinessReport,
     pub checks: Vec<DoctorCheck>,
     pub client_workspace_bindings: Vec<client_config::ClientWorkspaceBinding>,
     pub response_codec_coverage: Vec<ResponseCodecCoverage>,
@@ -1318,15 +1323,10 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     }
     match &adoption_status {
         Ok(status) => checks.push(match status.native_tool_mode {
-            Some(adoption::NativeToolMode::Observe) => check(
-                "native_tool_mode",
-                CheckStatus::Warning,
-                "observe mode leaves native Read/Grep unsteered; run `hzr install --force --native-tool-mode steer`",
-            ),
             Some(mode) => check(
                 "native_tool_mode",
                 CheckStatus::Pass,
-                mode.as_str().to_owned(),
+                format!("{}: native arguments preserved; observation only, no optimization denial or savings credit", mode.as_str()),
             ),
             None => check(
                 "native_tool_mode",
@@ -1723,9 +1723,9 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         )),
         Ok(coverage) => checks.push(check(
             "degraded_rewrites",
-            CheckStatus::Pass,
+            CheckStatus::Warning,
             format!(
-                "{} historical daemon-free rewrite(s); live accounting is complete",
+                "{} historical daemon-free rewrite(s); accounting completeness could not be established",
                 coverage.lifetime_rewrites
             ),
         )),
@@ -1905,6 +1905,33 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 Ok(health) => {
                     let compatible = health.protocol_version == PROTOCOL_VERSION
                         && health.hzr_version == env!("CARGO_PKG_VERSION");
+                    checks.push(check(
+                        "daemon_process",
+                        if compatible {
+                            CheckStatus::Pass
+                        } else {
+                            CheckStatus::Error
+                        },
+                        "authenticated daemon response; version/protocol compatibility checked",
+                    ));
+                    checks.push(
+                        match health.engines.iter().find(|engine| engine.name == "icm") {
+                            Some(engine) => check(
+                                "memory_runtime",
+                                if engine.state == EngineState::Ready {
+                                    CheckStatus::Pass
+                                } else {
+                                    CheckStatus::Warning
+                                },
+                                format!("memory engine state {:?}", engine.state),
+                            ),
+                            None => check(
+                                "memory_runtime",
+                                CheckStatus::Warning,
+                                "memory engine readiness was not reported",
+                            ),
+                        },
+                    );
                     let fts_only = health.engines.iter().any(|engine| {
                         engine.name == "icm"
                             && engine.state == EngineState::Degraded
@@ -1975,6 +2002,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         data_dir: config.data_dir.clone(),
         workspace: workspace.to_path_buf(),
         healthy,
+        readiness: ReadinessReport::from_checks(&checks, &response_codec_coverage),
         checks,
         client_workspace_bindings,
         response_codec_coverage,

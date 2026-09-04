@@ -34,12 +34,14 @@ pub use host_grant::{
     normalize_session_id,
 };
 pub use ledger::{
+    DeliverySummary,
     BypassSummary, BypassTool, BypassWindow, CURRENT_ACCOUNTING_POLICY_VERSION,
     CURRENT_PRODUCER_VERSION, DEFAULT_FIDELITY_OPERATION_ALLOWANCE,
     DEFAULT_FIDELITY_TOKEN_ALLOWANCE, DetailedOperationAttribution, EfficiencyCommandSummary,
     EfficiencyOperationSummary, EfficiencySummary, EvasionClassSummary, EvasionSummary,
-    FidelityAllowance, FidelitySessionUsage, HostVisibleEfficiencySummary, Ledger, LedgerError,
-    LedgerRecord, LedgerSummary, LegacyEfficiencyMigration, LegacyEfficiencySource,
+    FidelityAllowance, FidelitySessionUsage, FleetDimension, FleetMetrics, FleetOperationGroup,
+    FleetProject, FleetStatsQuery, FleetStatsSnapshot, HostVisibleEfficiencySummary, Ledger,
+    LedgerError, LedgerRecord, LedgerSummary, LegacyEfficiencyMigration, LegacyEfficiencySource,
     OperationAttribution, OperationContext, OperationFamilySummary, OperationModeSummary,
     PolicyEvent, PolicyEventSummary, PriceTable, PrivacyPseudonymizer,
     PrivacySafeFidelityOperation, PrivacySafeOperationKey, ProjectActivitySummary,
@@ -52,7 +54,7 @@ pub use operation::{
     FidelityBudget, FidelityPreflight, OperationChannel, OperationClassification,
     OperationMeasurement, OperationRoute, OperationSubsystem, RawFidelityReason,
     RawFidelityRequest, RawReplacement, ReplacementCapability, classify_operation,
-    efficient_route_replacement, explicit_raw_fidelity, fidelity_preflight,
-    fidelity_preflight_required, first_class_replacement, is_direct_hzr_command,
-    managed_raw_payload, raw_fidelity_request, raw_route_sql_predicate,
+    explicit_raw_fidelity, fidelity_preflight, fidelity_preflight_required,
+    first_class_replacement, is_direct_hzr_command, managed_raw_payload, raw_fidelity_request,
+    raw_route_sql_predicate,
 };

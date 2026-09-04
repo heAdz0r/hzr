@@ -72,6 +72,18 @@ impl ApiError {
     }
 }
 
+impl ApiError {
+    pub(crate) fn payload(self) -> ErrorResponse {
+        ErrorResponse {
+            trace_id: None,
+            code: self.code.into(),
+            message: self.message,
+            recoverable: self.recoverable,
+            details: serde_json::Value::Null,
+        }
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let payload = ErrorResponse {

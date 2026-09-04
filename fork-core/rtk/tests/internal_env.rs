@@ -25,6 +25,10 @@ fn host_grant_marker_is_consumed_and_persisted_on_the_operation() {
     let database = directory.path().join("tracking.sqlite");
     let status = Command::new(env!("CARGO_BIN_EXE_rtk"))
         .env("RTK_DB_PATH", &database)
+        .env_remove("HZR_INTERNAL_ACCOUNTING_RECEIPT_JOURNAL")
+        .env_remove("HZR_INTERNAL_ACCOUNTING_FAILURE_JOURNAL")
+        .env_remove("HZR_INTERNAL_ACCOUNTING_CORRELATION")
+        .env_remove("RTK_TRACKING_DISABLED")
         .env("HZR_INTERNAL_HOST_GRANT_APPLIED", "1")
         .args([
             "raw",

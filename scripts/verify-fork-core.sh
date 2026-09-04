@@ -302,7 +302,12 @@ if [[ "${HZR_RUN_TESTS}" == "--test" ]]; then
     exit 1
   fi
 
-  CARGO_TARGET_DIR="${HZR_VERIFY_TEMP}/target" \
+  # The gate is one outer managed operation. Test engines own isolated journals;
+  # never route their synthetic receipts into the invoking agent operation.
+  env -u HZR_INTERNAL_ACCOUNTING_RECEIPT_JOURNAL \
+    -u HZR_INTERNAL_ACCOUNTING_FAILURE_JOURNAL \
+    -u HZR_INTERNAL_ACCOUNTING_CORRELATION -u RTK_TRACKING_DISABLED \
+    CARGO_TARGET_DIR="${HZR_VERIFY_TEMP}/target" \
     cargo test --quiet --manifest-path "${HZR_TEST_ROOT}/Cargo.toml" --locked --all-targets
 fi
 

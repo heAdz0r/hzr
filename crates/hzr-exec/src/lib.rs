@@ -8,6 +8,8 @@ mod adapter;
 mod capture;
 mod error;
 mod executor;
+mod jobs;
+pub use jobs::{ExecJobDelivery, ExecJobSnapshot, ExecJobState};
 mod model;
 mod shell;
 
@@ -23,7 +25,7 @@ pub use adapter::{
     expected_engine_identity,
 };
 pub use error::ExecError;
-pub use executor::{ExecutionHandle, ExecutionPipeline};
+pub use executor::{ExecutionCancellation, ExecutionHandle, ExecutionPipeline};
 pub use model::{
     AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent,
     CapturedStream, Environment, ExecutionEnvelope, ExecutionEvent, ExecutionOutcome,

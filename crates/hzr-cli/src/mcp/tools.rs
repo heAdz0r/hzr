@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 
 use serde_json::{Value, json};
 
-pub(super) const MCP_EXEC_TIMEOUT_MAX_MS: u64 = 29_500;
+pub(super) const MCP_EXEC_TIMEOUT_MAX_MS: u64 = 1_800_000;
 pub(super) const MCP_PATH_MAX_BYTES: usize = 4096;
 pub(super) const MCP_PATCH_BLOCK_MAX_BYTES: usize = 65_536;
 pub(super) const MCP_CREATE_CONTENT_MAX_BYTES: usize = 192 * 1024;
@@ -17,6 +17,7 @@ pub(super) struct ToolDefinition {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ToolKind {
     MemoryRecall,
+    MemoryGet,
     MemoryStore,
     MemoryForget,
     MemoryUpdate,
@@ -35,6 +36,7 @@ impl ToolKind {
     const fn name(self) -> &'static str {
         match self {
             Self::MemoryRecall => "hzr_memory_recall",
+            Self::MemoryGet => "hzr_memory_get",
             Self::MemoryStore => "hzr_memory_store",
             Self::MemoryForget => "hzr_memory_forget",
             Self::MemoryUpdate => "hzr_memory_update",
@@ -370,8 +372,50 @@ fn doctor_schema() -> Value {
     )
 }
 
+fn read_result_schema() -> Value {
+    strict_object(
+        json!({
+            "files": {"type": "array", "items": strict_object(json!({
+                "path": {"type": "string"}, "source_sha256": {"type": "string"},
+                "source_bytes": {"type": "integer"}, "total_lines": {"type": "integer"},
+                "from": {"type": "integer"}, "to": {"type": "integer"},
+                "next_line": {"type": ["integer", "null"]}, "complete": {"type": "boolean"},
+                "content": {"type": "string"},
+                "cost_advice": strict_object(json!({
+                    "method": {"type": "string"}, "requests": {"type": "integer"},
+                    "produced_tokens_estimated": {"type": "integer"},
+                    "repeated_source_tokens_estimated": {"type": "integer"},
+                    "full_result_tokens_estimated": {"type": "integer"},
+                    "next_action": {"type": "string"}, "next_missing_from": {"type": ["integer", "null"]},
+                    "next_missing_to": {"type": ["integer", "null"]}
+                }), &["method", "requests", "produced_tokens_estimated", "repeated_source_tokens_estimated", "full_result_tokens_estimated", "next_action", "next_missing_from", "next_missing_to"])
+            }), &["path", "source_sha256", "source_bytes", "total_lines", "from", "to", "next_line", "complete", "content"])},
+            "remaining_paths": {"type": "array", "items": {"type": "string"}},
+            "estimated_tokens": {"type": "integer"}, "max_tokens": {"type": "integer"}
+        }),
+        &["files", "remaining_paths", "estimated_tokens", "max_tokens"],
+    )
+}
+
 fn raw_tool_definitions() -> Vec<ToolDefinition> {
     vec![
+        ToolDefinition::new(
+            ToolKind::MemoryGet,
+            json!({
+                "title": "Get HZR Memory",
+                "description": "Retrieve one exact memory ID in the selected namespace without repeating semantic recall.",
+                "inputSchema": strict_object(json!({
+                    "id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "scope": {"type": "string", "enum": ["project", "global"], "default": "project"}
+                }), &["id"]),
+                "outputSchema": strict_object(json!({
+                    "id": {"type": "string"}, "topic": {"type": "string"},
+                    "updated_at": {"type": "string"}, "summary": {"type": "string"},
+                    "raw_excerpt": {"type": ["string", "null"]}
+                }), &["id", "topic", "updated_at", "summary", "raw_excerpt"]),
+                "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
+            }),
+        ),
         ToolDefinition::new(
             ToolKind::MemoryRecall,
             json!({
@@ -649,6 +693,8 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
                             "default": 10,
                             "description": "Maximum search hits returned.",
                         },
+                        "paginate": {"type":"boolean", "default":false, "description":"Capture up to 100 immutable hits for stable pagination; default search does not prefetch."},
+                        "cursor": {"type":"string", "minLength":1, "maxLength":128, "x-maxUtf8Bytes":128, "description":"Continue the same snapshot/query/scope/options/page size without re-searching."},
                         "include_content": {
                             "type": "boolean",
                             "default": false,
@@ -664,6 +710,18 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
                     "properties": {
                         "query": {"type": "string"},
                         "path": {"type": "string"},
+                        "page": {
+                            "type": "object", "additionalProperties": false,
+                            "properties": {
+                                "snapshot_id":{"type":"string"},
+                                "offset":{"type":"integer","minimum":0},
+                                "available_hits":{"type":"integer","minimum":0},
+                                "snapshot_complete":{"type":"boolean"},
+                                "next_cursor":{"type":["string","null"]},
+                                "expires_at_ms":{"type":"integer","minimum":0}
+                            },
+                            "required":["snapshot_id","offset","available_hits","snapshot_complete","next_cursor","expires_at_ms"]
+                        },
                         "total_hits": {"type": "integer", "minimum": 0},
                         "shown_hits": {"type": "integer", "minimum": 0},
                         "scanned_files": {"type": "integer", "minimum": 0},
@@ -710,6 +768,8 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
                     "type": "object",
                     "additionalProperties": false,
                     "properties": {
+                        "max_tokens": {"type": "integer", "minimum": 1, "maximum": 1_000_000},
+                        "no_memory": {"type": "boolean", "default": false},
                         "intent": {
                             "type": "string",
                             "minLength": 1,
@@ -883,21 +943,31 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
             ToolKind::Read,
             json!({
                 "title": "Read through HZR",
-                "description": "Read bounded exact content through the daemon-owned fork-core path. The response preserves termination, hashes and truncation so omitted bytes cannot look complete.",
+                "description": "Read exact files under one shared token budget. Use paths for a batch; complete/next_line distinguish full source from ranges. Expand with from and expected_sha256 to reject changed sources. outline uses the structural fork response.",
                 "inputSchema": {
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
                     "type": "object",
                     "additionalProperties": false,
                     "properties": {
-                        "path": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES},
+                        "path": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES, "x-maxUtf8Bytes": MCP_PATH_MAX_BYTES},
+                        "paths": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES, "x-maxUtf8Bytes": MCP_PATH_MAX_BYTES}},
+                        "max_tokens": {"type": "integer", "minimum": 1024, "maximum": 48_000, "default": 8192},
+                        "expected_sha256": {"type": "string", "minLength": 64, "maxLength": 64},
+                        "context_epoch": {"type": "string", "minLength": 1, "maxLength": 128, "description": "Advisory read-cost episode; change after compaction, fork or resume. Never suppresses requested content."},
+                        "session_id": {"type": "string", "minLength": 1, "maxLength": 256},
                         "outline": {"type": "boolean", "default": false},
-                        "from": {"type": "integer", "minimum": 1},
-                        "to": {"type": "integer", "minimum": 1},
-                        "max_lines": {"type": "integer", "minimum": 1}
+                        "from": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                        "to": {"type": "integer", "minimum": 1, "maximum": 100_000},
+                        "max_lines": {"type": "integer", "minimum": 1, "maximum": 100_000}
                     },
-                    "required": ["path"]
+                    "required": [],
+                    "anyOf": [{"required": ["path"], "not": {"required": ["paths"]}}, {"required": ["paths"], "not": {"required": ["path"]}}],
+                    "allOf": [
+                        {"if": {"required": ["context_epoch"]}, "then": {"required": ["session_id"]}},
+                        {"if": {"properties": {"outline": {"const": true}}, "required": ["outline"]}, "then": {"required": ["path"], "not": {"anyOf": [{"required": ["max_tokens"]}, {"required": ["expected_sha256"]}, {"required": ["context_epoch"]}]}}}
+                    ]
                 },
-                "outputSchema": fork_result_schema("content", json!({"type": "string"})),
+                "outputSchema": {"type": "object", "anyOf": [fork_result_schema("content", json!({"type": "string"})), read_result_schema()]},
                 "annotations": {"readOnlyHint": true, "destructiveHint": false, "openWorldHint": false}
             }),
         ),
@@ -912,10 +982,10 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
                     "additionalProperties": false,
                     "properties": {
                         "operation": {"type": "string", "enum": ["patch", "create"]},
-                        "path": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES},
-                        "old": {"type": "string", "maxLength": MCP_PATCH_BLOCK_MAX_BYTES},
-                        "new": {"type": "string", "maxLength": MCP_PATCH_BLOCK_MAX_BYTES},
-                        "content": {"type": "string", "maxLength": MCP_CREATE_CONTENT_MAX_BYTES},
+                        "path": {"type": "string", "minLength": 1, "maxLength": MCP_PATH_MAX_BYTES, "x-maxUtf8Bytes": MCP_PATH_MAX_BYTES},
+                        "old": {"type": "string", "minLength": 1, "maxLength": MCP_PATCH_BLOCK_MAX_BYTES, "x-maxUtf8Bytes": MCP_PATCH_BLOCK_MAX_BYTES},
+                        "new": {"type": "string", "maxLength": MCP_PATCH_BLOCK_MAX_BYTES, "x-maxUtf8Bytes": MCP_PATCH_BLOCK_MAX_BYTES},
+                        "content": {"type": "string", "maxLength": MCP_CREATE_CONTENT_MAX_BYTES, "x-maxUtf8Bytes": MCP_CREATE_CONTENT_MAX_BYTES},
                         "cas": {"type": "boolean", "const": true, "default": true}
                     },
                     "required": ["operation", "path"],
@@ -938,27 +1008,60 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
             ToolKind::Exec,
             json!({
                 "title": "Execute through HZR Policy",
-                "description": "Run one shell command through the daemon-owned policy, rewrite and accounting pipeline. Approval-required and denied decisions are returned as typed outcomes; MCP never falls back to a direct shell.",
+                "description": "Run or start durable commands; wait/cancel by stable operation_id. Replies contain bounded text, not spill paths. Use output with stream/offset/expected_sha256 for exact continuation; after_revision avoids repeated results.",
                 "inputSchema": {
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
                     "type": "object",
                     "additionalProperties": false,
                     "properties": {
+                        "action": {"type": "string", "enum": ["run", "start", "wait", "cancel", "output"], "default": "run"},
+                        "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                        "wait_ms": {"type": "integer", "minimum": 0, "maximum": 10_000},
+                        "after_revision": {"type": "integer", "minimum": 0},
+                        "max_output_bytes": {"type": "integer", "minimum": 1024, "maximum": 8_388_608, "default": 65_536},
+                        "stream": {"type": "string", "enum": ["stdout", "stderr"], "default": "stdout"},
+                        "offset": {"type": "integer", "minimum": 0},
+                        "max_bytes": {"type": "integer", "minimum": 1, "maximum": 262_144, "default": 32_768},
+                        "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
                         "command": {"type": "string", "minLength": 1},
                         "timeout_ms": {"type": "integer", "minimum": 1, "maximum": MCP_EXEC_TIMEOUT_MAX_MS}
                     },
-                    "required": ["command"]
+                    "required": [],
+                    "allOf": [
+                        {"if": {"properties": {"action": {"const": "run"}}}, "then": {"not": {"required": ["operation_id"]}}},
+                        {"if": {"properties": {"action": {"enum": ["run", "start"]}}}, "then": {"required": ["command"]}},
+                        {"if": {"required": ["action"], "properties": {"action": {"enum": ["start", "wait", "cancel", "output"]}}}, "then": {"required": ["operation_id"]}},
+                        {"if": {"required": ["action"], "properties": {"action": {"enum": ["wait", "cancel"]}}}, "then": {"not": {"anyOf": [{"required": ["command"]}, {"required": ["timeout_ms"]}]}}},
+                        {"if": {"anyOf": [{"required": ["wait_ms"]}, {"required": ["after_revision"]}, {"required": ["max_output_bytes"]}]}, "then": {"required": ["action"], "properties": {"action": {"enum": ["wait", "cancel"]}}}},
+                        {"if": {"anyOf": [{"required": ["stream"]}, {"required": ["offset"]}, {"required": ["max_bytes"]}, {"required": ["expected_sha256"]}]}, "then": {"required": ["action"], "properties": {"action": {"const": "output"}}}},
+                        {"if": {"required": ["action"], "properties": {"action": {"const": "output"}}}, "then": {"not": {"anyOf": [{"required": ["command"]}, {"required": ["timeout_ms"]}, {"required": ["wait_ms"]}, {"required": ["after_revision"]}, {"required": ["max_output_bytes"]}]}}}
+                    ]
                 },
                 "outputSchema": {
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
                     "type": "object",
                     "additionalProperties": false,
                     "properties": {
-                        "outcome": {"type": "string", "enum": ["completed", "executed_accounting_incomplete", "not_started"]},
+                        "operation_id": {"type": "string"},
+                        "state": {"type": "string", "enum": ["running", "completed", "cancelled", "interrupted", "failed"]},
+                        "revision": {"type": "integer", "minimum": 0},
+                        "delivery": {"type": "object", "additionalProperties": false, "required": ["unchanged", "output_omitted", "required_bytes"], "properties": {"unchanged": {"type": "boolean"}, "output_omitted": {"type": "boolean"}, "required_bytes": {"type": "integer", "minimum": 0}, "projection": {"const": "bounded_text"}}},
+                        "error": {"type": ["object", "null"]},
+                        "outcome": {"type": ["string", "object", "null"]},
                         "result": {"type": "object"},
-                        "disposition": {"type": "object"}
+                        "disposition": {"type": "object"},
+                        "stream": {"type": "string", "enum": ["stdout", "stderr"]},
+                        "offset": {"type": "integer", "minimum": 0},
+                        "next_offset": {"type": ["integer", "null"], "minimum": 0},
+                        "total_bytes": {"type": "integer", "minimum": 0},
+                        "stored_bytes": {"type": "integer", "minimum": 0},
+                        "source_sha256": {"type": "string"},
+                        "capture_truncated": {"type": "boolean"},
+                        "complete": {"type": "boolean"},
+                        "encoding": {"type": "string", "enum": ["utf8", "hex"]},
+                        "content": {"type": "string"}
                     },
-                    "required": ["outcome"]
+                    "anyOf": [{"required": ["outcome"]}, {"required": ["operation_id", "state", "revision"]}, {"required": ["operation_id", "stream", "content", "revision"]}]
                 },
                 "annotations": {"readOnlyHint": false, "destructiveHint": true, "idempotentHint": false, "openWorldHint": true}
             }),
@@ -1085,6 +1188,11 @@ fn validate_schema(schema: &Value, value: &Value, path: &str) -> Result<(), Stri
         }
     }
     if let Some(text) = value.as_str() {
+        if let Some(maximum) = schema.get("x-maxUtf8Bytes").and_then(Value::as_u64) {
+            if text.len() as u64 > maximum {
+                return Err(format!("{path} exceeds the advertised UTF-8 byte limit"));
+            }
+        }
         let character_count = text.chars().count() as u64;
         if let Some(minimum) = schema.get("minLength").and_then(Value::as_u64) {
             if character_count < minimum {
@@ -1103,6 +1211,11 @@ fn validate_schema(schema: &Value, value: &Value, path: &str) -> Result<(), Stri
         }
     }
     if let Some(items) = value.as_array() {
+        if let Some(minimum) = schema.get("minItems").and_then(Value::as_u64) {
+            if (items.len() as u64) < minimum {
+                return Err(format!("{path} contains too few items"));
+            }
+        }
         if let Some(maximum) = schema.get("maxItems").and_then(Value::as_u64) {
             if items.len() as u64 > maximum {
                 return Err(format!("{path} contains too many items"));
@@ -1285,6 +1398,7 @@ mod tests {
             "hzr_memory_prune" => {
                 serde_json::json!({"threshold":0.2, "dry_run":true, "scope":"project"})
             }
+            "hzr_memory_get" => serde_json::json!({"id": "memory-1", "scope": "project"}),
             "hzr_search" => serde_json::json!({
                 "query":"Ledger", "path":"crates", "mode":"exact", "limit":1,
                 "include_content":true
@@ -1311,9 +1425,9 @@ mod tests {
 
     #[test]
     fn acceptance_gate_mcp_descriptions_are_unique_and_schema_is_bounded() {
-        // The 13-tool typed inventory serializes to 23,776 bytes. Keep under 25 KiB so
-        // capability coverage cannot silently recreate the former 64 KiB prompt budget.
-        const MAX_TOOL_SCHEMA_BYTES: usize = 25 * 1024;
+        // Include exact memory retrieval, bounded reads, and durable execution contracts.
+        // Keep the complete wire inventory below 32 KiB rather than dropping safety fields.
+        const MAX_TOOL_SCHEMA_BYTES: usize = 32 * 1024;
 
         let definitions = super::tool_definitions();
         let encoded = serde_json::to_vec(&serde_json::json!({"tools": &definitions}))

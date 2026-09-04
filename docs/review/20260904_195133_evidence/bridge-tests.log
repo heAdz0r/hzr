@@ -1,0 +1,58 @@
+TAP version 13
+# Subtest: bridge import is side-effect free
+ok 1 - bridge import is side-effect free
+  ---
+  duration_ms: 0.442708
+  type: 'test'
+  ...
+# Subtest: production preparation owns tools and disables duplicate subsystems in order
+ok 2 - production preparation owns tools and disables duplicate subsystems in order
+  ---
+  duration_ms: 16.191625
+  type: 'test'
+  ...
+# Subtest: context formatter rejects malformed planner responses
+ok 3 - context formatter rejects malformed planner responses
+  ---
+  duration_ms: 0.124917
+  type: 'test'
+  ...
+# Subtest: managed HZR contract parser rejects stray, nested, and unterminated markers
+ok 4 - managed HZR contract parser rejects stray, nested, and unterminated markers
+  ---
+  duration_ms: 0.067667
+  type: 'test'
+  ...
+# Subtest: context formatter enforces its byte budget for multibyte UTF-8 delivery
+ok 5 - context formatter enforces its byte budget for multibyte UTF-8 delivery
+  ---
+  duration_ms: 0.159083
+  type: 'test'
+  ...
+# Subtest: context formatter preserves provenance and truncates only at candidate boundaries
+ok 6 - context formatter preserves provenance and truncates only at candidate boundaries
+  ---
+  duration_ms: 0.20925
+  type: 'test'
+  ...
+# Subtest: usage outbox survives a failed send and replays exactly once
+ok 7 - usage outbox survives a failed send and replays exactly once
+  ---
+  duration_ms: 2.109875
+  type: 'test'
+  ...
+# Subtest: bridge manifest version tracks the workspace version
+ok 8 - bridge manifest version tracks the workspace version
+  ---
+  duration_ms: 0.550125
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 891.4025

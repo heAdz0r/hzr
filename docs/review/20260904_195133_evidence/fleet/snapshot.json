@@ -1,0 +1,3260 @@
+{
+  "generated_at_utc": "2026-09-04T19:56:19Z",
+  "scope": "rolling --since 7d; individual snapshots were not atomic; HZR audit activity after parent frozen snapshots excluded from comparison using parent copies",
+  "fleet_inventory": {
+    "healthy": false,
+    "checks": [
+      {
+        "name": "fleet_reconcile",
+        "status": "error",
+        "detail": "fleet closure incomplete: refused=false, write_errors=0, workspace_errors=9, owner_conflicts=0, unresolved_indexes=0, preview_changes=false; follow the structured fleet_reconcile actions"
+      }
+    ],
+    "fleet": {
+      "count": 85,
+      "projects": [
+        {
+          "workspace": "/Users/andrew/Programming/anonymous_bot",
+          "path": "/Users/andrew/Programming/anonymous_bot/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/hzr",
+          "path": "/Users/andrew/Programming/hzr/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/readest/packages/tauri-plugins",
+          "path": "/Users/andrew/Programming/readest/packages/tauri-plugins/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/readest/packages/tauri",
+          "path": "/Users/andrew/Programming/readest/packages/tauri/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/readest/packages/foliate-js",
+          "path": "/Users/andrew/Programming/readest/packages/foliate-js/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/deno-icon-crop/frontend",
+          "path": "/Users/andrew/Programming/deno-icon-crop/frontend/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/wolfgame_ionic",
+          "path": "/Users/andrew/Programming/wolfgame_ionic/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/dkp_pdf_generator",
+          "path": "/Users/andrew/Programming/dkp_pdf_generator/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/rss2_github",
+          "path": "/Users/andrew/Programming/rss2_github/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/ralph",
+          "path": "/Users/andrew/Programming/ralph/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/autogpt-reactive",
+          "path": "/Users/andrew/Programming/autogpt-reactive/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/dishwashers/my-washing-machine-comparison",
+          "path": "/Users/andrew/Programming/dishwashers/my-washing-machine-comparison/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/git-book-quest",
+          "path": "/Users/andrew/Programming/git-book-quest/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/fairytale",
+          "path": "/Users/andrew/Programming/fairytale/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/icon-splitter",
+          "path": "/Users/andrew/Programming/icon-splitter/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/easy_math/tasks/prd-secret-letters-cipher",
+          "path": "/Users/andrew/Programming/easy_math/tasks/prd-secret-letters-cipher/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/github_subscription",
+          "path": "/Users/andrew/Programming/github_subscription/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/autogpt-reactive/app",
+          "path": "/Users/andrew/Programming/autogpt-reactive/app/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/llm_knowledge/vllm-visualizer",
+          "path": "/Users/andrew/Programming/llm_knowledge/vllm-visualizer/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/server_autogpt",
+          "path": "/Users/andrew/Programming/server_autogpt/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/llm_context",
+          "path": "/Users/andrew/Programming/llm_context/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/khomovniki/khomovniki",
+          "path": "/Users/andrew/Programming/khomovniki/khomovniki/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/wikijs-mcp",
+          "path": "/Users/andrew/Programming/wikijs-mcp/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/ralph-claude-code",
+          "path": "/Users/andrew/Programming/ralph-claude-code/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/adminpanel_autogpt",
+          "path": "/Users/andrew/Programming/adminpanel_autogpt/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/darts_game",
+          "path": "/Users/andrew/Programming/darts_game/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/term-finder-extension",
+          "path": "/Users/andrew/Programming/term-finder-extension/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/khomovniki",
+          "path": "/Users/andrew/Programming/khomovniki/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/git-book-quest2",
+          "path": "/Users/andrew/Programming/git-book-quest2/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/postcard_grammy",
+          "path": "/Users/andrew/Programming/postcard_grammy/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/superlapka",
+          "path": "/Users/andrew/Programming/superlapka/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/flant_dkp_price/dkp-price-calculator",
+          "path": "/Users/andrew/Programming/flant_dkp_price/dkp-price-calculator/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/RAG_LLM",
+          "path": "/Users/andrew/Programming/RAG_LLM/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/wolfgame2",
+          "path": "/Users/andrew/Programming/wolfgame2/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/git-book-quest2/flant-commercial-tutorial",
+          "path": "/Users/andrew/Programming/git-book-quest2/flant-commercial-tutorial/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/microtasks",
+          "path": "/Users/andrew/Programming/microtasks/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/coffee-flavor-visualizer",
+          "path": "/Users/andrew/Programming/coffee-flavor-visualizer/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/React_E-Commerce",
+          "path": "/Users/andrew/Programming/React_E-Commerce/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/tg_coffeebot",
+          "path": "/Users/andrew/Programming/tg_coffeebot/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/bg_remove_cli",
+          "path": "/Users/andrew/Programming/bg_remove_cli/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/dkp2_licence",
+          "path": "/Users/andrew/Programming/dkp2_licence/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/git-book-quest2/test-published-repo/flant-commercial-tutorial",
+          "path": "/Users/andrew/Programming/git-book-quest2/test-published-repo/flant-commercial-tutorial/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/webhook-service",
+          "path": "/Users/andrew/Programming/webhook-service/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/HTMLPortfolioProject",
+          "path": "/Users/andrew/Programming/HTMLPortfolioProject/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/AutoGPT",
+          "path": "/Users/andrew/Programming/AutoGPT/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/n8n",
+          "path": "/Users/andrew/Programming/n8n/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/my-mcp-github-project/servers",
+          "path": "/Users/andrew/Programming/my-mcp-github-project/servers/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Documents/Codex/2026-07-31/new-chat/work/caveman",
+          "path": "/Users/andrew/Documents/Codex/2026-07-31/new-chat/work/caveman/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/english_memo_bot/camdict",
+          "path": "/Users/andrew/Programming/english_memo_bot/camdict/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/SalesAcademy/testapp_k8s",
+          "path": "/Users/andrew/Programming/SalesAcademy/testapp_k8s/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/AutoGPTSubscription",
+          "path": "/Users/andrew/Programming/AutoGPTSubscription/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/QWEN3",
+          "path": "/Users/andrew/Programming/QWEN3/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/chrome_wife",
+          "path": "/Users/andrew/Programming/chrome_wife/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/2048_game",
+          "path": "/Users/andrew/Programming/2048_game/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/dkp_licence_python",
+          "path": "/Users/andrew/Programming/dkp_licence_python/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/readest",
+          "path": "/Users/andrew/Programming/readest/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/OKComputer_Зельда 2048",
+          "path": "/Users/andrew/Programming/OKComputer_Зельда 2048/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/StudentEnrollmentWithESDB",
+          "path": "/Users/andrew/Programming/StudentEnrollmentWithESDB/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/dkp_license_graph",
+          "path": "/Users/andrew/Programming/dkp_license_graph/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/rtk_upstream_bench",
+          "path": "/Users/andrew/Programming/rtk_upstream_bench/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/git_claude_tutor/git-demo",
+          "path": "/Users/andrew/Programming/git_claude_tutor/git-demo/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/whisper_notes",
+          "path": "/Users/andrew/Programming/whisper_notes/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/8march_postcard_python",
+          "path": "/Users/andrew/Programming/8march_postcard_python/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/english_tutor",
+          "path": "/Users/andrew/Programming/english_tutor/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/deckhouse_platform_landing",
+          "path": "/Users/andrew/Programming/deckhouse_platform_landing/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/SalesAcademy",
+          "path": "/Users/andrew/Programming/SalesAcademy/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/bun_icons",
+          "path": "/Users/andrew/Programming/bun_icons/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/git-book-quest2/test-published-repo",
+          "path": "/Users/andrew/Programming/git-book-quest2/test-published-repo/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/bun_autogpt",
+          "path": "/Users/andrew/Programming/bun_autogpt/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/kaiten-mcp-server",
+          "path": "/Users/andrew/Programming/kaiten-mcp-server/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/rc_outlook_bot",
+          "path": "/Users/andrew/Programming/rc_outlook_bot/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/QWEN3_backup_20250430_201950",
+          "path": "/Users/andrew/Programming/QWEN3_backup_20250430_201950/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/cloudru_vpn",
+          "path": "/Users/andrew/Programming/cloudru_vpn/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/RAG_LLM/gemma_pytorch",
+          "path": "/Users/andrew/Programming/RAG_LLM/gemma_pytorch/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/codex_text",
+          "path": "/Users/andrew/Programming/codex_text/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/rag_embeddings",
+          "path": "/Users/andrew/Programming/rag_embeddings/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/strapi-autogpt",
+          "path": "/Users/andrew/Programming/strapi-autogpt/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/dkp_calc",
+          "path": "/Users/andrew/Programming/dkp_calc/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/AutoGPT_shop",
+          "path": "/Users/andrew/Programming/AutoGPT_shop/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/kiro_test",
+          "path": "/Users/andrew/Programming/kiro_test/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/sch57",
+          "path": "/Users/andrew/Programming/sch57/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/kiro_coffeebot",
+          "path": "/Users/andrew/Programming/kiro_coffeebot/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/git_tutor/git_tutor",
+          "path": "/Users/andrew/Programming/git_tutor/git_tutor/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/dkp_hpa_frontend",
+          "path": "/Users/andrew/Programming/dkp_hpa_frontend/.codex/config.toml",
+          "changed": false,
+          "error": null
+        },
+        {
+          "workspace": "/Users/andrew/Programming/ios_tilewords",
+          "path": "/Users/andrew/Programming/ios_tilewords/.codex/config.toml",
+          "changed": false,
+          "error": null
+        }
+      ],
+      "errors": [
+        {
+          "workspace": "/Users/andrew/Programming/hzr-wt-update-check-only",
+          "error": "registered workspace root is absent or not a directory"
+        },
+        {
+          "workspace": "/Users/andrew/Programming/hzr-wt-memory-hygiene-sync",
+          "error": "registered workspace root is absent or not a directory"
+        },
+        {
+          "workspace": "/Users/andrew/Programming/hzr-wt-mcp-workspace-pin-apply",
+          "error": "registered workspace root is absent or not a directory"
+        },
+        {
+          "workspace": "/Users/andrew/Programming/hzr-wt-index-ready-doctor",
+          "error": "registered workspace root is absent or not a directory"
+        },
+        {
+          "workspace": "/Users/andrew/Programming/hzr-wt-doctor-next-actions",
+          "error": "registered workspace root is absent or not a directory"
+        },
+        {
+          "workspace": "/Users/andrew/Programming/hzr-wt-doctor-claude-code-mcp",
+          "error": "registered workspace root is absent or not a directory"
+        },
+        {
+          "workspace": "/Users/andrew/Programming/hzr-wt-0.6.2-scorecard",
+          "error": "registered workspace root is absent or not a directory"
+        },
+        {
+          "workspace": "/Users/andrew/Programming/hzr-wt-stats-truthful",
+          "error": "registered workspace root is absent or not a directory"
+        },
+        {
+          "workspace": "/Users/andrew/Programming/hzr-wt-stats-patchcheck",
+          "error": "registered workspace root is absent or not a directory"
+        }
+      ]
+    }
+  },
+  "project_checks": [
+    {
+      "workspace": "/Users/andrew/Programming/anonymous_bot",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 279,
+      "measured_operations": 269,
+      "baseline_tokens_estimated": 230578,
+      "delivered_tokens_estimated": 227684,
+      "net_avoided_tokens_estimated": 2894
+    },
+    {
+      "workspace": "/Users/andrew/Programming/hzr",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 493,
+      "measured_operations": 473,
+      "baseline_tokens_estimated": 713744,
+      "delivered_tokens_estimated": 612083,
+      "net_avoided_tokens_estimated": 101661
+    },
+    {
+      "workspace": "/Users/andrew/Programming/readest/packages/tauri-plugins",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/readest/packages/tauri",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/readest/packages/foliate-js",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/deno-icon-crop/frontend",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/wolfgame_ionic",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/dkp_pdf_generator",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/rss2_github",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/ralph",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/autogpt-reactive",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/dishwashers/my-washing-machine-comparison",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/git-book-quest",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/fairytale",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/icon-splitter",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/easy_math/tasks/prd-secret-letters-cipher",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/github_subscription",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/autogpt-reactive/app",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/llm_knowledge/vllm-visualizer",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/server_autogpt",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/llm_context",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/khomovniki/khomovniki",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/wikijs-mcp",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/ralph-claude-code",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/adminpanel_autogpt",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/darts_game",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/term-finder-extension",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/khomovniki",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/git-book-quest2",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/postcard_grammy",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/superlapka",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/flant_dkp_price/dkp-price-calculator",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/RAG_LLM",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/wolfgame2",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/git-book-quest2/flant-commercial-tutorial",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/microtasks",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/coffee-flavor-visualizer",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/React_E-Commerce",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/tg_coffeebot",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/bg_remove_cli",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/dkp2_licence",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/git-book-quest2/test-published-repo/flant-commercial-tutorial",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/webhook-service",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/HTMLPortfolioProject",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/AutoGPT",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/n8n",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/my-mcp-github-project/servers",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Documents/Codex/2026-07-31/new-chat/work/caveman",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/english_memo_bot/camdict",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/SalesAcademy/testapp_k8s",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/AutoGPTSubscription",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/QWEN3",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/chrome_wife",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/2048_game",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/dkp_licence_python",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/readest",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/OKComputer_Зельда 2048",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/StudentEnrollmentWithESDB",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/dkp_license_graph",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/rtk_upstream_bench",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/git_claude_tutor/git-demo",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/whisper_notes",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/8march_postcard_python",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/english_tutor",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/deckhouse_platform_landing",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/SalesAcademy",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/bun_icons",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/git-book-quest2/test-published-repo",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/bun_autogpt",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/kaiten-mcp-server",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/rc_outlook_bot",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/QWEN3_backup_20250430_201950",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/cloudru_vpn",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/RAG_LLM/gemma_pytorch",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/codex_text",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/rag_embeddings",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/strapi-autogpt",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/dkp_calc",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/AutoGPT_shop",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/kiro_test",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/sch57",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/kiro_coffeebot",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/git_tutor/git_tutor",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/dkp_hpa_frontend",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/ios_tilewords",
+      "exit_code": 0,
+      "error": null,
+      "observed_operations": 0,
+      "measured_operations": 0,
+      "baseline_tokens_estimated": 0,
+      "delivered_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0
+    },
+    {
+      "workspace": "/Users/andrew/Programming/hzr-wt-update-check-only",
+      "exit_code": 1,
+      "error": "invalid directory /Users/andrew/Programming/hzr-wt-update-check-only: No such file or directory (os error 2)",
+      "observed_operations": null,
+      "measured_operations": null,
+      "baseline_tokens_estimated": null,
+      "delivered_tokens_estimated": null,
+      "net_avoided_tokens_estimated": null
+    },
+    {
+      "workspace": "/Users/andrew/Programming/hzr-wt-memory-hygiene-sync",
+      "exit_code": 1,
+      "error": "invalid directory /Users/andrew/Programming/hzr-wt-memory-hygiene-sync: No such file or directory (os error 2)",
+      "observed_operations": null,
+      "measured_operations": null,
+      "baseline_tokens_estimated": null,
+      "delivered_tokens_estimated": null,
+      "net_avoided_tokens_estimated": null
+    },
+    {
+      "workspace": "/Users/andrew/Programming/hzr-wt-mcp-workspace-pin-apply",
+      "exit_code": 1,
+      "error": "invalid directory /Users/andrew/Programming/hzr-wt-mcp-workspace-pin-apply: No such file or directory (os error 2)",
+      "observed_operations": null,
+      "measured_operations": null,
+      "baseline_tokens_estimated": null,
+      "delivered_tokens_estimated": null,
+      "net_avoided_tokens_estimated": null
+    },
+    {
+      "workspace": "/Users/andrew/Programming/hzr-wt-index-ready-doctor",
+      "exit_code": 1,
+      "error": "invalid directory /Users/andrew/Programming/hzr-wt-index-ready-doctor: No such file or directory (os error 2)",
+      "observed_operations": null,
+      "measured_operations": null,
+      "baseline_tokens_estimated": null,
+      "delivered_tokens_estimated": null,
+      "net_avoided_tokens_estimated": null
+    },
+    {
+      "workspace": "/Users/andrew/Programming/hzr-wt-doctor-next-actions",
+      "exit_code": 1,
+      "error": "invalid directory /Users/andrew/Programming/hzr-wt-doctor-next-actions: No such file or directory (os error 2)",
+      "observed_operations": null,
+      "measured_operations": null,
+      "baseline_tokens_estimated": null,
+      "delivered_tokens_estimated": null,
+      "net_avoided_tokens_estimated": null
+    },
+    {
+      "workspace": "/Users/andrew/Programming/hzr-wt-doctor-claude-code-mcp",
+      "exit_code": 1,
+      "error": "invalid directory /Users/andrew/Programming/hzr-wt-doctor-claude-code-mcp: No such file or directory (os error 2)",
+      "observed_operations": null,
+      "measured_operations": null,
+      "baseline_tokens_estimated": null,
+      "delivered_tokens_estimated": null,
+      "net_avoided_tokens_estimated": null
+    },
+    {
+      "workspace": "/Users/andrew/Programming/hzr-wt-0.6.2-scorecard",
+      "exit_code": 1,
+      "error": "invalid directory /Users/andrew/Programming/hzr-wt-0.6.2-scorecard: No such file or directory (os error 2)",
+      "observed_operations": null,
+      "measured_operations": null,
+      "baseline_tokens_estimated": null,
+      "delivered_tokens_estimated": null,
+      "net_avoided_tokens_estimated": null
+    },
+    {
+      "workspace": "/Users/andrew/Programming/hzr-wt-stats-truthful",
+      "exit_code": 1,
+      "error": "invalid directory /Users/andrew/Programming/hzr-wt-stats-truthful: No such file or directory (os error 2)",
+      "observed_operations": null,
+      "measured_operations": null,
+      "baseline_tokens_estimated": null,
+      "delivered_tokens_estimated": null,
+      "net_avoided_tokens_estimated": null
+    },
+    {
+      "workspace": "/Users/andrew/Programming/hzr-wt-stats-patchcheck",
+      "exit_code": 1,
+      "error": "invalid directory /Users/andrew/Programming/hzr-wt-stats-patchcheck: No such file or directory (os error 2)",
+      "observed_operations": null,
+      "measured_operations": null,
+      "baseline_tokens_estimated": null,
+      "delivered_tokens_estimated": null,
+      "net_avoided_tokens_estimated": null
+    }
+  ],
+  "frozen_comparison": {
+    "global": {
+      "hzr_version": "0.7.1",
+      "scope": "global since 7d",
+      "direct_savings": {
+        "operations": 660,
+        "input_tokens_estimated": 867654,
+        "delivered_tokens_estimated": 784661,
+        "gross_avoided_tokens_estimated": 103607,
+        "regression_tokens_estimated": 20614,
+        "net_avoided_tokens_estimated": 82993,
+        "reduction_pct": 9.56521839350709,
+        "total_execution_ms": 2483853,
+        "measurement": "estimated_utf8_bytes_div_4_v1"
+      },
+      "host_visible_savings": {
+        "operations": 660,
+        "baseline_tokens_estimated": 758443,
+        "delivered_tokens_estimated": 676557,
+        "net_avoided_tokens_estimated": 81886,
+        "reduction_pct": 10.796592492777968,
+        "uncapped_operations": 414,
+        "complete": false,
+        "method": "known_host_visible_caps_v1; claude-code=512 tokens; unknown hosts remain raw upper bounds"
+      },
+      "by_subsystem": [
+        {
+          "subsystem": "search",
+          "operations": 87,
+          "gross_avoided_tokens_estimated": 99423,
+          "regression_tokens_estimated": 20614,
+          "net_avoided_tokens_estimated": 78809,
+          "share_pct": 94.95861096719
+        },
+        {
+          "subsystem": "execution",
+          "operations": 23,
+          "gross_avoided_tokens_estimated": 4183,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 4183,
+          "share_pct": 5.040184111913053
+        },
+        {
+          "subsystem": "read",
+          "operations": 1,
+          "gross_avoided_tokens_estimated": 1,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 1,
+          "share_pct": 0.0012049208969431156
+        },
+        {
+          "subsystem": "bypass",
+          "operations": 520,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "share_pct": 0
+        },
+        {
+          "subsystem": "codec",
+          "operations": 7,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "share_pct": 0
+        },
+        {
+          "subsystem": "memory",
+          "operations": 22,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "share_pct": 0
+        }
+      ],
+      "by_mode": [
+        {
+          "operation": "codec",
+          "mode": "codec_compile",
+          "stage": "internal_transport",
+          "operations": 7,
+          "delivered_tokens_estimated": 28779
+        },
+        {
+          "operation": "context",
+          "mode": "context_plan",
+          "stage": "standalone_delivery",
+          "operations": 10,
+          "delivered_tokens_estimated": 50966
+        },
+        {
+          "operation": "exec",
+          "mode": "exec_run",
+          "stage": "internal_transport",
+          "operations": 494,
+          "delivered_tokens_estimated": 219650
+        },
+        {
+          "operation": "memory",
+          "mode": "memory_recall",
+          "stage": "standalone_delivery",
+          "operations": 17,
+          "delivered_tokens_estimated": 40446
+        },
+        {
+          "operation": "memory",
+          "mode": "memory_store",
+          "stage": "standalone_delivery",
+          "operations": 5,
+          "delivered_tokens_estimated": 2709
+        },
+        {
+          "operation": "read",
+          "mode": "read_filtered",
+          "stage": "internal_transport",
+          "operations": 3,
+          "delivered_tokens_estimated": 3800
+        },
+        {
+          "operation": "read",
+          "mode": "read_head",
+          "stage": "internal_transport",
+          "operations": 16,
+          "delivered_tokens_estimated": 16925
+        },
+        {
+          "operation": "read",
+          "mode": "read_range",
+          "stage": "internal_transport",
+          "operations": 11,
+          "delivered_tokens_estimated": 3256
+        },
+        {
+          "operation": "read",
+          "mode": "read_tail",
+          "stage": "internal_transport",
+          "operations": 38,
+          "delivered_tokens_estimated": 370138
+        },
+        {
+          "operation": "search",
+          "mode": "search_exact",
+          "stage": "final_delivery",
+          "operations": 340,
+          "delivered_tokens_estimated": 85178
+        },
+        {
+          "operation": "search",
+          "mode": "search_exact",
+          "stage": "internal_transport",
+          "operations": 71,
+          "delivered_tokens_estimated": 25480
+        },
+        {
+          "operation": "search",
+          "mode": "search_semantic",
+          "stage": "final_delivery",
+          "operations": 119,
+          "delivered_tokens_estimated": 114474
+        },
+        {
+          "operation": "search",
+          "mode": "search_semantic",
+          "stage": "internal_transport",
+          "operations": 16,
+          "delivered_tokens_estimated": 22512
+        },
+        {
+          "operation": "write",
+          "mode": "write",
+          "stage": "final_delivery",
+          "operations": 36,
+          "delivered_tokens_estimated": 249964
+        }
+      ],
+      "read_pipeline": {
+        "operations": 1,
+        "source_tokens_estimated": 672,
+        "selected_tokens_estimated": 672,
+        "delivered_tokens_estimated": 671,
+        "selection_avoided_tokens_estimated": 0,
+        "selection_overhead_tokens_estimated": 0,
+        "transform_avoided_tokens_estimated": 1,
+        "transform_overhead_tokens_estimated": 0
+      },
+      "accounting_version_scope": "typed_v2_plus_aggregate_compatible_v1",
+      "accounting_policy_version": "privacy_typed_v2",
+      "excluded_legacy_operations": 0,
+      "stage_exclusion": {
+        "operations": 495,
+        "delivered_tokens_estimated": 449616
+      },
+      "rerun_tax": {
+        "operations": 40,
+        "tokens_estimated": 29695,
+        "net_avoided_after_rerun_tax_estimated": 53298,
+        "detection_window_operations": 8
+      },
+      "by_family": [
+        {
+          "family": "read",
+          "route": "raw",
+          "operations": 67,
+          "delivered_tokens_estimated": 393448,
+          "replacement_capability": "unknown"
+        },
+        {
+          "family": "other",
+          "route": "raw",
+          "operations": 481,
+          "delivered_tokens_estimated": 207800,
+          "replacement_capability": "unknown"
+        },
+        {
+          "family": "other",
+          "route": "optimized",
+          "operations": 23,
+          "delivered_tokens_estimated": 62816,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "search",
+          "route": "optimized",
+          "operations": 87,
+          "delivered_tokens_estimated": 47992,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "memory",
+          "route": "optimized",
+          "operations": 22,
+          "delivered_tokens_estimated": 43155,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "codec",
+          "route": "optimized",
+          "operations": 7,
+          "delivered_tokens_estimated": 28779,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "read",
+          "route": "optimized",
+          "operations": 1,
+          "delivered_tokens_estimated": 671,
+          "replacement_capability": "available"
+        }
+      ],
+      "by_command": [
+        {
+          "key": {
+            "family": "search",
+            "operation": "search",
+            "mode": "search_semantic",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt search:semantic/int",
+          "subsystem": "search",
+          "executions": 16,
+          "baseline_tokens_estimated": 121935,
+          "delivered_tokens_estimated": 22512,
+          "gross_avoided_tokens_estimated": 99423,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 99423,
+          "avg_savings_pct": 81.53770451470045,
+          "avg_time_ms": 392
+        },
+        {
+          "key": {
+            "family": "other",
+            "operation": "exec",
+            "mode": "exec_run",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt other>exec:run/int",
+          "subsystem": "execution",
+          "executions": 13,
+          "baseline_tokens_estimated": 16033,
+          "delivered_tokens_estimated": 11850,
+          "gross_avoided_tokens_estimated": 4183,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 4183,
+          "avg_savings_pct": 26.0899394997817,
+          "avg_time_ms": 4148
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_head",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt read:head/int",
+          "subsystem": "read",
+          "executions": 1,
+          "baseline_tokens_estimated": 672,
+          "delivered_tokens_estimated": 671,
+          "gross_avoided_tokens_estimated": 1,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 1,
+          "avg_savings_pct": 0.1488095238095238,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "codec",
+            "operation": "codec",
+            "mode": "codec_compile",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt codec:compile/int",
+          "subsystem": "codec",
+          "executions": 7,
+          "baseline_tokens_estimated": 28779,
+          "delivered_tokens_estimated": 28779,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 12
+        },
+        {
+          "key": {
+            "family": "memory",
+            "operation": "memory",
+            "mode": "memory_recall",
+            "stage": "standalone_delivery",
+            "route": "optimized"
+          },
+          "command": "opt memory:recall/direct",
+          "subsystem": "memory",
+          "executions": 17,
+          "baseline_tokens_estimated": 40446,
+          "delivered_tokens_estimated": 40446,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "memory",
+            "operation": "memory",
+            "mode": "memory_store",
+            "stage": "standalone_delivery",
+            "route": "optimized"
+          },
+          "command": "opt memory:store/direct",
+          "subsystem": "memory",
+          "executions": 5,
+          "baseline_tokens_estimated": 2709,
+          "delivered_tokens_estimated": 2709,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "other",
+            "operation": "context",
+            "mode": "context_plan",
+            "stage": "standalone_delivery",
+            "route": "optimized"
+          },
+          "command": "opt other>context:plan/direct",
+          "subsystem": "execution",
+          "executions": 10,
+          "baseline_tokens_estimated": 50966,
+          "delivered_tokens_estimated": 50966,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "other",
+            "operation": "exec",
+            "mode": "exec_run",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw other>exec:run/int",
+          "subsystem": "bypass",
+          "executions": 453,
+          "baseline_tokens_estimated": 207800,
+          "delivered_tokens_estimated": 207800,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 5344
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_filtered",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw read:filtered/int",
+          "subsystem": "bypass",
+          "executions": 3,
+          "baseline_tokens_estimated": 3800,
+          "delivered_tokens_estimated": 3800,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 4
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_head",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw read:head/int",
+          "subsystem": "bypass",
+          "executions": 15,
+          "baseline_tokens_estimated": 16254,
+          "delivered_tokens_estimated": 16254,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_range",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw read:range/int",
+          "subsystem": "bypass",
+          "executions": 11,
+          "baseline_tokens_estimated": 3256,
+          "delivered_tokens_estimated": 3256,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_tail",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw read:tail/int",
+          "subsystem": "bypass",
+          "executions": 38,
+          "baseline_tokens_estimated": 370138,
+          "delivered_tokens_estimated": 370138,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 1
+        }
+      ],
+      "by_command_total": 13,
+      "by_command_omitted": 1,
+      "by_command_recovery": "hzr stats --json --all --since 7d",
+      "observed_model_usage": {
+        "tasks": 0,
+        "accepted": 0,
+        "actual_input_tokens": 0,
+        "actual_output_tokens": 0,
+        "estimated_input_tokens": 0,
+        "cost_microusd": 0
+      },
+      "observed_model_usage_scope": "global_window",
+      "bypass": {
+        "operations": 548,
+        "total_operations": 688,
+        "operation_share_pct": 79.65116279069767,
+        "delivered_tokens_estimated": 601248,
+        "total_delivered_tokens_estimated": 784661,
+        "token_share_pct": 76.62519228048801,
+        "by_tool": [
+          {
+            "tool": "read",
+            "executions": 67,
+            "delivered_tokens_estimated": 393448,
+            "example_command": "bypassed read <arguments omitted>",
+            "replacement": null,
+            "replacement_capability": "unknown",
+            "rationale": null
+          },
+          {
+            "tool": "other",
+            "executions": 481,
+            "delivered_tokens_estimated": 207800,
+            "example_command": "bypassed other <arguments omitted>",
+            "replacement": null,
+            "replacement_capability": "unknown",
+            "rationale": null
+          }
+        ],
+        "by_tool_total": 2,
+        "by_tool_omitted": 0,
+        "by_tool_recovery": "hzr stats --json --all --since 7d"
+      },
+      "traffic_coverage": {
+        "observability_scope": "observed_channels_only",
+        "completeness": "degraded_rewrite_gap",
+        "complete": false,
+        "accounted_operations": 660,
+        "total_observed_operations": 688,
+        "native_unaccounted_operations": 0,
+        "unmeasured_bypass_operations": 28,
+        "accounted_share_pct": 95.93023255813954,
+        "by_channel": {
+          "hook_cli": 681,
+          "mcp": 7
+        }
+      },
+      "degraded_rewrites": 5137,
+      "coverage": {
+        "unreconciled_rewrites": 5137,
+        "lifetime_rewrites": 5916,
+        "daemon_unavailable_operations": 723,
+        "complete": false,
+        "live_complete": false,
+        "historical_complete": false,
+        "open_intervals": 2,
+        "closed_intervals": 572,
+        "last_degraded_at_unix": 1788551058,
+        "gap_started_at_unix": 1787875502,
+        "last_recovered_at_unix": 1788551041,
+        "open_gap_seconds": 675557,
+        "closed_gap_seconds": 6032,
+        "hook_missing_operations": 0,
+        "cli_missing_operations": 0,
+        "mcp_missing_operations": 0,
+        "fork_producer_missing_operations": 5856
+      },
+      "runtime_accounting_complete": false,
+      "economic_claim_ready": false,
+      "raw_public_estimate_unavailable_reason": "potential pricing is disabled because one or more operation hosts have no validated visible-output cap; raw byte estimates are upper bounds",
+      "economics": {
+        "rows": [
+          {
+            "scope": "this project",
+            "scope_resolved": true,
+            "avoided_input_tokens_estimated": 80099,
+            "billed_receipts": 0,
+            "notes": [
+              "no paired provider receipt is attributed to this project"
+            ]
+          },
+          {
+            "scope": "global lifetime",
+            "scope_resolved": true,
+            "avoided_input_tokens_estimated": 82993,
+            "billed_receipts": 0,
+            "notes": [
+              "no paired provider receipt is attributed to the global ledger"
+            ]
+          }
+        ],
+        "unavailable_reason": "potential pricing is disabled because one or more operation hosts have no validated visible-output cap; raw byte estimates are upper bounds",
+        "enable_steps": [
+          "1. `hzr billing catalog` — find the exact harness/provider/model/method row",
+          "2. set [billing] public_estimate_enabled = true in the HZR config",
+          "3. set [billing] harness, provider, model, method and pricing_basis to that exact row"
+        ]
+      },
+      "zero_reduction_cause": "not_zero",
+      "notes": [
+        "direct savings are estimated from before/after output size and never mixed with provider usage",
+        "read, write, rgai/search, and command filters share the same HZR-owned ledger scope",
+        "a bypassed operation delivers as many tokens as it consumed, so it cancels out of the reduction ratio instead of lowering it",
+        "context selection, memory recall, and response contracts receive no savings credit without a measured counterfactual",
+        "accounting completeness applies only to observed channels; a host-native tool without an installed observer is outside the denominator",
+        "provider usage is limited to receipts in the same requested time window",
+        "degraded-hook accounting coverage remains process-local and is not project- or time-window-filtered"
+      ]
+    },
+    "hzr": {
+      "hzr_version": "0.7.1",
+      "scope": "project sha256:91512d7d10c9cf4f9272dece97ff05a88df8acdd80786bc1ccbc8737e3915f12 since 7d",
+      "direct_savings": {
+        "operations": 391,
+        "input_tokens_estimated": 637076,
+        "delivered_tokens_estimated": 556977,
+        "gross_avoided_tokens_estimated": 99836,
+        "regression_tokens_estimated": 19737,
+        "net_avoided_tokens_estimated": 80099,
+        "reduction_pct": 12.572911238219616,
+        "total_execution_ms": 2088874,
+        "measurement": "estimated_utf8_bytes_div_4_v1"
+      },
+      "host_visible_savings": {
+        "operations": 391,
+        "baseline_tokens_estimated": 637076,
+        "delivered_tokens_estimated": 556977,
+        "net_avoided_tokens_estimated": 80099,
+        "reduction_pct": 12.572911238219616,
+        "uncapped_operations": 391,
+        "complete": false,
+        "method": "known_host_visible_caps_v1; claude-code=512 tokens; unknown hosts remain raw upper bounds"
+      },
+      "by_subsystem": [
+        {
+          "subsystem": "search",
+          "operations": 83,
+          "gross_avoided_tokens_estimated": 96787,
+          "regression_tokens_estimated": 19737,
+          "net_avoided_tokens_estimated": 77050,
+          "share_pct": 96.19346059251676
+        },
+        {
+          "subsystem": "execution",
+          "operations": 17,
+          "gross_avoided_tokens_estimated": 3049,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 3049,
+          "share_pct": 3.8065394074832395
+        },
+        {
+          "subsystem": "bypass",
+          "operations": 277,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "share_pct": 0
+        },
+        {
+          "subsystem": "codec",
+          "operations": 2,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "share_pct": 0
+        },
+        {
+          "subsystem": "memory",
+          "operations": 12,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "share_pct": 0
+        }
+      ],
+      "by_mode": [
+        {
+          "operation": "codec",
+          "mode": "codec_compile",
+          "stage": "internal_transport",
+          "operations": 2,
+          "delivered_tokens_estimated": 3336
+        },
+        {
+          "operation": "context",
+          "mode": "context_plan",
+          "stage": "standalone_delivery",
+          "operations": 6,
+          "delivered_tokens_estimated": 32009
+        },
+        {
+          "operation": "exec",
+          "mode": "exec_run",
+          "stage": "internal_transport",
+          "operations": 268,
+          "delivered_tokens_estimated": 87341
+        },
+        {
+          "operation": "memory",
+          "mode": "memory_recall",
+          "stage": "standalone_delivery",
+          "operations": 11,
+          "delivered_tokens_estimated": 29077
+        },
+        {
+          "operation": "memory",
+          "mode": "memory_store",
+          "stage": "standalone_delivery",
+          "operations": 1,
+          "delivered_tokens_estimated": 631
+        },
+        {
+          "operation": "read",
+          "mode": "read_head",
+          "stage": "internal_transport",
+          "operations": 1,
+          "delivered_tokens_estimated": 101
+        },
+        {
+          "operation": "read",
+          "mode": "read_tail",
+          "stage": "internal_transport",
+          "operations": 37,
+          "delivered_tokens_estimated": 360069
+        },
+        {
+          "operation": "search",
+          "mode": "search_exact",
+          "stage": "final_delivery",
+          "operations": 215,
+          "delivered_tokens_estimated": 39842
+        },
+        {
+          "operation": "search",
+          "mode": "search_exact",
+          "stage": "internal_transport",
+          "operations": 68,
+          "delivered_tokens_estimated": 24322
+        },
+        {
+          "operation": "search",
+          "mode": "search_semantic",
+          "stage": "final_delivery",
+          "operations": 55,
+          "delivered_tokens_estimated": 44147
+        },
+        {
+          "operation": "search",
+          "mode": "search_semantic",
+          "stage": "internal_transport",
+          "operations": 15,
+          "delivered_tokens_estimated": 20091
+        },
+        {
+          "operation": "write",
+          "mode": "write",
+          "stage": "final_delivery",
+          "operations": 5,
+          "delivered_tokens_estimated": 45741
+        }
+      ],
+      "read_pipeline": {
+        "operations": 0,
+        "source_tokens_estimated": 0,
+        "selected_tokens_estimated": 0,
+        "delivered_tokens_estimated": 0,
+        "selection_avoided_tokens_estimated": 0,
+        "selection_overhead_tokens_estimated": 0,
+        "transform_avoided_tokens_estimated": 0,
+        "transform_overhead_tokens_estimated": 0
+      },
+      "accounting_version_scope": "typed_v2_plus_aggregate_compatible_v1",
+      "accounting_policy_version": "privacy_typed_v2",
+      "excluded_legacy_operations": 0,
+      "stage_exclusion": {
+        "operations": 275,
+        "delivered_tokens_estimated": 129730
+      },
+      "rerun_tax": {
+        "operations": 24,
+        "tokens_estimated": 5672,
+        "net_avoided_after_rerun_tax_estimated": 74427,
+        "detection_window_operations": 8
+      },
+      "by_family": [
+        {
+          "family": "read",
+          "route": "raw",
+          "operations": 38,
+          "delivered_tokens_estimated": 360170,
+          "replacement_capability": "unknown"
+        },
+        {
+          "family": "other",
+          "route": "raw",
+          "operations": 257,
+          "delivered_tokens_estimated": 77637,
+          "replacement_capability": "unknown"
+        },
+        {
+          "family": "search",
+          "route": "optimized",
+          "operations": 83,
+          "delivered_tokens_estimated": 44413,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "other",
+          "route": "optimized",
+          "operations": 17,
+          "delivered_tokens_estimated": 41713,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "memory",
+          "route": "optimized",
+          "operations": 12,
+          "delivered_tokens_estimated": 29708,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "codec",
+          "route": "optimized",
+          "operations": 2,
+          "delivered_tokens_estimated": 3336,
+          "replacement_capability": "available"
+        }
+      ],
+      "by_command": [
+        {
+          "key": {
+            "family": "search",
+            "operation": "search",
+            "mode": "search_semantic",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt search:semantic/int",
+          "subsystem": "search",
+          "executions": 15,
+          "baseline_tokens_estimated": 116878,
+          "delivered_tokens_estimated": 20091,
+          "gross_avoided_tokens_estimated": 96787,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 96787,
+          "avg_savings_pct": 82.81028080562638,
+          "avg_time_ms": 371
+        },
+        {
+          "key": {
+            "family": "other",
+            "operation": "exec",
+            "mode": "exec_run",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt other>exec:run/int",
+          "subsystem": "execution",
+          "executions": 11,
+          "baseline_tokens_estimated": 12753,
+          "delivered_tokens_estimated": 9704,
+          "gross_avoided_tokens_estimated": 3049,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 3049,
+          "avg_savings_pct": 23.908100054889047,
+          "avg_time_ms": 4900
+        },
+        {
+          "key": {
+            "family": "codec",
+            "operation": "codec",
+            "mode": "codec_compile",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt codec:compile/int",
+          "subsystem": "codec",
+          "executions": 2,
+          "baseline_tokens_estimated": 3336,
+          "delivered_tokens_estimated": 3336,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 5
+        },
+        {
+          "key": {
+            "family": "memory",
+            "operation": "memory",
+            "mode": "memory_recall",
+            "stage": "standalone_delivery",
+            "route": "optimized"
+          },
+          "command": "opt memory:recall/direct",
+          "subsystem": "memory",
+          "executions": 11,
+          "baseline_tokens_estimated": 29077,
+          "delivered_tokens_estimated": 29077,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "memory",
+            "operation": "memory",
+            "mode": "memory_store",
+            "stage": "standalone_delivery",
+            "route": "optimized"
+          },
+          "command": "opt memory:store/direct",
+          "subsystem": "memory",
+          "executions": 1,
+          "baseline_tokens_estimated": 631,
+          "delivered_tokens_estimated": 631,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "other",
+            "operation": "context",
+            "mode": "context_plan",
+            "stage": "standalone_delivery",
+            "route": "optimized"
+          },
+          "command": "opt other>context:plan/direct",
+          "subsystem": "execution",
+          "executions": 6,
+          "baseline_tokens_estimated": 32009,
+          "delivered_tokens_estimated": 32009,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "other",
+            "operation": "exec",
+            "mode": "exec_run",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw other>exec:run/int",
+          "subsystem": "bypass",
+          "executions": 239,
+          "baseline_tokens_estimated": 77637,
+          "delivered_tokens_estimated": 77637,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 8481
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_head",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw read:head/int",
+          "subsystem": "bypass",
+          "executions": 1,
+          "baseline_tokens_estimated": 101,
+          "delivered_tokens_estimated": 101,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 1
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_tail",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw read:tail/int",
+          "subsystem": "bypass",
+          "executions": 37,
+          "baseline_tokens_estimated": 360069,
+          "delivered_tokens_estimated": 360069,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 1
+        },
+        {
+          "key": {
+            "family": "search",
+            "operation": "search",
+            "mode": "search_exact",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt search:exact/int",
+          "subsystem": "search",
+          "executions": 68,
+          "baseline_tokens_estimated": 4585,
+          "delivered_tokens_estimated": 24322,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 19737,
+          "net_avoided_tokens_estimated": -19737,
+          "avg_savings_pct": -430.4689203925845,
+          "avg_time_ms": 31
+        }
+      ],
+      "by_command_total": 10,
+      "by_command_omitted": 0,
+      "by_command_recovery": "hzr stats --json --all --workspace <workspace> --since 7d",
+      "observed_model_usage": {
+        "tasks": 0,
+        "accepted": 0,
+        "actual_input_tokens": 0,
+        "actual_output_tokens": 0,
+        "estimated_input_tokens": 0,
+        "cost_microusd": 0
+      },
+      "observed_model_usage_scope": "project_matched_window",
+      "bypass": {
+        "operations": 295,
+        "total_operations": 409,
+        "operation_share_pct": 72.12713936430318,
+        "delivered_tokens_estimated": 437807,
+        "total_delivered_tokens_estimated": 556977,
+        "token_share_pct": 78.604143438598,
+        "by_tool": [
+          {
+            "tool": "read",
+            "executions": 38,
+            "delivered_tokens_estimated": 360170,
+            "example_command": "bypassed read <arguments omitted>",
+            "replacement": null,
+            "replacement_capability": "unknown",
+            "rationale": null
+          },
+          {
+            "tool": "other",
+            "executions": 257,
+            "delivered_tokens_estimated": 77637,
+            "example_command": "bypassed other <arguments omitted>",
+            "replacement": null,
+            "replacement_capability": "unknown",
+            "rationale": null
+          }
+        ],
+        "by_tool_total": 2,
+        "by_tool_omitted": 0,
+        "by_tool_recovery": "hzr stats --json --all --workspace <workspace> --since 7d"
+      },
+      "traffic_coverage": {
+        "observability_scope": "observed_channels_only",
+        "completeness": "degraded_rewrite_gap",
+        "complete": false,
+        "accounted_operations": 391,
+        "total_observed_operations": 409,
+        "native_unaccounted_operations": 0,
+        "unmeasured_bypass_operations": 18,
+        "accounted_share_pct": 95.59902200488997,
+        "by_channel": {
+          "hook_cli": 407,
+          "mcp": 2
+        }
+      },
+      "degraded_rewrites": 5137,
+      "coverage": {
+        "unreconciled_rewrites": 5137,
+        "lifetime_rewrites": 5916,
+        "daemon_unavailable_operations": 723,
+        "complete": false,
+        "live_complete": false,
+        "historical_complete": false,
+        "open_intervals": 2,
+        "closed_intervals": 572,
+        "last_degraded_at_unix": 1788551058,
+        "gap_started_at_unix": 1787875502,
+        "last_recovered_at_unix": 1788551041,
+        "open_gap_seconds": 675557,
+        "closed_gap_seconds": 6032,
+        "hook_missing_operations": 0,
+        "cli_missing_operations": 0,
+        "mcp_missing_operations": 0,
+        "fork_producer_missing_operations": 5856
+      },
+      "runtime_accounting_complete": false,
+      "economic_claim_ready": false,
+      "raw_public_estimate_unavailable_reason": "potential pricing is disabled because one or more operation hosts have no validated visible-output cap; raw byte estimates are upper bounds",
+      "economics": {
+        "rows": [
+          {
+            "scope": "this project",
+            "scope_resolved": true,
+            "avoided_input_tokens_estimated": 80099,
+            "billed_receipts": 0,
+            "notes": [
+              "no paired provider receipt is attributed to this project"
+            ]
+          },
+          {
+            "scope": "global lifetime",
+            "scope_resolved": true,
+            "avoided_input_tokens_estimated": 82993,
+            "billed_receipts": 0,
+            "notes": [
+              "no paired provider receipt is attributed to the global ledger"
+            ]
+          }
+        ],
+        "unavailable_reason": "potential pricing is disabled because one or more operation hosts have no validated visible-output cap; raw byte estimates are upper bounds",
+        "enable_steps": [
+          "1. `hzr billing catalog` — find the exact harness/provider/model/method row",
+          "2. set [billing] public_estimate_enabled = true in the HZR config",
+          "3. set [billing] harness, provider, model, method and pricing_basis to that exact row"
+        ]
+      },
+      "zero_reduction_cause": "not_zero",
+      "notes": [
+        "direct savings are estimated from before/after output size and never mixed with provider usage",
+        "read, write, rgai/search, and command filters share the same HZR-owned ledger scope",
+        "a bypassed operation delivers as many tokens as it consumed, so it cancels out of the reduction ratio instead of lowering it",
+        "context selection, memory recall, and response contracts receive no savings credit without a measured counterfactual",
+        "accounting completeness applies only to observed channels; a host-native tool without an installed observer is outside the denominator",
+        "provider usage is scoped to receipts that carry a matching workspace identity; older unscoped receipts stay in the global lifetime view only",
+        "degraded-hook accounting coverage remains process-local and is not project- or time-window-filtered"
+      ]
+    },
+    "anonymous_bot": {
+      "hzr_version": "0.7.1",
+      "scope": "project sha256:fc1b9c4b38676ced300ef746e6013d84534eac00b0d353dac0e2d5a69fc4e504 since 7d",
+      "direct_savings": {
+        "operations": 269,
+        "input_tokens_estimated": 230578,
+        "delivered_tokens_estimated": 227684,
+        "gross_avoided_tokens_estimated": 3771,
+        "regression_tokens_estimated": 877,
+        "net_avoided_tokens_estimated": 2894,
+        "reduction_pct": 1.2551067317784004,
+        "total_execution_ms": 394979,
+        "measurement": "estimated_utf8_bytes_div_4_v1"
+      },
+      "host_visible_savings": {
+        "operations": 269,
+        "baseline_tokens_estimated": 121367,
+        "delivered_tokens_estimated": 119580,
+        "net_avoided_tokens_estimated": 1787,
+        "reduction_pct": 1.4723936490149712,
+        "uncapped_operations": 23,
+        "complete": false,
+        "method": "known_host_visible_caps_v1; claude-code=512 tokens; unknown hosts remain raw upper bounds"
+      },
+      "by_subsystem": [
+        {
+          "subsystem": "search",
+          "operations": 4,
+          "gross_avoided_tokens_estimated": 2636,
+          "regression_tokens_estimated": 877,
+          "net_avoided_tokens_estimated": 1759,
+          "share_pct": 60.78092605390463
+        },
+        {
+          "subsystem": "execution",
+          "operations": 6,
+          "gross_avoided_tokens_estimated": 1134,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 1134,
+          "share_pct": 39.184519695922596
+        },
+        {
+          "subsystem": "read",
+          "operations": 1,
+          "gross_avoided_tokens_estimated": 1,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 1,
+          "share_pct": 0.03455425017277125
+        },
+        {
+          "subsystem": "bypass",
+          "operations": 243,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "share_pct": 0
+        },
+        {
+          "subsystem": "codec",
+          "operations": 5,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "share_pct": 0
+        },
+        {
+          "subsystem": "memory",
+          "operations": 10,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "share_pct": 0
+        }
+      ],
+      "by_mode": [
+        {
+          "operation": "codec",
+          "mode": "codec_compile",
+          "stage": "internal_transport",
+          "operations": 5,
+          "delivered_tokens_estimated": 25443
+        },
+        {
+          "operation": "context",
+          "mode": "context_plan",
+          "stage": "standalone_delivery",
+          "operations": 4,
+          "delivered_tokens_estimated": 18957
+        },
+        {
+          "operation": "exec",
+          "mode": "exec_run",
+          "stage": "internal_transport",
+          "operations": 226,
+          "delivered_tokens_estimated": 132309
+        },
+        {
+          "operation": "memory",
+          "mode": "memory_recall",
+          "stage": "standalone_delivery",
+          "operations": 6,
+          "delivered_tokens_estimated": 11369
+        },
+        {
+          "operation": "memory",
+          "mode": "memory_store",
+          "stage": "standalone_delivery",
+          "operations": 4,
+          "delivered_tokens_estimated": 2078
+        },
+        {
+          "operation": "read",
+          "mode": "read_filtered",
+          "stage": "internal_transport",
+          "operations": 3,
+          "delivered_tokens_estimated": 3800
+        },
+        {
+          "operation": "read",
+          "mode": "read_head",
+          "stage": "internal_transport",
+          "operations": 15,
+          "delivered_tokens_estimated": 16824
+        },
+        {
+          "operation": "read",
+          "mode": "read_range",
+          "stage": "internal_transport",
+          "operations": 11,
+          "delivered_tokens_estimated": 3256
+        },
+        {
+          "operation": "read",
+          "mode": "read_tail",
+          "stage": "internal_transport",
+          "operations": 1,
+          "delivered_tokens_estimated": 10069
+        },
+        {
+          "operation": "search",
+          "mode": "search_exact",
+          "stage": "final_delivery",
+          "operations": 125,
+          "delivered_tokens_estimated": 45336
+        },
+        {
+          "operation": "search",
+          "mode": "search_exact",
+          "stage": "internal_transport",
+          "operations": 3,
+          "delivered_tokens_estimated": 1158
+        },
+        {
+          "operation": "search",
+          "mode": "search_semantic",
+          "stage": "final_delivery",
+          "operations": 64,
+          "delivered_tokens_estimated": 70327
+        },
+        {
+          "operation": "search",
+          "mode": "search_semantic",
+          "stage": "internal_transport",
+          "operations": 1,
+          "delivered_tokens_estimated": 2421
+        },
+        {
+          "operation": "write",
+          "mode": "write",
+          "stage": "final_delivery",
+          "operations": 31,
+          "delivered_tokens_estimated": 204223
+        }
+      ],
+      "read_pipeline": {
+        "operations": 1,
+        "source_tokens_estimated": 672,
+        "selected_tokens_estimated": 672,
+        "delivered_tokens_estimated": 671,
+        "selection_avoided_tokens_estimated": 0,
+        "selection_overhead_tokens_estimated": 0,
+        "transform_avoided_tokens_estimated": 1,
+        "transform_overhead_tokens_estimated": 0
+      },
+      "accounting_version_scope": "typed_v2_plus_aggregate_compatible_v1",
+      "accounting_policy_version": "privacy_typed_v2",
+      "excluded_legacy_operations": 0,
+      "stage_exclusion": {
+        "operations": 220,
+        "delivered_tokens_estimated": 319886
+      },
+      "rerun_tax": {
+        "operations": 16,
+        "tokens_estimated": 24023,
+        "net_avoided_after_rerun_tax_estimated": -21129,
+        "detection_window_operations": 8
+      },
+      "by_family": [
+        {
+          "family": "other",
+          "route": "raw",
+          "operations": 224,
+          "delivered_tokens_estimated": 130163,
+          "replacement_capability": "unknown"
+        },
+        {
+          "family": "read",
+          "route": "raw",
+          "operations": 29,
+          "delivered_tokens_estimated": 33278,
+          "replacement_capability": "unknown"
+        },
+        {
+          "family": "codec",
+          "route": "optimized",
+          "operations": 5,
+          "delivered_tokens_estimated": 25443,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "other",
+          "route": "optimized",
+          "operations": 6,
+          "delivered_tokens_estimated": 21103,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "memory",
+          "route": "optimized",
+          "operations": 10,
+          "delivered_tokens_estimated": 13447,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "search",
+          "route": "optimized",
+          "operations": 4,
+          "delivered_tokens_estimated": 3579,
+          "replacement_capability": "available"
+        },
+        {
+          "family": "read",
+          "route": "optimized",
+          "operations": 1,
+          "delivered_tokens_estimated": 671,
+          "replacement_capability": "available"
+        }
+      ],
+      "by_command": [
+        {
+          "key": {
+            "family": "search",
+            "operation": "search",
+            "mode": "search_semantic",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt search:semantic/int",
+          "subsystem": "search",
+          "executions": 1,
+          "baseline_tokens_estimated": 5057,
+          "delivered_tokens_estimated": 2421,
+          "gross_avoided_tokens_estimated": 2636,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 2636,
+          "avg_savings_pct": 52.125766264583746,
+          "avg_time_ms": 710
+        },
+        {
+          "key": {
+            "family": "other",
+            "operation": "exec",
+            "mode": "exec_run",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt other>exec:run/int",
+          "subsystem": "execution",
+          "executions": 2,
+          "baseline_tokens_estimated": 3280,
+          "delivered_tokens_estimated": 2146,
+          "gross_avoided_tokens_estimated": 1134,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 1134,
+          "avg_savings_pct": 34.573170731707314,
+          "avg_time_ms": 11
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_head",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt read:head/int",
+          "subsystem": "read",
+          "executions": 1,
+          "baseline_tokens_estimated": 672,
+          "delivered_tokens_estimated": 671,
+          "gross_avoided_tokens_estimated": 1,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 1,
+          "avg_savings_pct": 0.1488095238095238,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "codec",
+            "operation": "codec",
+            "mode": "codec_compile",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt codec:compile/int",
+          "subsystem": "codec",
+          "executions": 5,
+          "baseline_tokens_estimated": 25443,
+          "delivered_tokens_estimated": 25443,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 15
+        },
+        {
+          "key": {
+            "family": "memory",
+            "operation": "memory",
+            "mode": "memory_recall",
+            "stage": "standalone_delivery",
+            "route": "optimized"
+          },
+          "command": "opt memory:recall/direct",
+          "subsystem": "memory",
+          "executions": 6,
+          "baseline_tokens_estimated": 11369,
+          "delivered_tokens_estimated": 11369,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "memory",
+            "operation": "memory",
+            "mode": "memory_store",
+            "stage": "standalone_delivery",
+            "route": "optimized"
+          },
+          "command": "opt memory:store/direct",
+          "subsystem": "memory",
+          "executions": 4,
+          "baseline_tokens_estimated": 2078,
+          "delivered_tokens_estimated": 2078,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "other",
+            "operation": "context",
+            "mode": "context_plan",
+            "stage": "standalone_delivery",
+            "route": "optimized"
+          },
+          "command": "opt other>context:plan/direct",
+          "subsystem": "execution",
+          "executions": 4,
+          "baseline_tokens_estimated": 18957,
+          "delivered_tokens_estimated": 18957,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "other",
+            "operation": "exec",
+            "mode": "exec_run",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw other>exec:run/int",
+          "subsystem": "bypass",
+          "executions": 214,
+          "baseline_tokens_estimated": 130163,
+          "delivered_tokens_estimated": 130163,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 1839
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_filtered",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw read:filtered/int",
+          "subsystem": "bypass",
+          "executions": 3,
+          "baseline_tokens_estimated": 3800,
+          "delivered_tokens_estimated": 3800,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 4
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_head",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw read:head/int",
+          "subsystem": "bypass",
+          "executions": 14,
+          "baseline_tokens_estimated": 16153,
+          "delivered_tokens_estimated": 16153,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_range",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw read:range/int",
+          "subsystem": "bypass",
+          "executions": 11,
+          "baseline_tokens_estimated": 3256,
+          "delivered_tokens_estimated": 3256,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "read",
+            "operation": "read",
+            "mode": "read_tail",
+            "stage": "internal_transport",
+            "route": "raw"
+          },
+          "command": "raw read:tail/int",
+          "subsystem": "bypass",
+          "executions": 1,
+          "baseline_tokens_estimated": 10069,
+          "delivered_tokens_estimated": 10069,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 0,
+          "net_avoided_tokens_estimated": 0,
+          "avg_savings_pct": 0,
+          "avg_time_ms": 0
+        },
+        {
+          "key": {
+            "family": "search",
+            "operation": "search",
+            "mode": "search_exact",
+            "stage": "internal_transport",
+            "route": "optimized"
+          },
+          "command": "opt search:exact/int",
+          "subsystem": "search",
+          "executions": 3,
+          "baseline_tokens_estimated": 281,
+          "delivered_tokens_estimated": 1158,
+          "gross_avoided_tokens_estimated": 0,
+          "regression_tokens_estimated": 877,
+          "net_avoided_tokens_estimated": -877,
+          "avg_savings_pct": -312.0996441281139,
+          "avg_time_ms": 156
+        }
+      ],
+      "by_command_total": 13,
+      "by_command_omitted": 0,
+      "by_command_recovery": "hzr stats --json --all --workspace <workspace> --since 7d",
+      "observed_model_usage": {
+        "tasks": 0,
+        "accepted": 0,
+        "actual_input_tokens": 0,
+        "actual_output_tokens": 0,
+        "estimated_input_tokens": 0,
+        "cost_microusd": 0
+      },
+      "observed_model_usage_scope": "project_matched_window",
+      "bypass": {
+        "operations": 253,
+        "total_operations": 279,
+        "operation_share_pct": 90.68100358422939,
+        "delivered_tokens_estimated": 163441,
+        "total_delivered_tokens_estimated": 227684,
+        "token_share_pct": 71.78413942130321,
+        "by_tool": [
+          {
+            "tool": "other",
+            "executions": 224,
+            "delivered_tokens_estimated": 130163,
+            "example_command": "bypassed other <arguments omitted>",
+            "replacement": null,
+            "replacement_capability": "unknown",
+            "rationale": null
+          },
+          {
+            "tool": "read",
+            "executions": 29,
+            "delivered_tokens_estimated": 33278,
+            "example_command": "bypassed read <arguments omitted>",
+            "replacement": null,
+            "replacement_capability": "unknown",
+            "rationale": null
+          }
+        ],
+        "by_tool_total": 2,
+        "by_tool_omitted": 0,
+        "by_tool_recovery": "hzr stats --json --all --workspace <workspace> --since 7d"
+      },
+      "traffic_coverage": {
+        "observability_scope": "observed_channels_only",
+        "completeness": "degraded_rewrite_gap",
+        "complete": false,
+        "accounted_operations": 269,
+        "total_observed_operations": 279,
+        "native_unaccounted_operations": 0,
+        "unmeasured_bypass_operations": 10,
+        "accounted_share_pct": 96.415770609319,
+        "by_channel": {
+          "hook_cli": 274,
+          "mcp": 5
+        }
+      },
+      "degraded_rewrites": 5295,
+      "coverage": {
+        "unreconciled_rewrites": 5295,
+        "lifetime_rewrites": 6163,
+        "daemon_unavailable_operations": 809,
+        "complete": false,
+        "live_complete": false,
+        "historical_complete": false,
+        "open_intervals": 2,
+        "closed_intervals": 615,
+        "last_degraded_at_unix": 1788551636,
+        "gap_started_at_unix": 1787875502,
+        "last_recovered_at_unix": 1788551601,
+        "open_gap_seconds": 676134,
+        "closed_gap_seconds": 6076,
+        "hook_missing_operations": 0,
+        "cli_missing_operations": 0,
+        "mcp_missing_operations": 0,
+        "fork_producer_missing_operations": 6103
+      },
+      "runtime_accounting_complete": false,
+      "economic_claim_ready": false,
+      "raw_public_estimate_unavailable_reason": "potential pricing is disabled because one or more operation hosts have no validated visible-output cap; raw byte estimates are upper bounds",
+      "economics": {
+        "rows": [
+          {
+            "scope": "this project",
+            "scope_resolved": true,
+            "avoided_input_tokens_estimated": 2894,
+            "billed_receipts": 0,
+            "notes": [
+              "no paired provider receipt is attributed to this project"
+            ]
+          },
+          {
+            "scope": "global lifetime",
+            "scope_resolved": true,
+            "avoided_input_tokens_estimated": 104555,
+            "billed_receipts": 0,
+            "notes": [
+              "no paired provider receipt is attributed to the global ledger"
+            ]
+          }
+        ],
+        "unavailable_reason": "potential pricing is disabled because one or more operation hosts have no validated visible-output cap; raw byte estimates are upper bounds",
+        "enable_steps": [
+          "1. `hzr billing catalog` — find the exact harness/provider/model/method row",
+          "2. set [billing] public_estimate_enabled = true in the HZR config",
+          "3. set [billing] harness, provider, model, method and pricing_basis to that exact row"
+        ]
+      },
+      "zero_reduction_cause": "not_zero",
+      "notes": [
+        "direct savings are estimated from before/after output size and never mixed with provider usage",
+        "read, write, rgai/search, and command filters share the same HZR-owned ledger scope",
+        "a bypassed operation delivers as many tokens as it consumed, so it cancels out of the reduction ratio instead of lowering it",
+        "context selection, memory recall, and response contracts receive no savings credit without a measured counterfactual",
+        "accounting completeness applies only to observed channels; a host-native tool without an installed observer is outside the denominator",
+        "provider usage is scoped to receipts that carry a matching workspace identity; older unscoped receipts stay in the global lifetime view only",
+        "degraded-hook accounting coverage remains process-local and is not project- or time-window-filtered"
+      ]
+    }
+  },
+  "limitations": [
+    "85 existing registered workspaces, 9 missing registered roots; no host-native unobserved traffic denominator",
+    "No raw command argv, paths, output contents, per-host breakdown, timestamps, model acceptance, or billed receipts in stats export",
+    "Deleted workspace --workspace rejected invalid directory; stats grouping by project/host unavailable",
+    "Audit invokes tools and can increase HZR observations; frozen totals used"
+  ]
+}

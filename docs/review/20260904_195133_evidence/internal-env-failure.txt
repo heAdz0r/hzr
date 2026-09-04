@@ -1,0 +1,10 @@
+Command: cargo test --manifest-path fork-core/rtk/Cargo.toml --test internal_env (inside hzr exec run)
+running 2 tests
+test internal_evasion_metadata_is_not_inherited_by_native_children ... ok
+test host_grant_marker_is_consumed_and_persisted_on_the_operation ... FAILED
+Location: tests/internal_env.rs:46:10
+persisted host grant marker: SqliteFailure(Error { code: Unknown, extended_code: 1 }, Some("no such table: commands"))
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+error: test failed, to rerun pass --test internal_env
+This is a bounded transcription of the captured diagnostic, with irrelevant compiler warnings and thread identifier omitted.
+

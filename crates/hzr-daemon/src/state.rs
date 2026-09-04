@@ -34,6 +34,8 @@ pub struct AppState {
     pub rtk: Arc<PinnedRtkAdapter>,
     pub executor: ExecutionPipeline,
     pub ledger: LedgerWriter,
+    pub(crate) exec_jobs: crate::exec_jobs::ExecJobs,
+    pub(crate) read_costs: crate::read_cost::ReadCosts,
 }
 
 #[derive(Clone, Debug)]
@@ -146,7 +148,11 @@ impl AppState {
             "daemon_ready",
             None,
         );
+        let exec_jobs =
+            crate::exec_jobs::ExecJobs::new(&config.data_dir).map_err(DaemonError::Io)?;
         Ok(Self {
+            exec_jobs,
+            read_costs: crate::read_cost::ReadCosts::default(),
             config: Arc::new(config),
             started_at,
             approvals: ApprovalStore::default(),
@@ -245,6 +251,7 @@ async fn supervise_memory(
                     None,
                 );
                 let mut stable_polls = 0_u32;
+                let mut failed_polls = 0_u32;
                 loop {
                     tokio::time::sleep(policy.health_poll).await;
                     if stop.load(Ordering::Acquire) {
@@ -252,12 +259,23 @@ async fn supervise_memory(
                     }
                     match memory.status().await {
                         ServiceStatus::Running { .. } | ServiceStatus::Attached { .. } => {
+                            failed_polls = 0;
                             stable_polls = stable_polls.saturating_add(1);
                             if stable_polls >= policy.stable_health_polls {
                                 consecutive_failures = 0;
                             }
                         }
                         status => {
+                            if matches!(status, ServiceStatus::Unready { pid: Some(_), .. }) {
+                                stable_polls = 0;
+                                failed_polls = failed_polls.saturating_add(1);
+                                if failed_polls < 3 {
+                                    continue;
+                                }
+                                if let Err(error) = memory.stop_unready_owned().await {
+                                    tracing::warn!(%error, "unable to stop unready owned ICM");
+                                }
+                            }
                             consecutive_failures = consecutive_failures.saturating_add(1);
                             let delay = policy.backoff(consecutive_failures);
                             record_memory_degraded(
@@ -540,6 +558,108 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(80)).await;
         assert_eq!(start_count(&starts), starts_at_stop);
         assert!(matches!(memory.stop().await?, StopOutcome::AlreadyStopped));
+        server.abort();
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn memory_supervision_replaces_alive_unready_child()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new()?;
+        let starts = temp.path().join("starts-hung");
+        let executable = temp.path().join("fake-unready-icm");
+        std::fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'icm 0.10.61'; exit 0; fi\nprintf 'x\\n' >> '{}'\nexec sleep 60\n",
+                starts.display(),
+            ),
+        )?;
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))?;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let unhealthy = Arc::new(AtomicBool::new(false));
+        let failures = Arc::new(AtomicUsize::new(0));
+        let health_flag = Arc::clone(&unhealthy);
+        let health_failures = Arc::clone(&failures);
+        let health_starts = starts.clone();
+        let application = Router::new()
+            .route(
+                "/health",
+                get(move || {
+                    let flag = Arc::clone(&health_flag);
+                    let failures = Arc::clone(&health_failures);
+                    let starts = health_starts.clone();
+                    async move {
+                        let status = if flag.load(Ordering::Acquire) && start_count(&starts) == 1 {
+                            failures.fetch_add(1, Ordering::AcqRel);
+                            axum::http::StatusCode::SERVICE_UNAVAILABLE
+                        } else {
+                            axum::http::StatusCode::OK
+                        };
+                        (status, Json(json!({"status":"ok","has_embedder":false})))
+                    }
+                }),
+            )
+            .route(
+                "/stats",
+                get(|| async {
+                    Json(json!({"total_memories":0,"total_topics":0,"avg_weight":0.0}))
+                }),
+            );
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, application).await;
+        });
+        let mut config = IcmConfig::from_data_root(executable, temp.path());
+        config.bind_addr = address;
+        config.transport = IcmTransport::Http;
+        config.cli_fallback = false;
+        config.request_timeout = Duration::from_millis(100);
+        config.startup_timeout = Duration::from_secs(3);
+        config.shutdown_timeout = Duration::from_secs(1);
+        let memory = Arc::new(IcmSupervisor::new(config)?);
+        let state = Arc::new(RwLock::new(MemoryStartState::Starting));
+        let stop = Arc::new(AtomicBool::new(false));
+        let task = tokio::spawn(supervise_memory(
+            Arc::clone(&memory),
+            Arc::clone(&state),
+            Arc::clone(&stop),
+            crate::observability::ObservabilityStore::new(
+                hzr_core::PrivacyPseudonymizer::from_key("22".repeat(32))?,
+            ),
+            MemoryRecoveryPolicy {
+                health_poll: Duration::from_millis(20),
+                stable_health_polls: 5,
+                initial_backoff: Duration::from_millis(20),
+                max_backoff: Duration::from_millis(40),
+            },
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !matches!(&*state.read().await, MemoryStartState::Ready(_)) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        unhealthy.store(true, Ordering::Release);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while start_count(&starts) != 2
+                || !matches!(&*state.read().await, MemoryStartState::Ready(_))
+            {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        assert!(
+            failures.load(Ordering::Acquire) >= 3,
+            "transient failures must not trigger an immediate restart"
+        );
+        stop.store(true, Ordering::Release);
+        assert_eq!(memory.stop().await?, StopOutcome::Stopped);
+        tokio::time::timeout(Duration::from_secs(1), task).await??;
+        assert_eq!(start_count(&starts), 2);
         server.abort();
         Ok(())
     }

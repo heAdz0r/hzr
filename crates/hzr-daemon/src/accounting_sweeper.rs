@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use hzr_core::{AccountingCoverageStore, AccountingReceiptContextStore};
 use hzr_exec::{AccountingDrainStatus, acknowledge_accounting, drain_accounting};
@@ -8,6 +8,7 @@ use hzr_protocol::AccountingChannel;
 
 use crate::AppState;
 
+#[cfg(test)]
 const ABANDONED_CONTEXT_TTL_SECS: u64 = 24 * 60 * 60;
 
 pub fn register(
@@ -16,13 +17,14 @@ pub fn register(
     project_path: &Path,
     agent: Option<&str>,
     session_id: Option<&str>,
+    channel: AccountingChannel,
 ) -> Result<(), String> {
     let runner = state.rtk.runner().map_err(|error| error.to_string())?;
     runner
         .accounting_handle(correlation_id)
         .map_err(|error| error.to_string())?;
     AccountingReceiptContextStore::new(&state.config.data_dir)
-        .register(correlation_id, project_path, agent, session_id)
+        .register_with_channel(correlation_id, project_path, agent, session_id, channel)
         .map_err(|error| error.to_string())
 }
 
@@ -34,55 +36,94 @@ pub async fn sweep_once(state: &AppState) -> Result<usize, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(error) => return Err(error.to_string()),
     };
-    let mut committed = 0;
-    for path in entries
+    let mut paths = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| AccountingReceiptContextStore::is_context_path(path))
-    {
-        let context = contexts.read(&path).map_err(|error| error.to_string())?;
-        let runner = state.rtk.runner().map_err(|error| error.to_string())?;
-        let handle = runner
-            .accounting_handle(&context.correlation_id)
-            .map_err(|error| error.to_string())?;
-        let drained = drain_accounting(&handle).map_err(|error| error.to_string())?;
-        let batch_id = match &drained.status {
-            AccountingDrainStatus::Empty
-                if unix_now().saturating_sub(context.registered_at_unix)
-                    >= ABANDONED_CONTEXT_TTL_SECS =>
-            {
-                fs::remove_file(&path).map_err(|error| error.to_string())?;
-                AccountingCoverageStore::new(&state.config.data_dir)
-                    .recover(context.gap_event())
-                    .map_err(|error| error.to_string())?;
-                continue;
+        .collect::<Vec<_>>();
+    paths.sort();
+    let mut committed = 0;
+    for path in paths {
+        match sweep_context(state, &contexts, &path).await {
+            Ok(count) => committed += count,
+            Err(error) => {
+                let context = contexts.read(&path);
+                let event = context.as_ref().map_or_else(
+                    |_| hzr_core::AccountingGapEvent {
+                        surface: hzr_core::AccountingGapSurface::ForkProducer,
+                        workspace_hash: None,
+                        session_hash: None,
+                        operation_family: Some("invalid_accounting_context".into()),
+                        at_unix: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            .max(1),
+                    },
+                    |context| context.gap_event(),
+                );
+                let recorded =
+                    AccountingCoverageStore::new(&state.config.data_dir).ensure_missing(event);
+                if let Err(recording_error) = &recorded {
+                    tracing::error!(%recording_error, "accounting failure could not be recorded");
+                }
+                if context.is_err() && recorded.is_ok() {
+                    // Invalid identity cannot be attributed safely. Preserve it for inspection.
+                    let quarantine = path.with_extension("invalid");
+                    if !quarantine.exists() {
+                        if let Err(error) = fs::rename(&path, &quarantine) {
+                            tracing::warn!(%error, "accounting context quarantine failed");
+                        }
+                    }
+                }
+                tracing::warn!(%error, context_path = %path.display(), "isolated accounting context failure");
             }
-            AccountingDrainStatus::Empty => continue,
-            AccountingDrainStatus::Ready { batch_id } if drained.failures.is_empty() => batch_id,
-            AccountingDrainStatus::Ready { .. } | AccountingDrainStatus::Rejected { .. } => {
-                continue;
-            }
-        };
-        for receipt in drained.receipts {
-            state
-                .ledger
-                .record_engine_receipt(
-                    receipt,
-                    context.project_path.clone(),
-                    context.agent.clone(),
-                    context.session_id.clone(),
-                    AccountingChannel::HookCli,
-                )
-                .await
-                .map_err(|error| error.to_string())?;
-            committed += 1;
         }
-        acknowledge_accounting(&handle, batch_id).map_err(|error| error.to_string())?;
-        fs::remove_file(&path).map_err(|error| error.to_string())?;
-        AccountingCoverageStore::new(&state.config.data_dir)
-            .recover(context.gap_event())
-            .map_err(|error| error.to_string())?;
     }
+    Ok(committed)
+}
+
+async fn sweep_context(
+    state: &AppState,
+    contexts: &AccountingReceiptContextStore,
+    path: &Path,
+) -> Result<usize, String> {
+    let context = contexts.read(path).map_err(|error| error.to_string())?;
+    let runner = state.rtk.runner().map_err(|error| error.to_string())?;
+    let handle = runner
+        .accounting_handle(&context.correlation_id)
+        .map_err(|error| error.to_string())?;
+    let drained = drain_accounting(&handle).map_err(|error| error.to_string())?;
+    let batch_id = match &drained.status {
+        AccountingDrainStatus::Empty if context.completed_at_unix.is_some() => {
+            fs::remove_file(path).map_err(|error| error.to_string())?;
+            return Ok(0);
+        }
+        AccountingDrainStatus::Empty => return Ok(0),
+        AccountingDrainStatus::Ready { batch_id } if drained.failures.is_empty() => batch_id,
+        AccountingDrainStatus::Ready { .. } | AccountingDrainStatus::Rejected { .. } => {
+            return Err("accounting batch is rejected or contains producer failures".into());
+        }
+    };
+    let mut committed = 0;
+    for receipt in drained.receipts {
+        state
+            .ledger
+            .record_engine_receipt(
+                receipt,
+                context.project_path.clone(),
+                context.agent.clone(),
+                context.session_id.clone(),
+                context.channel,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        committed += 1;
+    }
+    acknowledge_accounting(&handle, batch_id).map_err(|error| error.to_string())?;
+    AccountingCoverageStore::new(&state.config.data_dir)
+        .recover(context.gap_event())
+        .map_err(|error| error.to_string())?;
     Ok(committed)
 }
 
@@ -93,14 +134,6 @@ pub async fn run(state: AppState) {
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-}
-
-fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .max(1)
 }
 
 #[cfg(test)]
@@ -172,6 +205,7 @@ exit 64
             &project,
             Some("claude-code"),
             Some("s1"),
+            hzr_protocol::AccountingChannel::Mcp,
         )
         .expect("registration");
         let paths = ForkRuntimePaths::from_data_root(&state.config.data_dir);
@@ -219,19 +253,62 @@ exit 64
         )
         .expect("receipt journal");
 
+        let malformed = state
+            .config
+            .data_dir
+            .join("fork/accounting-context-00000000000000000000000000000000.json");
+        fs::write(&malformed, b"{broken").expect("bad context before valid context");
         assert_eq!(sweep_once(&state).await.expect("sweep"), 1);
+        assert!(
+            malformed.with_extension("invalid").exists(),
+            "invalid context preserved"
+        );
         assert!(!journal.exists());
         assert!(
-            AccountingCoverageStore::new(&state.config.data_dir)
+            AccountingReceiptContextStore::new(&state.config.data_dir)
+                .context_path(correlation_id)
+                .exists()
+        );
+        assert_eq!(sweep_once(&state).await.expect("empty replay"), 0);
+        let mut later = receipt.clone();
+        later.sequence = 2;
+        fs::write(
+            &journal,
+            format!("{}\n", serde_json::to_string(&later).expect("late receipt")),
+        )
+        .expect("late journal");
+        assert_eq!(sweep_once(&state).await.expect("later producer batch"), 1);
+        assert_eq!(sweep_once(&state).await.expect("second replay"), 0);
+        let contexts = AccountingReceiptContextStore::new(&state.config.data_dir);
+        assert_eq!(
+            contexts
+                .read(&contexts.context_path(correlation_id))
+                .expect("valid receipt fixture")
+                .channel,
+            hzr_protocol::AccountingChannel::Mcp
+        );
+        contexts
+            .complete(correlation_id)
+            .expect("producer finished all batches");
+        assert_eq!(
+            sweep_once(&state)
+                .await
+                .expect("completed producer retirement"),
+            0
+        );
+        assert!(!contexts.context_path(correlation_id).exists());
+        assert!(
+            !AccountingCoverageStore::new(&state.config.data_dir)
                 .snapshot(2)
                 .expect("coverage")
-                .live_complete
+                .live_complete,
+            "the invalid context remains an explicit unattributed gap"
         );
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn abandoned_empty_context_is_retired_without_poisoning_live_coverage() {
+    async fn unknown_empty_context_is_not_falsely_recovered_by_age() {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = tempdir().expect("temporary directory");
@@ -276,7 +353,15 @@ exit 64
         let project = directory.path().join("project");
         fs::create_dir(&project).expect("project");
         let correlation_id = "fedcba9876543210fedcba9876543210";
-        register(&state, correlation_id, &project, None, Some("denied")).expect("registration");
+        register(
+            &state,
+            correlation_id,
+            &project,
+            None,
+            Some("denied"),
+            hzr_protocol::AccountingChannel::HookCli,
+        )
+        .expect("registration");
 
         let contexts = AccountingReceiptContextStore::new(&state.config.data_dir);
         let path = contexts.context_path(correlation_id);
@@ -288,12 +373,24 @@ exit 64
             .expect("expired context");
 
         assert_eq!(sweep_once(&state).await.expect("sweep"), 0);
-        assert!(!path.exists());
+        assert!(path.exists(), "age does not prove producer completion");
         assert!(
-            AccountingCoverageStore::new(&state.config.data_dir)
+            !AccountingCoverageStore::new(&state.config.data_dir)
                 .snapshot(2)
                 .expect("coverage")
                 .live_complete
+        );
+        contexts
+            .complete(correlation_id)
+            .expect("producer completion");
+        assert_eq!(sweep_once(&state).await.expect("completed empty sweep"), 0);
+        assert!(!path.exists());
+        assert!(
+            !AccountingCoverageStore::new(&state.config.data_dir)
+                .snapshot(2)
+                .expect("coverage")
+                .live_complete,
+            "missing receipts remain unresolved after cleanup"
         );
     }
 }

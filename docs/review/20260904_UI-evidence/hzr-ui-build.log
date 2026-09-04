@@ -1,0 +1,11 @@
+$ vue-tsc --noEmit && vite build
+vite v8.2.0 building client environment for production...
+[2Ktransforming...✓ 43 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                       0.57 kB │ gzip:   0.33 kB
+dist/assets/app.css                  61.22 kB │ gzip:  12.30 kB
+dist/assets/app.js                  142.13 kB │ gzip:  49.13 kB
+dist/assets/chunk-cytoscape.esm.js  434.75 kB │ gzip: 137.79 kB
+
+✓ built in 366ms

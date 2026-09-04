@@ -114,6 +114,14 @@ pub struct AccountingReceiptContext {
     pub agent: Option<String>,
     pub session_id: Option<String>,
     pub registered_at_unix: u64,
+    #[serde(default)]
+    pub completed_at_unix: Option<u64>,
+    #[serde(default = "default_accounting_channel")]
+    pub channel: hzr_protocol::AccountingChannel,
+}
+
+fn default_accounting_channel() -> hzr_protocol::AccountingChannel {
+    hzr_protocol::AccountingChannel::HookCli
 }
 
 impl AccountingReceiptContext {
@@ -155,6 +163,23 @@ impl AccountingReceiptContextStore {
         agent: Option<&str>,
         session_id: Option<&str>,
     ) -> Result<(), AccountingCoverageError> {
+        self.register_with_channel(
+            correlation_id,
+            project_path,
+            agent,
+            session_id,
+            default_accounting_channel(),
+        )
+    }
+
+    pub fn register_with_channel(
+        &self,
+        correlation_id: &str,
+        project_path: &Path,
+        agent: Option<&str>,
+        session_id: Option<&str>,
+        channel: hzr_protocol::AccountingChannel,
+    ) -> Result<(), AccountingCoverageError> {
         validate_correlation_id(correlation_id)?;
         let context = AccountingReceiptContext {
             correlation_id: correlation_id.to_owned(),
@@ -162,12 +187,26 @@ impl AccountingReceiptContextStore {
             agent: agent.map(str::to_owned),
             session_id: session_id.map(str::to_owned),
             registered_at_unix: unix_now(),
+            completed_at_unix: None,
+            channel,
         };
         let path = self.context_path(correlation_id);
         let parent = path.parent().ok_or_else(|| {
             AccountingCoverageError::Invalid("accounting context path has no parent".into())
         })?;
         fs::create_dir_all(parent).map_err(|source| context_io(&path, source))?;
+        let existing = fs::read_dir(parent)
+            .map_err(|source| context_io(&path, source))?
+            .filter_map(Result::ok)
+            .filter(|entry| Self::is_context_path(&entry.path()))
+            .take(20_001)
+            .count();
+        if existing >= 20_000 {
+            return Err(AccountingCoverageError::Invalid(
+                "unresolved accounting context capacity reached; pending attribution was retained"
+                    .into(),
+            ));
+        }
         let mut temporary =
             NamedTempFile::new_in(parent).map_err(|source| context_io(&path, source))?;
         serde_json::to_writer(&mut temporary, &context)?;
@@ -190,6 +229,28 @@ impl AccountingReceiptContextStore {
         Ok(())
     }
 
+    /// Called only after the owned producer has exited and its final writes are closed.
+    pub fn complete(&self, correlation_id: &str) -> Result<(), AccountingCoverageError> {
+        validate_correlation_id(correlation_id)?;
+        let path = self.context_path(correlation_id);
+        let mut context = self.read(&path)?;
+        context.completed_at_unix = Some(unix_now());
+        let parent = path
+            .parent()
+            .ok_or_else(|| AccountingCoverageError::Invalid("context parent missing".into()))?;
+        let mut temporary =
+            NamedTempFile::new_in(parent).map_err(|source| context_io(&path, source))?;
+        serde_json::to_writer(&mut temporary, &context)?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|source| context_io(&path, source))?;
+        temporary
+            .persist(&path)
+            .map_err(|error| context_io(&path, error.error))?;
+        Ok(())
+    }
+
     #[must_use]
     pub fn context_path(&self, correlation_id: &str) -> PathBuf {
         self.data_root.join("fork").join(format!(
@@ -208,7 +269,12 @@ impl AccountingReceiptContextStore {
     }
 
     pub fn read(&self, path: &Path) -> Result<AccountingReceiptContext, AccountingCoverageError> {
-        let metadata = fs::metadata(path).map_err(|source| context_io(path, source))?;
+        let metadata = fs::symlink_metadata(path).map_err(|source| context_io(path, source))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(AccountingCoverageError::Invalid(
+                "accounting context must be a regular file".into(),
+            ));
+        }
         if metadata.len() > MAX_ACCOUNTING_CONTEXT_BYTES {
             return Err(AccountingCoverageError::Invalid(format!(
                 "accounting context exceeds {MAX_ACCOUNTING_CONTEXT_BYTES} bytes"
@@ -245,6 +311,22 @@ impl AccountingCoverageStore {
         &self,
         event: AccountingGapEvent,
     ) -> Result<AccountingCoverageSnapshot, AccountingCoverageError> {
+        self.record_missing_event(event, true)
+    }
+
+    /// Repeated inspection of one unresolved condition is not another missing operation.
+    pub fn ensure_missing(
+        &self,
+        event: AccountingGapEvent,
+    ) -> Result<AccountingCoverageSnapshot, AccountingCoverageError> {
+        self.record_missing_event(event, false)
+    }
+
+    fn record_missing_event(
+        &self,
+        event: AccountingGapEvent,
+        count_repetition: bool,
+    ) -> Result<AccountingCoverageSnapshot, AccountingCoverageError> {
         validate_event(&event)?;
         self.with_exclusive_state(|state| {
             let interval = state.intervals.iter_mut().rev().find(|interval| {
@@ -258,7 +340,9 @@ impl AccountingCoverageStore {
                 Some(interval) => {
                     interval.last_failure_at_unix =
                         interval.last_failure_at_unix.max(event.at_unix);
-                    interval.missing_operations = interval.missing_operations.saturating_add(1);
+                    if count_repetition {
+                        interval.missing_operations = interval.missing_operations.saturating_add(1);
+                    }
                 }
                 None => {
                     if state.intervals.len() >= MAX_INTERVALS {
@@ -584,6 +668,41 @@ fn snapshot(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn repeated_condition_does_not_inflate_missing_operation_count() {
+        let directory = tempfile::tempdir().expect("valid accounting fixture");
+        let store = AccountingCoverageStore::new(directory.path());
+        let event = super::AccountingGapEvent {
+            surface: super::AccountingGapSurface::ForkProducer,
+            workspace_hash: None,
+            session_hash: None,
+            operation_family: Some("invalid_context".into()),
+            at_unix: 1,
+        };
+        for _ in 0..5 {
+            store
+                .ensure_missing(event.clone())
+                .expect("valid accounting fixture");
+        }
+        assert_eq!(
+            store
+                .snapshot(1)
+                .expect("valid accounting fixture")
+                .open_missing_operations,
+            1
+        );
+        store
+            .record_missing(event)
+            .expect("valid accounting fixture");
+        assert_eq!(
+            store
+                .snapshot(1)
+                .expect("valid accounting fixture")
+                .open_missing_operations,
+            2
+        );
+    }
     use std::sync::{Arc, Barrier};
     use std::thread;
 

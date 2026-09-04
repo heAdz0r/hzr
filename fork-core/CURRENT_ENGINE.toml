@@ -1,11 +1,11 @@
 schema_version = 1
 engine_version = "0.44.1-fork.1"
-hzr_release_line = "0.7.x"
+hzr_release_line = "0.8.x"
 parent_snapshot_sha256 = "f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16"
 manifest = "CURRENT_ENGINE_V1.tsv"
-manifest_sha256 = "e7f747d624f563eff93647aa605569789b902b6e9caee8e976dc320ebd8989a4"
+manifest_sha256 = "4ddb11cae1f5910a592b45e90b1bfff51cdbf9b93b244944311fa56748a0c28a"
 content_manifest = "CURRENT_SHA256SUMS"
-content_manifest_sha256 = "3c75bf5c4e334b6d16a79574db57d79a05d15ed6b2e2335479d70ada3e884875"
+content_manifest_sha256 = "e2ab2733727ba342f99ca26db3ae3c31f0242efdb94d93dacce8304e979cbbad"
 files = "CURRENT_FILES"
 included_file_count = 483
 selection = "HZR-owned current engine files, derived from immutable snapshot v2 and enumerated by CURRENT_FILES"

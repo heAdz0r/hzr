@@ -56,8 +56,20 @@ pub struct SearchHit {
     pub snippets: Vec<SearchSnippet>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SearchPage {
+    pub snapshot_id: String,
+    pub offset: usize,
+    pub available_hits: usize,
+    pub snapshot_complete: bool,
+    pub next_cursor: Option<String>,
+    pub expires_at_ms: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SearchApiResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<SearchPage>,
     pub query: String,
     pub path: String,
     pub total_hits: usize,
@@ -80,6 +92,10 @@ pub struct SearchApiResponse {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SearchApiRequest {
+    #[serde(default)]
+    pub paginate: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
     pub workspace: String,
     pub query: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -108,6 +124,10 @@ pub struct SemanticReadinessApiResponse {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContextPlanApiRequest {
     pub workspace: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    #[serde(default)]
+    pub no_memory: bool,
     pub intent: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -229,6 +249,15 @@ pub struct MemoryStoreApiRequest {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MemoryGetApiRequest {
+    pub workspace: String,
+    pub id: String,
+    #[serde(default)]
+    pub scope: MemoryWriteScope,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryForgetApiRequest {
     pub workspace: String,
     pub id: String,
@@ -272,7 +301,65 @@ pub struct MemoryMutationApiResponse {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecStartApiRequest {
+    pub operation_id: String,
+    pub request: ExecApiRequest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecJobApiRequest {
+    pub operation_id: String,
+    pub cwd: String,
+    #[serde(default)]
+    pub wait_ms: Option<u64>,
+    #[serde(default)]
+    pub after_revision: Option<u64>,
+    #[serde(default)]
+    pub max_output_bytes: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecOutputStream {
+    #[default]
+    Stdout,
+    Stderr,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExecOutputApiRequest {
+    pub operation_id: String,
+    pub cwd: String,
+    #[serde(default)]
+    pub stream: ExecOutputStream,
+    #[serde(default)]
+    pub offset: u64,
+    #[serde(default)]
+    pub max_bytes: Option<u64>,
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExecOutputApiResponse {
+    pub operation_id: String,
+    pub revision: u64,
+    pub stream: ExecOutputStream,
+    pub offset: u64,
+    pub next_offset: Option<u64>,
+    pub total_bytes: u64,
+    pub stored_bytes: u64,
+    pub source_sha256: String,
+    pub capture_truncated: bool,
+    pub complete: bool,
+    pub encoding: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecApiRequest {
+    #[serde(default)]
+    pub channel: Option<AccountingChannel>,
     pub cwd: String,
     pub command: String,
     /// The public `HZR_RAW_FIDELITY=1 hzr exec run ...` marker, transported separately from
@@ -693,6 +780,64 @@ pub struct FidelityReconcileReceipt {
     pub allowance_released: bool,
     pub cleanup_complete: bool,
     pub idempotent_replay: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReadApiRequest {
+    /// Caller-defined context epoch; change after compaction, fork or resume.
+    #[serde(default)]
+    pub context_epoch: Option<String>,
+    pub cwd: String,
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub from: Option<u64>,
+    #[serde(default)]
+    pub to: Option<u64>,
+    #[serde(default)]
+    pub max_lines: Option<u64>,
+    #[serde(default)]
+    pub max_tokens: Option<u64>,
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReadFileResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_advice: Option<ReadCostAdvice>,
+    pub path: String,
+    pub source_sha256: String,
+    pub source_bytes: u64,
+    pub total_lines: u64,
+    pub from: u64,
+    pub to: u64,
+    pub next_line: Option<u64>,
+    pub complete: bool,
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReadCostAdvice {
+    pub method: String,
+    pub requests: u64,
+    pub produced_tokens_estimated: u64,
+    pub repeated_source_tokens_estimated: u64,
+    pub full_result_tokens_estimated: u64,
+    pub next_action: String,
+    pub next_missing_from: Option<u64>,
+    pub next_missing_to: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ReadApiResponse {
+    pub files: Vec<ReadFileResult>,
+    pub remaining_paths: Vec<String>,
+    pub estimated_tokens: u64,
+    pub max_tokens: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1334,6 +1479,7 @@ mod tests {
         assert!(legacy.fidelity_reason.is_none());
 
         let request = ExecApiRequest {
+            channel: None,
             cwd: "/repo".into(),
             command: "cargo test".into(),
             fidelity_requested: true,

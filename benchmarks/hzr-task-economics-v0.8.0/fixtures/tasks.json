@@ -1,0 +1,7 @@
+{
+  "tasks": [
+    {"id": "targeted-read", "prompt": "Find the branch that returns 403 for a revoked session and identify its exact condition. Use the least total context that retains the relevant evidence.", "acceptance": "Independent evaluator verifies the condition and source span against the fixture revision; unrelated file output is unnecessary.", "scenario": {"allowed_strategies": ["exact_search_then_range", "single_full_read"]}},
+    {"id": "whole-file-invariant", "prompt": "Review every branch of the small session validator for inconsistent expiry behavior. Complete-file reading is justified if it reduces total calls and prevents missed branches.", "acceptance": "Independent evaluator checks every expected expiry branch and the resulting conclusion against the complete fixture.", "scenario": {"allowed_strategies": ["single_full_read", "bounded_ranges"], "full_read_is_allowed": true}},
+    {"id": "repeated-range-expansion", "prompt": "Trace the interaction of session refresh and expiry checks. Compare a direct complete read with repeated partial reads using all provider requests, then return the same correct answer.", "acceptance": "Independent evaluator verifies the answer. Host records every read with the same source hash, source ranges, and every provider receipt, including retries.", "scenario": {"comparison": "task_total", "full_read_is_allowed": true}}
+  ]
+}

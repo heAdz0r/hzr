@@ -4,21 +4,52 @@ use std::time::Duration;
 
 use hzr_codec::Transform;
 use hzr_core::{Config, EngineManifest, ProviderEconomicReceipt, ProviderReceiptRecordResult};
-use hzr_exec::{ExecutionOutcome, RtkRewriteOutcome};
+use hzr_exec::{ExecJobSnapshot, ExecJobState, ExecutionOutcome, RtkRewriteOutcome};
 use hzr_memory::{MemoryRecord, MemoryTransport};
 use hzr_protocol::{
     CodecApiRequest, ContextPlanApiRequest, ContextPlanApiResponse, ErrorResponse, ExecApiRequest,
-    ExecApprovalApiRequest, FidelityReconcileApiRequest, FidelityReconcileReceipt,
-    ForkRunApiRequest, ForkRunApiResponse, HealthResponse, MemoryForgetApiRequest,
-    MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
-    MemoryStoreApiRequest, MemoryUpdateApiRequest, OperationApiRequest, OperationApiResponse,
-    PolicyEventApiRequest, PolicyEventApiResponse, SearchApiRequest, SearchApiResponse,
-    SemanticReadinessApiRequest, SemanticReadinessApiResponse,
+    ExecApprovalApiRequest, ExecJobApiRequest, ExecStartApiRequest, FidelityReconcileApiRequest,
+    FidelityReconcileReceipt, ForkRunApiRequest, ForkRunApiResponse, HealthResponse,
+    MemoryForgetApiRequest, MemoryMutationApiResponse, MemoryPruneApiRequest,
+    MemoryRecallApiRequest, MemoryStoreApiRequest, MemoryUpdateApiRequest, OperationApiRequest,
+    OperationApiResponse, PolicyEventApiRequest, PolicyEventApiResponse, SearchApiRequest,
+    SearchApiResponse, SemanticReadinessApiRequest, SemanticReadinessApiResponse,
 };
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+struct CancelJobOnDrop {
+    http: reqwest::Client,
+    endpoint: String,
+    token: String,
+    request: Option<ExecJobApiRequest>,
+}
+
+impl Drop for CancelJobOnDrop {
+    fn drop(&mut self) {
+        let Some(request) = self.request.take() else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let http = self.http.clone();
+        let endpoint = format!("{}/v1/exec/cancel", self.endpoint);
+        let token = self.token.clone();
+        // MCP cancels a request by dropping its future. The daemon owns the child,
+        // so cancellation must cross the same authenticated boundary as execution.
+        runtime.spawn(async move {
+            if let Err(error) = async {
+                http.post(endpoint).bearer_auth(token).json(&request).send().await?.error_for_status()?;
+                Ok::<_, reqwest::Error>(())
+            }.await {
+                tracing::warn!(operation_id = %request.operation_id, %error, "execution cancellation delivery failed");
+            }
+        });
+    }
+}
 
 pub struct DaemonClient {
     http: reqwest::Client,
@@ -96,6 +127,20 @@ impl DaemonClient {
         self.post("/v1/context/plan", request).await
     }
 
+    pub async fn read_files(
+        &self,
+        request: &hzr_protocol::ReadApiRequest,
+    ) -> Result<hzr_protocol::ReadApiResponse, ClientError> {
+        self.post("/v1/read", request).await
+    }
+
+    pub async fn memory_get(
+        &self,
+        request: &hzr_protocol::MemoryGetApiRequest,
+    ) -> Result<hzr_memory::MemoryContent, ClientError> {
+        self.post("/v1/memory/get", request).await
+    }
+
     pub async fn memory_recall(
         &self,
         request: &MemoryRecallApiRequest,
@@ -138,11 +183,112 @@ impl DaemonClient {
         self.post("/v1/exec/rewrite", request).await
     }
 
-    pub async fn exec_run(
+    pub async fn exec_run_with_id(
         &self,
         request: &ExecApiRequest,
+    ) -> Result<(String, ExecutionOutcome), ClientError> {
+        let operation_id = uuid::Uuid::new_v4().to_string();
+        let mut cancellation = CancelJobOnDrop {
+            http: self.http.clone(),
+            endpoint: self.endpoint.clone(),
+            token: self.token.clone(),
+            request: Some(ExecJobApiRequest {
+                operation_id: operation_id.clone(),
+                cwd: request.cwd.clone(),
+                wait_ms: None,
+                after_revision: None,
+                max_output_bytes: None,
+            }),
+        };
+        let result = self.exec_run_id(request, operation_id.clone()).await;
+        cancellation.request = None;
+        result.map(|outcome| (operation_id, outcome))
+    }
+
+    pub(crate) async fn exec_run_id(
+        &self,
+        request: &ExecApiRequest,
+        operation_id: String,
     ) -> Result<ExecutionOutcome, ClientError> {
-        self.post("/v1/exec/run", request).await
+        let started = self
+            .exec_start(&ExecStartApiRequest {
+                operation_id: operation_id.clone(),
+                request: request.clone(),
+            })
+            .await;
+        let mut snapshot = started.map_err(|error| ClientError::ExecutionJob {
+            operation_id: operation_id.clone(),
+            message: format!(
+                "dispatch response unavailable: {error}; inspect this operation ID before retrying"
+            ),
+        })?;
+        while snapshot.state == ExecJobState::Running
+            || snapshot
+                .delivery
+                .as_ref()
+                .is_some_and(|delivery| delivery.output_omitted)
+        {
+            snapshot = self.exec_wait(&ExecJobApiRequest {
+                operation_id: operation_id.clone(),
+                cwd: request.cwd.clone(),
+                wait_ms: Some(10_000),
+                after_revision: None,
+                max_output_bytes: Some(8 * 1024 * 1024),
+            }).await.map_err(|error| ClientError::ExecutionJob {
+                operation_id: operation_id.clone(),
+                message: format!("wait failed: {error}; the command may still be running, resume this operation ID"),
+            })?;
+        }
+        if let Some(outcome) = snapshot.outcome {
+            return Ok(outcome);
+        }
+        Err(ClientError::ExecutionJob {
+            operation_id,
+            message: snapshot.error.map_or_else(
+                || {
+                    format!(
+                        "state {:?}; do not replay without checking side effects",
+                        snapshot.state
+                    )
+                },
+                |error| format!("{}: {}", error.code, error.message),
+            ),
+        })
+    }
+
+    pub async fn exec_start(
+        &self,
+        request: &ExecStartApiRequest,
+    ) -> Result<ExecJobSnapshot, ClientError> {
+        self.post("/v1/exec/start", request)
+            .await
+            .map_err(|error| ClientError::ExecutionJob {
+                operation_id: request.operation_id.clone(),
+                message: format!(
+                    "start failed: {error}; inspect this operation ID before a new dispatch"
+                ),
+            })
+    }
+
+    pub async fn exec_output(
+        &self,
+        request: &hzr_protocol::ExecOutputApiRequest,
+    ) -> Result<hzr_protocol::ExecOutputApiResponse, ClientError> {
+        self.post("/v1/exec/output", request).await
+    }
+
+    pub async fn exec_wait(
+        &self,
+        request: &ExecJobApiRequest,
+    ) -> Result<ExecJobSnapshot, ClientError> {
+        self.post("/v1/exec/wait", request).await
+    }
+
+    pub async fn exec_cancel(
+        &self,
+        request: &ExecJobApiRequest,
+    ) -> Result<ExecJobSnapshot, ClientError> {
+        self.post("/v1/exec/cancel", request).await
     }
 
     pub async fn fork_run(
@@ -271,6 +417,11 @@ fn bounded_diagnostic(bytes: &[u8]) -> String {
 
 #[derive(Debug, Error)]
 pub enum ClientError {
+    #[error("execution {operation_id}: {message}")]
+    ExecutionJob {
+        operation_id: String,
+        message: String,
+    },
     #[error("daemon endpoint is not loopback: {0}")]
     NonLoopback(std::net::SocketAddr),
     #[error("failed to build daemon HTTP client: {0}")]

@@ -2,13 +2,17 @@
   "schema_version": 1,
   "product": "HZR",
   "control_plane": "hzr",
-  "internal_engines": ["rtk", "grepai", "icm"],
+  "internal_engines": [
+    "rtk",
+    "grepai",
+    "icm"
+  ],
   "routes": [
     {
       "id": "read",
       "instead_of": "Read",
       "command": "hzr read <file>",
-      "guidance": "Uses the smart default; use --outline first for structure and ranges for exact evidence."
+      "guidance": "Choose exact full content or bounded ranges by total task cost; --json reports completeness, hashes and continuation."
     },
     {
       "id": "search",
@@ -25,14 +29,14 @@
     {
       "id": "memory",
       "instead_of": "durable memory",
-      "command": "hzr memory recall|store|update|forget|prune",
+      "command": "hzr memory recall|get|store|update|forget|prune",
       "guidance": "Project is the default scope; global is only for durable user-wide facts."
     },
     {
       "id": "context",
       "instead_of": "cross-cutting context discovery",
       "command": "hzr context plan \"<intent>\"",
-      "guidance": "Builds bounded graph-first evidence from independently calibrated retrieval sources."
+      "guidance": "Use --max-tokens to bound evidence and --no-memory when memory is irrelevant."
     },
     {
       "id": "shell",
@@ -60,19 +64,62 @@
     }
   ],
   "mcp_tools": [
-    { "name": "hzr_context_plan", "purpose": "Build bounded graph-first evidence for unfamiliar or cross-cutting work." },
-    { "name": "hzr_search", "purpose": "Find code by intent or by a known exact literal." },
-    { "name": "hzr_memory_recall", "purpose": "Recall durable decisions, resolved errors, and prior context." },
-    { "name": "hzr_memory_store", "purpose": "Persist one durable fact or finished handoff, not ephemeral state." },
-    { "name": "hzr_memory_update", "purpose": "Replace one superseded memory after namespace ownership is verified." },
-    { "name": "hzr_memory_forget", "purpose": "Delete one invalid memory after namespace ownership is verified." },
-    { "name": "hzr_memory_prune", "purpose": "Preview or remove low-weight memories in one namespace." },
-    { "name": "hzr_codec", "purpose": "Return a protected response-density transform or shadow counterfactual; host delivery remains instructed until replacement is confirmed." },
-    { "name": "hzr_read", "purpose": "Read bounded exact content through the daemon-owned confined fork path." },
-    { "name": "hzr_write", "purpose": "Apply confined atomic patch or create operations with typed CAS receipts." },
-    { "name": "hzr_exec", "purpose": "Run shell commands through daemon policy and accounting without direct fallback." },
-    { "name": "hzr_observability", "purpose": "Return typed daemon, engine, capability, and workspace health." },
-    { "name": "hzr_doctor", "purpose": "Run desired-state diagnostics for the exact MCP workspace." }
+    {
+      "name": "hzr_context_plan",
+      "purpose": "Build bounded graph-first evidence for unfamiliar or cross-cutting work."
+    },
+    {
+      "name": "hzr_search",
+      "purpose": "Find code by intent or by a known exact literal."
+    },
+    {
+      "name": "hzr_memory_recall",
+      "purpose": "Recall durable decisions, resolved errors, and prior context."
+    },
+    {
+      "name": "hzr_memory_get",
+      "purpose": "Read one exact memory ID after verifying namespace ownership."
+    },
+    {
+      "name": "hzr_memory_store",
+      "purpose": "Persist one durable fact or finished handoff, not ephemeral state."
+    },
+    {
+      "name": "hzr_memory_update",
+      "purpose": "Replace one superseded memory after namespace ownership is verified."
+    },
+    {
+      "name": "hzr_memory_forget",
+      "purpose": "Delete one invalid memory after namespace ownership is verified."
+    },
+    {
+      "name": "hzr_memory_prune",
+      "purpose": "Preview or remove low-weight memories in one namespace."
+    },
+    {
+      "name": "hzr_codec",
+      "purpose": "Return a protected response-density transform or shadow counterfactual; host delivery remains instructed until replacement is confirmed."
+    },
+    {
+      "name": "hzr_read",
+      "purpose": "Read exact full or bounded batch content with total token budget, hashes and explicit continuation."
+    },
+    {
+      "name": "hzr_write",
+      "purpose": "Apply confined atomic patch or create operations with typed CAS receipts."
+    },
+    {
+      "name": "hzr_exec",
+      "purpose": "Run commands, or start/wait/cancel bounded background jobs through daemon policy and accounting."
+    },
+    {
+      "name": "hzr_observability",
+      "purpose": "Return typed daemon, engine, capability, and workspace health."
+    },
+    {
+      "name": "hzr_doctor",
+      "purpose": "Run desired-state diagnostics for the exact MCP workspace."
+    }
   ],
   "harnesses": {
     "claude": {
@@ -83,6 +130,31 @@
         "coverage": "instructed",
         "mechanism": "managed_instruction_and_session_start",
         "economic_credit": false
+      },
+      "hooks": {
+        "adapter_contract": "hzr_host_hooks_v1",
+        "documentation_checked": "2026-09-04",
+        "source": "https://code.claude.com/docs/en/hooks",
+        "minimum_verified_host_version": null,
+        "declared_pre_tool_input_rewrite": true,
+        "implemented_pre_tool_tools": [
+          "Bash",
+          "Agent",
+          "Task"
+        ],
+        "argument_rewrite_permission": "preserve_host_permission_flow",
+        "declared_post_tool_output_replacement": true,
+        "implemented_post_tool_output_replacement": true,
+        "post_tool_output_opt_in": "hzr hooks observe --native-mode observe --replace-output",
+        "implemented_post_tool_tools": ["Bash:cargo_test_success_summary"],
+        "post_tool_output_schema": "stdout:string,stderr:string,interrupted:false,isImage:false",
+        "post_tool_output_recovery": "private_content_addressed_original_stdout",
+        "post_tool_output_economic_credit": false,
+        "native_file_policy": "observe_without_optimization_denial",
+        "unsupported_shape": "pass_through_to_host_permissions",
+        "installation": "managed_opt_in",
+        "delivery": "unverified",
+        "economic_credit": false
       }
     },
     "codex": {
@@ -92,6 +164,24 @@
         "global_replacement": false,
         "coverage": "instructed",
         "mechanism": "managed_instruction",
+        "economic_credit": false
+      },
+      "hooks": {
+        "adapter_contract": "hzr_host_hooks_v1",
+        "documentation_checked": "2026-09-04",
+        "source": "https://learn.chatgpt.com/docs/hooks",
+        "minimum_verified_host_version": null,
+        "declared_pre_tool_input_rewrite": true,
+        "implemented_pre_tool_tools": [
+          "Bash"
+        ],
+        "argument_rewrite_permission": "explicit_bypassPermissions_only",
+        "declared_post_tool_output_replacement": false,
+        "implemented_post_tool_output_replacement": false,
+        "native_file_policy": "observe_without_optimization_denial",
+        "unsupported_shape": "pass_through_to_host_permissions",
+        "installation": "manual_opt_in",
+        "delivery": "unverified",
         "economic_credit": false
       }
     },

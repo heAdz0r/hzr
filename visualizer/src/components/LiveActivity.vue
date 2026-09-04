@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import AppIcon from "./AppIcon.vue";
 import type { DashboardLocalOperation } from "../types";
 import { formatCount, formatSignedCount } from "../utils";
+import { filterActivity, tokenBarWidth, type ActivityRoute } from "../evidence";
 
 const props = defineProps<{
   operations: DashboardLocalOperation[];
@@ -13,8 +14,20 @@ const props = defineProps<{
   measurement: string;
 }>();
 const selectedKey = ref<string | null>(null);
+const routeFilter = ref<ActivityRoute>("all");
+const agentFilter = ref("");
+const sessionFilter = ref("");
+const visibleOperations = computed(() =>
+  filterActivity(props.operations, routeFilter.value, agentFilter.value, sessionFilter.value),
+);
+const sessions = computed(() => [...new Set(props.operations.map((operation) => operation.session_hash ?? "Unattributed"))]);
+function resetFilters(): void {
+  routeFilter.value = "all";
+  agentFilter.value = "";
+  sessionFilter.value = "";
+}
 const maxTokens = computed(() =>
-  Math.max(1, ...props.operations.map((operation) => operation.baseline_tokens_estimated)),
+  Math.max(1, ...props.operations.flatMap((operation) => [operation.baseline_tokens_estimated, operation.delivered_tokens_estimated])),
 );
 const totalCount = computed(
   () => props.optimizedCount + props.rawCount + props.nativeCount + props.unmeasuredCount,
@@ -45,7 +58,7 @@ const recentAgents = computed(() => {
 });
 
 function width(value: number): string {
-  return `${Math.max(2, (value / maxTokens.value) * 100)}%`;
+  return tokenBarWidth(value, maxTokens.value);
 }
 
 function operationTime(timestamp: string): string {
@@ -118,8 +131,15 @@ function routeDetail(operation: DashboardLocalOperation): string {
       <span class="raw-credit">RAW savings credit: 0</span>
     </div>
 
-    <div v-if="operations.length" class="activity-stream">
-      <article v-for="operation in operations" :key="operationKey(operation)" class="activity-entry">
+    <div class="activity-filters">
+      <label>Route<select v-model="routeFilter"><option value="all">All routes</option><option value="optimized">Managed</option><option value="raw">Raw</option><option value="native_unaccounted">Native outside ratio</option><option value="regressions">Output growth</option></select></label>
+      <label>Agent<select v-model="agentFilter"><option value="">All agents</option><option v-for="agent in recentAgents" :key="agent.agent" :value="agent.agent">{{ agent.agent }}</option></select></label>
+      <label>Session<select v-model="sessionFilter"><option value="">All recent sessions</option><option v-for="session in sessions" :key="session" :value="session">{{ session === 'Unattributed' ? session : session.slice(0, 16) + '…' }}</option></select></label>
+      <button class="ghost-action" type="button" :disabled="routeFilter === 'all' && !agentFilter && !sessionFilter" @click="resetFilters">Reset</button>
+    </div>
+    <p class="activity-filter-count" role="status">{{ visibleOperations.length }} of {{ operations.length }} recent operations · filters apply to this bounded snapshot</p>
+    <div v-if="visibleOperations.length" class="activity-stream">
+      <article v-for="operation in visibleOperations" :key="operationKey(operation)" class="activity-entry">
         <button
           class="activity-row"
           type="button"
@@ -172,7 +192,7 @@ function routeDetail(operation: DashboardLocalOperation): string {
         </section>
       </article>
     </div>
-    <div v-else class="activity-empty">No routed operations have been recorded for this project yet.</div>
+    <div v-else class="activity-empty">{{ operations.length ? "No recent operations match these filters. Reset filters to see the available snapshot." : "No operations in this project snapshot. Choose a project with recorded activity or refresh after an agent runs a command." }}</div>
     <p class="activity-footnote">
       Coverage: current privacy-typed rows for this project and its subdirectories. Commands, arguments, queries, paths, environment values, SQL, heredocs, prompts, responses, stdin, and output bodies are not exposed here.
     </p>

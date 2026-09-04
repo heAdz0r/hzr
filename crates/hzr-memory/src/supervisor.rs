@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "supervisor_tests.rs"]
+mod tests;
+
 use std::fs::{self, File, OpenOptions};
 use std::io::ErrorKind;
 use std::process::Stdio;
@@ -14,6 +18,7 @@ use crate::error::{MemoryError, Result};
 use crate::installation::verify_installation;
 use crate::layout::IcmLayout;
 use crate::mcp;
+use crate::runtime::{ProcessIdentity, RuntimeState};
 use crate::types::{IcmTransport, ServiceHealth};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,9 +75,14 @@ impl std::fmt::Debug for IcmSupervisor {
 }
 
 impl IcmSupervisor {
-    pub fn new(config: IcmConfig) -> Result<Self> {
+    pub fn new(mut config: IcmConfig) -> Result<Self> {
         config.validate()?;
         let layout = IcmLayout::prepare(config.data_root())?;
+        if config.transport == IcmTransport::Http {
+            if let Some(state) = RuntimeState::load(&layout)? {
+                config.bind_addr = state.endpoint;
+            }
+        }
         let token = layout.load_or_create_token()?;
         let client = IcmClient::new(config.clone(), layout.clone(), token, mcp::shared())?;
         Ok(Self {
@@ -142,24 +152,63 @@ impl IcmSupervisor {
                 return Ok(StartOutcome::Attached { health });
             }
         };
-        let orphan_health =
-            if self.config.transport == IcmTransport::Http && self.layout.pid_file.exists() {
-                self.client.readiness().await.ok()
-            } else {
-                None
-            };
-        if let Some(health) = orphan_health {
-            *process = ManagedProcess::Attached { lock: Some(lock) };
-            return Ok(StartOutcome::Attached { health });
+        if let Some(state) = RuntimeState::load(&self.layout)? {
+            let identity = state.process.as_ref().ok_or_else(|| MemoryError::OwnershipUncertain(
+                "previous launch has no committed child identity; reconcile the isolated runtime before retrying".into(),
+            ))?;
+            if identity.is_current()? {
+                if self.config.transport != IcmTransport::Http
+                    || state.endpoint != self.config.bind_addr
+                    || !state.matches_executable(&self.config)?
+                {
+                    return Err(MemoryError::OwnershipUncertain(
+                        "live ICM identity belongs to a different transport or executable".into(),
+                    ));
+                }
+                let health = self.client.readiness().await.map_err(|_| MemoryError::OwnershipUncertain(
+                    "previous ICM process is alive but its authenticated endpoint is unavailable".into(),
+                ))?;
+                *process = ManagedProcess::Attached { lock: Some(lock) };
+                return Ok(StartOutcome::Attached { health });
+            }
+            RuntimeState::remove(&self.layout);
+            let _ = fs::remove_file(&self.layout.pid_file);
+        } else if let Some(pid) = crate::runtime::legacy_pid(&self.layout)? {
+            if ProcessIdentity::capture(pid)?.is_some() {
+                return Err(MemoryError::OwnershipUncertain(
+                    "legacy ICM PID is alive without a verified endpoint/start identity".into(),
+                ));
+            }
+            let _ = fs::remove_file(&self.layout.pid_file);
         }
         let token = self.layout.load_or_create_token()?;
-        let mut child = self.spawn(&token)?;
+        let mut runtime = RuntimeState::starting(&self.config, &self.layout)?;
+        // A crash between spawn and identity commit must never authorize a second writer.
+        runtime.persist(&self.layout)?;
+        let mut child = match self.spawn(&token) {
+            Ok(child) => child,
+            Err(error) => {
+                RuntimeState::remove(&self.layout);
+                return Err(error);
+            }
+        };
         let pid = child.id().ok_or_else(|| MemoryError::UnexpectedResponse {
             operation: "process start",
             message: "spawned ICM process did not expose a process ID".into(),
         })?;
+        let identity = ProcessIdentity::spawned(pid);
+        let committed = identity.and_then(|identity| {
+            runtime.process = Some(identity);
+            runtime.persist(&self.layout)
+        });
+        if let Err(error) = committed {
+            terminate_child(&mut child, self.config.shutdown_timeout).await?;
+            RuntimeState::remove(&self.layout);
+            return Err(error);
+        }
         if let Err(error) = fs::write(&self.layout.pid_file, pid.to_string()) {
-            let _ = terminate_child(&mut child, self.config.shutdown_timeout).await;
+            terminate_child(&mut child, self.config.shutdown_timeout).await?;
+            RuntimeState::remove(&self.layout);
             return Err(MemoryError::Io {
                 operation: "write ICM PID file",
                 path: self.layout.pid_file.clone(),
@@ -170,7 +219,8 @@ impl IcmSupervisor {
         let health = match self.wait_ready(&mut child).await {
             Ok(health) => health,
             Err(error) => {
-                let _ = terminate_child(&mut child, self.config.shutdown_timeout).await;
+                terminate_child(&mut child, self.config.shutdown_timeout).await?;
+                RuntimeState::remove(&self.layout);
                 let _ = fs::remove_file(&self.layout.pid_file);
                 fs2::FileExt::unlock(&lock).map_err(process_control)?;
                 return Err(error);
@@ -202,10 +252,10 @@ impl IcmSupervisor {
                 mut child, lock, ..
             } => {
                 self.client.disconnect_mcp().await;
-                let termination = terminate_child(&mut child, self.config.shutdown_timeout).await;
+                terminate_child(&mut child, self.config.shutdown_timeout).await?;
+                RuntimeState::remove(&self.layout);
                 let _ = fs::remove_file(&self.layout.pid_file);
                 let unlock = fs2::FileExt::unlock(&lock).map_err(process_control);
-                termination?;
                 unlock?;
                 Ok(StopOutcome::Stopped)
             }
@@ -219,6 +269,18 @@ impl IcmSupervisor {
         }
         self.stop_locked().await?;
         self.start_locked().await
+    }
+
+    /// Stops only a child owned by this supervisor after repeated readiness failures.
+    pub async fn stop_unready_owned(&self) -> Result<bool> {
+        let _lifecycle = self.lifecycle.lock().await;
+        if !matches!(&*self.process.lock().await, ManagedProcess::Owned { .. })
+            || self.client.readiness().await.is_ok()
+        {
+            return Ok(false);
+        }
+        self.stop_locked().await?;
+        Ok(true)
     }
 
     pub async fn status(&self) -> ServiceStatus {
@@ -273,8 +335,18 @@ impl IcmSupervisor {
                         lock_path: self.layout.lock_file.clone(),
                     });
                 }
-                if let Some(health) = self.wait_external_ready().await {
-                    return Ok(LockAcquisition::Attached(health));
+                if let Some(state) = RuntimeState::load(&self.layout)? {
+                    if state.endpoint == self.config.bind_addr
+                        && state.matches_executable(&self.config)?
+                        && state
+                            .process
+                            .as_ref()
+                            .is_some_and(|identity| identity.is_current().unwrap_or(false))
+                    {
+                        if let Some(health) = self.wait_external_ready().await {
+                            return Ok(LockAcquisition::Attached(health));
+                        }
+                    }
                 }
                 Err(MemoryError::SupervisorLockHeld {
                     lock_path: self.layout.lock_file.clone(),
@@ -380,7 +452,7 @@ impl Drop for IcmSupervisor {
             } = &mut *process
             {
                 let _ = child.start_kill();
-                let _ = fs::remove_file(&self.layout.pid_file);
+                // Keep the durable identity until a later owner proves the child exited.
                 let _ = fs2::FileExt::unlock(lock);
             }
             if let ManagedProcess::Attached { lock: Some(lock) } = &*process {
@@ -395,6 +467,7 @@ fn release_owned(process: &mut ManagedProcess, layout: &IcmLayout) {
     if let ManagedProcess::Owned { lock, .. } = process {
         let _ = fs2::FileExt::unlock(lock);
     }
+    RuntimeState::remove(layout);
     let _ = fs::remove_file(&layout.pid_file);
     *process = ManagedProcess::Stopped;
 }

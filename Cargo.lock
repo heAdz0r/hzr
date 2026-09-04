@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-agent"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "http",
  "nix",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-cli"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -648,6 +648,7 @@ dependencies = [
  "hzr-index",
  "hzr-memory",
  "hzr-protocol",
+ "nix",
  "reqwest",
  "rusqlite",
  "serde",
@@ -657,11 +658,13 @@ dependencies = [
  "thiserror",
  "tokio",
  "toml_edit",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "hzr-codec"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "hzr-protocol",
  "regex",
@@ -671,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-context"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "hex",
  "hzr-core",
@@ -690,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "directories",
  "fs2",
@@ -709,10 +712,11 @@ dependencies = [
 
 [[package]]
 name = "hzr-daemon"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "axum",
  "fs2",
+ "hex",
  "hzr-agent",
  "hzr-codec",
  "hzr-context",
@@ -725,6 +729,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",
@@ -745,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-exec"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "fs2",
@@ -765,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-index"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fs2",
  "hex",
@@ -780,7 +785,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-memory"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -802,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "hzr-protocol"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "hzr-engine-contract",
  "serde",

@@ -194,7 +194,7 @@ pub enum Command {
         /// Enable HZR only for the current workspace; hooks become no-ops elsewhere
         #[arg(long)]
         project_only: bool,
-        /// Native file-tool policy. New installs default to steer; upgrades retain observe.
+        /// Legacy native mode label; all modes preserve native arguments and only observe.
         #[arg(long, value_enum, value_name = "MODE")]
         native_tool_mode: Option<crate::adoption::NativeToolMode>,
         /// Select the global fallback/Claude Desktop workspace (default: install cwd).
@@ -379,6 +379,26 @@ pub enum Command {
         after_help = STATS_AFTER_HELP
     )]
     Stats {
+        /// Collect all projects in one atomic fixed-window ledger snapshot, including deleted workspaces
+        #[arg(long, conflicts_with_all = ["workspace", "evasion", "all"])]
+        fleet: bool,
+        /// Inclusive Unix-second start for a reproducible fleet snapshot
+        #[arg(
+            long,
+            requires = "fleet",
+            conflicts_with = "since",
+            value_name = "SECONDS"
+        )]
+        since_unix: Option<i64>,
+        /// Exclusive Unix-second end for a fleet snapshot; defaults to the collection start time
+        #[arg(long, requires = "fleet", value_name = "SECONDS")]
+        until: Option<i64>,
+        /// Select a historical ledger project ID without requiring its workspace directory
+        #[arg(long, requires = "fleet", value_name = "ID")]
+        project_id: Option<String>,
+        /// Atomically export the complete privacy-safe fleet snapshot as owner-only JSON
+        #[arg(long, requires = "fleet", value_name = "FILE")]
+        export: Option<PathBuf>,
         /// Limit the ledger view to one workspace root
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
@@ -484,10 +504,21 @@ pub enum ActivationCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum HooksCommand {
+    #[command(
+        about = "Report declared host hook capabilities; optionally run local adapter fixtures"
+    )]
+    Capabilities {
+        #[arg(long, value_enum, default_value = "claude")]
+        host: crate::host_hooks::HookHost,
+        #[arg(long)]
+        probe: bool,
+    },
     #[command(about = "Report HZR, legacy RTK, and external ICM hook ownership")]
     Status,
     #[command(hide = true)]
     Dispatch {
+        #[arg(long, value_enum, default_value = "claude")]
+        host: crate::host_hooks::HookHost,
         #[arg(long, value_enum, default_value = "observe")]
         native_mode: crate::adoption::NativeToolMode,
     },
@@ -495,6 +526,11 @@ pub enum HooksCommand {
     Observe {
         #[arg(long, value_enum, default_value = "observe")]
         native_mode: crate::adoption::NativeToolMode,
+        #[arg(long, value_enum, default_value = "claude")]
+        host: crate::host_hooks::HookHost,
+        /// Opt in only on a host supporting built-in updatedToolOutput.
+        #[arg(long)]
+        replace_output: bool,
     },
     #[command(hide = true)]
     Feedback,
@@ -562,6 +598,12 @@ pub enum ContextCommand {
 #[derive(Clone, Debug, Args)]
 pub struct ContextPlanArgs {
     pub intent: String,
+    /// Limit delivered evidence tokens below the configured maximum
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub max_tokens: Option<u64>,
+    /// Skip durable memory retrieval for code-only work
+    #[arg(long)]
+    pub no_memory: bool,
     /// Workspace root used for code and memory planning
     #[arg(long, value_name = "DIR")]
     pub workspace: Option<PathBuf>,
@@ -599,6 +641,12 @@ pub struct RtkArgs {
 #[derive(Clone, Debug, Args)]
 pub struct SearchArgs {
     pub query: String,
+    /// Capture up to 100 immutable hits for stable pages without repeating the search
+    #[arg(long)]
+    pub paginate: bool,
+    /// Continue a private snapshot with the same query, scope, options and page size
+    #[arg(long, value_name = "CURSOR")]
+    pub cursor: Option<String>,
     /// Workspace root that owns the canonical index
     #[arg(long, value_name = "DIR")]
     pub workspace: Option<PathBuf>,
@@ -660,6 +708,16 @@ impl From<StoreScopeArg> for MemoryWriteScope {
 
 #[derive(Debug, Subcommand)]
 pub enum MemoryCommand {
+    /// Read one exact memory ID after verifying namespace ownership
+    Get {
+        id: String,
+        /// Workspace root selecting the project namespace
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Namespace containing the exact memory ID
+        #[arg(long, value_enum, default_value_t = StoreScopeArg::Project)]
+        scope: StoreScopeArg,
+    },
     #[command(
         about = "Recall relevant memories with full ICM semantics",
         long_about = MEMORY_RECALL_LONG_ABOUT,
@@ -789,6 +847,45 @@ pub enum ExecCommand {
     Rewrite(ExecArgs),
     #[command(about = "Execute through the canonical policy and capture pipeline")]
     Run(ExecArgs),
+    #[command(about = "Start a durable command and return its operation ID")]
+    Start {
+        #[command(flatten)]
+        execution: ExecArgs,
+        #[arg(long)]
+        operation_id: Option<String>,
+    },
+    #[command(about = "Read an execution result without running the command again")]
+    Wait {
+        operation_id: String,
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        #[arg(long, default_value_t = 10_000)]
+        wait_ms: u64,
+        #[arg(long)]
+        after_revision: Option<u64>,
+        #[arg(long)]
+        max_output_bytes: Option<u64>,
+    },
+    #[command(about = "Read exact captured output by operation ID and byte range")]
+    Output {
+        operation_id: String,
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        #[arg(long, value_parser = ["stdout", "stderr"], default_value = "stdout")]
+        stream: String,
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        #[arg(long)]
+        max_bytes: Option<u64>,
+        #[arg(long)]
+        expected_sha256: Option<String>,
+    },
+    #[command(about = "Cancel an owned execution and wait for its final result")]
+    Cancel {
+        operation_id: String,
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+    },
     #[command(about = "Approve and execute one pending fork-core decision")]
     Approve { decision_id: String },
     #[command(about = "Deny and consume one pending fork-core decision")]
@@ -1697,6 +1794,52 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn fleet_stats_flags_require_atomic_mode_and_preserve_historical_ids() {
+        let id = format!("sha256:{}", "a".repeat(64));
+        let cli = Cli::try_parse_from([
+            "hzr",
+            "stats",
+            "--fleet",
+            "--since-unix",
+            "100",
+            "--until",
+            "200",
+            "--project-id",
+            &id,
+            "--export",
+            "fleet.json",
+            "--json",
+        ])
+        .expect("fleet");
+        assert!(matches!(
+            cli.command,
+            Command::Stats {
+                fleet: true,
+                since_unix: Some(100),
+                until: Some(200),
+                project_id: Some(_),
+                ..
+            }
+        ));
+        assert!(Cli::try_parse_from(["hzr", "stats", "--until", "200"]).is_err());
+        assert!(
+            Cli::try_parse_from(["hzr", "stats", "--fleet", "--workspace", "/deleted"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "hzr",
+                "stats",
+                "--fleet",
+                "--since",
+                "7d",
+                "--since-unix",
+                "100"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

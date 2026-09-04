@@ -9,9 +9,9 @@ use hzr_core::{
     AccountingCoverageStore, AccountingGapEvent, AccountingGapSurface, FidelityAllowance,
     FidelityBudget, FidelityPreflight, Ledger, LedgerRecord, ProjectOperationRoute,
     ProjectOperationSummary, ProviderEconomicReceipt, ProviderReceiptRecordResult,
-    RawFidelityReason, RawFidelityRequest, RawPublicEstimateRequest, efficient_route_replacement,
-    first_class_replacement, load_pricing_catalog, locked_engines, price_avoided_input_tokens,
-    privacy_identity_hash, raw_fidelity_request, validate_receipt,
+    RawFidelityReason, RawFidelityRequest, RawPublicEstimateRequest, first_class_replacement,
+    load_pricing_catalog, locked_engines, price_avoided_input_tokens, privacy_identity_hash,
+    raw_fidelity_request, validate_receipt,
 };
 use hzr_exec::{
     AccountingDrainStatus, AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow,
@@ -1431,10 +1431,21 @@ pub async fn engines() -> Result<Json<hzr_core::EngineManifest>, ApiError> {
 
 pub async fn search(
     State(state): State<AppState>,
-    Json(request): Json<SearchApiRequest>,
+    Json(mut request): Json<SearchApiRequest>,
 ) -> Result<Json<SearchApiResponse>, ApiError> {
     validate_search(&request)?;
+    if request
+        .cursor
+        .as_ref()
+        .is_some_and(|cursor| cursor.len() > 128)
+    {
+        return Err(ApiError::bad_request("search cursor exceeds 128 bytes"));
+    }
     let workspace = canonical_workspace(&request.workspace)?;
+    request.workspace = workspace.to_string_lossy().into_owned();
+    if request.cursor.is_some() {
+        return crate::search_pages::read(&state.config.data_dir, &request).map(Json);
+    }
     let started = Instant::now();
     let trace = state
         .observability
@@ -1443,9 +1454,13 @@ pub async fn search(
         .context
         .search(SearchRequest {
             workspace: workspace.clone(),
-            query: request.query,
-            path: request.path.map(PathBuf::from),
-            limit: request.limit,
+            query: request.query.clone(),
+            path: request.path.clone().map(PathBuf::from),
+            limit: if request.paginate {
+                crate::search_pages::SNAPSHOT_HITS
+            } else {
+                request.limit
+            },
             mode: request.mode,
             include_content: request.include_content,
         })
@@ -1483,7 +1498,12 @@ pub async fn search(
             generation,
         },
     );
-    outcome.map(Json).map_err(context_error)
+    let response = outcome.map_err(context_error)?;
+    if request.paginate {
+        crate::search_pages::publish(&state.config.data_dir, &request, response).map(Json)
+    } else {
+        Ok(Json(response))
+    }
 }
 
 pub async fn semantic_readiness(
@@ -1516,6 +1536,8 @@ pub async fn context_plan(
         .plan(PlanRequest {
             workspace: workspace.clone(),
             intent: request.intent,
+            max_tokens: request.max_tokens,
+            no_memory: request.no_memory,
             path: request.path.map(PathBuf::from),
             topic: request.topic,
             search_limit: request.search_limit,
@@ -1552,6 +1574,33 @@ pub async fn context_plan(
         },
     );
     outcome.map(Json).map_err(context_error)
+}
+
+pub async fn memory_get(
+    State(state): State<AppState>,
+    Json(request): Json<hzr_protocol::MemoryGetApiRequest>,
+) -> Result<Json<hzr_memory::MemoryContent>, ApiError> {
+    validate_memory_id(&request.id)?;
+    let project = memory_project(&state, &request.workspace).await?;
+    let database = state.memory.layout().database.clone();
+    let record = tokio::task::spawn_blocking(move || {
+        hzr_memory::read_memory_by_id(
+            &database,
+            &project,
+            &request.id,
+            request.scope == MemoryWriteScope::Global,
+        )
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("memory get task failed: {error}")))?
+    .map_err(memory_maintenance_error)?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "memory_not_found",
+            "memory does not exist in the requested namespace",
+        )
+    })?;
+    Ok(Json(record))
 }
 
 pub async fn memory_recall(
@@ -1934,12 +1983,28 @@ pub async fn exec_run(
     State(state): State<AppState>,
     Json(request): Json<ExecApiRequest>,
 ) -> Result<Json<ExecutionOutcome>, ApiError> {
+    execute_command(state, request, None, None, None).await
+}
+
+pub(crate) async fn execute_command(
+    state: AppState,
+    request: ExecApiRequest,
+    job_timeout_ms: Option<u64>,
+    mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
+    output_directory: Option<std::path::PathBuf>,
+) -> Result<Json<ExecutionOutcome>, ApiError> {
     if request.command.trim().is_empty() {
         return Err(ApiError::bad_request("command must not be empty"));
     }
     validate_exec_timeout(request.timeout_ms)?;
     validate_caller_path(request.caller_path.as_deref())?;
-    let budget = ManagedExecutionBudget::new(&state, request.timeout_ms)?;
+    let budget = match job_timeout_ms {
+        Some(limit_ms) => ManagedExecutionBudget {
+            started: Instant::now(),
+            limit: Duration::from_millis(limit_ms),
+        },
+        None => ManagedExecutionBudget::new(&state, request.timeout_ms)?,
+    };
     let cwd = canonical_workspace(&request.cwd)?;
     let request_started = Instant::now();
     let trace = state
@@ -2063,6 +2128,7 @@ pub async fn exec_run(
                     state
                         .approvals
                         .insert(PendingApproval {
+                            channel: request.channel,
                             requested: command.clone(),
                             approved_decision: approved_execution_decision(
                                 proposed_command,
@@ -2105,17 +2171,41 @@ pub async fn exec_run(
         }
         decision => decision,
     };
+    if cancellation
+        .as_ref()
+        .is_some_and(|receiver| *receiver.borrow())
+    {
+        if let Some(reservation) = fidelity_reservation {
+            state
+                .ledger
+                .cancel_fidelity(reservation)
+                .await
+                .map_err(|error| {
+                    ApiError::internal(format!("cancel execution reservation: {error}"))
+                })?;
+        }
+        return Ok(Json(ExecutionOutcome::NotStarted {
+            disposition: NotStarted::Denied {
+                requested: command,
+                reason: "execution cancelled before process creation".into(),
+            },
+        }));
+    }
     register_accounting_context(
         &state,
         plan.accounting_correlation_id.as_deref(),
         &cwd,
         request.agent.as_deref(),
         request.session_id.as_deref(),
+        request.channel,
     )?;
     let mut envelope = ExecutionEnvelope::allow_raw(command);
     envelope.decision = decision;
     envelope.cwd = Some(cwd.clone());
     envelope.timeout_ms = Some(budget.remaining_ms()?);
+    if let Some(directory) = output_directory {
+        envelope.capture.overflow = hzr_exec::CaptureOverflow::Spill { directory };
+    }
     RtkRewriteOutcome {
         decision: envelope.decision.clone(),
         evasion: plan.evasion,
@@ -2135,12 +2225,15 @@ pub async fn exec_run(
             .ledger
             .begin_fidelity(
                 reservation,
-                fidelity_pending_record_for_context(
-                    &cwd,
-                    request.agent.clone(),
-                    request.session_id.clone(),
-                    evasion,
-                    grant_applied,
+                with_exec_channel(
+                    fidelity_pending_record_for_context(
+                        &cwd,
+                        request.agent.clone(),
+                        request.session_id.clone(),
+                        evasion,
+                        grant_applied,
+                    ),
+                    request.channel,
                 ),
             )
             .await
@@ -2157,7 +2250,30 @@ pub async fn exec_run(
     }
     let engine_started = Instant::now();
     let (outcome, process_started) = match state.executor.start(envelope) {
-        Ok(handle) => (handle.wait().await, true),
+        Ok(handle) => {
+            let cancel = handle.cancellation();
+            let waiting = handle.wait();
+            tokio::pin!(waiting);
+            let result = if let Some(receiver) = cancellation.as_mut() {
+                if *receiver.borrow() {
+                    cancel.cancel();
+                }
+                tokio::select! {
+                    result = &mut waiting => result,
+                    _ = async {
+                        while receiver.changed().await.is_ok() {
+                            if *receiver.borrow() { return; }
+                        }
+                    } => {
+                        cancel.cancel();
+                        waiting.await
+                    }
+                }
+            } else {
+                waiting.await
+            };
+            (result, true)
+        }
         Err(error) => {
             if let Some(reservation) = fidelity_reservation.as_ref() {
                 if let Err(recovery) = state
@@ -2177,6 +2293,7 @@ pub async fn exec_run(
             (Err(error), false)
         }
     };
+    complete_accounting_context(&state, plan.accounting_correlation_id.as_deref());
     let fidelity_execution_unknown =
         fidelity_reservation.is_some() && process_started && outcome.is_err();
     let fidelity_accounting_error = match fidelity_reservation {
@@ -2282,6 +2399,19 @@ fn fidelity_operation_record(
         outcome,
         host_grant_applied,
     )
+    .map(|record| with_exec_channel(record, request.channel))
+}
+
+fn with_exec_channel(
+    mut record: crate::ledger_writer::OperationRecord,
+    channel: Option<hzr_protocol::AccountingChannel>,
+) -> crate::ledger_writer::OperationRecord {
+    record.channel = match channel.unwrap_or(hzr_protocol::AccountingChannel::HookCli) {
+        hzr_protocol::AccountingChannel::HookCli => hzr_core::OperationChannel::HookCli,
+        hzr_protocol::AccountingChannel::Mcp => hzr_core::OperationChannel::Mcp,
+        hzr_protocol::AccountingChannel::NativeHost => hzr_core::OperationChannel::NativeHost,
+    };
+    record
 }
 
 fn fidelity_operation_record_for_context(
@@ -2462,6 +2592,7 @@ pub async fn exec_approval(
         &pending.cwd,
         pending.agent.as_deref(),
         pending.session_id.as_deref(),
+        pending.channel,
     )?;
     let accounting_correlation_id = pending.accounting_correlation_id.clone();
     let mut envelope = ExecutionEnvelope::allow_raw(pending.requested);
@@ -2471,7 +2602,7 @@ pub async fn exec_approval(
     RtkRewriteOutcome {
         decision: envelope.decision.clone(),
         evasion: pending.evasion,
-        accounting_correlation_id,
+        accounting_correlation_id: accounting_correlation_id.clone(),
     }
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
@@ -2483,12 +2614,15 @@ pub async fn exec_approval(
             .ledger
             .begin_fidelity(
                 reservation,
-                fidelity_pending_record_for_context(
-                    cwd,
-                    agent.clone(),
-                    session_id.clone(),
-                    *evasion,
-                    false,
+                with_exec_channel(
+                    fidelity_pending_record_for_context(
+                        cwd,
+                        agent.clone(),
+                        session_id.clone(),
+                        *evasion,
+                        false,
+                    ),
+                    pending.channel,
                 ),
             )
             .await
@@ -2525,6 +2659,7 @@ pub async fn exec_approval(
             (Err(error), false)
         }
     };
+    complete_accounting_context(&state, accounting_correlation_id.as_deref());
     let fidelity_execution_unknown =
         fidelity_reservation.is_some() && process_started && outcome.is_err();
     let mut fidelity_accounting_error = None;
@@ -2534,6 +2669,7 @@ pub async fn exec_approval(
                 fidelity_operation_record_for_context(
                     &cwd, agent, session_id, evasion, execution, false,
                 )
+                .map(|record| with_exec_channel(record, pending.channel))
             }
             _ => None,
         };
@@ -2659,6 +2795,9 @@ fn mark_accounting_incomplete(
         other => other,
     }
 }
+
+mod read;
+pub use read::read_files;
 
 pub async fn fork_run(
     State(state): State<AppState>,
@@ -3135,6 +3274,7 @@ pub async fn exec_rewrite(
         &cwd,
         request.agent.as_deref(),
         request.session_id.as_deref(),
+        request.channel,
     )?;
     record_exec_policy_event(&state, &request, &cwd, outcome.evasion.as_ref(), &decision).await?;
     // The attribution travels with the decision: the hook forwards it to the process that will
@@ -3146,20 +3286,36 @@ pub async fn exec_rewrite(
     }))
 }
 
+fn complete_accounting_context(state: &AppState, correlation_id: Option<&str>) {
+    if let Some(correlation_id) = correlation_id {
+        if let Err(error) = hzr_core::AccountingReceiptContextStore::new(&state.config.data_dir)
+            .complete(correlation_id)
+        {
+            tracing::warn!(%error, %correlation_id, "accounting producer completion remains unresolved");
+        }
+    }
+}
+
 fn register_accounting_context(
     state: &AppState,
     correlation_id: Option<&str>,
     workspace: &Path,
     agent: Option<&str>,
     session_id: Option<&str>,
+    channel: Option<hzr_protocol::AccountingChannel>,
 ) -> Result<(), ApiError> {
     let Some(correlation_id) = correlation_id else {
         return Ok(());
     };
-    crate::accounting_sweeper::register(state, correlation_id, workspace, agent, session_id)
-        .map_err(|error| {
-            ApiError::internal(format!("accounting receipt registration failed: {error}"))
-        })
+    crate::accounting_sweeper::register(
+        state,
+        correlation_id,
+        workspace,
+        agent,
+        session_id,
+        channel.unwrap_or(hzr_protocol::AccountingChannel::HookCli),
+    )
+    .map_err(|error| ApiError::internal(format!("accounting receipt registration failed: {error}")))
 }
 
 async fn daemon_fidelity_preflight(
@@ -3457,14 +3613,6 @@ fn unix_millis_now() -> u64 {
 }
 
 fn enforce_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision {
-    if matches!(
-        decision,
-        RewriteDecision::AllowRaw { .. } | RewriteDecision::AllowRewrite { .. }
-    ) {
-        if let Some(replacement) = efficient_route_replacement(raw) {
-            return hzr_policy_rewrite(replacement);
-        }
-    }
     if !matches!(
         decision,
         RewriteDecision::AllowRaw { .. }
@@ -3756,12 +3904,16 @@ fn validate_fork_run(request: &ForkRunApiRequest) -> Result<(), ApiError> {
 }
 
 fn validate_managed_fork_tool(args: &[String], workspace: &Path) -> Result<(), ApiError> {
+    // A closed stdin-only filter cannot access files or replay the observed command.
+    if args == ["pipe", "--filter", "cargo-test"] {
+        return Ok(());
+    }
     let path = match args.first().map(String::as_str) {
         Some("read") => validate_managed_read_args(args)?,
         Some("write") => validate_managed_write_args(args)?,
         _ => {
             return Err(ApiError::bad_request(
-                "managed fork API permits only read and atomic patch/create operations",
+                "managed fork API permits confined read/write and the closed stdin cargo-test filter",
             ));
         }
     };
@@ -3808,6 +3960,9 @@ fn validate_managed_read_args(args: &[String]) -> Result<&String, ApiError> {
                     return Err(ApiError::bad_request("managed read has an invalid bound"));
                 }
                 position += 2;
+            }
+            "--level" if args.get(position + 1).is_some_and(|value| value == "none") => {
+                position += 2
             }
             "--line-numbers" => position += 1,
             "--outline" | "--symbols" | "--changed" if !mode => {
@@ -4112,9 +4267,27 @@ mod tests {
     const PROJECT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     #[test]
+    fn post_tool_filter_accepts_only_closed_stdin_argv() {
+        let workspace = std::path::Path::new("/nonexistent");
+        let allowed = ["pipe", "--filter", "cargo-test"].map(str::to_owned);
+        assert!(validate_managed_fork_tool(&allowed, workspace).is_ok());
+        for args in [
+            vec!["pipe"],
+            vec!["pipe", "--filter", "grep"],
+            vec!["pipe", "--filter", "cargo-test", "source.rs"],
+            vec!["pipe", "--filter=cargo-test"],
+            vec!["pipe", "--passthrough"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            assert!(validate_managed_fork_tool(&args, workspace).is_err());
+        }
+    }
+
+    #[test]
     fn acceptance_gate_exec_run_honors_a_valid_grant_without_weakening_deny() {
         let session = "exec-run-granted-session";
         let request = ExecApiRequest {
+            channel: None,
             cwd: "/tmp".into(),
             command: "hzr stats --accounting-version all".into(),
             fidelity_requested: false,
@@ -4164,6 +4337,7 @@ mod tests {
             "hmac-sha256:session".into(),
             (
                 SessionEfficiencySummary {
+                    explicit_delivery: Default::default(),
                     operations: 2,
                     baseline_tokens_estimated: 1_200,
                     delivered_tokens_estimated: 200,
@@ -4210,6 +4384,7 @@ mod tests {
         let ledger_path = directory.path().join("ledger.sqlite");
         let writer = LedgerWriter::open(&ledger_path).expect("ledger writer");
         let request = ExecApiRequest {
+            channel: None,
             cwd: directory.path().to_string_lossy().into_owned(),
             command: "sha256sum artifact.bin".into(),
             fidelity_requested: true,
@@ -4444,7 +4619,7 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_gate_no_unbounded_exact_read_in_exec() {
+    fn explicit_full_read_is_preserved_by_exec_without_a_fidelity_marker() {
         let filtered = RewriteDecision::AllowRewrite {
             command: CanonicalCommand::shell("rtk read src/main.rs --level none"),
             source: RewriteSource::Rtk {
@@ -4453,18 +4628,8 @@ mod tests {
             },
             reason: "fork-core accepted the explicit read".into(),
         };
-        let decision =
-            enforce_first_class("hzr rtk -- read src/main.rs --level none", filtered.clone());
-        assert!(matches!(
-            decision,
-            RewriteDecision::AllowRewrite {
-                command: CanonicalCommand::Shell { ref command, .. },
-                source: RewriteSource::HzrPolicy,
-                ..
-            } if command == "hzr rtk -- read src/main.rs"
-        ));
-
         for command in [
+            "hzr rtk -- read src/main.rs --level none",
             "hzr rtk -- read src/main.rs --from 40 --to 80 --level none",
             "HZR_EXACT_FIDELITY=1 hzr rtk -- read src/main.rs --level none",
         ] {

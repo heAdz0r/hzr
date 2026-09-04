@@ -1,0 +1,12 @@
+test_clippy_failure_stops_before_fork_gate (__main__.ReleaseGateRegressionTests.test_clippy_failure_stops_before_fork_gate) ... ok
+test_ordinary_unit_failure_stops_before_fork_gate (__main__.ReleaseGateRegressionTests.test_ordinary_unit_failure_stops_before_fork_gate) ... ok
+test_static_gate_rejects_checksum_filenames_with_a_leading_space (__main__.ReleaseGateRegressionTests.test_static_gate_rejects_checksum_filenames_with_a_leading_space) ... ok
+test_static_gate_rejects_missing_native_preflight_dependency (__main__.ReleaseGateRegressionTests.test_static_gate_rejects_missing_native_preflight_dependency) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 1.155s
+
+OK
+release workflows are transitively gated by the complete source and bundle gates
+    Checking hzr-exec v0.7.1 (/Users/andrew/Programming/hzr/crates/hzr-exec)
+    Checking hzr-context v0.7.1 (/Users/andrew/Programming/hzr/crates/hzr-context)

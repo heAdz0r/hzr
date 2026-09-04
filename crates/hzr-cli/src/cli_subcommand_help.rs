@@ -28,6 +28,12 @@ Examples:
   hzr stats
   hzr stats --workspace /path/to/project
   hzr stats --json
+  hzr stats --fleet --since 7d --export fleet.json
+  hzr stats --fleet --since-unix 1788472800 --until 1788559200 --json
+
+Fleet windows use [since, until) Unix seconds. Historical --project-id does not
+require an existing workspace. Host groups describe agent ecosystems; physical
+host identity and complete native traffic coverage remain unknown.
 ";
 
 pub const ENABLE_LONG_ABOUT: &str = "\
@@ -200,13 +206,13 @@ Forwarded fork-core options:
   --batch --max-tokens N        several files under one total budget
 
 An unqualified file read uses the smart filter and a 400-line / 12K-token safety budget.
-Exact unbounded recovery requires --level none and HZR_EXACT_FIDELITY=1.
+Use --level none when the complete exact file is justified; no fidelity marker is required.
 ";
 
 pub const WRITE_AFTER_HELP: &str = "\
 Forwarded fork-core operations:
   patch PATH --old @FILE --new @FILE --cas --retry N
-  replace PATH PATTERN REPLACEMENT
+  replace PATH --from PATTERN --to REPLACEMENT
   set PATH KEY VALUE
   create PATH --content TEXT
   batch --file PLAN.json

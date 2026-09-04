@@ -3,11 +3,55 @@ use std::path::Path;
 use std::time::Duration;
 
 use rusqlite::types::Type;
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{MemoryError, Result, topic_belongs_to_project};
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MemoryContent {
+    pub id: String,
+    pub topic: String,
+    pub updated_at: String,
+    pub summary: String,
+    pub raw_excerpt: Option<String>,
+}
+
+pub fn read_memory_by_id(
+    path: &Path,
+    project: &str,
+    id: &str,
+    global: bool,
+) -> Result<Option<MemoryContent>> {
+    if !path.is_file() {
+        return Err(MemoryError::SnapshotUnavailable);
+    }
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.busy_timeout(Duration::from_millis(250))?;
+    let record = connection
+        .query_row(
+            "SELECT id, topic, updated_at, summary, raw_excerpt FROM memories WHERE id = ?1",
+            [id],
+            |row| {
+                Ok(MemoryContent {
+                    id: row.get(0)?,
+                    topic: row.get(1)?,
+                    updated_at: row.get(2)?,
+                    summary: row.get(3)?,
+                    raw_excerpt: row.get(4)?,
+                })
+            },
+        )
+        .optional()?;
+    Ok(record.filter(|record| {
+        if global {
+            crate::topic_is_global(&record.topic)
+        } else {
+            topic_belongs_to_project(&record.topic, project)
+        }
+    }))
+}
 
 const MAX_MEMORIES: usize = 256;
 const MAX_TOPICS: usize = 64;

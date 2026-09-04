@@ -1,0 +1,35 @@
+bun test v1.2.19 (aad3abea)
+
+src/utils.test.ts:
+(pass) dashboard formatters > keeps missing provider cost distinct from a derived estimate [0.32ms]
+(pass) dashboard formatters > formats preliminary native-currency amounts without hidden FX [0.13ms]
+(pass) dashboard formatters > formats exact units and signs [0.07ms]
+(pass) dashboard formatters > formats relative time without future negative values [0.03ms]
+(pass) dashboard formatters > defines a text label for every service state [0.05ms]
+(pass) dashboard formatters > retains a successful snapshot when a later refresh fails [0.01ms]
+(pass) project filtering > filters by visible digest or stable project identity [0.10ms]
+(pass) project filtering > combines query and state filters [0.03ms]
+
+src/observability.test.ts:
+(pass) privacy-safe observability timeline > groups correlated spans, preserves stage order, and surfaces failures [0.25ms]
+(pass) privacy-safe observability timeline > serialized component input has no content-bearing fields
+(pass) privacy-safe observability timeline > surfaces approval continuations as a visible causal link
+(pass) privacy-safe observability timeline > merges cursor deltas with hard bounds and preserves truncation evidence
+(pass) privacy-safe observability timeline > refresh backoff resets on success and doubles to a cap [0.23ms]
+
+src/detail-request.test.ts:
+(pass) DetailRequestCoordinator > rejects an A response after the selected project switches to B [0.30ms]
+(pass) DetailRequestCoordinator > cached topic A invalidates an older in-flight topic B in the same project
+(pass) DetailRequestCoordinator > late project B refresh cannot clear or replace selected project C
+(pass) DetailRequestCoordinator > late A observability delta cannot merge into the replacement B snapshot [0.02ms]
+
+src/evidence.test.ts:
+(pass) bounded activity exploration > combines route, agent and session without changing the source snapshot [0.05ms]
+(pass) bounded activity exploration > makes regressions and missing attribution discoverable
+(pass) zero baseline is unknown, while output growth stays negative [0.03ms]
+(pass) comparison bars never invent nonzero output or overflow [0.02ms]
+
+ 21 pass
+ 0 fail
+ 56 expect() calls
+Ran 21 tests across 4 files. [20.00ms]

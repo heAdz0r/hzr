@@ -75,6 +75,9 @@ pub enum MemoryError {
     #[error("cannot restart an ICM process supervised by another HZR instance")]
     NotProcessOwner,
 
+    #[error("ICM ownership cannot be proven: {0}")]
+    OwnershipUncertain(String),
+
     #[error("ICM HTTP {operation} timed out after {timeout:?}")]
     HttpTimeout {
         operation: &'static str,

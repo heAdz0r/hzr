@@ -10,6 +10,7 @@ mod layout;
 mod mcp;
 mod namespace;
 mod release;
+mod runtime;
 mod snapshot;
 mod supervisor;
 mod types;
@@ -26,9 +27,11 @@ pub use namespace::{
     recall_candidate_limit, topic_belongs_to_project, topic_is_global, validate_memory_kind,
 };
 pub use release::{ICM_COMMIT, ICM_MCP_SERVER_VERSION, ICM_TAG, ICM_VERSION, IcmInstallation};
+pub use runtime::is_managed_icm_process;
 pub use snapshot::{
-    MemoryTopicEdge, MemoryTopicSnapshot, ProjectMemoryDetail, ProjectMemorySnapshot,
-    ProjectTopicDetails, read_project_snapshot, read_project_topic_details,
+    MemoryContent, MemoryTopicEdge, MemoryTopicSnapshot, ProjectMemoryDetail,
+    ProjectMemorySnapshot, ProjectTopicDetails, read_memory_by_id, read_project_snapshot,
+    read_project_topic_details,
 };
 pub use supervisor::{IcmSupervisor, ServiceStatus, StartOutcome, StopOutcome};
 pub use types::{

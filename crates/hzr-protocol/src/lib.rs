@@ -31,16 +31,19 @@ pub use api::{
     DashboardRawPublicEstimate, DashboardResponse, DashboardSearchActivity, DashboardService,
     DashboardSessionCommand, DashboardSessionRoi, DashboardState, DashboardTraceSpan,
     DashboardTraceStage, DashboardTraceState, ExecApiRequest, ExecApprovalApiRequest,
-    FidelityReconcileApiRequest, FidelityReconcileReceipt, FidelityUnknownResolution,
-    FilterPlacement, ForkManagedWrite, ForkPlannerMetadata, ForkRunApiRequest, ForkRunApiResponse,
-    HOST_EXECUTION_GRANT_ENV, HOST_EXECUTION_GRANT_MAX_AGE_MS,
-    HOST_EXECUTION_GRANT_MAX_FUTURE_SKEW_MS, HostExecutionGrant, HostGrantRejection,
-    HostPermissionMode, MemoryForgetApiRequest, MemoryImportance, MemoryMutationApiResponse,
-    MemoryPruneApiRequest, MemoryRecallApiRequest, MemoryScopeSelector, MemoryStoreApiRequest,
-    MemoryUpdateApiRequest, MemoryWriteScope, MustKeep, OperationApiRequest, OperationApiResponse,
-    PolicyEventApiRequest, PolicyEventApiResponse, SearchApiRequest, SearchApiResponse, SearchHit,
-    SearchLine, SearchMode, SearchSnippet, SearchStrategy, SemanticReadinessApiRequest,
-    SemanticReadinessApiResponse, UsageApiRequest, UsageApiResponse, completeness_contract,
+    ExecJobApiRequest, ExecOutputApiRequest, ExecOutputApiResponse, ExecOutputStream,
+    ExecStartApiRequest, FidelityReconcileApiRequest, FidelityReconcileReceipt,
+    FidelityUnknownResolution, FilterPlacement, ForkManagedWrite, ForkPlannerMetadata,
+    ForkRunApiRequest, ForkRunApiResponse, HOST_EXECUTION_GRANT_ENV,
+    HOST_EXECUTION_GRANT_MAX_AGE_MS, HOST_EXECUTION_GRANT_MAX_FUTURE_SKEW_MS, HostExecutionGrant,
+    HostGrantRejection, HostPermissionMode, MemoryForgetApiRequest, MemoryGetApiRequest,
+    MemoryImportance, MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
+    MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope, MustKeep,
+    OperationApiRequest, OperationApiResponse, PolicyEventApiRequest, PolicyEventApiResponse,
+    ReadApiRequest, ReadApiResponse, ReadCostAdvice, ReadFileResult, SearchApiRequest,
+    SearchApiResponse, SearchHit, SearchLine, SearchMode, SearchPage, SearchSnippet,
+    SearchStrategy, SemanticReadinessApiRequest, SemanticReadinessApiResponse, UsageApiRequest,
+    UsageApiResponse, completeness_contract,
 };
 
 /// Delivery metadata that is independent of the search strategy selected by the daemon.
@@ -394,6 +397,7 @@ mod tests {
     #[test]
     fn search_accounting_builder_owns_requested_and_effective_mapping() {
         let response = SearchApiResponse {
+            page: None,
             query: "needle".into(),
             path: ".".into(),
             total_hits: 0,

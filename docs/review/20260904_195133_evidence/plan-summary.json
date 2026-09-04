@@ -1,0 +1,209 @@
+{
+  "pack": {
+    "selected": [
+      {
+        "id": "fork-rgai:1d5612254b2936714c686431b38cded068cd4cb67a58264b469d8af6c04bae87",
+        "source": "exact",
+        "content_ref": "sha256:1d5612254b2936714c686431b38cded068cd4cb67a58264b469d8af6c04bae87",
+        "path": "crates/hzr-daemon/src/accounting_sweeper.rs",
+        "symbol": null,
+        "symbol_unavailable_reason": "no_enclosing_symbol",
+        "line_start": 29,
+        "line_end": 92,
+        "source_rank": 1,
+        "relevance": 1.0,
+        "tokens": {
+          "value": 64,
+          "source": "estimate"
+        },
+        "freshness": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+        "trust": "workspace:untrusted",
+        "provenance": {
+          "source": "fork-core/rgai-builtin",
+          "content_hash": "1d5612254b2936714c686431b38cded068cd4cb67a58264b469d8af6c04bae87",
+          "generation": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+          "canonical_ref": "crates/hzr-daemon/src/accounting_sweeper.rs#L29-L92",
+          "derived_by": "rtk-rgai-0.44.1-fork.1"
+        }
+      },
+      {
+        "id": "icm:56d9a530da2aaf3c47851c5aed55de19cf68685cd8f19a1e610902e45bb01b2b",
+        "source": "memory",
+        "content_ref": "sha256:56d9a530da2aaf3c47851c5aed55de19cf68685cd8f19a1e610902e45bb01b2b",
+        "path": null,
+        "symbol": null,
+        "symbol_unavailable_reason": "not_applicable",
+        "line_start": null,
+        "line_end": null,
+        "source_rank": 1,
+        "relevance": 0.8,
+        "tokens": {
+          "value": 377,
+          "source": "estimate"
+        },
+        "freshness": "2026-08-01T01:45:44.264258Z",
+        "trust": "icm:user",
+        "provenance": {
+          "source": "icm",
+          "content_hash": "56d9a530da2aaf3c47851c5aed55de19cf68685cd8f19a1e610902e45bb01b2b",
+          "generation": "icm:2026-08-01T01:45:44.264258Z",
+          "canonical_ref": "icm:memory:01KYXFZ9J83Y79NDX0NCTEZ37S",
+          "derived_by": null
+        }
+      },
+      {
+        "id": "fork-plan:c109f356c2f3047caa78d5c899db6a764a734c4f0017680a47594ffe51bc0b72",
+        "source": "context",
+        "content_ref": "sha256:c109f356c2f3047caa78d5c899db6a764a734c4f0017680a47594ffe51bc0b72",
+        "path": "src/accounting_sweeper.rs",
+        "symbol": null,
+        "symbol_unavailable_reason": "outline_unavailable",
+        "line_start": null,
+        "line_end": null,
+        "source_rank": 4,
+        "relevance": 1.0,
+        "tokens": {
+          "value": 4233,
+          "source": "estimate"
+        },
+        "freshness": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+        "trust": "workspace:untrusted",
+        "provenance": {
+          "source": "fork-core/memory-plan",
+          "content_hash": "c109f356c2f3047caa78d5c899db6a764a734c4f0017680a47594ffe51bc0b72",
+          "generation": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+          "canonical_ref": "src/accounting_sweeper.rs",
+          "derived_by": "graph_first_v1"
+        }
+      },
+      {
+        "id": "fork-plan:a934a92b0f6490e4f3230147237bf365be4a6f080bf269de74f6452815571a21",
+        "source": "context",
+        "content_ref": "sha256:a934a92b0f6490e4f3230147237bf365be4a6f080bf269de74f6452815571a21",
+        "path": "Cargo.toml",
+        "symbol": null,
+        "symbol_unavailable_reason": "outline_unavailable",
+        "line_start": null,
+        "line_end": null,
+        "source_rank": 1,
+        "relevance": 0.82738674,
+        "tokens": {
+          "value": 602,
+          "source": "estimate"
+        },
+        "freshness": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+        "trust": "workspace:untrusted",
+        "provenance": {
+          "source": "fork-core/memory-plan",
+          "content_hash": "a934a92b0f6490e4f3230147237bf365be4a6f080bf269de74f6452815571a21",
+          "generation": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+          "canonical_ref": "Cargo.toml",
+          "derived_by": "graph_first_v1"
+        }
+      },
+      {
+        "id": "fork-plan:a9a915fb04b59d3f77b592b2a142471089d3e36629ec98fc53999276fd5f8469",
+        "source": "context",
+        "content_ref": "sha256:a9a915fb04b59d3f77b592b2a142471089d3e36629ec98fc53999276fd5f8469",
+        "path": "src/lib.rs",
+        "symbol": null,
+        "symbol_unavailable_reason": "outline_unavailable",
+        "line_start": null,
+        "line_end": null,
+        "source_rank": 3,
+        "relevance": 0.4867528,
+        "tokens": {
+          "value": 294,
+          "source": "estimate"
+        },
+        "freshness": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+        "trust": "workspace:untrusted",
+        "provenance": {
+          "source": "fork-core/memory-plan",
+          "content_hash": "a9a915fb04b59d3f77b592b2a142471089d3e36629ec98fc53999276fd5f8469",
+          "generation": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+          "canonical_ref": "src/lib.rs",
+          "derived_by": "graph_first_v1"
+        }
+      },
+      {
+        "id": "fork-plan:1d426f40607f1f88df8ead9a367d58781975771ec72e1150ba73137b826adb03",
+        "source": "context",
+        "content_ref": "sha256:1d426f40607f1f88df8ead9a367d58781975771ec72e1150ba73137b826adb03",
+        "path": "src/main.rs",
+        "symbol": null,
+        "symbol_unavailable_reason": "outline_unavailable",
+        "line_start": null,
+        "line_end": null,
+        "source_rank": 2,
+        "relevance": 0.43709892,
+        "tokens": {
+          "value": 211,
+          "source": "estimate"
+        },
+        "freshness": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+        "trust": "workspace:untrusted",
+        "provenance": {
+          "source": "fork-core/memory-plan",
+          "content_hash": "1d426f40607f1f88df8ead9a367d58781975771ec72e1150ba73137b826adb03",
+          "generation": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+          "canonical_ref": "src/main.rs",
+          "derived_by": "graph_first_v1"
+        }
+      },
+      {
+        "id": "fork-plan:8fbe30a64d180c459a64079cad606d5f8b8e2a8b2f666f716d07fd6e99720257",
+        "source": "context",
+        "content_ref": "sha256:8fbe30a64d180c459a64079cad606d5f8b8e2a8b2f666f716d07fd6e99720257",
+        "path": "src/approval.rs",
+        "symbol": null,
+        "symbol_unavailable_reason": "outline_unavailable",
+        "line_start": null,
+        "line_end": null,
+        "source_rank": 5,
+        "relevance": 0.43041545,
+        "tokens": {
+          "value": 1570,
+          "source": "estimate"
+        },
+        "freshness": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+        "trust": "workspace:untrusted",
+        "provenance": {
+          "source": "fork-core/memory-plan",
+          "content_hash": "8fbe30a64d180c459a64079cad606d5f8b8e2a8b2f666f716d07fd6e99720257",
+          "generation": "c6e3267b458e4844492203ecc213904b6363c3ce3f61814f4f674a620854d2b6",
+          "canonical_ref": "src/approval.rs",
+          "derived_by": "graph_first_v1"
+        }
+      }
+    ],
+    "rejected": [],
+    "used": {
+      "value": 7351,
+      "source": "estimate"
+    },
+    "hard_limit": 13000,
+    "coverage": 0.2857143,
+    "confidence": 0.7503118,
+    "budget_exceeded": false
+  },
+  "planner": {
+    "pipeline_version": "graph_first_v1",
+    "semantic_backend_used": "rg-files",
+    "graph_candidate_count": 15,
+    "semantic_hit_count": 7,
+    "candidates_total": 15,
+    "candidates_selected": 7,
+    "estimated_tokens_used": 9083,
+    "token_budget": 9750
+  },
+  "warnings": [
+    {
+      "code": "outline_unavailable",
+      "message": "symbol outline unavailable for 4 of 5 candidates"
+    }
+  ],
+  "content_count": 7,
+  "wire_bytes": 8927,
+  "content_bytes": 2415
+}

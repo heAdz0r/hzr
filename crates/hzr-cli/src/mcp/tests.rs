@@ -335,7 +335,14 @@ fn test_every_tool_has_model_guidance_and_typed_schemas() {
             "{name} must declare required arguments"
         );
         assert_eq!(tool["outputSchema"]["type"], "object");
-        assert_eq!(tool["outputSchema"]["additionalProperties"], false);
+        if tool["outputSchema"]["additionalProperties"] != false {
+            let branches = tool["outputSchema"]["anyOf"]
+                .as_array()
+                .expect("strict output branches");
+            for branch in branches {
+                assert_eq!(branch["additionalProperties"], false);
+            }
+        }
         assert!(tool["annotations"]["readOnlyHint"].is_boolean());
     }
     assert!(
@@ -363,6 +370,9 @@ fn representative_output(name: &str) -> Option<Value> {
         "scope": "project"
     });
     Some(match name {
+        "hzr_memory_get" => {
+            json!({"id": "memory-1", "topic": "architecture", "updated_at": "2026-09-04", "summary": "Fact", "raw_excerpt": null})
+        }
         "hzr_memory_recall" => json!({"count": 1, "total_matches": 2, "memories": [memory]}),
         "hzr_memory_store" => json!({"transport": "stdio_mcp", "memory": memory}),
         "hzr_memory_forget" | "hzr_memory_update" | "hzr_memory_prune" => {
@@ -733,6 +743,29 @@ fn mcp_read_and_write_build_only_confined_typed_fork_requests() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn mcp_exact_content_accepts_deletion_empty_files_and_whitespace() {
+    for content in ["", "  ", "\\n", "λ"] {
+        let create = json!({"operation": "create", "path": "file", "content": content});
+        assert!(super::validate_tool_input("hzr_write", &create).is_ok());
+        assert!(write_fork_request("/work", &create).is_ok());
+        let patch = json!({"operation": "patch", "path": "file", "old": " ", "new": content});
+        assert!(super::validate_tool_input("hzr_write", &patch).is_ok());
+        assert!(write_fork_request("/work", &patch).is_ok());
+    }
+    let empty_old = json!({"operation": "patch", "path": "file", "old": "", "new": "x"});
+    assert!(super::validate_tool_input("hzr_write", &empty_old).is_err());
+    assert!(write_fork_request("/work", &empty_old).is_err());
+    let unicode = json!({"operation": "create", "path": "file", "content": "λ".repeat(super::MCP_CREATE_CONTENT_MAX_BYTES / 2 + 1)});
+    assert!(super::validate_tool_input("hzr_write", &unicode).is_err());
+    assert!(write_fork_request("/work", &unicode).is_err());
+    for value in [0, 100_001] {
+        let read = json!({"path": "file", "max_lines": value});
+        assert!(super::validate_tool_input("hzr_read", &read).is_err());
+        assert!(read_fork_request("/work", &read).is_err());
+    }
 }
 
 #[test]

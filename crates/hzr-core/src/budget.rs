@@ -50,6 +50,12 @@ impl BudgetPlanner {
         self
     }
 
+    /// Refresh ranking diagnostics after complete candidates are removed by a delivery budget.
+    pub fn refresh_selection_diagnostics(pack: &mut ContextPack) {
+        pack.coverage = coverage(&pack.selected);
+        pack.confidence = confidence(&pack.selected);
+    }
+
     pub fn plan(&self, sources: Vec<FusionInput>) -> ContextPack {
         let mut fused = HashMap::<String, (ContextCandidate, f32)>::new();
         for source in sources {

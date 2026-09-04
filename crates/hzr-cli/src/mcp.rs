@@ -695,6 +695,7 @@ async fn call_tool(
 
     let outcome = match contract.kind {
         ToolKind::MemoryRecall => recall(&client, workspace, &arguments).await,
+        ToolKind::MemoryGet => memory_get(&client, workspace, &arguments).await,
         ToolKind::MemoryStore => store(&client, workspace, &arguments).await,
         ToolKind::MemoryForget => forget(&client, workspace, &arguments).await,
         ToolKind::MemoryUpdate => update(&client, workspace, &arguments).await,
@@ -787,7 +788,7 @@ fn mcp_operation_request(
     let command = tool_name.replace('_', " ");
     let attribution = Some(match kind {
         ToolKind::Search => search_accounting_attribution(arguments, response)?,
-        ToolKind::Read => read_accounting_attribution(arguments),
+        ToolKind::Read => read_accounting_attribution(arguments, response),
         // Fork-backed operations already have an included transport receipt.
         ToolKind::Write => simple_accounting_attribution(
             AccountingOperationKind::Write,
@@ -799,7 +800,7 @@ fn mcp_operation_request(
             AccountingOperationMode::ContextPlan,
             AccountingStage::StandaloneDelivery,
         ),
-        ToolKind::MemoryRecall => simple_accounting_attribution(
+        ToolKind::MemoryRecall | ToolKind::MemoryGet => simple_accounting_attribution(
             AccountingOperationKind::Memory,
             AccountingOperationMode::MemoryRecall,
             AccountingStage::StandaloneDelivery,
@@ -878,8 +879,15 @@ fn simple_accounting_attribution(
     }
 }
 
-fn read_accounting_attribution(arguments: &Value) -> AccountingAttribution {
-    let mode = if arguments
+fn read_accounting_attribution(arguments: &Value, response: &Value) -> AccountingAttribution {
+    let files = response.get("files").and_then(Value::as_array);
+    let mode = if files
+        .is_some_and(|files| !files.is_empty() && files.iter().all(|file| file["complete"] == true))
+    {
+        AccountingOperationMode::ReadFull
+    } else if files.is_some() {
+        AccountingOperationMode::ReadRange
+    } else if arguments
         .get("outline")
         .and_then(Value::as_bool)
         .unwrap_or(false)
@@ -900,7 +908,18 @@ fn read_accounting_attribution(arguments: &Value) -> AccountingAttribution {
     attribution.from_line = arguments.get("from").and_then(Value::as_u64);
     attribution.to_line = arguments.get("to").and_then(Value::as_u64);
     attribution.limit = arguments.get("max_lines").and_then(Value::as_u64);
-    attribution.path_scope_count = Some(1);
+    attribution.path_scope_count = Some(
+        arguments
+            .get("paths")
+            .and_then(Value::as_array)
+            .map_or(1, |paths| paths.len() as u64),
+    );
+    attribution.source_bytes = files.map(|files| {
+        files
+            .iter()
+            .filter_map(|file| file["source_bytes"].as_u64())
+            .sum()
+    });
     attribution
 }
 
@@ -920,7 +939,11 @@ fn search_accounting_attribution(
         requested_mode,
         &response,
         SearchAccountingMetadata {
-            stage: AccountingStage::FinalDelivery,
+            stage: if response.page.as_ref().is_some_and(|page| page.offset > 0) {
+                AccountingStage::StandaloneDelivery
+            } else {
+                AccountingStage::FinalDelivery
+            },
             include_content: optional_bool(arguments, "include_content", false)?,
             limit: u64::try_from(bounded_usize(arguments, "limit", 10, 50)?)?,
             path_scope_count: 1,
@@ -959,6 +982,21 @@ async fn codec(client: &DaemonClient, workspace: &str, arguments: &Value) -> Res
     };
     let transform = client.codec_compile(&request).await?;
     Ok(serde_json::to_value(transform)?)
+}
+
+async fn memory_get(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    let request = hzr_protocol::MemoryGetApiRequest {
+        workspace: workspace.to_owned(),
+        id: required_string(arguments, "id")?,
+        scope: optional_enum(
+            arguments,
+            "scope",
+            MemoryWriteScope::Project,
+            parse_write_scope,
+            "project, global",
+        )?,
+    };
+    Ok(serde_json::to_value(client.memory_get(&request).await?)?)
 }
 
 async fn recall(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
@@ -1072,7 +1110,10 @@ async fn prune(client: &DaemonClient, workspace: &str, arguments: &Value) -> Res
 }
 
 async fn search(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    let cursor = optional_string(arguments, "cursor")?;
     let request = SearchApiRequest {
+        paginate: optional_bool(arguments, "paginate", false)? || cursor.is_some(),
+        cursor,
         workspace: workspace.to_owned(),
         query: required_string(arguments, "query")?,
         path: optional_string(arguments, "path")?,
@@ -1094,6 +1135,8 @@ async fn context_plan(client: &DaemonClient, workspace: &str, arguments: &Value)
     let request = ContextPlanApiRequest {
         workspace: workspace.to_owned(),
         intent: required_string(arguments, "intent")?,
+        max_tokens: optional_positive_u64(arguments, "max_tokens", 1_000_000)?,
+        no_memory: optional_bool(arguments, "no_memory", false)?,
         path: optional_string(arguments, "path")?,
         topic: optional_string(arguments, "topic")?,
         search_limit: bounded_usize(arguments, "search_limit", 10, 50)?,
@@ -1104,6 +1147,54 @@ async fn context_plan(client: &DaemonClient, workspace: &str, arguments: &Value)
 }
 
 async fn exec(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    let action = optional_string(arguments, "action")?.unwrap_or_else(|| "run".into());
+    if action == "output" {
+        return Ok(serde_json::to_value(
+            client
+                .exec_output(&hzr_protocol::ExecOutputApiRequest {
+                    operation_id: required_string(arguments, "operation_id")?,
+                    cwd: workspace.to_owned(),
+                    stream: if optional_string(arguments, "stream")?.as_deref() == Some("stderr") {
+                        hzr_protocol::ExecOutputStream::Stderr
+                    } else {
+                        hzr_protocol::ExecOutputStream::Stdout
+                    },
+                    offset: arguments
+                        .get("offset")
+                        .map(|value| value.as_u64().context("offset must be an integer"))
+                        .transpose()?
+                        .unwrap_or(0),
+                    max_bytes: optional_positive_u64(arguments, "max_bytes", 262_144)?,
+                    expected_sha256: optional_string(arguments, "expected_sha256")?,
+                })
+                .await?,
+        )?);
+    }
+    if action == "wait" || action == "cancel" {
+        let request = hzr_protocol::ExecJobApiRequest {
+            operation_id: required_string(arguments, "operation_id")?,
+            cwd: workspace.to_owned(),
+            wait_ms: arguments
+                .get("wait_ms")
+                .map(|value| value.as_u64().context("wait_ms must be an integer"))
+                .transpose()?,
+            after_revision: arguments
+                .get("after_revision")
+                .map(|value| value.as_u64().context("after_revision must be an integer"))
+                .transpose()?,
+            max_output_bytes: optional_positive_u64(
+                arguments,
+                "max_output_bytes",
+                8 * 1024 * 1024,
+            )?,
+        };
+        let result = if action == "wait" {
+            client.exec_wait(&request).await?
+        } else {
+            client.exec_cancel(&request).await?
+        };
+        return exec_snapshot_value(client, workspace, result, request.max_output_bytes).await;
+    }
     let timeout_ms = match arguments.get("timeout_ms") {
         None => None,
         Some(value) => {
@@ -1119,6 +1210,7 @@ async fn exec(client: &DaemonClient, workspace: &str, arguments: &Value) -> Resu
         }
     };
     let request = hzr_protocol::ExecApiRequest {
+        channel: Some(hzr_protocol::AccountingChannel::Mcp),
         cwd: workspace.to_owned(),
         command: required_string(arguments, "command")?,
         fidelity_requested: false,
@@ -1129,10 +1221,138 @@ async fn exec(client: &DaemonClient, workspace: &str, arguments: &Value) -> Resu
         session_id: hzr_core::ambient_session_id(),
         host_execution_grant: hzr_core::inspect_ambient_host_grant().and_then(Result::ok),
     };
-    Ok(serde_json::to_value(client.exec_run(&request).await?)?)
+    match action.as_str() {
+        "run" => {
+            let (operation_id, _) = client.exec_run_with_id(&request).await?;
+            let snapshot = client
+                .exec_wait(&hzr_protocol::ExecJobApiRequest {
+                    operation_id,
+                    cwd: workspace.to_owned(),
+                    wait_ms: None,
+                    after_revision: None,
+                    max_output_bytes: Some(8 * 1024 * 1024),
+                })
+                .await?;
+            exec_snapshot_value(client, workspace, snapshot, None).await
+        }
+        "start" => {
+            let snapshot = client
+                .exec_start(&hzr_protocol::ExecStartApiRequest {
+                    operation_id: required_string(arguments, "operation_id")?,
+                    request,
+                })
+                .await?;
+            exec_snapshot_value(client, workspace, snapshot, None).await
+        }
+        _ => anyhow::bail!("action must be run, start, wait, cancel, or output"),
+    }
+}
+
+async fn exec_snapshot_value(
+    client: &DaemonClient,
+    workspace: &str,
+    mut snapshot: hzr_exec::ExecJobSnapshot,
+    max_output_bytes: Option<u64>,
+) -> Result<Value> {
+    if snapshot
+        .delivery
+        .as_ref()
+        .is_some_and(|delivery| delivery.unchanged)
+    {
+        return Ok(serde_json::to_value(snapshot)?);
+    }
+    if snapshot
+        .delivery
+        .as_ref()
+        .is_some_and(|delivery| delivery.output_omitted)
+    {
+        snapshot = client
+            .exec_wait(&hzr_protocol::ExecJobApiRequest {
+                operation_id: snapshot.operation_id.clone(),
+                cwd: workspace.to_owned(),
+                wait_ms: None,
+                after_revision: None,
+                max_output_bytes: Some(8 * 1024 * 1024),
+            })
+            .await?;
+    }
+    let mut value = serde_json::to_value(&snapshot)?;
+    let has_output = matches!(
+        snapshot.outcome,
+        Some(
+            hzr_exec::ExecutionOutcome::Completed { .. }
+                | hzr_exec::ExecutionOutcome::ExecutedAccountingIncomplete { .. }
+        )
+    );
+    if has_output {
+        let per_stream = (max_output_bytes.unwrap_or(65_536) / 2).clamp(1, 262_144);
+        let mut omitted = false;
+        for (name, stream) in [
+            ("stdout", hzr_protocol::ExecOutputStream::Stdout),
+            ("stderr", hzr_protocol::ExecOutputStream::Stderr),
+        ] {
+            let response = client
+                .exec_output(&hzr_protocol::ExecOutputApiRequest {
+                    operation_id: snapshot.operation_id.clone(),
+                    cwd: workspace.to_owned(),
+                    stream,
+                    offset: 0,
+                    max_bytes: Some(per_stream),
+                    expected_sha256: None,
+                })
+                .await;
+            value["outcome"]["result"][name] = match response {
+                Ok(response) => {
+                    omitted |= !response.complete;
+                    serde_json::to_value(response)?
+                }
+                Err(error) => {
+                    omitted = true;
+                    json!({"output_unavailable": true, "error": error.to_string(),
+                    "operation_id": snapshot.operation_id, "stream": name,
+                    "recovery": "retry action output for this operation; do not execute the command again"})
+                }
+            };
+        }
+        value["delivery"]["output_omitted"] = json!(omitted);
+        value["delivery"]["projection"] = json!("bounded_text");
+        if let Some(result) = value["outcome"]["result"].as_object_mut() {
+            result.remove("requested");
+            result.remove("executed");
+            result.insert("commands_omitted".into(), json!(true));
+        }
+    }
+    Ok(value)
 }
 
 async fn read(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
+    if arguments.get("context_epoch").is_some() {
+        let _ = bounded_required_string(arguments, "session_id", 256)?;
+        if optional_bool(arguments, "outline", false)? {
+            anyhow::bail!("context_epoch applies to exact reads, not outline");
+        }
+    }
+    if !optional_bool(arguments, "outline", false)? {
+        let paths = if let Some(path) = optional_string(arguments, "path")? {
+            vec![path]
+        } else {
+            string_array(arguments, "paths", 32)?
+        };
+        let request = hzr_protocol::ReadApiRequest {
+            context_epoch: optional_string(arguments, "context_epoch")?,
+            cwd: workspace.to_owned(),
+            paths,
+            from: optional_positive_u64(arguments, "from", 100_000)?,
+            to: optional_positive_u64(arguments, "to", 100_000)?,
+            max_lines: optional_positive_u64(arguments, "max_lines", 100_000)?,
+            max_tokens: optional_positive_u64(arguments, "max_tokens", 48_000)?,
+            expected_sha256: optional_string(arguments, "expected_sha256")?,
+            agent: Some("mcp".into()),
+            session_id: optional_string(arguments, "session_id")?
+                .or_else(hzr_core::ambient_session_id),
+        };
+        return Ok(serde_json::to_value(client.read_files(&request).await?)?);
+    }
     let request = read_fork_request(workspace, arguments)?;
     let response = client.fork_run(&request).await?;
     fork_result(response, "content", false)
@@ -1193,8 +1413,8 @@ fn write_fork_request(workspace: &str, arguments: &Value) -> Result<ForkRunApiRe
             }
             ForkManagedWrite::Patch {
                 path,
-                old: bounded_required_string(arguments, "old", MCP_PATCH_BLOCK_MAX_BYTES)?,
-                new: bounded_required_string(arguments, "new", MCP_PATCH_BLOCK_MAX_BYTES)?,
+                old: bounded_content_string(arguments, "old", MCP_PATCH_BLOCK_MAX_BYTES, false)?,
+                new: bounded_content_string(arguments, "new", MCP_PATCH_BLOCK_MAX_BYTES, true)?,
             }
         }
         "create" => {
@@ -1203,10 +1423,11 @@ fn write_fork_request(workspace: &str, arguments: &Value) -> Result<ForkRunApiRe
             }
             ForkManagedWrite::Create {
                 path,
-                content: bounded_required_string(
+                content: bounded_content_string(
                     arguments,
                     "content",
                     MCP_CREATE_CONTENT_MAX_BYTES,
+                    true,
                 )?,
             }
         }
@@ -1229,6 +1450,25 @@ fn bounded_required_string(arguments: &Value, key: &str, maximum_bytes: usize) -
         anyhow::bail!("argument `{key}` must contain at most {maximum_bytes} UTF-8 bytes");
     }
     Ok(value)
+}
+
+fn bounded_content_string(
+    arguments: &Value,
+    key: &str,
+    maximum_bytes: usize,
+    allow_empty: bool,
+) -> Result<String> {
+    let value = arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .with_context(|| format!("argument `{key}` must be a string"))?;
+    if (!allow_empty && value.is_empty()) || value.len() > maximum_bytes {
+        anyhow::bail!(
+            "argument `{key}` must contain {} to {maximum_bytes} UTF-8 bytes",
+            usize::from(!allow_empty)
+        );
+    }
+    Ok(value.to_owned())
 }
 
 fn optional_positive_u64(arguments: &Value, key: &str, maximum: u64) -> Result<Option<u64>> {

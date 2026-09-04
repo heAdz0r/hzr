@@ -1,0 +1,138 @@
+/* Workspace-first dashboard. Existing observatory components retain their own layouts. */
+:root { --text-tertiary: #a1a1aa; --surface-border: rgba(255,255,255,.05); }
+body { background: var(--ink-950); font-size: 14px; }
+.dashboard-header, main, .site-footer { max-width: 1440px; margin-inline: auto; }
+.dashboard-header { padding: 0 32px; }
+.dashboard-topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 88px; border-bottom: 1px solid var(--surface-border); }
+.dashboard-status { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.dashboard-status .refresh-action { margin: 0; min-height: 44px; background: var(--ink-850); padding: 8px 16px; border-radius: 8px; }
+.dashboard-status .version-pill { font-size: 12px; }
+.workspace-toolbar { display: grid; grid-template-columns: 1fr minmax(240px,360px); gap: 24px; padding: 32px 0 24px; align-items: end; }
+.workspace-toolbar h1 { font-size: 24px; line-height: 1.2; letter-spacing: -.025em; font-weight: 700; margin: 8px 0; overflow-wrap: anywhere; }
+.workspace-toolbar p { margin: 0; color: var(--text-secondary); line-height: 1.5; }
+.workspace-select, .activity-filters label { display: flex; flex-direction: column; gap: 8px; color: var(--text-secondary); font-size: 12px; min-width: 0; }
+.workspace-select small { font-size: 12px; }
+select { font: inherit; color: var(--text-primary); background: var(--ink-850); border: 1px solid #555861; padding: 8px 12px; border-radius: 8px; min-height: 44px; width: 100%; text-overflow: ellipsis; }
+select:focus-visible { outline: 2px solid var(--info); outline-offset: 4px; }
+.dashboard-navigation { display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--surface-border); }
+.dashboard-navigation button { min-height: 48px; border: 0; border-bottom: 2px solid transparent; padding: 12px 16px; background: transparent; color: var(--text-secondary); font-weight: 600; cursor: pointer; white-space: nowrap; }
+.dashboard-navigation button.active { color: var(--ember-300); border-bottom-color: var(--ember-500); }
+.dashboard-navigation button span { margin-left: 8px; color: var(--text-secondary); font-size: 12px; }
+.dashboard-navigation button:hover { background: var(--ink-850); }
+.dashboard-navigation button:active { background: var(--ink-800); }
+.snapshot-freshness { margin-left: auto; font-size: 12px; color: var(--text-tertiary); }
+.loading-scope { color: var(--warning); font-size: 12px; }
+main { padding: 32px 32px 48px; }
+.metrics-section, .system-section, .projects-section, .observatory-grid { margin-top: 0; }
+.section-heading { margin-bottom: 24px; gap: 24px; }
+.section-heading h2, .observatory-head h2 { font-size: 20px; line-height: 1.3; }
+.metrics-heading > p { overflow-wrap: anywhere; }
+.system-section, .projects-section { padding: 24px; border-radius: 16px; }
+.metric-group { border-radius: 16px; padding: 24px; }
+.metric-group-title { flex-wrap: wrap; gap: 12px; }
+.metric-group-title > div > span { overflow-wrap: anywhere; }
+.component-strip { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin-bottom: 24px; }
+.component-strip button { display: flex; justify-content: space-between; align-items: center; gap: 8px; min-width: 0; padding: 12px 16px; min-height: 56px; border: 0; border-radius: 12px; background: var(--ink-850); cursor: pointer; }
+.component-strip button:hover { background: var(--ink-800); }
+.component-strip button:active { background: var(--ink-700); }
+.component-strip button > span:first-child { font-weight: 600; }
+.health-boundary, .loaded-scope { color: var(--text-secondary); line-height: 1.5; margin: 0 0 24px; font-size: 14px; }
+.evidence-cards { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
+.evidence-card { display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: 12px; background: var(--ink-850); min-width: 0; }
+.evidence-label { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.evidence-number { color: var(--text-primary); font-size: 24px; letter-spacing: -.025em; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.evidence-number small { font-size: 12px; font-weight: 400; letter-spacing: 0; }
+.evidence-verdict { font-size: 20px; line-height: 1.5; color: var(--text-primary); }
+.evidence-card > span:not(.evidence-label) { color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.evidence-card p { font-size: 12px; line-height: 1.5; color: var(--text-tertiary); margin: auto 0 0; }
+.evidence-attention .evidence-number { color: var(--warning); }
+.value-negative { color: var(--error); }
+.scope-notice { display: flex; align-items: center; gap: 12px; background: var(--ink-850); padding: 16px; border-radius: 12px; margin-bottom: 16px; }
+.scope-notice .app-icon { color: var(--ember-300); flex-shrink: 0; }
+.scope-notice p { margin: 4px 0 0; color: var(--text-secondary); line-height: 1.5; }
+.output-comparison { padding: 24px 0 0; }
+.comparison-label { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.comparison-label span { font-size: 12px; color: var(--text-tertiary); overflow-wrap: anywhere; }
+.comparison-row { display: grid; grid-template-columns: 72px minmax(0,1fr) 80px; gap: 16px; align-items: center; margin: 12px 0; font-size: 12px; color: var(--text-secondary); }
+.comparison-row > div { height: 8px; border-radius: 4px; background: var(--ink-800); overflow: hidden; }
+.comparison-row i { display: block; height: 100%; border-radius: 4px; background: #747783; }
+.comparison-row.delivered i { background: var(--ember-300); }
+.comparison-row strong { text-align: right; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.measurement-detail { color: var(--text-secondary); margin-top: 12px; font-size: 12px; }
+.measurement-detail summary { min-height: 44px; padding: 12px 0; cursor: pointer; }
+.output-comparison p { margin: 16px 0 0; color: var(--text-tertiary); font-size: 12px; line-height: 1.5; }
+.activity-filters { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)) auto; align-items: end; gap: 12px; margin-top: 24px; }
+.activity-filters .ghost-action { min-height: 44px; justify-content: center; padding: 8px 16px; margin: 0; }
+.activity-filter-count { color: var(--text-secondary); font-size: 12px; line-height: 1.5; margin: 16px 0; }
+.activity-row { min-height: 56px; }
+.activity-row:hover { background: var(--ink-800); }
+.activity-row:active { background: var(--ink-700); }
+.output-bars { overflow: hidden; }
+.detail-disclosure { margin-top: 24px; }
+.detail-disclosure > summary { min-height: 44px; padding: 12px 0; font-size: 14px; font-weight: 600; cursor: pointer; }
+.detail-disclosure > summary span { color: var(--text-tertiary); font-weight: 400; margin-left: 12px; font-size: 12px; }
+.detail-disclosure > summary:hover { color: var(--ember-300); }
+.detail-disclosure[open] > summary { margin-bottom: 16px; }
+.metric-group.detail-disclosure { padding: 12px 24px; }
+.metric-group.detail-disclosure[open] { padding-bottom: 24px; }
+.session-roi h3 { font-size: 18px; }
+.session-roi-value strong { font-size: 20px; }
+.session-token-line { display: flex; gap: 24px; flex-wrap: wrap; margin: 24px 0; }
+.session-token-line div { display: flex; flex-direction: column; gap: 8px; }
+.session-token-line strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.session-token-line span { font-size: 12px; color: var(--text-secondary); }
+.inline-error { color: var(--error); background: var(--ink-850); padding: 16px; border-radius: 8px; }
+button, select { transition: background 150ms ease, color 150ms ease; }
+button:disabled { background: #34363d; color: #b1b2b8; cursor: not-allowed; transform: none; }
+.project-card summary { min-height: 64px; }
+.project-card .secondary-action { min-height: 44px; }
+.service-node { border-radius: 12px; }
+.site-footer { padding: 24px 32px; }
+@media (max-width: 1100px) {
+  .component-strip, .evidence-cards { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .activity-row { grid-template-columns: 56px 76px 92px minmax(72px,1fr) 100px 64px 48px 16px; }
+  .activity-row .activity-directory, .activity-row .output-bars { display: none; }
+}
+@media (max-width: 767px) {
+  .dashboard-header { padding: 0 16px; }
+  .dashboard-topbar { min-height: 64px; }
+  .dashboard-status { gap: 8px; justify-content: flex-end; }
+  .dashboard-status .version-pill { display: none; }
+  .dashboard-status .refresh-action { padding: 8px; }
+  .wordmark-copy small { display: none; }
+  .workspace-toolbar { grid-template-columns: 1fr; padding: 16px 0; gap: 12px; }
+  .workspace-toolbar p { display: none; }
+  .metrics-heading > p { display: none; }
+  .dashboard-navigation { gap: 0; flex-wrap: wrap; }
+  .dashboard-navigation button { padding: 12px; flex: 1; font-size: 12px; }
+  .dashboard-navigation button span { display: none; }
+  .snapshot-freshness { width: 100%; padding: 12px 0; margin: 0; }
+  main { padding: 24px 16px 32px; }
+  .section-heading { display: block; }
+  .section-heading > p { margin-top: 12px; }
+  .component-strip { grid-template-columns: repeat(4,minmax(0,1fr)); gap: 8px; }
+  .component-strip button > span:first-child { font-size: 12px; }
+  .component-strip button { flex-direction: column; align-items: flex-start; padding: 12px 8px; }
+  .component-strip .status-chip { padding-inline: 4px; gap: 4px; font-size: 12px; }
+  .evidence-cards { grid-template-columns: 1fr 1fr; }
+  .evidence-card { padding: 16px; gap: 12px; }
+  .evidence-verdict { font-size: 18px; }
+  .metric-group, .system-section, .projects-section { padding: 16px; }
+  .metric-group-title .metric-legend { margin: 0; white-space: normal; }
+  .comparison-label { display: block; }
+  .comparison-label span { display: block; margin-top: 8px; }
+  .comparison-row { grid-template-columns: 56px minmax(0,1fr) 64px; gap: 8px; }
+  .activity-filters { grid-template-columns: 1fr 1fr; }
+  .activity-row { grid-template-columns: 56px 76px minmax(0,1fr) 48px; padding: 12px; gap: 8px; }
+  .activity-row .activity-directory { display: none; }
+  .activity-row .activity-agent { grid-column: 1 / 4; }
+  .activity-row .activity-latency { grid-column: 4; text-align: right; }
+  .detail-disclosure > summary span { display: block; margin: 8px 0 0; }
+  .metric-group.detail-disclosure { padding-inline: 16px; }
+  .site-footer { padding: 24px 16px; }
+  .project-search { width: 100%; margin-top: 16px; }
+}
+@media (max-width: 359px) {
+  .evidence-cards { grid-template-columns: 1fr; }
+  .dashboard-status .status-chip { display: none; }
+}

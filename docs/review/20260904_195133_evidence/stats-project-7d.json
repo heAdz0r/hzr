@@ -1,0 +1,530 @@
+{
+  "hzr_version": "0.7.1",
+  "scope": "project sha256:91512d7d10c9cf4f9272dece97ff05a88df8acdd80786bc1ccbc8737e3915f12 since 7d",
+  "direct_savings": {
+    "operations": 391,
+    "input_tokens_estimated": 637076,
+    "delivered_tokens_estimated": 556977,
+    "gross_avoided_tokens_estimated": 99836,
+    "regression_tokens_estimated": 19737,
+    "net_avoided_tokens_estimated": 80099,
+    "reduction_pct": 12.572911238219616,
+    "total_execution_ms": 2088874,
+    "measurement": "estimated_utf8_bytes_div_4_v1"
+  },
+  "host_visible_savings": {
+    "operations": 391,
+    "baseline_tokens_estimated": 637076,
+    "delivered_tokens_estimated": 556977,
+    "net_avoided_tokens_estimated": 80099,
+    "reduction_pct": 12.572911238219616,
+    "uncapped_operations": 391,
+    "complete": false,
+    "method": "known_host_visible_caps_v1; claude-code=512 tokens; unknown hosts remain raw upper bounds"
+  },
+  "by_subsystem": [
+    {
+      "subsystem": "search",
+      "operations": 83,
+      "gross_avoided_tokens_estimated": 96787,
+      "regression_tokens_estimated": 19737,
+      "net_avoided_tokens_estimated": 77050,
+      "share_pct": 96.19346059251676
+    },
+    {
+      "subsystem": "execution",
+      "operations": 17,
+      "gross_avoided_tokens_estimated": 3049,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 3049,
+      "share_pct": 3.8065394074832395
+    },
+    {
+      "subsystem": "bypass",
+      "operations": 277,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0,
+      "share_pct": 0.0
+    },
+    {
+      "subsystem": "codec",
+      "operations": 2,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0,
+      "share_pct": 0.0
+    },
+    {
+      "subsystem": "memory",
+      "operations": 12,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0,
+      "share_pct": 0.0
+    }
+  ],
+  "by_mode": [
+    {
+      "operation": "codec",
+      "mode": "codec_compile",
+      "stage": "internal_transport",
+      "operations": 2,
+      "delivered_tokens_estimated": 3336
+    },
+    {
+      "operation": "context",
+      "mode": "context_plan",
+      "stage": "standalone_delivery",
+      "operations": 6,
+      "delivered_tokens_estimated": 32009
+    },
+    {
+      "operation": "exec",
+      "mode": "exec_run",
+      "stage": "internal_transport",
+      "operations": 268,
+      "delivered_tokens_estimated": 87341
+    },
+    {
+      "operation": "memory",
+      "mode": "memory_recall",
+      "stage": "standalone_delivery",
+      "operations": 11,
+      "delivered_tokens_estimated": 29077
+    },
+    {
+      "operation": "memory",
+      "mode": "memory_store",
+      "stage": "standalone_delivery",
+      "operations": 1,
+      "delivered_tokens_estimated": 631
+    },
+    {
+      "operation": "read",
+      "mode": "read_head",
+      "stage": "internal_transport",
+      "operations": 1,
+      "delivered_tokens_estimated": 101
+    },
+    {
+      "operation": "read",
+      "mode": "read_tail",
+      "stage": "internal_transport",
+      "operations": 37,
+      "delivered_tokens_estimated": 360069
+    },
+    {
+      "operation": "search",
+      "mode": "search_exact",
+      "stage": "final_delivery",
+      "operations": 215,
+      "delivered_tokens_estimated": 39842
+    },
+    {
+      "operation": "search",
+      "mode": "search_exact",
+      "stage": "internal_transport",
+      "operations": 68,
+      "delivered_tokens_estimated": 24322
+    },
+    {
+      "operation": "search",
+      "mode": "search_semantic",
+      "stage": "final_delivery",
+      "operations": 55,
+      "delivered_tokens_estimated": 44147
+    },
+    {
+      "operation": "search",
+      "mode": "search_semantic",
+      "stage": "internal_transport",
+      "operations": 15,
+      "delivered_tokens_estimated": 20091
+    },
+    {
+      "operation": "write",
+      "mode": "write",
+      "stage": "final_delivery",
+      "operations": 5,
+      "delivered_tokens_estimated": 45741
+    }
+  ],
+  "read_pipeline": {
+    "operations": 0,
+    "source_tokens_estimated": 0,
+    "selected_tokens_estimated": 0,
+    "delivered_tokens_estimated": 0,
+    "selection_avoided_tokens_estimated": 0,
+    "selection_overhead_tokens_estimated": 0,
+    "transform_avoided_tokens_estimated": 0,
+    "transform_overhead_tokens_estimated": 0
+  },
+  "accounting_version_scope": "typed_v2_plus_aggregate_compatible_v1",
+  "accounting_policy_version": "privacy_typed_v2",
+  "excluded_legacy_operations": 0,
+  "stage_exclusion": {
+    "operations": 275,
+    "delivered_tokens_estimated": 129730
+  },
+  "rerun_tax": {
+    "operations": 24,
+    "tokens_estimated": 5672,
+    "net_avoided_after_rerun_tax_estimated": 74427,
+    "detection_window_operations": 8
+  },
+  "by_family": [
+    {
+      "family": "read",
+      "route": "raw",
+      "operations": 38,
+      "delivered_tokens_estimated": 360170,
+      "replacement_capability": "unknown"
+    },
+    {
+      "family": "other",
+      "route": "raw",
+      "operations": 257,
+      "delivered_tokens_estimated": 77637,
+      "replacement_capability": "unknown"
+    },
+    {
+      "family": "search",
+      "route": "optimized",
+      "operations": 83,
+      "delivered_tokens_estimated": 44413,
+      "replacement_capability": "available"
+    },
+    {
+      "family": "other",
+      "route": "optimized",
+      "operations": 17,
+      "delivered_tokens_estimated": 41713,
+      "replacement_capability": "available"
+    },
+    {
+      "family": "memory",
+      "route": "optimized",
+      "operations": 12,
+      "delivered_tokens_estimated": 29708,
+      "replacement_capability": "available"
+    },
+    {
+      "family": "codec",
+      "route": "optimized",
+      "operations": 2,
+      "delivered_tokens_estimated": 3336,
+      "replacement_capability": "available"
+    }
+  ],
+  "by_command": [
+    {
+      "key": {
+        "family": "search",
+        "operation": "search",
+        "mode": "search_semantic",
+        "stage": "internal_transport",
+        "route": "optimized"
+      },
+      "command": "opt search:semantic/int",
+      "subsystem": "search",
+      "executions": 15,
+      "baseline_tokens_estimated": 116878,
+      "delivered_tokens_estimated": 20091,
+      "gross_avoided_tokens_estimated": 96787,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 96787,
+      "avg_savings_pct": 82.81028080562638,
+      "avg_time_ms": 371
+    },
+    {
+      "key": {
+        "family": "other",
+        "operation": "exec",
+        "mode": "exec_run",
+        "stage": "internal_transport",
+        "route": "optimized"
+      },
+      "command": "opt other>exec:run/int",
+      "subsystem": "execution",
+      "executions": 11,
+      "baseline_tokens_estimated": 12753,
+      "delivered_tokens_estimated": 9704,
+      "gross_avoided_tokens_estimated": 3049,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 3049,
+      "avg_savings_pct": 23.908100054889047,
+      "avg_time_ms": 4900
+    },
+    {
+      "key": {
+        "family": "codec",
+        "operation": "codec",
+        "mode": "codec_compile",
+        "stage": "internal_transport",
+        "route": "optimized"
+      },
+      "command": "opt codec:compile/int",
+      "subsystem": "codec",
+      "executions": 2,
+      "baseline_tokens_estimated": 3336,
+      "delivered_tokens_estimated": 3336,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0,
+      "avg_savings_pct": 0.0,
+      "avg_time_ms": 5
+    },
+    {
+      "key": {
+        "family": "memory",
+        "operation": "memory",
+        "mode": "memory_recall",
+        "stage": "standalone_delivery",
+        "route": "optimized"
+      },
+      "command": "opt memory:recall/direct",
+      "subsystem": "memory",
+      "executions": 11,
+      "baseline_tokens_estimated": 29077,
+      "delivered_tokens_estimated": 29077,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0,
+      "avg_savings_pct": 0.0,
+      "avg_time_ms": 0
+    },
+    {
+      "key": {
+        "family": "memory",
+        "operation": "memory",
+        "mode": "memory_store",
+        "stage": "standalone_delivery",
+        "route": "optimized"
+      },
+      "command": "opt memory:store/direct",
+      "subsystem": "memory",
+      "executions": 1,
+      "baseline_tokens_estimated": 631,
+      "delivered_tokens_estimated": 631,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0,
+      "avg_savings_pct": 0.0,
+      "avg_time_ms": 0
+    },
+    {
+      "key": {
+        "family": "other",
+        "operation": "context",
+        "mode": "context_plan",
+        "stage": "standalone_delivery",
+        "route": "optimized"
+      },
+      "command": "opt other>context:plan/direct",
+      "subsystem": "execution",
+      "executions": 6,
+      "baseline_tokens_estimated": 32009,
+      "delivered_tokens_estimated": 32009,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0,
+      "avg_savings_pct": 0.0,
+      "avg_time_ms": 0
+    },
+    {
+      "key": {
+        "family": "other",
+        "operation": "exec",
+        "mode": "exec_run",
+        "stage": "internal_transport",
+        "route": "raw"
+      },
+      "command": "raw other>exec:run/int",
+      "subsystem": "bypass",
+      "executions": 239,
+      "baseline_tokens_estimated": 77637,
+      "delivered_tokens_estimated": 77637,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0,
+      "avg_savings_pct": 0.0,
+      "avg_time_ms": 8481
+    },
+    {
+      "key": {
+        "family": "read",
+        "operation": "read",
+        "mode": "read_head",
+        "stage": "internal_transport",
+        "route": "raw"
+      },
+      "command": "raw read:head/int",
+      "subsystem": "bypass",
+      "executions": 1,
+      "baseline_tokens_estimated": 101,
+      "delivered_tokens_estimated": 101,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0,
+      "avg_savings_pct": 0.0,
+      "avg_time_ms": 1
+    },
+    {
+      "key": {
+        "family": "read",
+        "operation": "read",
+        "mode": "read_tail",
+        "stage": "internal_transport",
+        "route": "raw"
+      },
+      "command": "raw read:tail/int",
+      "subsystem": "bypass",
+      "executions": 37,
+      "baseline_tokens_estimated": 360069,
+      "delivered_tokens_estimated": 360069,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 0,
+      "net_avoided_tokens_estimated": 0,
+      "avg_savings_pct": 0.0,
+      "avg_time_ms": 1
+    },
+    {
+      "key": {
+        "family": "search",
+        "operation": "search",
+        "mode": "search_exact",
+        "stage": "internal_transport",
+        "route": "optimized"
+      },
+      "command": "opt search:exact/int",
+      "subsystem": "search",
+      "executions": 68,
+      "baseline_tokens_estimated": 4585,
+      "delivered_tokens_estimated": 24322,
+      "gross_avoided_tokens_estimated": 0,
+      "regression_tokens_estimated": 19737,
+      "net_avoided_tokens_estimated": -19737,
+      "avg_savings_pct": -430.4689203925845,
+      "avg_time_ms": 31
+    }
+  ],
+  "by_command_total": 10,
+  "by_command_omitted": 0,
+  "by_command_recovery": "hzr stats --json --all --workspace <workspace> --since 7d",
+  "observed_model_usage": {
+    "tasks": 0,
+    "accepted": 0,
+    "actual_input_tokens": 0,
+    "actual_output_tokens": 0,
+    "estimated_input_tokens": 0,
+    "cost_microusd": 0
+  },
+  "observed_model_usage_scope": "project_matched_window",
+  "bypass": {
+    "operations": 295,
+    "total_operations": 409,
+    "operation_share_pct": 72.12713936430318,
+    "delivered_tokens_estimated": 437807,
+    "total_delivered_tokens_estimated": 556977,
+    "token_share_pct": 78.604143438598,
+    "by_tool": [
+      {
+        "tool": "read",
+        "executions": 38,
+        "delivered_tokens_estimated": 360170,
+        "example_command": "bypassed read <arguments omitted>",
+        "replacement": null,
+        "replacement_capability": "unknown",
+        "rationale": null
+      },
+      {
+        "tool": "other",
+        "executions": 257,
+        "delivered_tokens_estimated": 77637,
+        "example_command": "bypassed other <arguments omitted>",
+        "replacement": null,
+        "replacement_capability": "unknown",
+        "rationale": null
+      }
+    ],
+    "by_tool_total": 2,
+    "by_tool_omitted": 0,
+    "by_tool_recovery": "hzr stats --json --all --workspace <workspace> --since 7d"
+  },
+  "traffic_coverage": {
+    "observability_scope": "observed_channels_only",
+    "completeness": "degraded_rewrite_gap",
+    "complete": false,
+    "accounted_operations": 391,
+    "total_observed_operations": 409,
+    "native_unaccounted_operations": 0,
+    "unmeasured_bypass_operations": 18,
+    "accounted_share_pct": 95.59902200488997,
+    "by_channel": {
+      "hook_cli": 407,
+      "mcp": 2
+    }
+  },
+  "degraded_rewrites": 5137,
+  "coverage": {
+    "unreconciled_rewrites": 5137,
+    "lifetime_rewrites": 5916,
+    "daemon_unavailable_operations": 723,
+    "complete": false,
+    "live_complete": false,
+    "historical_complete": false,
+    "open_intervals": 2,
+    "closed_intervals": 572,
+    "last_degraded_at_unix": 1788551058,
+    "gap_started_at_unix": 1787875502,
+    "last_recovered_at_unix": 1788551041,
+    "open_gap_seconds": 675557,
+    "closed_gap_seconds": 6032,
+    "hook_missing_operations": 0,
+    "cli_missing_operations": 0,
+    "mcp_missing_operations": 0,
+    "fork_producer_missing_operations": 5856
+  },
+  "runtime_accounting_complete": false,
+  "economic_claim_ready": false,
+  "raw_public_estimate_unavailable_reason": "potential pricing is disabled because one or more operation hosts have no validated visible-output cap; raw byte estimates are upper bounds",
+  "economics": {
+    "rows": [
+      {
+        "scope": "this project",
+        "scope_resolved": true,
+        "avoided_input_tokens_estimated": 80099,
+        "billed_receipts": 0,
+        "notes": [
+          "no paired provider receipt is attributed to this project"
+        ]
+      },
+      {
+        "scope": "global lifetime",
+        "scope_resolved": true,
+        "avoided_input_tokens_estimated": 82993,
+        "billed_receipts": 0,
+        "notes": [
+          "no paired provider receipt is attributed to the global ledger"
+        ]
+      }
+    ],
+    "unavailable_reason": "potential pricing is disabled because one or more operation hosts have no validated visible-output cap; raw byte estimates are upper bounds",
+    "enable_steps": [
+      "1. `hzr billing catalog` — find the exact harness/provider/model/method row",
+      "2. set [billing] public_estimate_enabled = true in the HZR config",
+      "3. set [billing] harness, provider, model, method and pricing_basis to that exact row"
+    ]
+  },
+  "zero_reduction_cause": "not_zero",
+  "notes": [
+    "direct savings are estimated from before/after output size and never mixed with provider usage",
+    "read, write, rgai/search, and command filters share the same HZR-owned ledger scope",
+    "a bypassed operation delivers as many tokens as it consumed, so it cancels out of the reduction ratio instead of lowering it",
+    "context selection, memory recall, and response contracts receive no savings credit without a measured counterfactual",
+    "accounting completeness applies only to observed channels; a host-native tool without an installed observer is outside the denominator",
+    "provider usage is scoped to receipts that carry a matching workspace identity; older unscoped receipts stay in the global lifetime view only",
+    "degraded-hook accounting coverage remains process-local and is not project- or time-window-filtered"
+  ]
+}

@@ -8,9 +8,11 @@ mod client;
 mod client_config;
 mod diagnostics;
 mod fleet_exemption;
+mod fleet_stats;
 mod foreign;
 mod fork;
 mod hook_runner;
+mod host_hooks;
 mod input;
 mod instructions;
 mod invocation;
@@ -19,6 +21,7 @@ mod memory_migration;
 mod migration;
 mod output;
 mod prefix;
+mod read_cli;
 mod release_version;
 mod service;
 mod stats;
@@ -407,15 +410,26 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         } => bail!("hook status entered configured execution path"),
         Command::Update { .. } => bail!("update command entered configured execution path"),
         Command::Hooks {
-            command: HooksCommand::Dispatch { native_mode },
+            command: HooksCommand::Capabilities { host, probe },
         } => {
-            hook_runner::dispatch(&config, native_mode).await;
+            print_json(&host_hooks::capabilities(host, probe))?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Hooks {
-            command: HooksCommand::Observe { native_mode },
+            command: HooksCommand::Dispatch { native_mode, host },
         } => {
-            hook_runner::observe(&config, native_mode).await;
+            hook_runner::dispatch(&config, native_mode, host).await;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Hooks {
+            command:
+                HooksCommand::Observe {
+                    native_mode,
+                    host,
+                    replace_output,
+                },
+        } => {
+            hook_runner::observe(&config, native_mode, host, replace_output).await;
             Ok(ExitCode::SUCCESS)
         }
         Command::Hooks {
@@ -496,6 +510,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     report.healthy = false;
                 }
                 report.checks.push(completion);
+                report.readiness = diagnostics::ReadinessReport::from_checks(
+                    &report.checks,
+                    &report.response_codec_coverage,
+                );
             }
             if cli.json {
                 print_json(&report)?;
@@ -516,10 +534,8 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Daemon { command } => match command {
             DaemonCommand::Serve => {
-                hzr_daemon::serve(config, async {
-                    let _ = tokio::signal::ctrl_c().await;
-                })
-                .await?;
+                let shutdown = hzr_daemon::shutdown_signal()?;
+                hzr_daemon::serve(config, shutdown).await?;
                 Ok(ExitCode::SUCCESS)
             }
             DaemonCommand::Status => {
@@ -666,8 +682,10 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             fork::passthrough(&config, &args).await
         }
         Command::Read(arguments) => {
+            if cli.json {
+                return read_cli::run(&config, &arguments.args).await;
+            }
             let args = forwarded_fork_args("read", &arguments.args);
-            let args = bounded_read_arguments(&args, exact_read_fidelity_requested());
             fork::passthrough(&config, &args).await
         }
         Command::Write(arguments) => {
@@ -734,7 +752,27 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             evasion,
             since,
             accounting_version,
+            fleet,
+            since_unix,
+            until,
+            project_id,
+            export,
         } => {
+            if fleet {
+                fleet_stats::show(
+                    &config,
+                    fleet_stats::FleetOptions {
+                        since: since.as_ref(),
+                        since_unix,
+                        until,
+                        project_id: project_id.as_deref(),
+                        export: export.as_deref(),
+                        accounting_version,
+                        json: cli.json,
+                    },
+                )?;
+                return Ok(ExitCode::SUCCESS);
+            }
             show_stats(
                 &config,
                 workspace.as_deref(),
@@ -927,8 +965,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         },
         Command::Rtk(arguments) => {
             reject_direct_fork_bypass(&config, &arguments.args).await?;
-            let args = bounded_read_arguments(&arguments.args, exact_read_fidelity_requested());
-            fork::passthrough(&config, &args).await
+            fork::passthrough(&config, &arguments.args).await
         }
     }
 }
@@ -1045,93 +1082,6 @@ async fn reject_direct_fork_bypass(config: &Config, args: &[std::ffi::OsString])
     bail!(
         "direct managed raw execution is disabled; use `hzr exec run <command>` so fidelity policy, session budget, and E7 accounting are enforced"
     )
-}
-
-fn exact_read_fidelity_requested() -> bool {
-    std::env::var_os("HZR_EXACT_FIDELITY").as_deref() == Some(std::ffi::OsStr::new("1"))
-}
-
-/// Remove an unbounded exact-text request before entering fork-core.
-///
-/// This is an argv transformation, not a shell reconstruction: non-UTF-8 file names and every
-/// untouched argument retain their original bytes. Bounded/structural reads and the explicit
-/// fidelity marker remain unchanged.
-fn bounded_read_arguments(
-    arguments: &[std::ffi::OsString],
-    exact_fidelity: bool,
-) -> Vec<std::ffi::OsString> {
-    if exact_fidelity || arguments.first().and_then(|value| value.to_str()) != Some("read") {
-        return arguments.to_vec();
-    }
-
-    let mut level_none = None;
-    let mut index = 1;
-    let mut bounded = false;
-    while index < arguments.len() {
-        let Some(argument) = arguments[index].to_str() else {
-            index += 1;
-            continue;
-        };
-        bounded |= matches!(
-            argument,
-            "--from"
-                | "--to"
-                | "-n"
-                | "--line-numbers"
-                | "--max-lines"
-                | "--tail-lines"
-                | "--outline"
-                | "--symbols"
-                | "--changed"
-                | "--since"
-        ) || [
-            "--from=",
-            "--to=",
-            "--max-lines=",
-            "--tail-lines=",
-            "--since=",
-        ]
-        .iter()
-        .any(|prefix| argument.starts_with(prefix));
-
-        let candidate = if matches!(argument, "--level" | "-l") {
-            let Some(value) = arguments.get(index + 1).and_then(|value| value.to_str()) else {
-                return arguments.to_vec();
-            };
-            if value != "none" || level_none.is_some() {
-                return arguments.to_vec();
-            }
-            Some((index, index + 1))
-        } else if argument == "--level=none" {
-            if level_none.is_some() {
-                return arguments.to_vec();
-            }
-            Some((index, index))
-        } else if argument.starts_with("--level=") {
-            return arguments.to_vec();
-        } else {
-            None
-        };
-        if let Some(candidate) = candidate {
-            level_none = Some(candidate);
-            index = candidate.1 + 1;
-        } else {
-            index += 1;
-        }
-    }
-
-    let Some((start, end)) = level_none else {
-        return arguments.to_vec();
-    };
-    if bounded {
-        return arguments.to_vec();
-    }
-    arguments
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| *index < start || *index > end)
-        .map(|(_, argument)| argument.clone())
-        .collect()
 }
 
 struct InstallOptions {
@@ -3666,6 +3616,10 @@ async fn execute_search(
     let workspace = canonical_directory(arguments.workspace.as_deref())?;
     let mode = arguments.mode.map_or(default_mode, Into::into);
     let path_scope_count = arguments.path.len().max(1);
+    anyhow::ensure!(
+        !(arguments.paginate || arguments.cursor.is_some()) || path_scope_count == 1,
+        "stable search pagination requires one path scope; run separate scoped searches"
+    );
     // One request per subtree, merged. The daemon filter takes a single path, and running
     // the searches here keeps that contract while letting an agent write the multi-path
     // invocation it would reach for anyway.
@@ -3683,6 +3637,8 @@ async fn execute_search(
     for path in paths {
         let response = client
             .search(&SearchApiRequest {
+                paginate: arguments.paginate || arguments.cursor.is_some(),
+                cursor: arguments.cursor.clone(),
                 workspace: workspace.to_string_lossy().into_owned(),
                 query: arguments.query.clone(),
                 path,
@@ -3760,7 +3716,16 @@ async fn record_search_delivery(
             delivery.requested_mode,
             delivery.response,
             SearchAccountingMetadata {
-                stage: AccountingStage::FinalDelivery,
+                stage: if delivery
+                    .response
+                    .page
+                    .as_ref()
+                    .is_some_and(|page| page.offset > 0)
+                {
+                    AccountingStage::StandaloneDelivery
+                } else {
+                    AccountingStage::FinalDelivery
+                },
                 include_content: delivery.include_content,
                 limit: u64::try_from(delivery.limit).unwrap_or(u64::MAX),
                 path_scope_count: u64::try_from(delivery.path_scope_count).unwrap_or(u64::MAX),
@@ -3822,6 +3787,8 @@ async fn execute_context_plan(
     let request = ContextPlanApiRequest {
         workspace: workspace_text.clone(),
         intent: arguments.intent,
+        max_tokens: arguments.max_tokens,
+        no_memory: arguments.no_memory,
         path: arguments
             .path
             .as_deref()
@@ -3918,6 +3885,39 @@ async fn record_cli_standalone_delivery(
 async fn execute_memory(config: &Config, command: MemoryCommand, json: bool) -> Result<ExitCode> {
     let client = DaemonClient::from_config(config)?;
     match command {
+        MemoryCommand::Get {
+            id,
+            workspace,
+            scope,
+        } => {
+            let workspace = canonical_directory(workspace.as_deref())?;
+            let workspace_text = path_text(&workspace, "memory workspace")?;
+            let response = client
+                .memory_get(&hzr_protocol::MemoryGetApiRequest {
+                    workspace: workspace_text.clone(),
+                    id,
+                    scope: scope.into(),
+                })
+                .await?;
+            if json {
+                print_json(&response)?;
+            } else {
+                println!("{}", response.summary);
+                if let Some(raw) = &response.raw_excerpt {
+                    println!("\\n{raw}");
+                }
+            }
+            record_cli_standalone_delivery(
+                config,
+                &client,
+                &workspace_text,
+                "hzr memory get",
+                AccountingOperationKind::Memory,
+                AccountingOperationMode::MemoryRecall,
+                &response,
+            )
+            .await;
+        }
         MemoryCommand::Recall {
             query,
             workspace,
@@ -4138,8 +4138,120 @@ async fn execute_command(config: &Config, command: ExecCommand, json: bool) -> R
         }
         ExecCommand::Run(arguments) => {
             let request = exec_request(arguments)?;
-            let outcome = client.exec_run(&request).await?;
+            let shutdown = hzr_daemon::shutdown_signal()?;
+            let operation_id = uuid::Uuid::new_v4().to_string();
+            let outcome = tokio::select! {
+                outcome = client.exec_run_id(&request, operation_id.clone()) => outcome?,
+                _ = shutdown => {
+                    let cancelled = client.exec_cancel(&hzr_protocol::ExecJobApiRequest {
+                        operation_id: operation_id.clone(),
+                        cwd: request.cwd.clone(),
+                        wait_ms: None,
+                        after_revision: None,
+                        max_output_bytes: Some(8 * 1024 * 1024),
+                    }).await?;
+                    cancelled.outcome.with_context(|| format!(
+                        "cancellation requested for {operation_id}; state {:?}; inspect with hzr exec wait",
+                        cancelled.state,
+                    ))?
+                }
+            };
             Ok(print_execution(&outcome, json)?)
+        }
+        ExecCommand::Start {
+            execution,
+            operation_id,
+        } => {
+            let snapshot = client
+                .exec_start(&hzr_protocol::ExecStartApiRequest {
+                    operation_id: operation_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                    request: exec_request(execution)?,
+                })
+                .await?;
+            print_json(&snapshot)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        ExecCommand::Wait {
+            operation_id,
+            cwd,
+            wait_ms,
+            after_revision,
+            max_output_bytes,
+        } => {
+            let snapshot = client
+                .exec_wait(&hzr_protocol::ExecJobApiRequest {
+                    operation_id,
+                    cwd: cwd
+                        .unwrap_or(std::env::current_dir()?)
+                        .to_string_lossy()
+                        .into_owned(),
+                    wait_ms: Some(wait_ms),
+                    after_revision,
+                    max_output_bytes: Some(max_output_bytes.unwrap_or(8 * 1024 * 1024)),
+                })
+                .await?;
+            if !json {
+                if let Some(outcome) = snapshot.outcome.as_ref() {
+                    return Ok(print_execution(outcome, false)?);
+                }
+            }
+            print_json(&snapshot)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        ExecCommand::Output {
+            operation_id,
+            cwd,
+            stream,
+            offset,
+            max_bytes,
+            expected_sha256,
+        } => {
+            let cwd = cwd
+                .unwrap_or(std::env::current_dir()?)
+                .to_string_lossy()
+                .into_owned();
+            let response = client
+                .exec_output(&hzr_protocol::ExecOutputApiRequest {
+                    operation_id,
+                    cwd: cwd.clone(),
+                    stream: if stream == "stderr" {
+                        hzr_protocol::ExecOutputStream::Stderr
+                    } else {
+                        hzr_protocol::ExecOutputStream::Stdout
+                    },
+                    offset,
+                    max_bytes,
+                    expected_sha256,
+                })
+                .await?;
+            print_json(&response)?;
+            record_cli_standalone_delivery(
+                config,
+                &client,
+                &cwd,
+                "hzr exec output",
+                hzr_protocol::AccountingOperationKind::Exec,
+                hzr_protocol::AccountingOperationMode::ExecRun,
+                &response,
+            )
+            .await;
+            Ok(ExitCode::SUCCESS)
+        }
+        ExecCommand::Cancel { operation_id, cwd } => {
+            let snapshot = client
+                .exec_cancel(&hzr_protocol::ExecJobApiRequest {
+                    operation_id,
+                    cwd: cwd
+                        .unwrap_or(std::env::current_dir()?)
+                        .to_string_lossy()
+                        .into_owned(),
+                    wait_ms: None,
+                    after_revision: None,
+                    max_output_bytes: None,
+                })
+                .await?;
+            print_json(&snapshot)?;
+            Ok(ExitCode::SUCCESS)
         }
         ExecCommand::Approve { decision_id } => {
             let outcome = client
@@ -4167,6 +4279,7 @@ fn exec_request(arguments: ExecArgs) -> Result<ExecApiRequest> {
     let fidelity_requested =
         std::env::var_os("HZR_RAW_FIDELITY").as_deref() == Some(std::ffi::OsStr::new("1"));
     Ok(ExecApiRequest {
+        channel: None,
         cwd: cwd.to_string_lossy().into_owned(),
         command: arguments.command,
         fidelity_requested,
@@ -4471,11 +4584,11 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ReceiptImportCompatibility, bounded_read_arguments, canonical_directory,
-        contract_asset_path, executable_source_directory, format_pricing_entry,
-        forwarded_fork_args, instruction_drift_alert_for_targets, parse_provider_receipt_import,
-        payload_limit, reject_direct_fork_bypass, response_codec_session_notice,
-        session_instruction_drift_alert, session_start_payload, validate_activation_workspace,
+        ReceiptImportCompatibility, canonical_directory, contract_asset_path,
+        executable_source_directory, format_pricing_entry, forwarded_fork_args,
+        instruction_drift_alert_for_targets, parse_provider_receipt_import, payload_limit,
+        reject_direct_fork_bypass, response_codec_session_notice, session_instruction_drift_alert,
+        session_start_payload, validate_activation_workspace,
         validate_activation_workspace_against_home,
     };
 
@@ -4663,41 +4776,17 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_gate_direct_cli_reduces_only_unbounded_exact_reads() {
-        let arguments = |values: &[&str]| {
-            values
-                .iter()
-                .map(std::ffi::OsString::from)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            bounded_read_arguments(&arguments(&["read", "README.md", "--level", "none"]), false),
-            arguments(&["read", "README.md"])
-        );
-        assert_eq!(
-            bounded_read_arguments(&arguments(&["read", "README.md", "--level=none"]), false),
-            arguments(&["read", "README.md"])
-        );
-        for preserved in [
-            arguments(&[
-                "read",
-                "README.md",
-                "--from",
-                "1",
-                "--to",
-                "20",
-                "--level",
-                "none",
-            ]),
-            arguments(&["read", "README.md", "--outline", "--level", "none"]),
-            arguments(&["read", "README.md", "--level", "none"]),
-            arguments(&["write", "replace", "README.md", "old", "new"]),
+    fn explicit_full_read_is_forwarded_without_a_fidelity_marker() {
+        for flags in [
+            vec!["README.md", "--level", "none"],
+            vec!["README.md", "--level=none"],
+            vec!["README.md", "--from", "1", "--to", "20", "--level", "none"],
         ] {
-            let exact_fidelity = preserved == arguments(&["read", "README.md", "--level", "none"]);
-            assert_eq!(
-                bounded_read_arguments(&preserved, exact_fidelity),
-                preserved
-            );
+            let arguments: Vec<_> = flags.iter().map(std::ffi::OsString::from).collect();
+            let expected = std::iter::once(std::ffi::OsString::from("read"))
+                .chain(arguments.iter().cloned())
+                .collect::<Vec<_>>();
+            assert_eq!(forwarded_fork_args("read", &arguments), expected);
         }
     }
 

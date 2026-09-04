@@ -16,7 +16,7 @@ resolver = "2"
 exclude = ["fork-core/rtk"]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"

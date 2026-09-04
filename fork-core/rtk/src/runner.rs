@@ -95,7 +95,11 @@ pub fn run_test(command: &[String], verbose: u8) -> Result<()> {
         .status
         .code()
         .unwrap_or(if output.status.success() { 0 } else { 1 });
-    let summary = extract_test_summary(&raw, &display);
+    let summary = if output.status.success() {
+        extract_test_summary(&raw, &display)
+    } else {
+        extract_failure_summary(&raw, &display)
+    };
     let hint = crate::tee::tee_and_hint(&raw, "test", exit_code);
     let shown = emit_guarded(&summary, hint.as_deref(), &raw);
     timer.track(&display, "rtk run-test", &raw, &shown);
@@ -162,12 +166,40 @@ fn filter_errors(output: &str) -> String {
     result.join("\n")
 }
 
+fn extract_failure_summary(output: &str, command: &str) -> String {
+    let mut blocks = Vec::new();
+    let mut in_block = false;
+    for line in output.lines() {
+        if line.starts_with("---- ")
+            && (line.ends_with(" stdout ----") || line.ends_with(" stderr ----"))
+        {
+            in_block = true;
+        } else if line == "failures:" || line.starts_with("test result:") {
+            in_block = false;
+        }
+        if in_block {
+            blocks.push(line);
+        }
+    }
+    if blocks.is_empty() {
+        // An unknown failure format must retain its cause. A last-lines summary can
+        // discard the only actionable diagnostic, costing another execution.
+        return output.to_owned();
+    }
+    format!(
+        "{}\n\n{}",
+        extract_test_summary(output, command),
+        blocks.join("\n").trim_end()
+    )
+}
+
 fn extract_test_summary(output: &str, command: &str) -> String {
     let mut result = Vec::new();
     let lines: Vec<&str> = output.lines().collect();
 
     // Detect test framework
-    let is_cargo = command.contains("cargo test");
+    let is_cargo = command.contains("cargo test")
+        || output.lines().any(|line| line.starts_with("test result:"));
     let is_pytest = command.contains("pytest");
     let is_jest =
         command.contains("jest") || command.contains("npm test") || command.contains("yarn test");
@@ -226,8 +258,22 @@ fn extract_test_summary(output: &str, command: &str) -> String {
         }
     }
 
+    let warnings: Vec<_> = lines
+        .iter()
+        .filter(|line| line.trim_start().starts_with("warning:"))
+        .copied()
+        .collect();
+
     // Build output
     let mut output = String::new();
+    if !warnings.is_empty() {
+        output.push_str("Compiler warning summaries (details omitted):\n");
+        for warning in warnings {
+            output.push_str(warning);
+            output.push('\n');
+        }
+        output.push('\n');
+    }
 
     if !failures.is_empty() {
         output.push_str("❌ FAILURES:\n");
@@ -262,6 +308,40 @@ fn extract_test_summary(output: &str, command: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrapper_failure_retains_unindented_error_and_assertion() {
+        let output = "running 1 test\ntest owns_receipt ... FAILED\n\nfailures:\n\n---- owns_receipt stdout ----\nError: no such table: commands\nthread 'owns_receipt' panicked at tests/example.rs:46:10:\nassertion left == right failed\n  left: 0\n right: 1\n\nfailures:\n    owns_receipt\n\ntest result: FAILED. 0 passed; 1 failed\nwarning: noisy generated code\nwarning: more noise\n";
+        let shown = extract_failure_summary(output, "scripts/complete-gate.sh --source");
+        assert!(shown.contains("no such table: commands"));
+        assert!(shown.contains("tests/example.rs:46:10"));
+        assert!(shown.contains("left: 0"));
+        assert!(shown.contains("right: 1"));
+        assert!(shown.contains("0 passed; 1 failed"));
+        assert!(shown.contains("warning: noisy generated code"));
+    }
+
+    #[test]
+    fn successful_test_summary_keeps_warning_signal_without_triggering_raw_fallback() {
+        let raw = format!("running 1 test\ntest example ... ok\ntest result: ok. 1 passed; 0 failed\nwarning: unused field\n{}\nwarning: crate generated 1 warning\n",
+            "   | compiler detail and source lines\n".repeat(30));
+        let summary = extract_test_summary(&raw, "cargo test");
+        assert!(summary.contains("1 passed; 0 failed"));
+        assert!(summary.contains("warning: unused field"));
+        assert!(summary.contains("details omitted"));
+        assert_eq!(crate::guard::never_worse(&raw, &summary), summary);
+        assert!(summary.len() < raw.len() / 2);
+    }
+
+    #[test]
+    fn unknown_failure_is_exact_instead_of_hiding_cause_in_tail() {
+        let output =
+            "unknown-tool important diagnostic\n".to_owned() + &"cleanup noise\n".repeat(20);
+        assert_eq!(
+            extract_failure_summary(&output, "custom-test-runner"),
+            output
+        );
+    }
 
     #[test]
     fn test_filter_errors() {

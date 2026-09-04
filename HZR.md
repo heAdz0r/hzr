@@ -31,6 +31,7 @@ results are accounted:
 | `hzr_observability` | Return typed daemon, engine, capability and workspace health. |
 | `hzr_doctor` | Run desired-state diagnostics for the exact MCP workspace. |
 | `hzr_memory_recall` | Recall durable facts, past decisions and resolved errors before re-reading earlier work. |
+| `hzr_memory_get` | Retrieve one exact memory ID after verifying namespace ownership. |
 | `hzr_memory_store` | Persist a decision, resolved error, user preference or finished handoff. Not ephemeral state or raw tool output. |
 | `hzr_memory_update` | Replace a superseded memory after HZR verifies project/global namespace ownership. |
 | `hzr_memory_forget` | Delete one invalid memory after namespace verification. |
@@ -40,8 +41,9 @@ results are accounted:
 The gateway negotiates the latest stable MCP revision it supports
 (`2025-11-25`) while retaining compatible older revisions. Tools publish JSON
 Schema 2020-12 inputs and outputs, reject unknown or invalid arguments, and return
-both text and `structuredContent`. Arguments are bounded on purpose: limits are
-validated at 1–50. The workspace comes from the server's launch directory — you
+both text and `structuredContent`. Each tool schema declares its own limits. Exact reads
+support shared budgets and continuation; exec supports start/wait/cancel job handles.
+The workspace is pinned when the server launches — you
 cannot pass it or widen scope to another repository.
 
 Long-running tool calls are concurrent and honor `notifications/cancelled`; a cancelled
@@ -174,39 +176,41 @@ operator even when automatic activation is disabled.
 HZR-owned workspaces where the upstream default left it disabled. `hzr doctor` remains read-only:
 it reports graph readiness, while init/warm performs the state change.
 
-## Reading a file: reach for the flags, not for `sed`
+## Reading files by total task cost
 
-`hzr read` is not "cat with filtering". It takes the arguments you would
-otherwise express by piping through another tool, and it is the single most common
-source of avoidable output:
+Use exact full content when the whole file is needed or repeated fragments would cost more.
+Use an outline to discover structure and ranges to resolve a focused question. Neither is a
+mandatory extra round trip before an already justified full read.
 
 ```text
-hzr read <file> --from 120 --to 180          # a line span  (instead of `sed -n 120,180p`)
-hzr read <file> -n                           # with line numbers (instead of `nl -ba`)
-hzr read <file> --outline                    # structure only, ~98% smaller
-hzr read <file> --symbols                    # the same structure as JSON, with line spans
-hzr read <file> --changed                    # only the working-tree hunks
-hzr read <file> --since HEAD~3               # only what changed since a revision
-hzr read <file> --max-lines N                # head(1)
-hzr read <file> --tail-lines N               # tail(1)
-hzr read --batch --max-tokens N <files...>   # several files under one shared budget
+hzr --json read <file>                              # exact content, completeness and source hash
+hzr --json read --batch --max-tokens 12000 <files...> # one shared response budget
+hzr --json read <file> --from 120 --to 180           # exact source range
+hzr --json read <file> --from 181 --expected-sha256 <hash>
+hzr read <file> --level none                        # explicitly requested exact full source
+hzr read <file> --outline                           # headings or heuristic source symbols
+hzr read <file> --changed                           # working-tree hunks
 ```
 
-Markdown defaults to a bounded digest and code defaults to its minimal view. Unbounded
-`--level none` is automatically reduced to that smart default; use `--outline` first for
-structure and `--from N --to M` for exact evidence. When the complete file is itself the
-authoritative text input, use
-`HZR_EXACT_FIDELITY=1 hzr read <file> --level none`. The read engine intentionally previews
-binary data; when byte-for-byte binary stdout is itself required, use the explicit
-`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=binary hzr exec run '<command>'` recovery path.
-Batch reads keep caller order and source coordinates, reserve a bounded share for every file,
-and print exact range recovery commands when content is omitted. `-n` defaults to exact content
-and prints original
-source coordinates, including for ranges and tails. `--max-lines N` returns the first N
-lines followed by the file total, omitted count, and an exact recovery command; tails and
-explicit ranges carry the same bound evidence. `--outline` emits ATX Markdown headings (`#` through `######`) with source
-spans, or heuristic symbols for supported Rust, Python, TypeScript, JavaScript, Go and Java
-files. It is not a generic symbol query for every file format.
+Typed reads return explicit completeness, omitted content and continuation coordinates.
+A bounded response is not the whole file. Reuse its source hash for expansion and stop fragmenting
+when the accumulated wrapper, retry and reread cost exceeds one full pass. Token budgets are
+UTF-8/4 estimates, not provider token counts. Full content remains subject to workspace confinement
+and response limits; a full-read request does not authorize access outside the workspace.
+
+For repeated exploration, pass `--context-epoch <epoch> --session-id <session>` to typed
+CLI reads, or `context_epoch` and `session_id` to MCP. Change the epoch after compaction,
+fork or resume. The bounded in-memory advisory records produced response estimates and
+source overlap for that workspace, source hash and epoch. It can recommend `read_remaining`
+and return the next missing range when further fragments cost more than one full result.
+It never hides requested text or assumes the host retained previous output. Restart or cache
+eviction resets this advisory; these counters are not provider usage or billed savings.
+
+The ordinary text read retains its smart default. Explicit ranges and `--level none` retain
+exact source; no fidelity marker is required for an ordinary exact source read. Binary bytes
+still use the dedicated managed raw fidelity path with reason `binary`.
+`--outline` supports Markdown headings and heuristic symbols for supported code formats;
+it is not a generic symbol query for every language.
 
 ## Search modes
 
@@ -259,7 +263,7 @@ command; it enables unfiltered bytes only after fork-core proves that no byte-fa
 route exists. The default per-session allowance is five operations or 100,000 estimated delivered
 tokens, whichever is reached first. A statically identifiable local read that would exceed the
 remaining allowance, and any unmeasurable remote exact stream, requires approval before execution.
-The same preflight applies to `HZR_EXACT_FIDELITY=1` full reads. The normal agent route is still
+Ordinary exact source reads are first-class reads, not raw-fidelity exceptions. The normal shell route is still
 `hzr exec run`. Unmarked managed RAW wrappers are
 removed before fork-core policy runs. Raw is *never* correct when policy reports a safe first-class
 replacement.
@@ -311,28 +315,34 @@ degraded rewrite preserves command policy but is absent from the managed usage
 ledger; `hzr doctor` and `hzr stats` report that incomplete accounting instead of
 hiding it.
 
-## What the Claude Code hooks cover, and what only you can
+## Host hook capabilities and actual coverage
 
-The failure-open `PreToolUse` hook matches `Bash`, `Agent`, `Task`, `Read`, `Grep`, `Glob`,
-`Edit` and `Write`. New installations use `steer`: native Read/Grep calls receive one concrete
-HZR prescription, while Glob and native edits remain allowed. Existing installations retain
-`observe` until explicitly changed and `hzr doctor` names that compatibility state. Opt-in
-`strict` additionally prescribes `hzr write` for native edits. Hook failure never blocks a host
-tool call.
+`hzr hooks capabilities --host claude --probe` and `--host codex --probe` expose
+the versioned adapter contract and local fixture checks. They do not inspect installed host
+versions, trusted activation, or the next model request; those states remain unverified.
 
-The failure-silent `PostToolUse` observer stores no tool content and grants no savings credit.
-Policy-allowed native calls in steer/strict are typed E10 bypasses rather than being hidden as
-`native_unaccounted`; observe mode preserves the historical native-unaccounted measurement.
-Session nudges and stop scorecards are bounded, name the recovered route and never include the
-underlying command, path, query, content, or raw agent identity.
+Claude's managed PreToolUse adapter routes supported Bash arguments without granting new
+permissions. Unknown tool shapes pass to the host unchanged. Native Read, Grep, Glob, Edit and
+Write preserve their exact arguments in all legacy native modes. The PostToolUse observer
+stores estimates without tool content and grants no savings credit. Failed accounting is
+reported separately. Native execution without an HZR transform is not an avoidable policy violation.
 
-Codex and the managed caveman-code harness do not run these Claude hooks. Codex follows its
-generated AGENTS.md routes and registered HZR MCP tools explicitly. The managed harness exposes
-only its HZR-owned custom tools and strips generated HZR blocks from repository instruction files
-before loading the remaining repository-specific rules.
+Current Claude documentation supports structured `updatedToolOutput` for built-in tools, but
+HZR does not currently implement a validated native output replacement. Never claim replacement
+from additional context, a pre-hook rewrite, or a successful local fixture.
 
-Prefer the bounded HZR planner for discovery. Never create a second `.grepai` index,
-a second ICM database, or parallel RTK hooks.
+Codex supports PreToolUse for canonical Bash inputs (including unified exec) and apply_patch.
+HZR's optional `hzr hooks dispatch --host codex` adapter supports canonical Bash only; installation
+is manual and requires the host's normal trust review. Because Codex requires an allow decision
+with updatedInput, HZR rewrites only when the host explicitly reports bypassPermissions.
+Other permission modes and unsupported shapes follow normal host execution and permissions.
+HZR does not emit Codex PostToolUse block responses: they can reject code-mode promises after
+the command already ran. Use managed CLI or workspace-bound MCP tools for ordinary Codex work.
+
+The managed harness exposes its HZR-owned tools. No adapter can replace every final answer.
+Declared host support, installed configuration, observed dispatch, trusted delivery and economic
+credit are separate claims. A real host sentinel reaching the next model request is still required
+before reporting verified output replacement. Never create separate grepai, ICM or RTK owners.
 
 ## Reading `hzr stats`
 

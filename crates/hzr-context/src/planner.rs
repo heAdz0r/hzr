@@ -70,6 +70,8 @@ impl SearchRequest {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlanRequest {
     pub workspace: PathBuf,
+    pub max_tokens: Option<u64>,
+    pub no_memory: bool,
     pub intent: String,
     pub path: Option<PathBuf>,
     pub topic: Option<String>,
@@ -80,6 +82,12 @@ pub struct PlanRequest {
 impl PlanRequest {
     fn validate(&self) -> Result<()> {
         validate_text("intent", &self.intent, MAX_INTENT_BYTES)?;
+        if self.max_tokens == Some(0) {
+            return Err(ContextError::InvalidRequest {
+                field: "max_tokens",
+                reason: "must be positive".into(),
+            });
+        }
         validate_limit("search_limit", self.search_limit)?;
         validate_limit("memory_limit", self.memory_limit)?;
         validate_optional_path(self.path.as_deref())?;
@@ -277,8 +285,14 @@ impl ContextPlanner {
         recall_request.project = Some(project.clone());
 
         let code_plan = self.code_plan(&workspace, initial_generation, &request);
-        let (code_result, memory_result) =
-            tokio::join!(code_plan, self.memory.recall(&recall_request));
+        let memory = async {
+            if request.no_memory {
+                Ok(Vec::new())
+            } else {
+                self.memory.recall(&recall_request).await
+            }
+        };
+        let (code_result, memory_result) = tokio::join!(code_plan, memory);
 
         let mut warnings = Vec::new();
         let mut sources = Vec::with_capacity(3);
@@ -325,7 +339,15 @@ impl ContextPlanner {
                 },
             ),
         }
-        fuse(self.hard_token_limit, sources, warnings, planner)
+        fuse(
+            request
+                .max_tokens
+                .unwrap_or(self.hard_token_limit)
+                .min(self.hard_token_limit),
+            sources,
+            warnings,
+            planner,
+        )
     }
 
     pub async fn shutdown(&self) -> Result<()> {
@@ -397,7 +419,23 @@ impl ContextPlanner {
                 (initial_generation, false)
             }
         };
-        let plan = self.run_memory_plan(workspace, request).await?;
+        let mut plan = self.run_memory_plan(workspace, request).await?;
+        let scope = workspace.normalize_filter(request.path.as_deref())?;
+        let scope = scope.as_deref().unwrap_or_else(|| Path::new("."));
+        for candidate in &mut plan.selected {
+            let path = workspace.normalize_result(&hit_relative_path(
+                scope,
+                &candidate.rel_path,
+                false,
+            ))?;
+            candidate.rel_path = path
+                .to_str()
+                .ok_or_else(|| ContextError::InvalidForkOutput {
+                    operation: "memory plan",
+                    detail: "candidate path is not valid UTF-8".into(),
+                })?
+                .to_owned();
+        }
         let planner = Some(plan.metadata());
         if !plan.selected.is_empty() {
             let selected: Vec<_> = plan
@@ -579,34 +617,47 @@ impl ContextPlanner {
     ) -> (BTreeMap<String, ForkSymbolIndex>, usize) {
         let mut outlines = BTreeMap::new();
         let mut unavailable = 0;
-        for requested_path in paths {
-            let Ok(path) = workspace.normalize_result(Path::new(requested_path)) else {
-                unavailable += 1;
-                continue;
-            };
-            let Some(path) = path.to_str() else {
-                unavailable += 1;
-                continue;
-            };
-            let index: std::result::Result<ForkSymbolIndex, _> = self
-                .run_fork_json(
-                    vec!["read".into(), path.to_owned(), "--symbols".into()],
-                    &workspace.identity.root,
-                    OUTLINE_CAPTURE_BYTES,
-                    "read symbols",
-                    // Outline assembly happens inside one plan the ledger already accounts
-                    // for; charging it again would double-count that plan.
-                    false,
-                )
-                .await;
-            if let Ok(index) = index {
-                outlines.insert(requested_path.clone(), index.clone());
-                outlines.insert(path.to_owned(), index);
-            } else {
-                unavailable += 1;
+        // Read-only outline subprocesses are independent. Bound parallelism and retain input
+        // order when assembling results, so completion races never affect ranking.
+        for paths in paths.chunks(4) {
+            let (first, second, third, fourth) = tokio::join!(
+                self.candidate_outline(workspace, paths.first()),
+                self.candidate_outline(workspace, paths.get(1)),
+                self.candidate_outline(workspace, paths.get(2)),
+                self.candidate_outline(workspace, paths.get(3)),
+            );
+            for result in [first, second, third, fourth].into_iter().take(paths.len()) {
+                if let Some((requested, path, index)) = result {
+                    outlines.insert(requested, index.clone());
+                    outlines.insert(path, index);
+                } else {
+                    unavailable += 1;
+                }
             }
         }
         (outlines, unavailable)
+    }
+
+    async fn candidate_outline(
+        &self,
+        workspace: &Workspace,
+        requested_path: Option<&String>,
+    ) -> Option<(String, String, ForkSymbolIndex)> {
+        let requested_path = requested_path?;
+        let path = workspace.normalize_result(Path::new(requested_path)).ok()?;
+        let path = path.to_str()?.to_owned();
+        let index = self
+            .run_fork_json(
+                vec!["read".into(), path.clone(), "--symbols".into()],
+                &workspace.identity.root,
+                OUTLINE_CAPTURE_BYTES,
+                "read symbols",
+                // The enclosing context plan accounts for outline assembly once.
+                false,
+            )
+            .await
+            .ok()?;
+        Some((requested_path.clone(), path, index))
     }
 
     async fn run_memory_plan(
@@ -620,8 +671,10 @@ impl ContextPlanner {
             field: "path",
             reason: "path must be valid UTF-8".into(),
         })?;
-        let token_budget = self
-            .hard_token_limit
+        let token_budget = request
+            .max_tokens
+            .unwrap_or(self.hard_token_limit)
+            .min(self.hard_token_limit)
             .saturating_mul(3)
             .saturating_div(4)
             .clamp(1, u64::from(u32::MAX));
@@ -707,7 +760,7 @@ impl ContextPlanner {
             .hits
             .into_iter()
             .take(request.limit)
-            .map(|hit| normalize_search_hit(workspace, Path::new(path_text), hit))
+            .map(|hit| normalize_search_hit(workspace, Path::new(path_text), strategy, hit))
             .collect::<Result<Vec<_>>>()?;
         let next_step = (raw.total_hits > hits.len()).then(|| {
             format!(
@@ -718,6 +771,7 @@ impl ContextPlanner {
             )
         });
         Ok(SearchApiResponse {
+            page: None,
             query: raw.query,
             path: path_text.to_owned(),
             total_hits: raw.total_hits,
@@ -1026,18 +1080,14 @@ struct ForkBudgetReport {
 /// an unbounded read.
 const MAX_SNIPPET_REPAIR_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Rebase a fork hit path onto the project root.
-///
-/// The fork reports hit paths relative to `--path`, not to the project root, so any scoped
-/// search corrupted the one field an agent must act on: scoping to `src` reported `lib.rs`,
-/// which does not exist at the root, and scoping to a single file reported the empty string.
-/// Joining is uniform because an unscoped search is sent as `--path .`, and joining onto `.`
-/// changes nothing.
-fn hit_relative_path(search_path: &Path, hit_path: &str) -> PathBuf {
+// grepai emits workspace-relative paths; lexical search and graph plans emit
+// paths relative to the requested scope. Never guess provenance from existence:
+// both the scoped and root-relative names can name different real files.
+fn hit_relative_path(search_path: &Path, hit_path: &str, workspace_relative: bool) -> PathBuf {
     if hit_path.is_empty() {
         return search_path.to_path_buf();
     }
-    if search_path == Path::new(".") {
+    if workspace_relative || search_path == Path::new(".") {
         return PathBuf::from(hit_path);
     }
     search_path.join(hit_path)
@@ -1080,9 +1130,14 @@ fn repair_source(workspace: &Workspace, path: &Path) -> Option<Vec<String>> {
 fn normalize_search_hit(
     workspace: &Workspace,
     search_path: &Path,
+    strategy: SearchStrategy,
     hit: ForkSearchHit,
 ) -> Result<SearchHit> {
-    let path = workspace.normalize_result(&hit_relative_path(search_path, &hit.path))?;
+    let path = workspace.normalize_result(&hit_relative_path(
+        search_path,
+        &hit.path,
+        strategy == SearchStrategy::ForkRgaiGrepai,
+    ))?;
     let path = path
         .to_str()
         .ok_or_else(|| ContextError::InvalidForkOutput {
@@ -1411,12 +1466,87 @@ fn fuse(
         })?;
         selected_contents.insert(candidate.content_ref.clone(), content);
     }
-    Ok(ContextPlanApiResponse {
-        pack,
-        contents: selected_contents,
-        warnings,
-        planner,
-    })
+    bound_context_response(
+        ContextPlanApiResponse {
+            pack,
+            contents: selected_contents,
+            warnings,
+            planner,
+        },
+        hard_token_limit,
+    )
+}
+
+/// Charge the compact serialized response, including escaping, metadata and recovery text.
+/// Exact evidence is removed as a whole; source strings are never truncated.
+fn bound_context_response(
+    mut response: ContextPlanApiResponse,
+    hard_limit: u64,
+) -> Result<ContextPlanApiResponse> {
+    let mut omitted_candidates = 0;
+    let mut omitted_rejections = 0;
+    let mut omitted_warnings = 0;
+    let mut omitted_planner = false;
+    response.pack.used.source = hzr_protocol::TokenCountSource::Estimate;
+    loop {
+        response.warnings.retain(|warning| {
+            !(warning.code == ContextWarningCode::WarningsTruncated
+                && warning.message.starts_with("Response budget omitted "))
+        });
+        if omitted_candidates + omitted_rejections + omitted_warnings > 0 || omitted_planner {
+            response.warnings.push(ContextWarning {
+                code: ContextWarningCode::WarningsTruncated,
+                message: format!("Response budget omitted {omitted_candidates} whole evidence candidates, {omitted_rejections} rejection records, {omitted_warnings} warnings; planner metadata omitted={omitted_planner}. Increase max_tokens for more evidence."),
+            });
+        }
+        BudgetPlanner::refresh_selection_diagnostics(&mut response.pack);
+        // The used field contributes its own digits. Re-encode until that bounded fixed point
+        // stabilizes; the representation changes only when the digit count changes.
+        let mut estimated = encoded_context_tokens(&response)?;
+        for _ in 0..4 {
+            response.pack.used.value = estimated;
+            let actual = encoded_context_tokens(&response)?;
+            if actual == estimated {
+                break;
+            }
+            estimated = actual;
+        }
+        response.pack.used.value = estimated;
+        if encoded_context_tokens(&response)? <= hard_limit {
+            return Ok(response);
+        }
+        response.pack.budget_exceeded = true;
+        if !response.pack.rejected.is_empty() {
+            omitted_rejections += response.pack.rejected.len();
+            response.pack.rejected.clear();
+        } else if let Some(index) = response.warnings.iter().rposition(|warning| {
+            !(warning.code == ContextWarningCode::WarningsTruncated
+                && warning.message.starts_with("Response budget omitted "))
+        }) {
+            response.warnings.remove(index);
+            omitted_warnings += 1;
+        } else if response.planner.take().is_some() {
+            omitted_planner = true;
+        } else if let Some(candidate) = response.pack.selected.pop() {
+            response.contents.remove(&candidate.content_ref);
+            omitted_candidates += 1;
+        } else {
+            return Err(ContextError::InvalidRequest {
+                field: "max_tokens",
+                reason: format!(
+                    "budget is too small for complete context metadata; at least {estimated} estimated tokens are required"
+                ),
+            });
+        }
+    }
+}
+
+fn encoded_context_tokens(response: &ContextPlanApiResponse) -> Result<u64> {
+    serde_json::to_vec(response)
+        .map(|bytes| (bytes.len() as u64).div_ceil(4))
+        .map_err(|error| {
+            ContextError::Invariant(format!("context response serialization failed: {error}"))
+        })
 }
 
 fn validate_text(field: &'static str, text: &str, max_bytes: usize) -> Result<()> {
@@ -1919,19 +2049,35 @@ esac
         use std::path::Path;
 
         assert_eq!(
-            hit_relative_path(Path::new("."), "crates/hzr-cli/src/mcp.rs"),
+            hit_relative_path(Path::new("."), "crates/hzr-cli/src/mcp.rs", false),
             Path::new("crates/hzr-cli/src/mcp.rs"),
             "an unscoped search already reports root-relative paths"
         );
         assert_eq!(
-            hit_relative_path(Path::new("src"), "lib.rs"),
+            hit_relative_path(Path::new("src"), "lib.rs", false),
             Path::new("src/lib.rs"),
             "a directory scope must keep its prefix"
         );
         assert_eq!(
-            hit_relative_path(Path::new("src/lib.rs"), ""),
+            hit_relative_path(Path::new("src/lib.rs"), "", false),
             Path::new("src/lib.rs"),
             "a file scope reports no sub-path, and the file itself is the hit"
+        );
+    }
+
+    #[test]
+    fn scoped_semantic_paths_keep_workspace_provenance() {
+        assert_eq!(
+            hit_relative_path(Path::new("crates"), "crates/app/src/lib.rs", true),
+            Path::new("crates/app/src/lib.rs")
+        );
+        assert_eq!(
+            hit_relative_path(Path::new("crates/app"), "src/lib.rs", false),
+            Path::new("crates/app/src/lib.rs")
+        );
+        assert_eq!(
+            hit_relative_path(Path::new("src"), "src/lib.rs", false),
+            Path::new("src/src/lib.rs")
         );
     }
 
@@ -2031,21 +2177,66 @@ esac
     }
 
     #[test]
+    fn serialized_context_budget_includes_metadata_escaping_and_whole_evidence() {
+        let content = "\"Unicode λ\\n\"\n".repeat(40);
+        let candidates = (0..8)
+            .map(|index| {
+                retrieved(
+                    &format!("candidate-{index}"),
+                    CandidateSource::Exact,
+                    &content,
+                    1,
+                )
+            })
+            .collect();
+        let response = fuse(
+            1024,
+            vec![(1.0, candidates)],
+            vec![ContextWarning {
+                code: ContextWarningCode::SearchDegraded,
+                message: "diagnostic ".repeat(1000),
+            }],
+            None,
+        )
+        .expect("bounded response");
+        let encoded = serde_json::to_vec(&response).expect("JSON");
+        assert!(encoded.len().div_ceil(4) <= 1024);
+        assert_eq!(response.pack.used.value, encoded.len().div_ceil(4) as u64);
+        assert!(response.pack.budget_exceeded);
+        assert!(!response.pack.selected.is_empty());
+        assert!(response.pack.selected.len() < 8);
+        assert_eq!(response.pack.selected.len(), response.contents.len());
+        for candidate in &response.pack.selected {
+            assert_eq!(
+                response.contents.get(&candidate.content_ref),
+                Some(&content)
+            );
+        }
+        assert!(
+            response
+                .warnings
+                .iter()
+                .any(|warning| warning.code == ContextWarningCode::WarningsTruncated)
+        );
+        assert!(fuse(1, Vec::new(), Vec::new(), None).is_err());
+    }
+
+    #[test]
     fn test_fuse_returns_only_content_selected_within_hard_limit() {
         let response = fuse(
-            100,
+            500,
             vec![(
                 1.0,
                 vec![
-                    retrieved("first", CandidateSource::Context, "first content", 70),
-                    retrieved("second", CandidateSource::Context, "second content", 60),
+                    retrieved("first", CandidateSource::Context, "first content", 350),
+                    retrieved("second", CandidateSource::Context, "second content", 300),
                 ],
             )],
             Vec::new(),
             None,
         )
         .expect("fusion succeeds");
-        assert!(response.pack.used.value <= 100);
+        assert!(response.pack.used.value <= 500);
         assert_eq!(response.pack.used.source, TokenCountSource::Estimate);
         assert_eq!(response.pack.selected.len(), 1);
         assert_eq!(response.contents.len(), 1);
@@ -2073,7 +2264,7 @@ esac
         };
         let sources = separate_code_sources(plan, Some(exact));
         let response = fuse(
-            100,
+            1024,
             sources
                 .into_iter()
                 .map(|source| (1.0, source.candidates))
@@ -2134,6 +2325,8 @@ esac
             topic: None,
             search_limit: 101,
             memory_limit: 5,
+            max_tokens: None,
+            no_memory: false,
         };
         assert!(request.validate().is_err());
     }
@@ -2148,6 +2341,8 @@ esac
                 topic: Some(topic.into()),
                 search_limit: 5,
                 memory_limit: 5,
+                max_tokens: None,
+                no_memory: false,
             };
 
             assert!(request.validate().is_err(), "accepted {topic:?}");

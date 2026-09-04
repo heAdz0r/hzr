@@ -1,4 +1,57 @@
 use std::fs;
+
+#[test]
+fn stdin_pipe_emits_only_an_internal_estimated_receipt() {
+    use hzr_engine_contract::AccountingStage;
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let receipts = directory.path().join("receipts.jsonl");
+    let history = directory.path().join("must-not-exist.sqlite");
+    let raw = format!("running 180 tests\n{}\ntest result: ok. 180 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n",
+        (0..180).map(|n| format!("test module::case_{n} ... ok")).collect::<Vec<_>>().join("\n"));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rtk"))
+        .args(["pipe", "--filter", "cargo-test"])
+        .env("RTK_DB_PATH", &history)
+        .env("RTK_TRACKING_DISABLED", "0")
+        .env("HZR_INTERNAL_ACCOUNTING_RECEIPT_JOURNAL", &receipts)
+        .env(
+            "HZR_INTERNAL_ACCOUNTING_CORRELATION",
+            "0123456789abcdef0123456789abcdef",
+        )
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("pipe");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(raw.as_bytes())
+        .expect("source");
+    let output = child.wait_with_output().expect("wait");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.len() < raw.len());
+    let journal = fs::read_to_string(receipts).expect("receipt");
+    let receipt: EngineAccountingReceipt =
+        serde_json::from_str(journal.trim()).expect("typed receipt");
+    assert_eq!(
+        receipt.attribution.stage,
+        AccountingStage::InternalTransport
+    );
+    assert_eq!(receipt.measurement, AccountingMeasurement::Estimated);
+    assert_eq!(receipt.route, AccountingRoute::Optimized);
+    assert!(receipt.baseline_tokens > receipt.delivered_tokens);
+    assert!(!journal.contains("module::case_"));
+    assert!(!history.exists());
+}
+
 use std::process::Command;
 
 use hzr_engine_contract::{

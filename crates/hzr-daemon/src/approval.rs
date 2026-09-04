@@ -13,6 +13,7 @@ const MAX_PENDING_APPROVALS: usize = 128;
 
 #[derive(Clone, Debug)]
 pub struct PendingApproval {
+    pub channel: Option<hzr_protocol::AccountingChannel>,
     pub requested: CanonicalCommand,
     pub approved_decision: RewriteDecision,
     pub evasion: Option<EvasionAttribution>,
@@ -82,6 +83,7 @@ mod tests {
     async fn test_pending_approval_is_single_use() {
         let store = ApprovalStore::default();
         let pending = PendingApproval {
+            channel: None,
             requested: CanonicalCommand::shell("cargo test"),
             approved_decision: RewriteDecision::allow_raw("approved fixture"),
             evasion: None,

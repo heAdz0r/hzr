@@ -9,9 +9,9 @@ use hzr_core::{
     AccountingCoverageStore, AccountingGapEvent, AccountingGapSurface, ActivationMode, Config,
     FidelityAllowance, FidelityBudget, FidelityPreflight, Ledger, OperationRoute,
     RawFidelityRequest, RawPublicEstimate, RawPublicEstimateRequest, SessionEconomicSummary,
-    SessionEfficiencySummary, SessionEvasionSummary, efficient_route_replacement,
-    fidelity_preflight_required, first_class_replacement, load_pricing_catalog,
-    price_avoided_input_tokens, privacy_identity_hash, raw_fidelity_request,
+    SessionEfficiencySummary, SessionEvasionSummary, fidelity_preflight_required,
+    first_class_replacement, load_pricing_catalog, price_avoided_input_tokens,
+    privacy_identity_hash, raw_fidelity_request,
 };
 use hzr_exec::{
     CanonicalCommand, ForkRuntimePaths, HOST_GRANT_APPLIED_ENV, PinnedRtkAdapter, RewriteDecision,
@@ -47,12 +47,26 @@ const STATUSLINE_UPSTREAM_ENV: &str = "HZR_STATUSLINE_UPSTREAM_HEX";
 const STATUSLINE_UPSTREAM_TIMEOUT: Duration = Duration::from_millis(500);
 const STATUSLINE_UPSTREAM_MAX_BYTES: u64 = 64 * 1024;
 
-pub async fn dispatch(config: &Config, native_mode: NativeToolMode) {
-    let Ok(input) = read_input() else {
+pub async fn dispatch(
+    config: &Config,
+    _native_mode: NativeToolMode,
+    host: crate::host_hooks::HookHost,
+) {
+    let Ok(mut input) = read_input() else {
         return;
     };
     if hook_workspace_root(config, &input).is_none() {
         return;
+    }
+    if !crate::host_hooks::supports_pre_tool(host, &input) {
+        return;
+    }
+    if host == crate::host_hooks::HookHost::Codex && !host_grants_execution(&input) {
+        return;
+    }
+    input["_hzr_host"] = json!(host.name());
+    if host == crate::host_hooks::HookHost::Codex {
+        input["agent_type"] = json!("codex");
     }
     let _ = update_session(config, &input, |state| {
         state.operations = state.operations.saturating_add(1);
@@ -70,18 +84,20 @@ pub async fn dispatch(config: &Config, native_mode: NativeToolMode) {
         "Agent" | "Task" => {
             let _ = task(config, &input).await;
         }
-        "Read" | "Grep" | "Glob" | "Edit" | "Write" => {
-            let _ = native_pre_tool(config, &input, native_mode).await;
-        }
         _ => {}
     }
 }
 
 /// Observe host-native file tools without steering or blocking them.
 ///
-/// This entry point intentionally returns no error: a measurement failure must never turn a
-/// successful host tool call into a failed one. The hook emits no stdout payload.
-pub async fn observe(config: &Config, native_mode: NativeToolMode) {
+/// Failures never turn a successful host call into a failed one. Output replacement
+/// requires an explicit host capability opt-in and a supported exact response shape.
+pub async fn observe(
+    config: &Config,
+    native_mode: NativeToolMode,
+    host: crate::host_hooks::HookHost,
+    replace_output: bool,
+) {
     let Ok(input) = read_input() else {
         return;
     };
@@ -89,6 +105,19 @@ pub async fn observe(config: &Config, native_mode: NativeToolMode) {
         return;
     }
     let _ = observe_input(config, &input, native_mode).await;
+    if replace_output {
+        if let Ok(Some(output)) = timeout(
+            HOOK_TIMEOUT,
+            crate::host_hooks::replace_tool_output(config, &input, host),
+        )
+        .await
+        {
+            // No additionalContext duplicate: updatedToolOutput replaces the structured value.
+            let mut stdout = io::stdout().lock();
+            let _ = serde_json::to_writer(&mut stdout, &output);
+            let _ = stdout.write_all(b"\n");
+        }
+    }
 }
 
 async fn observe_input(config: &Config, input: &Value, native_mode: NativeToolMode) -> Result<()> {
@@ -242,6 +271,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         );
     }
     let request = ExecApiRequest {
+        channel: None,
         cwd: cwd.to_string_lossy().into_owned(),
         command: raw.to_owned(),
         fidelity_requested: fidelity_evasion.is_some(),
@@ -598,38 +628,6 @@ fn attach_session_attribution(_input: &Value, decision: RewriteDecision) -> Rewr
     decision
 }
 
-async fn native_pre_tool(config: &Config, input: &Value, mode: NativeToolMode) -> Result<()> {
-    let tool = input
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if mode == NativeToolMode::Observe || tool == "Glob" {
-        return Ok(());
-    }
-    if mode == NativeToolMode::Steer && matches!(tool, "Edit" | "Write") {
-        return Ok(());
-    }
-    let Some(replacement) = native_replacement(input, mode) else {
-        return Ok(());
-    };
-    record_native_correction(config, input, tool).await?;
-    let count = update_session(config, input, |state| {
-        state.corrections = state.corrections.saturating_add(1);
-        state.native_denials = state.native_denials.saturating_add(1);
-    })
-    .map(|state| state.corrections)
-    .unwrap_or(0);
-    write_hook_json(json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": format!(
-                "T1 native-tool correction E8 ({tool}); use `{replacement}`; session avoidable-bypass count={count}"
-            ),
-        }
-    }))
-}
-
 fn native_evasion(
     class: EvasionClass,
     avoidable: bool,
@@ -650,67 +648,18 @@ fn native_evasion(
 }
 
 fn native_observation_policy(
-    tool: &str,
-    native_mode: NativeToolMode,
+    _tool: &str,
+    _native_mode: NativeToolMode,
 ) -> (OperationRoute, EvasionAttribution) {
-    if native_mode == NativeToolMode::Observe {
-        return (
-            OperationRoute::NativeUnaccounted,
-            native_evasion(
-                EvasionClass::E8NativeTool,
-                false,
-                EnforcementTier::T0TransparentRewrite,
-            ),
-        );
-    }
-    let allowed_by_policy = tool == "Glob"
-        || (native_mode == NativeToolMode::Steer && matches!(tool, "Edit" | "Write"));
-    if allowed_by_policy {
-        (
-            OperationRoute::Bypassed,
-            native_evasion(
-                EvasionClass::E10CapabilityGap,
-                false,
-                EnforcementTier::T0TransparentRewrite,
-            ),
-        )
-    } else {
-        (
-            OperationRoute::Bypassed,
-            native_evasion(
-                EvasionClass::E8NativeTool,
-                true,
-                EnforcementTier::T2DenyWithPrescription,
-            ),
-        )
-    }
-}
-
-async fn record_native_correction(config: &Config, input: &Value, tool: &str) -> Result<()> {
-    let cwd = input.get("cwd").and_then(Value::as_str).unwrap_or_default();
-    let session_id = input.get("session_id").and_then(Value::as_str);
-    let agent = agent_attribution(input);
-    let evasion = native_evasion(
-        EvasionClass::E8NativeTool,
-        true,
-        EnforcementTier::T1NamedCorrection,
-    );
-    let family = match tool {
-        "Read" => "read",
-        "Grep" => "search",
-        "Edit" | "Write" => "write",
-        _ => "other",
-    };
-    let request = PolicyEventApiRequest {
-        project_path: cwd.to_owned(),
-        agent: Some(agent),
-        session_id: session_id.map(str::to_owned),
-        evasion,
-        decision: PolicyDecision::Deny,
-        replacement_family: Some(family.to_owned()),
-        command_identity: None,
-    };
-    send_hook_policy_event(config, input, family, &request).await
+    // No proven shape-preserving native transform: measurement is not an avoidable bypass.
+    (
+        OperationRoute::NativeUnaccounted,
+        native_evasion(
+            EvasionClass::E10CapabilityGap,
+            false,
+            EnforcementTier::T0TransparentRewrite,
+        ),
+    )
 }
 
 async fn send_hook_policy_event(
@@ -743,50 +692,6 @@ async fn send_hook_policy_event(
         )?;
     }
     Ok(())
-}
-
-fn native_replacement(input: &Value, mode: NativeToolMode) -> Option<String> {
-    let tool = input.get("tool_name")?.as_str()?;
-    let arguments = input.get("tool_input")?;
-    let path = arguments
-        .get("file_path")
-        .or_else(|| arguments.get("path"))
-        .and_then(Value::as_str);
-    match tool {
-        "Read" => Some(format!("hzr read {}", shell_quote(path?))),
-        "Grep" => {
-            let pattern = arguments.get("pattern")?.as_str()?;
-            let mut command = format!("hzr search {} --mode exact", shell_quote(pattern));
-            if let Some(path) = path {
-                command.push_str(" --path ");
-                command.push_str(&shell_quote(path));
-            }
-            Some(command)
-        }
-        "Edit" if mode == NativeToolMode::Strict => {
-            let old = bounded_hook_text(arguments.get("old_string")?.as_str()?)?;
-            let new = bounded_hook_text(arguments.get("new_string")?.as_str()?)?;
-            Some(format!(
-                "hzr write patch {} --old {} --new {} --cas",
-                shell_quote(path?),
-                shell_quote(old),
-                shell_quote(new)
-            ))
-        }
-        "Write" if mode == NativeToolMode::Strict => {
-            let content = bounded_hook_text(arguments.get("content")?.as_str()?)?;
-            Some(format!(
-                "hzr write create {} --content {} --force",
-                shell_quote(path?),
-                shell_quote(content)
-            ))
-        }
-        _ => None,
-    }
-}
-
-fn bounded_hook_text(value: &str) -> Option<&str> {
-    (value.len() <= 2_048 && !value.contains('\0')).then_some(value)
 }
 
 /// Give every agent-visible policy decision the running session cost.
@@ -833,14 +738,6 @@ fn attach_policy_feedback(
 /// Raw remains available when no safe equivalent exists. Once the central operation policy
 /// identifies an equivalent, asking leaves the avoidable bypass as the default action.
 fn steer_to_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision {
-    if matches!(
-        decision,
-        RewriteDecision::AllowRaw { .. } | RewriteDecision::AllowRewrite { .. }
-    ) {
-        if let Some(replacement) = efficient_route_replacement(raw) {
-            return hzr_policy_rewrite(replacement);
-        }
-    }
     if !matches!(
         decision,
         RewriteDecision::AllowRaw { .. }
@@ -1164,8 +1061,17 @@ fn write_decision(input: &Value, decision: RewriteDecision, notice: Option<&str>
     if let Some(notice) = notice {
         output["systemMessage"] = Value::String(notice.to_owned());
     }
-    serde_json::to_writer(io::stdout().lock(), &output)?;
-    io::stdout().lock().write_all(b"\n")?;
+    let host = if input["_hzr_host"].as_str() == Some("codex") {
+        crate::host_hooks::HookHost::Codex
+    } else {
+        crate::host_hooks::HookHost::Claude
+    };
+    if let Some(output) =
+        crate::host_hooks::adapt_response(host, input, output, host_grants_execution(input))
+    {
+        serde_json::to_writer(io::stdout().lock(), &output)?;
+        io::stdout().lock().write_all(b"\n")?;
+    }
     Ok(())
 }
 
@@ -1919,6 +1825,8 @@ async fn task(config: &Config, input: &Value) -> Result<()> {
         client.context_plan(&ContextPlanApiRequest {
             workspace: workspace.to_string_lossy().into_owned(),
             intent: prompt.chars().take(700).collect(),
+            max_tokens: None,
+            no_memory: false,
             path: None,
             topic: None,
             search_limit: 10,
@@ -2364,9 +2272,7 @@ mod tests {
     use crate::adoption::NativeToolMode;
     use hzr_exec::{CanonicalCommand, PINNED_RTK_VERSION, RewriteDecision, RewriteSource};
 
-    use super::anti_evasion_fixture::{
-        ProbeClass, ProbeDecision, ProbeLayer, ProbeNativeMode, ProbeSurface,
-    };
+    use super::anti_evasion_fixture::{ProbeDecision, ProbeLayer, ProbeNativeMode, ProbeSurface};
     use super::{
         HookFidelityPreflight, SessionFeedback, accounting_statusline, accounting_transition,
         accounting_transition_at, agent_attribution, agent_identity, apply_filter_placement,
@@ -2374,9 +2280,9 @@ mod tests {
         close_open_accounting_gaps, context_brief, deepest_registered_root,
         degraded_rewrite_coverage, degraded_rewrite_coverage_at, fallback_decision,
         honor_host_permission_mode, hook_fidelity_preflight, native_observation_policy,
-        native_replacement, read_session, reconcile_host_grant, record_accounting_gap_now,
-        record_degraded_rewrite_at, render_command, run_statusline_upstream, scorecard_message,
-        steer_to_first_class, update_session,
+        read_session, reconcile_host_grant, record_accounting_gap_now, record_degraded_rewrite_at,
+        render_command, run_statusline_upstream, scorecard_message, steer_to_first_class,
+        update_session,
     };
 
     #[cfg(unix)]
@@ -2439,56 +2345,19 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_gate_native_modes_prescribe_only_proven_surfaces() {
-        let read = serde_json::json!({
-            "tool_name": "Read",
-            "tool_input": {"file_path": "/work/file with spaces.md"}
-        });
-        assert_eq!(
-            native_replacement(&read, NativeToolMode::Steer).as_deref(),
-            Some("hzr read '/work/file with spaces.md'")
-        );
-        let grep = serde_json::json!({
-            "tool_name": "Grep",
-            "tool_input": {"pattern": "two words", "path": "/work/src"}
-        });
-        assert_eq!(
-            native_replacement(&grep, NativeToolMode::Steer).as_deref(),
-            Some("hzr search 'two words' --mode exact --path '/work/src'")
-        );
-        for mode in [
-            NativeToolMode::Observe,
-            NativeToolMode::Steer,
-            NativeToolMode::Strict,
-        ] {
-            assert_eq!(
-                native_replacement(
-                    &serde_json::json!({"tool_name": "Glob", "tool_input": {"pattern": "**/*"}}),
-                    mode,
-                ),
-                None,
-                "Glob must always remain allowed"
-            );
-        }
-        assert_eq!(
-            native_replacement(
-                &serde_json::json!({"tool_name": "Edit", "tool_input": {
-                    "file_path": "x.rs", "old_string": "old", "new_string": "new"
-                }}),
+    fn native_modes_never_classify_exact_native_work_as_avoidable() {
+        for tool in ["Read", "Grep", "Glob", "Edit", "Write"] {
+            for mode in [
+                NativeToolMode::Observe,
                 NativeToolMode::Steer,
-            ),
-            None,
-            "steer must not deny native edits"
-        );
-        assert!(
-            native_replacement(
-                &serde_json::json!({"tool_name": "Edit", "tool_input": {
-                    "file_path": "x.rs", "old_string": "old", "new_string": "new"
-                }}),
                 NativeToolMode::Strict,
-            )
-            .is_some()
-        );
+            ] {
+                let (route, attribution) = native_observation_policy(tool, mode);
+                assert_eq!(route, hzr_core::OperationRoute::NativeUnaccounted);
+                assert!(!attribution.avoidable);
+                assert_eq!(attribution.tier, EnforcementTier::T0TransparentRewrite);
+            }
+        }
     }
 
     /// Tie the matrix's expected wording to the implementation that produces it.
@@ -2523,8 +2392,8 @@ mod tests {
                 probe.id
             );
             if probe.surface == ProbeSurface::Native || probe.id == "fidelity-missing-reason" {
-                // Produced by the native correction and fidelity preflight paths, which already
-                // name the fault and the replacement.
+                // Native entries are historical engine fixtures; current host adapters never
+                // deny for optimization. Fidelity preflight has its own regression coverage.
                 continue;
             }
             let prescribed = probe.expect_reason_contains.iter().any(|expected| {
@@ -2549,69 +2418,25 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_gate_shared_fixture_covers_every_native_mode() {
+    fn legacy_native_fixture_modes_all_use_nonblocking_observation() {
+        // The imported fixture documents the old deny/retry policy, not current host permissions.
         let probes = super::anti_evasion_fixture::load_anti_evasion_probes();
-        let native = probes
-            .iter()
-            .filter(|probe| {
-                probe.layer == ProbeLayer::Root && probe.surface == ProbeSurface::Native
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(native.len(), 15, "five tools across three modes");
-
+        let native = probes.iter().filter(|probe| {
+            probe.layer == ProbeLayer::Root && probe.surface == ProbeSurface::Native
+        });
+        let mut count = 0;
         for probe in native {
-            let mode = match probe.mode.expect("validated native mode") {
+            count += 1;
+            let mode = match probe.mode.expect("native mode") {
                 ProbeNativeMode::Observe => NativeToolMode::Observe,
                 ProbeNativeMode::Steer => NativeToolMode::Steer,
                 ProbeNativeMode::Strict => NativeToolMode::Strict,
             };
-            let input = serde_json::json!({
-                "tool_name": probe.tool.as_deref().expect("native tool"),
-                "tool_input": probe.tool_input.as_ref().expect("native tool input"),
-            });
-            let replacement = native_replacement(&input, mode);
-            let tool = probe.tool.as_deref().expect("native tool");
-            let would_deny = mode != NativeToolMode::Observe
-                && tool != "Glob"
-                && !(mode == NativeToolMode::Steer && matches!(tool, "Edit" | "Write"))
-                && replacement.is_some();
-            match probe.decision {
-                ProbeDecision::Deny => {
-                    assert!(would_deny, "native probe {} was not denied", probe.id);
-                    assert_eq!(
-                        replacement.as_deref(),
-                        probe.route.as_deref(),
-                        "native probe {} did not prescribe its managed route",
-                        probe.id
-                    );
-                }
-                ProbeDecision::Allow => {
-                    assert!(!would_deny, "native probe {} was denied", probe.id)
-                }
-                ProbeDecision::Rewrite
-                | ProbeDecision::Ask
-                | ProbeDecision::Proxy
-                | ProbeDecision::Raw => {
-                    assert!(
-                        matches!(probe.decision, ProbeDecision::Allow | ProbeDecision::Deny),
-                        "invalid native decision for {}",
-                        probe.id
-                    )
-                }
-            }
-            let (_, attribution) = native_observation_policy(tool, mode);
-            let class = match probe.class.expect("validated native class") {
-                ProbeClass::E8NativeTool => EvasionClass::E8NativeTool,
-                ProbeClass::E10CapabilityGap => EvasionClass::E10CapabilityGap,
-            };
-            assert_eq!(attribution.class, class, "native probe {}", probe.id);
-            assert_eq!(
-                attribution.avoidable,
-                probe.avoidable.expect("native avoidable flag"),
-                "native probe {}",
-                probe.id
-            );
+            let (_, attribution) = native_observation_policy(probe.tool.as_deref().unwrap(), mode);
+            assert!(!attribution.avoidable, "{}", probe.id);
+            assert_eq!(attribution.class, EvasionClass::E10CapabilityGap);
         }
+        assert_eq!(count, 15);
     }
 
     #[test]
@@ -3577,7 +3402,7 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_gate_no_unbounded_exact_read_in_hook() {
+    fn explicit_full_read_is_preserved_without_a_fidelity_marker() {
         let filtered = RewriteDecision::AllowRewrite {
             command: CanonicalCommand::shell("rtk read src/main.rs --level none"),
             source: RewriteSource::Rtk {
@@ -3586,14 +3411,8 @@ mod tests {
             },
             reason: "fork-core accepted the explicit read".into(),
         };
-        let decision =
-            steer_to_first_class("hzr rtk -- read src/main.rs --level none", filtered.clone());
-        assert_eq!(
-            proposed(&decision).as_deref(),
-            Some("hzr rtk -- read src/main.rs")
-        );
-
         for command in [
+            "hzr rtk -- read src/main.rs --level none",
             "hzr rtk -- read src/main.rs --from 40 --to 80 --level none",
             "HZR_EXACT_FIDELITY=1 hzr rtk -- read src/main.rs --level none",
         ] {

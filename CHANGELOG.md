@@ -4,6 +4,36 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-04
+
+### Added
+
+- Durable execution start/wait/cancel operations with stable IDs and explicit interruption state.
+- Typed batch/range reads with output budgets, snapshot hashes and completeness metadata.
+- Exact memory lookup, optional context memory, and MCP execution lifecycle controls.
+- Consistent time-bounded fleet statistics, privacy-safe export and separate readiness dimensions.
+- A paired-task evaluation harness that validates per-request provider usage and independent
+  acceptance; offline fixtures never count as economic proof.
+
+### Changed
+
+- Redesigned the dashboard around operational evidence, useful filters and visible unknown states.
+- Preserved justified full reads and removed optimizer-only approval where no equivalent route exists.
+- Budgeted delivered context evidence rather than the full files that might be read later.
+- Kept host permission authority intact and stopped blocking native reads to force tool retries.
+- Rejected cumulative ledger counters as evidence for an individual benchmark run.
+
+### Fixed
+
+- Corrected scoped semantic and graph path resolution.
+- Preserved test failure diagnostics and compiler warning signals in managed output.
+- Added durable ICM ownership, graceful SIGTERM and recovery for verified owned unready children.
+- Corrected producer accounting lifecycle and command-family attribution.
+- Accepted empty and whitespace-only MCP writes consistently with their schema.
+
+This is the prepared source version. Release publication and billed/task-level savings are not
+implied by these entries.
+
 ## [0.7.1] - 2026-09-04
 
 ### Fixed
@@ -1550,6 +1580,7 @@ First public HZR release.
 [0.6.2]: https://github.com/heAdz0r/hzr/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/heAdz0r/hzr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0
+[0.8.0]: https://github.com/heAdz0r/hzr/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/heAdz0r/hzr/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/heAdz0r/hzr/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/heAdz0r/hzr/compare/v0.6.5...v0.6.6

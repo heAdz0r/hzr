@@ -75,7 +75,7 @@ pub async fn verify_installation(config: &IcmConfig) -> Result<IcmInstallation> 
     })
 }
 
-fn sha256_file(path: &std::path::Path) -> Result<String> {
+pub(crate) fn sha256_file(path: &std::path::Path) -> Result<String> {
     let mut file = File::open(path).map_err(|source| MemoryError::Io {
         operation: "open ICM executable for checksum verification",
         path: path.to_path_buf(),

@@ -57,7 +57,7 @@ fn run_observer(
 }
 
 #[test]
-fn acceptance_gate_native_pretool_modes_are_fail_open_and_prescriptive() {
+fn acceptance_gate_native_pretool_modes_preserve_exact_requests_without_retry() {
     let directory = tempdir().expect("temporary root");
     let workspace = directory.path().join("workspace");
     std::fs::create_dir(&workspace).expect("workspace");
@@ -79,19 +79,26 @@ fn acceptance_gate_native_pretool_modes_are_fail_open_and_prescriptive() {
         "agent_id": "agent-private"
     }))
     .expect("read input");
-    let steered = run_hook(&config_path, &workspace, "steer", &read);
-    assert!(steered.status.success());
-    let decision: Value = serde_json::from_slice(&steered.stdout).expect("steer decision");
-    assert_eq!(
-        decision.pointer("/hookSpecificOutput/permissionDecision"),
-        Some(&Value::String("deny".into()))
-    );
-    let reason = decision
-        .pointer("/hookSpecificOutput/permissionDecisionReason")
-        .and_then(Value::as_str)
-        .expect("replacement reason");
-    assert!(reason.contains("hzr read '/work/file with spaces.md'"));
-    assert!(reason.contains("session avoidable-bypass count=1"));
+    for mode in ["observe", "steer", "strict"] {
+        for tool in ["Read", "Grep", "Edit", "Write"] {
+            let mut request: Value = serde_json::from_slice(&read).unwrap();
+            request["tool_name"] = json!(tool);
+            request["tool_input"] = json!({"file_path":"/work/file with spaces.md",
+                "offset":100,"limit":20,"pattern":"a.*b","output_mode":"count",
+                "old_string":"before","new_string":"","content":""});
+            let output = run_hook(
+                &config_path,
+                &workspace,
+                mode,
+                &serde_json::to_vec(&request).unwrap(),
+            );
+            assert!(output.status.success());
+            assert!(
+                output.stdout.is_empty(),
+                "{mode} {tool} must preserve host request"
+            );
+        }
+    }
 
     let observed = run_hook(&config_path, &workspace, "observe", &read);
     assert!(observed.status.success());

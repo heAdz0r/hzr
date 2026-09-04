@@ -16,6 +16,9 @@ fn assert_accounted_read(source: &Path, ledger: &Path, max_lines: usize) -> Stri
             "none",
         ])
         .env("RTK_DB_PATH", ledger)
+        .env_remove("HZR_INTERNAL_ACCOUNTING_RECEIPT_JOURNAL")
+        .env_remove("HZR_INTERNAL_ACCOUNTING_FAILURE_JOURNAL")
+        .env_remove("HZR_INTERNAL_ACCOUNTING_CORRELATION")
         .env("RTK_TRACKING_DISABLED", "0")
         .output()
         .expect("run bounded read");
