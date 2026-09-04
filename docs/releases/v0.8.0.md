@@ -18,6 +18,8 @@ as not established.
   Repeated starts do not replay side effects; interrupted jobs stay explicit.
 - Failed test wrappers retain error blocks, assertions and source locations. Unknown failure
   formats preserve captured output. Successful summaries retain compiler warning signals.
+- Git diff checks, quiet mode and exit-code mode preserve native status and exact diagnostics.
+  A failed Git validation cannot be reported as a successful HZR command.
 - Explicit full reads remain valid when the whole file is needed. Typed reads add batch
   budgets, exact ranges, SHA-256 snapshot checks and completeness metadata.
 - Interpreter reads without an equivalent filter no longer trigger optimizer-only approval.

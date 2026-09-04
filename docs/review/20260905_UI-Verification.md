@@ -15,6 +15,10 @@ The current visualizer test command, TypeScript/Vue check, and production build 
 
 Do not transfer the earlier UI test count or screenshots to this exact working tree as though they were repeated here.
 
+The subsequent canonical native bundle build at source commit `b21d0c7` captured the full UI
+transcript: **21 tests passed, 0 failed, 56 assertions across four files**, followed by successful
+Vue/TypeScript checking and Vite production build. No UI source changed after that run.
+
 ## Accounting label review
 
 - Overview and session cards identify the reduction and input/output comparison as producer estimates.

@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use chrono::{FixedOffset, Utc};
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::io::Write;
 use std::process::Command;
 
 const BLAME_EXACT_REASONS: &[FidelityReason] = &[FidelityReason::VerbatimSource];
@@ -375,85 +376,87 @@ fn run_diff(
     global_args: &[String],
 ) -> Result<()> {
     let timer = tracking::TimedExecution::start();
-
-    // Check if user wants stat output
-    let wants_stat = args
-        .iter()
-        .any(|arg| arg == "--stat" || arg == "--numstat" || arg == "--shortstat");
-
-    // Check if user wants compact diff (default RTK behavior)
-    let wants_compact = !args.iter().any(|arg| arg == "--no-compact");
-
-    if wants_stat || !wants_compact {
-        // User wants stat or explicitly no compacting - pass through directly
+    let exact = args.iter().map(String::as_str).take_while(|arg| *arg != "--").any(|arg| matches!(arg,
+        "--check" | "--quiet" | "--exit-code" | "--stat" | "--numstat" | "--shortstat" | "--no-compact"
+    ));
+    if exact {
+        // Status-bearing modes must run once and retain native bytes, including
+        // diagnostics on stdout. --no-compact is HZR/RTK's option, not Git's.
         let mut cmd = git_cmd(global_args);
         cmd.arg("diff");
+        let mut paths = false;
         for arg in args {
-            cmd.arg(arg);
+            if arg == "--" { paths = true; }
+            if paths || arg != "--no-compact" { cmd.arg(arg); }
         }
-
         let output = cmd.output().context("Failed to run git diff")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            eprintln!("{}", stderr);
-            std::process::exit(output.status.code().unwrap_or(1));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        println!("{}", stdout.trim());
-
-        timer.track(
-            &format!("git diff {}", args.join(" ")),
-            &format!("rtk git diff {} (passthrough)", args.join(" ")),
-            &stdout,
-            &stdout,
-        );
-
-        return Ok(());
+        return emit_exact_diff(&timer, args, output);
     }
 
-    // Default RTK behavior: stat first, then compacted diff
+    // Preserve the inherited compact view on successful ordinary diffs only.
     let mut cmd = git_diff_cmd(global_args, &["diff", "--stat"]);
-
-    for arg in args {
-        cmd.arg(arg);
-    }
-
+    cmd.args(args);
     let output = cmd.output().context("Failed to run git diff")?;
+    if !output.status.success() {
+        return emit_exact_diff(&timer, args, output);
+    }
     let stat_stdout = String::from_utf8_lossy(&output.stdout);
+    if verbose > 0 { eprintln!("Git diff summary:"); }
 
-    if verbose > 0 {
-        eprintln!("Git diff summary:");
-    }
-
-    // Now get actual diff but compact it
     let mut diff_cmd = git_diff_cmd(global_args, &["diff"]);
-    for arg in args {
-        diff_cmd.arg(arg);
-    }
-
+    diff_cmd.args(args);
     let diff_output = diff_cmd.output().context("Failed to run git diff")?;
+    if !diff_output.status.success() {
+        return emit_exact_diff(&timer, args, diff_output);
+    }
     let diff_stdout = String::from_utf8_lossy(&diff_output.stdout);
-
     let printed = if !diff_stdout.is_empty() {
         let compacted = compact_diff(&diff_stdout, max_lines.unwrap_or(100));
         format!("{}\n\n--- Changes ---\n{}", stat_stdout.trim(), compacted)
     } else {
         stat_stdout.trim().to_string()
     };
-
     let raw = format!("{}\n{}", stat_stdout, diff_stdout);
     let shown = crate::guard::never_worse(&raw, &printed);
-    println!("{}", shown);
-
-    timer.track(
+    let stderr = if output.stderr == diff_output.stderr {
+        diff_output.stderr
+    } else {
+        [output.stderr, diff_output.stderr].concat()
+    };
+    let stderr_text = String::from_utf8_lossy(&stderr);
+    let _ = timer.track(
         &format!("git diff {}", args.join(" ")),
         &format!("rtk git diff {}", args.join(" ")),
-        &raw,
-        shown,
+        &format!("{raw}{stderr_text}"),
+        &format!("{shown}\n{stderr_text}"),
     );
+    println!("{shown}");
+    let mut error_output = std::io::stderr().lock();
+    error_output.write_all(&stderr).context("Failed to write git diff stderr")?;
+    error_output.flush().context("Failed to flush git diff stderr")?;
+    Ok(())
+}
 
+/// Emit both native streams and durably attempt the receipt before propagating status.
+fn emit_exact_diff(timer: &tracking::TimedExecution, args: &[String], output: std::process::Output) -> Result<()> {
+    let raw = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    let _ = timer.track(
+        &format!("git diff {}", args.join(" ")),
+        &format!("rtk git diff {} (exact)", args.join(" ")),
+        &raw, &raw,
+    );
+    {
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(&output.stdout).context("Failed to write git diff stdout")?;
+        stdout.flush().context("Failed to flush git diff stdout")?;
+    }
+    {
+        let mut stderr = std::io::stderr().lock();
+        stderr.write_all(&output.stderr).context("Failed to write git diff stderr")?;
+        stderr.flush().context("Failed to flush git diff stderr")?;
+    }
+    let code = crate::stream::status_to_exit_code(output.status);
+    if code != 0 { std::process::exit(code); }
     Ok(())
 }
 

@@ -67,6 +67,12 @@ summaries preserve compiler-warning titles so the failure guard does not restore
 details. Explicit full reads retain their requested fidelity; they do not require an artificial
 recovery marker. Shared policy fixtures record these deliberate current-engine changes.
 
+Git diff check, quiet and exit-code modes preserve one native invocation, both output streams
+and the native status. Ordinary compact diffs retain their successful summaries while Git
+errors stay exact and nonzero. This corrects the inherited reducer's unconditional-success
+path; accounting is emitted before status forwarding. Isolated real-Git regressions cover
+whitespace checks, changed/unchanged status, invalid revisions and receipt production.
+
 ### 0.7.1 bounded-output and accounting delta
 
 HZR 0.7.1 changes three current-engine surfaces without changing the immutable import baseline.

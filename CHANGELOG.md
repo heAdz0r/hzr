@@ -28,6 +28,7 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 - Scoped semantic and graph paths, exact source fidelity and valid empty MCP writes.
 - Test failure diagnostics, compiler warning signals and safe typed stdin filtering.
+- Native Git diff check/quiet/exit-code status and diagnostic fidelity.
 - Durable ICM ownership, graceful SIGTERM and recovery of verified owned unready children.
 - Producer lifecycle, command-family attribution and duplicate internal/delivery accounting.
 

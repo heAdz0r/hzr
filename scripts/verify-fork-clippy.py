@@ -17,9 +17,10 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 141
-# Recomputed after typed engine contracts, receipt accounting and PATH resolution moved reviewed
-# source positions. Warning code/message/source rows and the count remain identical to the import.
-EXPECTED_SHA256 = "3aa3353d899a0fa403f018310b913a5919095d746744b68e6ac0af65ab8fbfc8"
+# Recomputed after the 0.8.0 Git diff status fix moved the same needless_return diagnostic
+# from git.rs:1226 to :1229 in two targets. Reverse line mapping reproduces the prior hash;
+# no warning code/message/source identity was added or removed (see the verification report).
+EXPECTED_SHA256 = "5b013a3c862ea687ad6e8c12a9ce9be2370113b7620a60018c81a90fcd19bcd8"
 
 
 def main() -> int:

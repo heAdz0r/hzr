@@ -378,6 +378,23 @@ In `state.rs:253-285` and `supervisor.rs:113-125`, a live but unready owned chil
 
 Extend W08: persist verified process/DB/endpoint ownership, refuse unsafe second ownership, handle SIGTERM gracefully, and restart only verified owned children after a bounded failure threshold. Attached/foreign processes must never be killed as recovery. Test stale/reused PID, live-unready, transient health failure, SIGTERM, abrupt owner death and restart in isolated fixtures. Do not clean up existing user processes as a side effect of implementation.
 
+### F18 — P1: Git diff validation can report false success
+
+Found during final integration on September 5, after the initial audit. At source commit
+`b21d0c7`, `fork-core/rtk/src/git.rs::run_diff` (lines 423–458) ran both a diff-stat
+probe and the requested diff without checking their exit statuses, discarded stderr, and
+returned success. Consequently `git diff --cached --check` could print whitespace errors
+while HZR returned exit code 0. The same path mishandled `--exit-code`, `--quiet` and
+invalid revisions. The outer CLI correctly forwarded the fork's status; the defect was in
+the inherited reducer. This is a correctness failure, even when output is smaller.
+
+Required repair: run status-oriented modes exactly once, preserve stdout/stderr and native
+status, emit accounting before forwarding failure, and retain compact successful ordinary
+diffs without hiding Git errors. Regression fixtures must compare against real Git for
+whitespace checks, changed/unchanged exit-code and quiet modes, invalid revisions and receipt
+emission. Rebuild current-engine identity and repeat the complete deterministic/source gates.
+The immutable import baseline remains unchanged.
+
 ## 5. Target architecture
 
 ~~~mermaid

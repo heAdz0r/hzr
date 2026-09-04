@@ -1,8 +1,103 @@
-//! Exit-code parity tests for mutating `rtk git` commands.
+//! Exit-code and stream parity tests for `rtk git` commands.
 
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
+
+fn accounted_diff_command(repo: &Path, args: &[&str], journal: &Path) -> Command {
+    let mut command = rtk_bin();
+    command.arg("git").args(args).current_dir(repo)
+        .env("RTK_TRACKING_DISABLED", "0")
+        .env("RTK_DB_PATH", repo.join("forbidden-diff-history.sqlite"))
+        .env("HZR_INTERNAL_ACCOUNTING_RECEIPT_JOURNAL", journal)
+        .env("HZR_INTERNAL_ACCOUNTING_CORRELATION", "0123456789abcdef0123456789abcdef");
+    command
+}
+
+fn assert_exact_diff_receipt(journal: &Path) {
+    use hzr_engine_contract::{AccountingMeasurement, AccountingStage, EngineAccountingReceipt};
+    let encoded = fs::read_to_string(journal).expect("receipt before failure return");
+    assert_eq!(encoded.lines().count(), 1, "one invocation receipt");
+    let receipt: EngineAccountingReceipt = serde_json::from_str(encoded.trim()).expect("typed receipt");
+    assert_eq!(receipt.attribution.stage, AccountingStage::InternalTransport);
+    assert_eq!(receipt.measurement, AccountingMeasurement::Estimated);
+    assert_eq!(receipt.baseline_tokens, receipt.delivered_tokens, "exact output must not claim reduction");
+}
+
+#[test]
+fn parity_git_diff_status_modes_preserve_native_streams_and_failure_receipts() {
+    let directory = seed_repo();
+    let repo = directory.path();
+    set_file(repo, "README.md", "changed with trailing whitespace \n\n");
+    run_git_ok(repo, &["add", "README.md"]);
+    let cases: &[&[&str]] = &[
+        &["diff", "--cached", "--check"],
+        &["diff", "--cached", "--exit-code"],
+        &["diff", "--cached", "--quiet"],
+        &["diff", "--cached", "--stat", "--check"],
+        &["diff", "__HZR_nonexistent_revision__", "--"],
+    ];
+    for (index, args) in cases.iter().enumerate() {
+        let native = run_git(repo, args);
+        assert!(!native.status.success(), "fixture must expose nonzero status: {args:?}");
+        let journal = repo.join(format!("receipt-{index}.jsonl"));
+        let filtered = accounted_diff_command(repo, args, &journal).output().expect("rtk diff");
+        assert_eq!(filtered.status.code(), native.status.code(), "{args:?}");
+        assert_eq!(filtered.stdout, native.stdout, "stdout {args:?}");
+        assert_eq!(filtered.stderr, native.stderr, "stderr {args:?}");
+        assert_exact_diff_receipt(&journal);
+    }
+    assert!(!repo.join("forbidden-diff-history.sqlite").exists());
+}
+
+#[test]
+fn parity_git_diff_no_compact_is_exact_and_quiet_success_emits_no_text() {
+    let directory = seed_repo();
+    let repo = directory.path();
+    let quiet_receipt = repo.join("quiet-receipt.jsonl");
+    let quiet = accounted_diff_command(repo, &["diff", "--quiet"], &quiet_receipt).output().expect("quiet");
+    assert!(quiet.status.success());
+    assert!(quiet.stdout.is_empty() && quiet.stderr.is_empty());
+    assert_exact_diff_receipt(&quiet_receipt);
+
+    set_file(repo, "README.md", "changed\n");
+    let native = run_git(repo, &["diff"]);
+    let journal = repo.join("exact-receipt.jsonl");
+    let exact = accounted_diff_command(repo, &["diff", "--no-compact"], &journal).output().expect("exact");
+    assert_eq!(exact.status.code(), native.status.code());
+    assert_eq!(exact.stdout, native.stdout);
+    assert_eq!(exact.stderr, native.stderr);
+    assert_exact_diff_receipt(&journal);
+}
+
+#[cfg(unix)]
+#[test]
+fn parity_git_diff_signal_runs_once_preserves_partial_bytes_and_records_receipt() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("fixture");
+    let repo = directory.path();
+    let bin = repo.join("bin");
+    fs::create_dir(&bin).expect("bin");
+    let git = bin.join("git");
+    fs::write(&git, "#!/bin/sh\nprintf 'call\\n' >> \"$HZR_GIT_DIFF_FIXTURE_CALLS\"\nprintf 'partial stdout'\nprintf 'partial stderr' >&2\nkill -TERM $$\n").expect("git fixture");
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o700)).expect("executable");
+    let mut paths = vec![bin];
+    if let Some(existing) = std::env::var_os("PATH") { paths.extend(std::env::split_paths(&existing)); }
+    let path = std::env::join_paths(paths).expect("fixture PATH");
+    for (index, args) in [&["diff", "--check"][..], &["diff", "--quiet"], &["diff", "--exit-code"], &["diff"]].iter().enumerate() {
+        let calls = repo.join(format!("calls-{index}"));
+        let journal = repo.join(format!("receipt-{index}.jsonl"));
+        let output = accounted_diff_command(repo, args, &journal)
+            .env("PATH", &path).env("HZR_GIT_DIFF_FIXTURE_CALLS", &calls)
+            .output().expect("signal fixture");
+        assert_eq!(output.status.code(), Some(143), "SIGTERM maps to shell status");
+        assert_eq!(output.stdout, b"partial stdout");
+        assert_eq!(output.stderr, b"partial stderr");
+        assert_eq!(fs::read_to_string(calls).expect("calls"), "call\n", "one Git invocation");
+        assert_exact_diff_receipt(&journal);
+    }
+}
+
 
 fn rtk_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_rtk"))
