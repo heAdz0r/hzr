@@ -36,7 +36,7 @@ results are accounted:
 | `hzr_memory_update` | Replace a superseded memory after HZR verifies project/global namespace ownership. |
 | `hzr_memory_forget` | Delete one invalid memory after namespace verification. |
 | `hzr_memory_prune` | Preview or remove low-weight memories in one namespace; preview is the default. |
-| `hzr_codec` | Remove exact duplicate paragraphs from a long answer while provably preserving code, commands, paths, identifiers, errors and numbers. It does not reword or summarise prose, so text with no repetition comes back byte-identical. Use `profile: "shadow"` to measure the counterfactual without changing the text. |
+| `hzr_codec` | Evaluation only. Removes exact duplicate paragraphs while preserving code, commands, paths, identifiers, errors and numbers; it does not reword prose, so unique text comes back byte-identical. Not a default step for generated prose: a transform after generation cannot refund emitted tokens. Use `profile: "shadow"` to measure the counterfactual without changing the text. |
 
 The gateway negotiates the latest stable MCP revision it supports
 (`2025-11-25`) while retaining compatible older revisions. Tools publish JSON
@@ -60,11 +60,15 @@ not be used, and the workspace-pinned CLI remains safe. Run `hzr mcp status` in 
 inspect capability, effective scope, availability and remediation.
 
 Claude and Codex do not expose a trusted hook that can replace every final assistant response.
-Managed instructions and Claude Code SessionStart tell the agent to call `hzr_codec` for eligible
-long prose. The returned tool/CLI payload is an observable transform and can receive estimated
-codec-token credit. It does not prove that a later final assistant response was replaced:
-global-response coverage stays `instructed` (or `unavailable`), shadow stays counterfactual, and
-neither receives final-response economic credit or provider-billed dollar credit.
+Managed instructions and Claude Code SessionStart therefore instruct concise generation with exact
+technical content, and tell the agent *not* to route generated prose through `hzr_codec`: a
+transform applied after generation spends the answer's tokens again as tool arguments and payload
+to remove only exact duplicate paragraphs, so it cannot refund what was emitted. `hzr_codec`
+remains available on explicit request and for `shadow` measurement. A transformed tool/CLI payload
+is observable and can receive estimated codec-token credit, but it never proves that a later
+final assistant response was replaced: global-response coverage stays `instructed` (or
+`unavailable`), shadow stays counterfactual, and neither receives final-response economic credit
+or provider-billed dollar credit.
 
 When `[activation].mode = "selected"`, project-scoped MCP tools additionally require an
 initialized workspace whose repository/worktree identity appears in `enabled_workspaces`.

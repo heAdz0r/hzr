@@ -312,8 +312,10 @@ same `hzrd` boundary. The executable contract is
 `hzr_codec` distinguishes four coverage states: `applied`, `shadow_measured`, `instructed`, and
 `unavailable`. A transformed tool/CLI payload is observable and may receive estimated token
 credit. Claude and Codex cannot let HZR replace every final assistant response, so managed
-instructions and SessionStart expose the action while global-response coverage receives zero
-credit until a trusted host confirms replacement. Provider-billed `$` is never inferred from it.
+instructions and SessionStart ask for concise generation instead of a post-hoc transform: sending
+finished prose back through the codec cannot refund tokens already emitted. `hzr_codec` stays an
+explicit-request and `shadow` evaluation tool, and global-response coverage receives zero credit
+until a trusted host confirms replacement. Provider-billed `$` is never inferred from it.
 
 ## Keeping a fleet of projects current
 

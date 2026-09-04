@@ -66,59 +66,73 @@
   "mcp_tools": [
     {
       "name": "hzr_context_plan",
-      "purpose": "Build bounded graph-first evidence for unfamiliar or cross-cutting work."
+      "purpose": "Build bounded graph-first evidence for unfamiliar or cross-cutting work.",
+      "tier": "core"
     },
     {
       "name": "hzr_search",
-      "purpose": "Find code by intent or by a known exact literal."
+      "purpose": "Find code by intent or by a known exact literal.",
+      "tier": "core"
     },
     {
       "name": "hzr_memory_recall",
-      "purpose": "Recall durable decisions, resolved errors, and prior context."
+      "purpose": "Recall durable decisions, resolved errors, and prior context.",
+      "tier": "core"
     },
     {
       "name": "hzr_memory_get",
-      "purpose": "Read one exact memory ID after verifying namespace ownership."
+      "purpose": "Read one exact memory ID after verifying namespace ownership.",
+      "tier": "specialist"
     },
     {
       "name": "hzr_memory_store",
-      "purpose": "Persist one durable fact or finished handoff, not ephemeral state."
+      "purpose": "Persist one durable fact or finished handoff, not ephemeral state.",
+      "tier": "core"
     },
     {
       "name": "hzr_memory_update",
-      "purpose": "Replace one superseded memory after namespace ownership is verified."
+      "purpose": "Replace one superseded memory after namespace ownership is verified.",
+      "tier": "specialist"
     },
     {
       "name": "hzr_memory_forget",
-      "purpose": "Delete one invalid memory after namespace ownership is verified."
+      "purpose": "Delete one invalid memory after namespace ownership is verified.",
+      "tier": "specialist"
     },
     {
       "name": "hzr_memory_prune",
-      "purpose": "Preview or remove low-weight memories in one namespace."
+      "purpose": "Preview or remove low-weight memories in one namespace.",
+      "tier": "specialist"
     },
     {
       "name": "hzr_codec",
-      "purpose": "Return a protected response-density transform or shadow counterfactual; host delivery remains instructed until replacement is confirmed."
+      "purpose": "Explicit duplicate-paragraph transform or shadow measurement; not a default step for generated prose. Host delivery and economic credit remain unverified.",
+      "tier": "specialist"
     },
     {
       "name": "hzr_read",
-      "purpose": "Read exact full or bounded batch content with total token budget, hashes and explicit continuation."
+      "purpose": "Read exact full or bounded batch content with total token budget, hashes and explicit continuation.",
+      "tier": "core"
     },
     {
       "name": "hzr_write",
-      "purpose": "Apply confined atomic patch or create operations with typed CAS receipts."
+      "purpose": "Apply confined atomic patch or create operations with typed CAS receipts.",
+      "tier": "core"
     },
     {
       "name": "hzr_exec",
-      "purpose": "Run commands, or start/wait/cancel bounded background jobs through daemon policy and accounting."
+      "purpose": "Run commands, or start/wait/cancel bounded background jobs through daemon policy and accounting.",
+      "tier": "core"
     },
     {
       "name": "hzr_observability",
-      "purpose": "Return typed daemon, engine, capability, and workspace health."
+      "purpose": "Return typed daemon, engine, capability, and workspace health.",
+      "tier": "specialist"
     },
     {
       "name": "hzr_doctor",
-      "purpose": "Run desired-state diagnostics for the exact MCP workspace."
+      "purpose": "Run desired-state diagnostics for the exact MCP workspace.",
+      "tier": "specialist"
     }
   ],
   "harnesses": {
@@ -129,7 +143,8 @@
         "global_replacement": false,
         "coverage": "instructed",
         "mechanism": "managed_instruction_and_session_start",
-        "economic_credit": false
+        "economic_credit": false,
+        "default_prose_policy": "concise_generation_no_post_hoc_transform"
       },
       "hooks": {
         "adapter_contract": "hzr_host_hooks_v1",
@@ -146,7 +161,9 @@
         "declared_post_tool_output_replacement": true,
         "implemented_post_tool_output_replacement": true,
         "post_tool_output_opt_in": "hzr hooks observe --native-mode observe --replace-output",
-        "implemented_post_tool_tools": ["Bash:cargo_test_success_summary"],
+        "implemented_post_tool_tools": [
+          "Bash:cargo_test_success_summary"
+        ],
         "post_tool_output_schema": "stdout:string,stderr:string,interrupted:false,isImage:false",
         "post_tool_output_recovery": "private_content_addressed_original_stdout",
         "post_tool_output_economic_credit": false,
@@ -164,7 +181,8 @@
         "global_replacement": false,
         "coverage": "instructed",
         "mechanism": "managed_instruction",
-        "economic_credit": false
+        "economic_credit": false,
+        "default_prose_policy": "concise_generation_no_post_hoc_transform"
       },
       "hooks": {
         "adapter_contract": "hzr_host_hooks_v1",

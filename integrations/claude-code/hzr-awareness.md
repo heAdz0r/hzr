@@ -42,10 +42,11 @@ Tools: `hzr_context_plan`, `hzr_search`, `hzr_read`, `hzr_write`, `hzr_exec`,
 `hzr_memory_store`, `hzr_memory_update`, `hzr_memory_forget`,
 `hzr_memory_prune`, and `hzr_codec`. Plan first for unfamiliar or cross-cutting work, recall
 before re-reading files you already analysed, and store decisions and resolved
-errors rather than ephemeral session state. Use `hzr_codec` to apply or shadow-measure
-protected response-density transforms. Its returned payload is observable, but neither Claude
-host exposes a trusted global final-response replacement hook. Global coverage is instructed or
-unavailable and receives zero final-response credit. Inputs are strictly bounded and
+errors rather than ephemeral session state. Write concisely by default; do not route generated
+prose through `hzr_codec`, because a post-generation transform cannot refund emitted tokens. Use
+`hzr_codec` only on explicit request or to shadow-measure a counterfactual. Its returned payload
+is observable, but neither Claude host exposes a trusted global final-response replacement hook.
+Global coverage is instructed or unavailable and receives zero final-response credit. Inputs are strictly bounded and
 successful calls include typed `structuredContent`. `isError: true` means no
 success was confirmed and no fallback engine or store was used; recall before
 retrying an ambiguously completed store.

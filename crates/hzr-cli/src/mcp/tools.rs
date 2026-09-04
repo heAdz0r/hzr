@@ -249,7 +249,11 @@ fn context_pack_schema() -> Value {
             "used": token_count_schema(),
             "hard_limit": {"type": "integer", "minimum": 0},
             "coverage": {"type": "number"},
-            "confidence": {"type": "number"},
+            "confidence": {"type": "number", "description": "Ranking diagnostic, not a probability; see ranking."},
+            "ranking": strict_object(
+                json!({"method": {"type": "string"}, "calibrated": {"type": "boolean"}}),
+                &["method", "calibrated"]
+            ),
             "budget_exceeded": {"type": "boolean"}
         }),
         &[
@@ -259,6 +263,7 @@ fn context_pack_schema() -> Value {
             "hard_limit",
             "coverage",
             "confidence",
+            "ranking",
             "budget_exceeded",
         ],
     )
@@ -848,16 +853,11 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
             ToolKind::Codec,
             json!({
                 "title": "Compile an HZR Response-Density Contract",
-                "description": "Remove exact duplicate paragraphs from a long answer while provably \
-            preserving code, commands, paths, identifiers, errors, numbers and URLs. It is a \
-            structural transform, not a summariser: it never rewords prose, so text with no \
-            repeated paragraph comes back byte-identical and that is a correct result, not a \
-            failure. Use profile \"shadow\" to measure the counterfactual without changing the \
-            text. Protected spans are verified after the transform: if any of them changed, the \
-            call fails rather than returning altered technical content. Claude and Codex do not \
-            expose a global response-replacement hook. The returned tool payload can earn \
-            estimated codec-token credit when it is smaller, but it never proves a later final \
-            response was replaced and never earns provider-billed credit by itself.",
+                "description": "Evaluation tool, not a default step: a transform applied after \
+            generation cannot refund tokens already emitted. Removes exact duplicate paragraphs \
+            while protecting code, commands, paths, identifiers, errors, numbers and URLs; it \
+            never rewords, so unique text returns byte-identical. Use profile \"shadow\" to \
+            measure the counterfactual without changing text. It never earns provider-billed credit.",
                 "inputSchema": {
                     "$schema": "https://json-schema.org/draft/2020-12/schema",
                     "type": "object",
@@ -866,25 +866,25 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
                         "content": {
                             "type": "string",
                             "minLength": 1,
-                            "description": "The prose to compile. Code blocks, inline code, paths, flags, URLs, hashes and versions inside it are protected and returned unchanged.",
+                            "description": "Prose to transform; code, paths, flags, URLs, hashes and versions are protected.",
                         },
                         "fidelity": {
                             "type": "string",
                             "enum": ["exact", "lossless_structural", "semantic", "summary"],
                             "default": "semantic",
-                            "description": "How much rewriting is permitted. exact returns the input untouched; summary permits the most aggressive rewrite.",
+                            "description": "exact returns the input untouched.",
                         },
                         "risk": {
                             "type": "string",
                             "enum": ["low", "medium", "high", "irreversible"],
                             "default": "low",
-                            "description": "Risk of the action being described. high and irreversible force full detail regardless of profile.",
+                            "description": "high and irreversible force full detail.",
                         },
                         "profile": {
                             "type": "string",
                             "enum": ["off", "safe", "adaptive", "compact", "shadow"],
                             "default": "adaptive",
-                            "description": "shadow computes the counterfactual without changing the content, which is the only honest way to measure the codec's value.",
+                            "description": "shadow measures without changing content.",
                         },
                     },
                     "required": ["content"],
@@ -917,7 +917,7 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
                         "counterfactual": {
                             "type": "object",
                             "additionalProperties": false,
-                            "description": "Present in shadow profile: the sizes the transform would have produced.",
+                            "description": "Shadow profile only.",
                             "properties": {
                                 "input_bytes": {"type": "integer", "minimum": 0},
                                 "output_bytes": {"type": "integer", "minimum": 0},

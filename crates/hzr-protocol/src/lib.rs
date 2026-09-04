@@ -40,7 +40,7 @@ pub use api::{
     MemoryImportance, MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
     MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope, MustKeep,
     OperationApiRequest, OperationApiResponse, PolicyEventApiRequest, PolicyEventApiResponse,
-    ReadApiRequest, ReadApiResponse, ReadCostAdvice, ReadFileResult, SearchApiRequest,
+    PrefixEffect, ReadApiRequest, ReadApiResponse, ReadCostAdvice, ReadFileResult, SearchApiRequest,
     SearchApiResponse, SearchHit, SearchLine, SearchMode, SearchPage, SearchSnippet,
     SearchStrategy, SemanticReadinessApiRequest, SemanticReadinessApiResponse, UsageApiRequest,
     UsageApiResponse, completeness_contract,
@@ -292,8 +292,48 @@ pub struct ContextPack {
     pub used: TokenCount,
     pub hard_limit: u64,
     pub coverage: f32,
+    /// Ranking diagnostic in `[0, 1]`: how far the top candidate separated from the field.
+    ///
+    /// Not a probability that the plan is correct. The name is kept for wire compatibility;
+    /// `ranking` states what the number is and that it is uncalibrated.
     pub confidence: f32,
+    /// What `confidence` measures and whether it has been calibrated against labelled outcomes.
+    #[serde(default)]
+    pub ranking: RankingDiagnostic,
     pub budget_exceeded: bool,
+}
+
+/// Provenance of the `confidence` figure on a [`ContextPack`].
+///
+/// A plan cannot know whether its best hit answers the task; it can only report how clearly one
+/// candidate stood out. Until that separation is calibrated on held-out relevant-file labels
+/// (PRD 2026-09-04, W11/W13), every reader must treat the number as a ranking diagnostic, and the
+/// `calibrated` flag is what says so in the payload rather than in a document nobody re-reads.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RankingDiagnostic {
+    /// Identifier of the formula that produced `confidence`.
+    pub method: String,
+    /// `true` only once the method has been fitted to labelled task outcomes.
+    pub calibrated: bool,
+}
+
+impl RankingDiagnostic {
+    /// Relative separation of the top candidate's utility from the mean of the rest.
+    pub const TOP_CANDIDATE_SEPARATION_V1: &'static str = "top_candidate_separation_v1";
+
+    #[must_use]
+    pub fn uncalibrated_separation() -> Self {
+        Self {
+            method: Self::TOP_CANDIDATE_SEPARATION_V1.to_owned(),
+            calibrated: false,
+        }
+    }
+}
+
+impl Default for RankingDiagnostic {
+    fn default() -> Self {
+        Self::uncalibrated_separation()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

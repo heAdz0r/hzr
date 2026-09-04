@@ -52,7 +52,23 @@ struct AgentRoute {
 #[derive(Debug, Deserialize)]
 struct AgentTool {
     name: String,
+    #[serde(default)]
+    tier: ToolTier,
     purpose: String,
+}
+
+/// How prominently a tool is projected into every session's instruction prefix.
+///
+/// Every line of the managed block is loaded into every turn of every session, so a tool that
+/// is used once per week must not cost the same instruction bytes as one used every task. Core
+/// tools keep a table row; specialist tools are named once, in one line, and their full
+/// contract stays in the MCP schema the host loads on demand. (W12, PRD 2026-09-04)
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum ToolTier {
+    #[default]
+    Core,
+    Specialist,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +90,11 @@ struct ResponseCodecCapability {
     coverage: String,
     mechanism: String,
     economic_credit: bool,
+    /// What the agent is told to do about answer length by default. The only supported value
+    /// is concise generation without a post-hoc transform: a codec applied after the model has
+    /// emitted a long answer cannot refund those tokens. (F15, PRD 2026-09-04)
+    #[serde(default)]
+    default_prose_policy: Option<String>,
 }
 
 fn agent_capabilities() -> AgentCapabilities {
@@ -101,8 +122,30 @@ fn route_table(contract: &AgentCapabilities) -> String {
 
 fn mcp_table(contract: &AgentCapabilities) -> String {
     let mut table = String::from("| Tool | Use it for |\n|---|---|\n");
-    for tool in &contract.mcp_tools {
+    for tool in contract
+        .mcp_tools
+        .iter()
+        .filter(|tool| tool.tier == ToolTier::Core)
+    {
         table.push_str(&format!("| `{}` | {} |\n", tool.name, tool.purpose));
+    }
+    let specialist = contract
+        .mcp_tools
+        .iter()
+        .filter(|tool| tool.tier == ToolTier::Specialist)
+        .map(|tool| format!("`{}`", tool.name))
+        .collect::<Vec<_>>();
+    if !specialist.is_empty() {
+        table.push('\n');
+        table.push_str(&wrap_prose(
+            &format!(
+                "Specialist tools, called only when the task needs them; their full contracts \
+                 live in the MCP schema, not here: {}.",
+                specialist.join(", ")
+            ),
+            MANAGED_PROSE_WIDTH,
+        ));
+        table.push('\n');
     }
     table
 }
@@ -266,18 +309,27 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
     assert!(!codec.global_replacement);
     assert_eq!(codec.coverage, "instructed");
     assert!(!codec.economic_credit);
+    assert_eq!(
+        codec.default_prose_policy.as_deref(),
+        Some("concise_generation_no_post_hoc_transform"),
+        "the only supported default prose policy is concise generation"
+    );
+    // Concise generation is an instruction, not a transform: the cheapest long answer is the one
+    // that was never emitted. Asking every agent to send finished prose back through a codec
+    // spends the answer's tokens once to write it, again as tool arguments, again as the returned
+    // payload and again in the final message, to remove only exact duplicate paragraphs.
     let codec_guidance = format!(
-        "## Response codec coverage\n\n{}\n",
+        "## Response density\n\n{}\n",
         wrap_prose(
             &format!(
-                "This host cannot let HZR replace every final response. Coverage is \
-                 `{coverage}` via `{mechanism}`. Before delivering long low- or medium-risk \
-                 prose where compression is useful, call `hzr_codec` once and use its \
-                 returned `content`. If the tool is not available, keep the response concise \
-                 and report codec coverage as unavailable. An explicit tool result is not \
-                 proof that the host delivered it: HZR grants zero economic credit unless a \
-                 trusted host confirms replacement. Shadow results are counterfactual \
-                 measurements only.",
+                "Write concisely by default: lead with the result, omit greetings, request \
+                 restatement and tool recaps, and keep code, commands, paths, identifiers, \
+                 errors and numbers exact. Do not route generated prose through `hzr_codec`: a \
+                 transform applied after generation cannot refund tokens already emitted, and \
+                 it only removes exact duplicate paragraphs. Call `hzr_codec` only when the user \
+                 asks for it or to shadow-measure a counterfactual with `profile: \"shadow\"`. \
+                 Response coverage is `{coverage}` via `{mechanism}`; HZR grants no economic \
+                 credit unless a trusted host confirms replacement.",
                 coverage = codec.coverage,
                 mechanism = codec.mechanism,
             ),
@@ -1036,7 +1088,7 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        BEGIN, END, MANAGED_PROSE_WIDTH, Surface, compose, managed_block,
+        BEGIN, END, MANAGED_PROSE_WIDTH, Surface, ToolTier, compose, managed_block,
         migrate_legacy_directives, prose_words, strip_legacy_imports, strip_managed_block,
     };
 
@@ -1482,6 +1534,50 @@ mod tests {
             assert!(
                 conflicts.iter().any(|finding| finding.contains(expected)),
                 "missing {expected}: {conflicts:?}"
+            );
+        }
+    }
+
+    /// F15/W12 (PRD 2026-09-04): the managed block is loaded into every turn of every session,
+    /// so it must ask for concise generation rather than a post-generation codec round trip, and
+    /// it must spend table rows only on the tools a task uses routinely.
+    #[test]
+    fn acceptance_gate_managed_block_instructs_concise_generation_and_tiers_tools() {
+        let capabilities = super::agent_capabilities();
+        for surface in [Surface::Claude, Surface::Codex] {
+            let out = compose("", surface, contract()).0;
+            let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(flat.contains("Write concisely by default"));
+            assert!(flat.contains("Do not route generated prose through `hzr_codec`"));
+            assert!(flat.contains("cannot refund tokens already emitted"));
+            assert!(
+                !flat.contains("call `hzr_codec` once"),
+                "{} still instructs a default codec round trip",
+                surface.as_str()
+            );
+            for tool in &capabilities.mcp_tools {
+                let row = format!("| `{}` |", tool.name);
+                match tool.tier {
+                    ToolTier::Core => assert!(
+                        out.contains(&row),
+                        "core tool {} must keep a table row",
+                        tool.name
+                    ),
+                    ToolTier::Specialist => assert!(
+                        !out.contains(&row) && out.contains(&format!("`{}`", tool.name)),
+                        "specialist tool {} must be named once, not given a row",
+                        tool.name
+                    ),
+                }
+            }
+            assert!(flat.contains("Specialist tools, called only when the task needs them"));
+            // Measured 2026-09-04: 6,904 bytes (Claude) and 6,325 bytes (Codex) before W12;
+            // 6,593 and 6,014 after. Hold the ceiling below the pre-W12 size.
+            assert!(
+                out.len() <= 6_800,
+                "{} managed projection grew back to {} bytes",
+                surface.as_str(),
+                out.len()
             );
         }
     }

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use hzr_protocol::{
-    CandidateDecision, CandidateSource, ContextCandidate, ContextPack, TokenCount, TokenCountSource,
+    CandidateDecision, CandidateSource, ContextCandidate, ContextPack, RankingDiagnostic,
+    TokenCount, TokenCountSource,
 };
 
 pub struct FusionInput {
@@ -164,6 +165,7 @@ impl BudgetPlanner {
         ContextPack {
             coverage: coverage(&selected),
             confidence,
+            ranking: RankingDiagnostic::uncalibrated_separation(),
             selected,
             rejected,
             used: TokenCount {

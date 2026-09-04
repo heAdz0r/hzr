@@ -4,6 +4,7 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ## [0.8.0] - 2026-09-04
 
 ### Added
@@ -33,6 +34,34 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 This is the prepared source version. Release publication and billed/task-level savings are not
 implied by these entries.
+=======
+### Changed
+
+- Corrected the cache-aware filter placement model (PRD 2026-09-04, F13). `turn_boundary` no
+  longer declines every mid-turn filter: a `PreToolUse` command rewrite shapes a tool result the
+  host appends after the cached request prefix and cannot invalidate it, so it now filters at any
+  turn position. Only transforms classified as `PrefixEffect::HistoryMutation` are deferred to the
+  turn boundary. Session state counts both `placement_deferred_operations` and the new
+  `placement_append_filtered_operations` so an arm comparison can size what each rule kept.
+- Replaced the default response-codec round trip with concise generation (F15). Managed
+  instructions, the Claude Code SessionStart notice, the `hzr_codec` MCP description and the
+  contract documents now tell agents to write concisely and *not* to send generated prose back
+  through `hzr_codec`; a transform applied after generation cannot refund tokens already emitted
+  and only removes exact duplicate paragraphs. `hzr_codec` remains available on explicit request
+  and for `shadow` counterfactual measurement. The capability contract records the policy as
+  `default_prose_policy = concise_generation_no_post_hoc_transform`.
+- Tiered the MCP catalog in every session prefix (W12). `contracts/agent-capabilities.json`
+  marks each tool `core` or `specialist`; the managed instruction block keeps a table row only for
+  core tools and names the six specialist tools once in one line. The compacted `hzr_codec`
+  entry shrinks the `tools/list` result from 25,574 to 25,092 wire bytes and the managed block
+  from 6,904 to 6,593 bytes (Claude) and 6,325 to 6,014 bytes (Codex); a new gate holds both
+  below their pre-W12 sizes. These are payload bytes, not tokenizer or billed measurements.
+- Labelled the context-plan `confidence` figure as an uncalibrated ranking diagnostic (W13,
+  F09). `ContextPack` gains `ranking { method: "top_candidate_separation_v1", calibrated: false }`
+  in the protocol, the MCP output schema and the CLI summary line; the numeric field keeps its
+  name for wire compatibility. Calibration against held-out relevant-file labels remains
+  blocked on the paired evaluation harness (W11) and is not claimed.
+>>>>>>> feat/prd-p2-agent-efficiency
 
 ## [0.7.1] - 2026-09-04
 
