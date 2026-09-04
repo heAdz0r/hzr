@@ -569,7 +569,7 @@ onBeforeUnmount(() => {
             <details class="detail-disclosure"><summary>Request traces & lifecycle events</summary><ObservabilityTimeline :observability="snapshot.observability" /></details>
           </div>
 
-          <details class="metric-group estimate-group detail-disclosure"><summary>All-workspace output estimates <span>Global scope</span></summary>
+          <details class="metric-group estimate-group detail-disclosure"><summary>All-workspace producer estimates <span>Global scope</span></summary>
             <div class="metric-group-title">
               <span class="metric-group-mark estimate-mark"><AppIcon name="cpu" :size="18" /></span>
               <div><strong>All-workspace efficiency ledger</strong><span>Global operational context · {{ snapshot.estimated_efficiency.accounting_policy_version }}</span></div>
@@ -579,7 +579,7 @@ onBeforeUnmount(() => {
               <MetricCard
                 eyebrow="Estimate"
                 :value="formatCount(snapshot.estimated_efficiency.operations)"
-                label="Filtered operations"
+                label="Producer operations"
                 :detail="`${formatDuration(snapshot.estimated_efficiency.total_execution_ms)} measured execution`"
                 icon="activity"
                 tone="estimated"
@@ -595,7 +595,7 @@ onBeforeUnmount(() => {
               <MetricCard
                 eyebrow="Estimate"
                 :value="formatPercent(snapshot.estimated_efficiency.reduction_pct)"
-                label="Direct reduction"
+                label="Producer reduction"
                 detail="Not a provider billing claim"
                 icon="database"
                 tone="estimated"
@@ -603,7 +603,7 @@ onBeforeUnmount(() => {
               <MetricCard
                 eyebrow="Estimate"
                 :value="formatCount(snapshot.estimated_efficiency.delivered_tokens_estimated)"
-                label="Delivered tokens"
+                label="Produced tokens"
                 :detail="`${formatCount(snapshot.estimated_efficiency.baseline_tokens_estimated)} baseline estimate`"
                 icon="clock"
                 tone="estimated"

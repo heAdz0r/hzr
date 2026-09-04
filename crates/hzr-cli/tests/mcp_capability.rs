@@ -267,7 +267,24 @@ fn stdio_tools_call_executes_bounded_read_write_and_accounts_success_once() {
         json!({"path":"note.txt","from":2,"to":2}),
     );
     assert_eq!(read["result"]["isError"], false, "{read:#}");
-    assert_eq!(read["result"]["structuredContent"]["content"], "beta\n");
+    let result = &read["result"]["structuredContent"];
+    assert_eq!(
+        result["files"].as_array().expect("typed read files").len(),
+        1
+    );
+    let file = &result["files"][0];
+    assert_eq!(file["path"], "note.txt");
+    assert_eq!(file["content"], "beta\n");
+    assert_eq!(file["from"], 2);
+    assert_eq!(file["to"], 2);
+    assert_eq!(file["total_lines"], 2);
+    assert_eq!(file["complete"], false);
+    assert_eq!(file["next_line"], Value::Null);
+    assert_eq!(
+        file["source_sha256"].as_str().expect("source hash").len(),
+        64
+    );
+    assert_eq!(result["remaining_paths"], json!([]));
     let missing = request(
         &mut stdin,
         &mut stdout,

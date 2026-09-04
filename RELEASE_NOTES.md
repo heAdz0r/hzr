@@ -48,7 +48,10 @@ or total-task savings percentage is claimed without a real paired evaluation.
 
 ## Scope and verification
 
-The implementation follows the fresh September 4 audit and its approved P0/P1 scope. P2 ranking,
-catalog and optional codec enhancements remain deferred. The 0.8.0 verification report records
+The implementation follows the fresh September 4 audit and its approved P0/P1 scope. The user
+also approved inclusion of the completed P2 branch `feat/prd-p2-agent-efficiency` (`9016b29`):
+cache-prefix-aware placement, concise generation by default, tiered instructions and explicitly
+uncalibrated ranking diagnostics. Calibration and a real paired economic evaluation remain
+unproven; this release does not invent either result. The 0.8.0 verification report records
 exact checks and remaining release requirements. Source verification does not reconfigure
 existing user integrations.

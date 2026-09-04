@@ -17,9 +17,9 @@ fn seed(path: &std::path::Path, rows: &[(&str, &str, u64, u64, &str)]) {
                 "INSERT INTO commands (
                     timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
                     saved_tokens, savings_pct, exec_time_ms, project_path,
-                    producer_version, accounting_policy_version
+                    producer_version, accounting_policy_version, accounting_stage
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-                           'test', ?10)",
+                           'test', ?10, 'internal_transport')",
                 rusqlite::params![
                     timestamp,
                     command,

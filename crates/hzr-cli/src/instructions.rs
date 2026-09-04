@@ -1092,6 +1092,32 @@ mod tests {
         migrate_legacy_directives, prose_words, strip_legacy_imports, strip_managed_block,
     };
 
+    #[test]
+    fn repository_managed_contracts_match_canonical_renderer() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for (name, surface) in [
+            ("AGENTS.md", Surface::Codex),
+            ("CLAUDE.md", Surface::Claude),
+        ] {
+            let path = root.join(name);
+            let existing = std::fs::read_to_string(&path).expect("repository instruction file");
+            let from = existing.find(BEGIN).expect("managed block start");
+            let to = from + existing[from..].find(END).expect("managed block end") + END.len();
+            let expected = managed_block(surface, Path::new("HZR.md"));
+            if std::env::var("HZR_UPDATE_CONTRACTS").as_deref() == Ok("1") {
+                let updated = format!("{}{}{}", &existing[..from], expected, &existing[to..]);
+                std::fs::write(&path, updated)
+                    .expect("refresh repository-owned generated contract");
+            } else {
+                assert_eq!(
+                    &existing[from..to],
+                    expected,
+                    "{name} drifted; refresh with HZR_UPDATE_CONTRACTS=1 cargo test -p hzr-cli repository_managed_contracts_match_canonical_renderer"
+                );
+            }
+        }
+    }
+
     fn contract() -> &'static Path {
         Path::new("/opt/hzr/share/hzr/HZR.md")
     }

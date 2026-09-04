@@ -42,6 +42,11 @@ It runs the exact locked workspace format, Clippy and test commands, the complet
 suite, the fork warning ratchet, shell syntax checks and the static release-workflow regression
 gate. Do not replace it with name-filtered acceptance tests.
 
+After changing the managed agent contract renderer, refresh the repository mirrors with
+`HZR_UPDATE_CONTRACTS=1 cargo test -p hzr-cli repository_managed_contracts_match_canonical_renderer`.
+The same test without the environment variable verifies that `AGENTS.md` and `CLAUDE.md`
+match the canonical renderer while preserving repository-specific instructions.
+
 Changes to `fork-core/rtk` must also pass its complete regression gate and update
 the current-engine identity:
 

@@ -111,7 +111,16 @@ export interface DashboardIndexObservatory {
   diagnostic_command: string;
 }
 
+export interface DashboardDeliverySummary {
+  operations: number;
+  tokens_estimated: number | null;
+  legacy_unknown_stage_operations: number;
+  coverage: string;
+  complete: boolean;
+}
+
 export interface DashboardLocalActivity {
+  explicit_delivery?: DashboardDeliverySummary;
   project: string | null;
   accounting_policy_version: string;
   excluded_legacy_operations: number;
@@ -228,6 +237,7 @@ export interface DashboardSessionCommand {
 }
 
 export interface DashboardSessionRoi {
+  explicit_delivery?: DashboardDeliverySummary;
   session_hash: string | null;
   operations: number;
   baseline_tokens_estimated: number;

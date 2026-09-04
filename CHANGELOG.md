@@ -4,64 +4,34 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
-<<<<<<< HEAD
-## [0.8.0] - 2026-09-04
+## [0.8.0] - 2026-09-05
 
 ### Added
 
-- Durable execution start/wait/cancel operations with stable IDs and explicit interruption state.
-- Typed batch/range reads with output budgets, snapshot hashes and completeness metadata.
-- Exact memory lookup, optional context memory, and MCP execution lifecycle controls.
-- Consistent time-bounded fleet statistics, privacy-safe export and separate readiness dimensions.
-- A paired-task evaluation harness that validates per-request provider usage and independent
-  acceptance; offline fixtures never count as economic proof.
+- Durable execution start/wait/cancel and exact output recovery with stable operation IDs.
+- Typed batch/range reads, source hashes, explicit completeness and scoped read-cost advice.
+- Exact memory lookup, optional memory retrieval and bounded context responses.
+- Consistent fleet snapshots, private export and separate producer/delivery accounting.
+- Paired-task economics harness requiring per-request provider usage and independent acceptance.
 
 ### Changed
 
-- Redesigned the dashboard around operational evidence, useful filters and visible unknown states.
-- Preserved justified full reads and removed optimizer-only approval where no equivalent route exists.
-- Budgeted delivered context evidence rather than the full files that might be read later.
-- Kept host permission authority intact and stopped blocking native reads to force tool retries.
+- Redesigned the dashboard with useful project/activity filters and explicit unknown/error states.
+- Preserved justified full reads and removed optimizer-only approval without an equivalent route.
+- Included P2 branch `feat/prd-p2-agent-efficiency` (`9016b29`): cache-prefix-effect-aware filter
+  placement, concise generation instead of a default post-generation codec round trip, tiered
+  instruction catalog and explicitly uncalibrated ranking diagnostics.
+- Original P2 branch byte measurements are not measurements of the integrated 0.8.0 catalog.
 - Rejected cumulative ledger counters as evidence for an individual benchmark run.
 
 ### Fixed
 
-- Corrected scoped semantic and graph path resolution.
-- Preserved test failure diagnostics and compiler warning signals in managed output.
-- Added durable ICM ownership, graceful SIGTERM and recovery for verified owned unready children.
-- Corrected producer accounting lifecycle and command-family attribution.
-- Accepted empty and whitespace-only MCP writes consistently with their schema.
+- Scoped semantic and graph paths, exact source fidelity and valid empty MCP writes.
+- Test failure diagnostics, compiler warning signals and safe typed stdin filtering.
+- Durable ICM ownership, graceful SIGTERM and recovery of verified owned unready children.
+- Producer lifecycle, command-family attribution and duplicate internal/delivery accounting.
 
-This is the prepared source version. Release publication and billed/task-level savings are not
-implied by these entries.
-=======
-### Changed
-
-- Corrected the cache-aware filter placement model (PRD 2026-09-04, F13). `turn_boundary` no
-  longer declines every mid-turn filter: a `PreToolUse` command rewrite shapes a tool result the
-  host appends after the cached request prefix and cannot invalidate it, so it now filters at any
-  turn position. Only transforms classified as `PrefixEffect::HistoryMutation` are deferred to the
-  turn boundary. Session state counts both `placement_deferred_operations` and the new
-  `placement_append_filtered_operations` so an arm comparison can size what each rule kept.
-- Replaced the default response-codec round trip with concise generation (F15). Managed
-  instructions, the Claude Code SessionStart notice, the `hzr_codec` MCP description and the
-  contract documents now tell agents to write concisely and *not* to send generated prose back
-  through `hzr_codec`; a transform applied after generation cannot refund tokens already emitted
-  and only removes exact duplicate paragraphs. `hzr_codec` remains available on explicit request
-  and for `shadow` counterfactual measurement. The capability contract records the policy as
-  `default_prose_policy = concise_generation_no_post_hoc_transform`.
-- Tiered the MCP catalog in every session prefix (W12). `contracts/agent-capabilities.json`
-  marks each tool `core` or `specialist`; the managed instruction block keeps a table row only for
-  core tools and names the six specialist tools once in one line. The compacted `hzr_codec`
-  entry shrinks the `tools/list` result from 25,574 to 25,092 wire bytes and the managed block
-  from 6,904 to 6,593 bytes (Claude) and 6,325 to 6,014 bytes (Codex); a new gate holds both
-  below their pre-W12 sizes. These are payload bytes, not tokenizer or billed measurements.
-- Labelled the context-plan `confidence` figure as an uncalibrated ranking diagnostic (W13,
-  F09). `ContextPack` gains `ranking { method: "top_candidate_separation_v1", calibrated: false }`
-  in the protocol, the MCP output schema and the CLI summary line; the numeric field keeps its
-  name for wire compatibility. Calibration against held-out relevant-file labels remains
-  blocked on the paired evaluation harness (W11) and is not claimed.
->>>>>>> feat/prd-p2-agent-efficiency
+Prepared source version; publication and billed/task-level savings are separately verified.
 
 ## [0.7.1] - 2026-09-04
 

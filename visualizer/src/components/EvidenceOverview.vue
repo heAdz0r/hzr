@@ -23,7 +23,7 @@ const maximum = computed(() => Math.max(props.activity.baseline_tokens_estimated
     </div>
     <div class="evidence-cards">
       <article class="evidence-card">
-        <span class="evidence-label">Estimated net output reduction</span>
+        <span class="evidence-label">Estimated producer reduction</span>
         <strong class="evidence-number" :class="{ 'value-negative': activity.net_avoided_tokens_estimated < 0 }">
           {{ activity.operations > 0 ? formatSignedCount(activity.net_avoided_tokens_estimated) : "—" }}
           <small v-if="activity.operations > 0">tokens</small>
@@ -50,11 +50,12 @@ const maximum = computed(() => Math.max(props.activity.baseline_tokens_estimated
         <p>Output estimates exclude model retries, input overhead and answer quality. Receipts alone are not a comparison.</p>
       </article>
     </div>
+    <p class="scope-notice">Explicit adapter delivery: {{ activity.explicit_delivery?.tokens_estimated == null ? "Unknown" : formatCount(activity.explicit_delivery.tokens_estimated) + " estimated tokens" }}. This is a separate payload measurement; do not add it to producer output. Complete host delivery remains unproven.</p>
     <div v-if="activity.operations > 0" class="output-comparison" aria-label="Estimated output token comparison">
-      <div class="comparison-label"><strong>Output token estimates</strong><span>Baseline compared with delivered output</span></div>
+      <div class="comparison-label"><strong>Producer token estimates</strong><span>Internal input compared with transformed output</span></div>
       <div class="comparison-row"><span>Baseline</span><div><i :style="{ width: tokenBarWidth(activity.baseline_tokens_estimated, maximum) }"></i></div><strong>{{ formatCount(activity.baseline_tokens_estimated) }}</strong></div>
-      <div class="comparison-row delivered"><span>Delivered</span><div><i :style="{ width: tokenBarWidth(activity.delivered_tokens_estimated, maximum) }"></i></div><strong>{{ formatCount(activity.delivered_tokens_estimated) }}</strong></div>
-      <p>Recorded output only · project scope · {{ formatCount(activity.excluded_legacy_operations) }} legacy operations excluded</p>
+      <div class="comparison-row delivered"><span>Produced</span><div><i :style="{ width: tokenBarWidth(activity.delivered_tokens_estimated, maximum) }"></i></div><strong>{{ formatCount(activity.delivered_tokens_estimated) }}</strong></div>
+      <p>Internal producer output only · project scope · {{ formatCount(activity.excluded_legacy_operations) }} legacy operations excluded</p>
       <details class="measurement-detail"><summary>How these numbers are estimated</summary><p>{{ activity.measurement }}. This is the ledger’s output-sizing method. It does not measure the model’s full context, tool-call overhead, quality or provider invoice.</p></details>
     </div>
   </div>

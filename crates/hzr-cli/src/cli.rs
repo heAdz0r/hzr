@@ -857,6 +857,7 @@ pub enum ExecCommand {
     #[command(about = "Read an execution result without running the command again")]
     Wait {
         operation_id: String,
+        /// Workspace that owns this operation (defaults to current directory)
         #[arg(long)]
         cwd: Option<PathBuf>,
         #[arg(long, default_value_t = 10_000)]
@@ -869,6 +870,7 @@ pub enum ExecCommand {
     #[command(about = "Read exact captured output by operation ID and byte range")]
     Output {
         operation_id: String,
+        /// Workspace that owns this operation (defaults to current directory)
         #[arg(long)]
         cwd: Option<PathBuf>,
         #[arg(long, value_parser = ["stdout", "stderr"], default_value = "stdout")]
@@ -883,6 +885,7 @@ pub enum ExecCommand {
     #[command(about = "Cancel an owned execution and wait for its final result")]
     Cancel {
         operation_id: String,
+        /// Workspace that owns this operation (defaults to current directory)
         #[arg(long)]
         cwd: Option<PathBuf>,
     },

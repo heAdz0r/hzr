@@ -1,0 +1,1900 @@
+test_clippy_failure_stops_before_fork_gate (__main__.ReleaseGateRegressionTests.test_clippy_failure_stops_before_fork_gate) ... ok
+test_ordinary_unit_failure_stops_before_fork_gate (__main__.ReleaseGateRegressionTests.test_ordinary_unit_failure_stops_before_fork_gate) ... ok
+test_static_gate_rejects_checksum_filenames_with_a_leading_space (__main__.ReleaseGateRegressionTests.test_static_gate_rejects_checksum_filenames_with_a_leading_space) ... ok
+test_static_gate_rejects_missing_native_preflight_dependency (__main__.ReleaseGateRegressionTests.test_static_gate_rejects_missing_native_preflight_dependency) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 1.047s
+
+OK
+release workflows are transitively gated by the complete source and bundle gates
+    Checking hzr-core v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-core)
+    Checking hzr-context v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-context)
+    Checking hzr-daemon v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-daemon)
+    Checking hzr-cli v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 41.99s
+   Compiling hzr-core v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-core)
+   Compiling hzr-context v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-context)
+   Compiling hzr-daemon v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-daemon)
+   Compiling hzr-cli v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 46.64s
+     Running unittests src/lib.rs (target/debug/deps/hzr_agent-0d79ca78ad247787)
+
+running 18 tests
+test config::tests::test_bearer_token_rejects_invalid_length_or_syntax ... ok
+test config::tests::test_bearer_token_debug_is_redacted ... ok
+test preflight::tests::regression_bridge_package_version_must_match_hzr_binary ... ok
+test config::tests::test_hzr_api_rejects_remote_or_credentialed_hosts ... ok
+test config::tests::test_hzr_api_accepts_loopback_hosts ... ok
+test preflight::tests::test_parse_node_version_rejects_incomplete_semver ... ok
+test preflight::tests::test_parse_node_version_valid_semver ... ok
+test preflight::tests::test_supported_node_range_keeps_node_25_and_excludes_node_26 ... ok
+test runner::tests::test_parse_events_accepts_startup_error_without_ready ... ok
+test runner::tests::test_parse_events_rejects_events_after_terminal ... ok
+test runner::tests::test_parse_events_rejects_nonzero_initial_sequence ... ok
+test runner::tests::test_parse_events_requires_contiguous_sequence ... ok
+test runner::tests::test_redact_token_removes_every_occurrence ... ok
+test runner::tests::test_prepare_agent_data_dir_rejects_symlink ... ok
+test tests::test_bridge_accounts_provider_usage_once_for_every_terminal_outcome ... ok
+test tests::test_bridge_enforces_response_quality_before_and_after_generation ... ok
+test preflight::tests::test_embedded_package_lock_declares_the_binary_version ... ok
+test preflight::tests::test_package_lock_digest_rejects_tampering ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fake_bridge.rs (target/debug/deps/fake_bridge-17c3bd0947d72cf4)
+
+running 4 tests
+test test_bundled_layout_points_at_versioned_integration ... ok
+test test_managed_agent_runs_pinned_local_bridge_and_captures_jsonl ... ok
+test test_dropping_managed_agent_future_terminates_descendant_processes ... ok
+test test_managed_agent_timeout_covers_stdin_and_terminates_descendants ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.24s
+
+     Running unittests src/main.rs (target/debug/deps/hzr-82757bf51fca24e9)
+
+running 363 tests
+test activation::tests::human_status_explains_all_mode ... ok
+test activation::tests::human_status_lists_selected_roots ... ok
+test activation::tests::status_report_mirrors_config_activation_without_mutation ... ok
+test activation::tests::desired_state_makes_scope_transitions_explicit ... ok
+test activation::tests::selected_activation_is_exactly_scoped_to_the_enabled_workspace ... ok
+test adoption::tests::acceptance_gate_upgrade_observes_while_new_install_steers ... ok
+test adoption::tests::hook_binary_refuses_build_directories_unless_explicitly_allowed ... ok
+test adoption::tests::hook_binary_rejects_a_path_that_does_not_exist ... ok
+test adoption::tests::hook_binary_validates_but_preserves_a_durable_symlink ... ok
+test adoption::tests::dry_run_and_uninstall_are_recoverable ... ok
+test adoption::tests::hook_status_reports_duplicate_identity_by_name ... ok
+test adoption::tests::install_replaces_rtk_once_and_adopts_external_icm ... ok
+test adoption::tests::install_replaces_the_legacy_session_start_hook ... ok
+test adoption::tests::lifecycle_write_rejects_final_and_parent_symlinks ... ok
+test adoption::tests::keep_external_icm_leaves_the_duplicate_memory_layer_in_place ... ok
+test adoption::tests::project_only_session_start_never_initializes_an_unselected_workspace ... ok
+test adoption::tests::status_marks_hzr_and_rtk_coexistence_as_conflict ... ok
+test activation::tests::tracked_shared_instructions_are_repository_owned ... ok
+test build::tests::test_all_four_engines_are_verified_not_just_the_public_binary ... ok
+test build::tests::test_daemon_restart_wait_covers_slow_launchd_replacement ... ok
+test adoption::tests::service_opt_out_persists_in_the_session_start_hook ... ok
+test build::tests::test_engine_pins_match_the_locked_versions ... ok
+test build::tests::test_intel_macos_is_not_a_release_platform ... ok
+test build::tests::test_platform_is_recognized_on_this_host ... ok
+test build::tests::test_report_is_unhealthy_when_any_single_engine_mismatches ... ok
+test cli::tests::acceptance_gate_read_write_have_first_class_hzr_aliases ... ok
+test cli::tests::acceptance_gate_stats_exposes_bounded_evasion_view ... ok
+test activation::tests::local_exclude_is_installed_removed_and_preserves_user_bytes ... ok
+test cli::tests::acceptance_gate_test_and_native_policy_have_first_class_cli_surfaces ... ok
+test cli::tests::acceptance_gate_stats_since_accepts_h_d_w_and_rejects_ambiguous_values ... ok
+test cli::tests::init_plans_without_writing_where_reconciliation_is_needed ... ok
+test cli::tests::test_cli_accepts_explicit_fork_approval_decisions ... ok
+test cli::tests::fleet_stats_flags_require_atomic_mode_and_preserve_historical_ids ... ok
+test cli::tests::test_cli_accepts_global_json_after_subcommand ... ok
+test cli::tests::test_cli_memory_prune_requires_apply_for_deletion ... ok
+test cli::tests::test_cli_exposes_first_class_project_only_activation_and_scoped_stats ... ok
+test cli::tests::test_cli_parses_activation_status ... ok
+test adoption::tests::statusline_composes_with_and_restores_the_exact_existing_command ... ok
+test cli::tests::test_cli_memory_scope_comes_from_workspace_not_project_override ... ok
+test cli::tests::test_cli_parses_bounded_context_plan_inputs ... ok
+test cli::tests::test_cli_parses_daemon_service_lifecycle ... ok
+test cli::tests::test_cli_parses_adoption_and_idempotent_init_surface ... ok
+test cli::tests::test_cli_parses_mcp_config_apply_with_workspace ... ok
+test cli::tests::test_cli_parses_doctor_fix ... ok
+test cli::tests::test_cli_parses_native_mcp_status ... ok
+test cli::tests::test_cli_parses_index_lifecycle_and_explicit_migration_apply ... ok
+test cli::tests::test_cli_parses_native_tdd_contract ... ok
+test cli::tests::test_cli_parses_update_check_without_installing ... ok
+test cli::tests::test_cli_parses_update_command ... ok
+test cli::tests::test_cli_preserves_quoted_shell_command_as_one_value ... ok
+test cli::tests::test_help_ux_global_flags_have_help_text ... ok
+test cli::tests::test_help_ux_frequent_flags_expose_non_empty_help ... ok
+test cli::tests::test_cli_requires_explicit_history_migration_mode ... ok
+test cli::tests::test_help_ux_root_command_about_strings_stay_compact ... ok
+test cli::tests::test_help_ux_groups_list_every_visible_command ... ok
+test cli::tests::test_help_ux_root_includes_examples_footer ... ok
+test cli::tests::test_init_reset_is_explicit_and_dry_run_is_first_class ... ok
+test cli::tests::test_search_accepts_several_paths_instead_of_rejecting_the_second ... ok
+test cli::tests::test_search_without_a_path_still_covers_the_whole_workspace ... ok
+test cli::tests::test_help_ux_root_groups_top_level_commands ... ok
+test cli::tests::test_subcommand_help_enable_disable_doctor_include_examples ... ok
+test cli::tests::test_subcommand_help_agent_and_mcp_leaves_include_examples ... ok
+test cli::tests::test_subcommand_help_stats_includes_long_about_and_examples ... ok
+test cli::tests::test_subcommand_help_update_includes_long_about_and_examples ... ok
+test cli::tests::test_update_check_help_documents_agent_friendly_exit_codes ... ok
+test cli::tests::test_subcommand_help_high_traffic_flags_have_non_empty_help ... ok
+test cli::tests::test_subcommand_help_memory_leaves_include_examples ... ok
+test client::tests::test_read_token_accepts_private_daemon_secret ... ok
+test client::tests::test_read_token_alternate_error_chain_does_not_duplicate_os_error ... ok
+test client::tests::test_read_token_rejects_group_readable_secret ... ok
+test client::tests::test_health_uses_bearer_auth_and_typed_response ... ok
+test client_config::tests::acceptance_gate_claude_code_project_file_isolates_linked_worktrees ... ok
+test client_config::tests::development_override_cannot_write_a_real_client_configuration ... ok
+test client_config::tests::development_binary_cannot_write_a_client_configuration ... ok
+test client_config::tests::global_install_preserves_an_existing_desktop_selection ... ok
+test client_config::tests::global_codex_registration_is_dynamic_and_has_no_foreign_workspace ... ok
+test client_config::tests::missing_selected_workspace_has_stale_registration_remediation ... ok
+test client_config::tests::acceptance_gate_project_codex_configs_isolate_workspace_a_from_b ... ok
+test client_config::tests::global_install_repairs_a_temporary_desktop_selection ... ok
+test client_config::tests::test_a_direct_icm_registration_in_claude_code_is_audited ... ok
+test client_config::tests::test_claude_code_is_audited_but_never_written ... ok
+test client_config::tests::test_a_workspace_pinned_registration_is_still_recognised_and_reported ... ok
+test client_config::tests::test_an_unpinned_registration_reports_no_workspace ... ok
+test client_config::tests::test_install_pins_the_adopted_workspace_in_mcp_args ... ok
+test client_config::tests::test_codex_migration_replaces_direct_icm_and_preserves_other_servers ... ok
+test client_config::tests::test_missing_client_config_reports_client_managed_not_started ... ok
+test client_config::tests::test_claude_desktop_dry_run_and_migration_are_transactional ... ok
+test client_config::tests::test_status_rejects_non_string_native_arguments ... ok
+test client_config::tests::test_install_rewrites_an_unpinned_registration_to_pin_workspace ... ok
+test diagnostics::readiness::tests::warnings_and_missing_probes_do_not_become_readiness_or_economic_proof ... ok
+test client_config::tests::unpinned_user_fallback_uses_dynamic_client_workspace_binding ... ok
+test diagnostics::tests::a_source_tree_contract_is_never_written_across_the_fleet ... ok
+test diagnostics::tests::a_bundled_contract_is_portable_across_the_fleet ... ok
+test client_config::tests::test_project_only_migration_removes_only_the_hzr_owned_registration ... ok
+test diagnostics::tests::acceptance_gate_codec_instructions_are_unavailable_when_disabled_or_missing ... ok
+test diagnostics::tests::acceptance_gate_desktop_selection_is_unavailable_not_a_project_scope_error ... ok
+test build::tests::test_daemon_restart_wait_kills_a_hung_status_probe_at_the_wall_deadline ... ok
+test diagnostics::tests::acceptance_gate_doctor_rejects_stale_managed_instructions ... ok
+test diagnostics::tests::acceptance_gate_doctor_renders_fidelity_allowance ... ok
+test diagnostics::tests::acceptance_gate_codec_instructions_require_current_audited_surfaces ... ok
+test diagnostics::tests::acceptance_gate_doctor_warns_for_missing_project_contract ... ok
+test diagnostics::tests::acceptance_gate_global_codec_states_never_claim_host_replacement ... ok
+test diagnostics::tests::acceptance_gate_doctor_audits_registered_workspace_direct_engine_mandates ... ok
+test diagnostics::tests::acceptance_gate_doctor_truthfully_marks_user_conflicts_as_manual_only ... ok
+test diagnostics::tests::doctor_distinguishes_reserved_unknown_replay_and_corrupt_fidelity_records ... ok
+test diagnostics::tests::doctor_rejects_invalid_billing_selection_with_exact_action ... ok
+test diagnostics::tests::doctor_rejects_stale_pricing_override ... ok
+test diagnostics::tests::current_workspace_honours_auditable_direct_rtk_waiver ... ok
+test diagnostics::tests::acceptance_gate_doctor_fails_on_host_grant_propagation_drift ... ok
+test diagnostics::tests::fleet_migration_reports_duplicates_without_mutating_them ... ok
+test diagnostics::tests::fleet_reconcile_refuses_symlinked_instruction_and_codex_targets ... ok
+test diagnostics::tests::fleet_reconcile_rejects_a_registered_root_that_now_resolves_elsewhere ... ok
+test diagnostics::tests::cross_workspace_audit_preserves_tracked_shared_contracts ... ok
+test diagnostics::tests::project_claude_code_scope_takes_precedence_over_stale_global_claude_pin ... ok
+test diagnostics::tests::project_codex_registration_takes_precedence_over_stale_global_codex_pin ... ok
+test diagnostics::tests::test_an_unregistered_client_is_not_reported_as_unpinned ... ok
+test diagnostics::tests::instruction_audit_deadline_returns_an_actionable_error ... ok
+test diagnostics::tests::test_bounded_diagnostic_respects_utf8_boundary ... ok
+test diagnostics::tests::test_direct_icm_repair_names_the_command_that_fits_each_client ... ok
+test diagnostics::tests::test_doctor_accepts_the_dispatch_init_and_observer_hooks ... ok
+test diagnostics::tests::install_journal_desired_state_fails_closed_and_names_exact_recovery ... ok
+test diagnostics::tests::test_doctor_passes_when_semantic_index_artifacts_are_present ... ok
+test diagnostics::tests::test_doctor_rejects_a_pinned_workspace_other_than_the_current_project ... ok
+test diagnostics::tests::test_doctor_reports_an_unpinned_client_workspace ... ok
+test diagnostics::tests::test_doctor_warns_when_claude_code_hzr_mcp_is_absent ... ok
+test diagnostics::tests::test_doctor_warns_when_semantic_index_artifacts_are_incomplete ... ok
+test diagnostics::tests::test_doctor_warns_when_semantic_index_is_not_initialized ... ok
+test diagnostics::tests::test_integration_layout_prefers_relocatable_bundle_engine ... ok
+test fleet_exemption::tests::a_justified_waiver_covers_only_its_own_rule ... ok
+test fleet_exemption::tests::a_waiver_without_an_auditable_justification_is_rejected ... ok
+test fleet_exemption::tests::a_workspace_without_a_policy_file_declares_nothing ... ok
+test fleet_exemption::tests::an_execution_route_can_never_be_waived_by_a_file ... ok
+test fleet_exemption::tests::an_unknown_schema_version_is_not_honoured ... ok
+test fleet_stats::tests::explicit_window_is_independent_of_execution_time ... ok
+test foreign::tests::command_text_or_data_root_substrings_never_prove_ownership ... ok
+test foreign::tests::detects_options_before_subcommand_and_redacts_secrets ... ok
+test foreign::tests::distinguishes_shell_and_client_wrappers ... ok
+test foreign::tests::ignores_malformed_lines_and_unrelated_commands ... ok
+test diagnostics::tests::test_bundle_attestation_detects_tampered_runtime ... ok
+test foreign::tests::legacy_icm_requires_pid_database_and_daemon_parent ... ok
+test fork::tests::installed_contract_read_is_an_agent_update_checkpoint ... ok
+test foreign::tests::verifies_watcher_pid_marker_and_parent ... ok
+test diagnostics::tests::fleet_reconcile_creates_all_surfaces_only_for_registered_workspaces ... ok
+test hook_runner::tests::acceptance_gate_an_approved_command_carries_its_session_to_the_engine ... ok
+test hook_runner::tests::acceptance_gate_bypass_permissions_is_not_re_litigated ... ok
+test hook_runner::tests::acceptance_gate_bypass_permissions_returned_command_executes_end_to_end ... ok
+test hook_runner::tests::acceptance_gate_degraded_scorecard_withholds_partial_totals ... ok
+test hook_runner::tests::acceptance_gate_every_ask_and_deny_asserts_an_implemented_prescription ... ok
+test hook_runner::tests::acceptance_gate_accounting_gap_keeps_first_flip_time_and_duration ... ok
+test hook_runner::tests::acceptance_gate_host_grant_verdict_is_identical_across_policy_surfaces ... ok
+test hook_runner::tests::acceptance_gate_missing_ledger_is_unknown_instead_of_a_false_zero ... ok
+test hook_runner::tests::acceptance_gate_no_raw_for_optimizable_hook_commands ... ok
+test hook_runner::tests::acceptance_gate_no_raw_for_top_level_hzr_file_aliases_in_hook ... ok
+test hook_runner::tests::acceptance_gate_scorecard_explains_zero_and_granted_asks ... ok
+test hook_runner::tests::acceptance_gate_scorecard_prices_saved_inline_without_merging_billed ... ok
+test diagnostics::tests::test_doctor_fix_migrates_one_legacy_index_with_a_backup ... ok
+test hook_runner::tests::acceptance_gate_shared_fixture_reaches_hook_postprocessing ... ok
+test hook_runner::tests::acceptance_gate_t1_feedback_is_counted_without_raw_identity ... ok
+test hook_runner::tests::acceptance_gate_accounting_transition_notices_are_edge_triggered ... ok
+test hook_runner::tests::acceptance_gate_filter_placement_defers_only_history_mutations_mid_turn ... ok
+test hook_runner::tests::acceptance_gate_zero_leakage_explains_prevented_work_and_capability_gaps ... ok
+test hook_runner::tests::billing_opt_out_still_shows_user_supplied_reported_amount ... ok
+test hook_runner::tests::closing_a_clean_coverage_store_writes_nothing ... ok
+test hook_runner::tests::closing_twice_does_not_double_count_the_lifetime_total ... ok
+test hook_runner::tests::acceptance_gate_t4_preflights_first_use_fidelity_output ... ok
+test hook_runner::tests::acceptance_gate_the_shadow_budget_reflects_recorded_avoidable_bypass ... ok
+test hook_runner::tests::explicit_full_read_is_preserved_without_a_fidelity_marker ... ok
+test hook_runner::tests::deepest_registered_workspace_binds_descendants_without_crossing_nested_roots ... ok
+test hook_runner::tests::legacy_native_fixture_modes_all_use_nonblocking_observation ... ok
+test hook_runner::tests::native_modes_never_classify_exact_native_work_as_avoidable ... ok
+test hook_runner::tests::test_a_clean_installation_reports_complete_coverage ... ok
+test hook_runner::tests::test_a_command_without_an_equivalent_is_passed_through_untouched ... ok
+test hook_runner::tests::test_a_daemon_free_rewrite_marks_coverage_incomplete ... ok
+test hook_runner::tests::healthy_daemon_closes_live_gap_but_history_stays_partial ... ok
+test hook_runner::tests::test_ambiguous_shell_commands_are_not_reconstructed_by_the_hook ... ok
+test hook_runner::tests::test_an_already_optimized_decision_is_never_overridden ... ok
+test hook_runner::tests::test_an_ambiguous_shell_wrapper_remains_an_explicit_ask ... ok
+test hook_runner::tests::test_an_empty_plan_states_that_it_found_nothing ... ok
+test hook_runner::tests::test_coverage_reports_when_the_last_gap_occurred ... ok
+test hook_runner::tests::test_shell_policy_is_not_reconstructed_after_the_fork_decision ... ok
+test hook_runner::tests::test_the_injected_brief_tells_a_subagent_what_the_evidence_is ... ok
+test hook_runner::tests::test_a_legacy_log_without_a_lifetime_file_is_still_counted ... ok
+test hook_runner::tests::upstream_statusline_output_is_bounded ... ok
+test host_hooks::post::tests::busy_recovery_quota_lock_preserves_original_response ... ok
+test host_hooks::post::tests::envelope_overhead_must_break_even ... ok
+test host_hooks::post::tests::original_recovery_is_quota_bounded_and_never_overwrites_corruption ... ok
+test host_hooks::post::tests::recovery_rejects_symlinks_and_uses_private_permissions ... ok
+test host_hooks::post::tests::replacement_preserves_shape_status_stderr_and_suite_totals ... ok
+test host_hooks::post::tests::unsupported_or_sensitive_output_is_not_replaced ... ok
+test host_hooks::tests::claude_argument_rewrite_does_not_grant_permissions ... ok
+test host_hooks::tests::codex_rewrite_requires_explicit_host_grant_and_never_emits_ask ... ok
+test host_hooks::tests::native_semantics_and_unknown_shapes_pass_to_host_unchanged ... ok
+test host_hooks::tests::probes_do_not_claim_live_delivery_or_economic_credit ... ok
+test host_hooks::tests::security_denial_survives_both_host_adapters ... ok
+test input::tests::test_read_text_accepts_input_at_limit ... ok
+test input::tests::test_read_text_rejects_oversized_inline_input ... ok
+test instructions::tests::acceptance_gate_all_instruction_surfaces_project_the_capability_ssot ... ok
+test instructions::tests::acceptance_gate_audit_reports_direct_engine_and_native_mandates_with_lines ... ok
+test instructions::tests::acceptance_gate_direct_command_matrix_handles_negation_and_descriptive_prose ... ok
+test instructions::tests::acceptance_gate_install_retires_complete_legacy_rtk_block ... ok
+test instructions::tests::acceptance_gate_instruction_audit_rejects_stale_managed_policy ... ok
+test instructions::tests::acceptance_gate_managed_block_instructs_concise_generation_and_tiers_tools ... ok
+test instructions::tests::acceptance_gate_managed_contract_matches_native_observer_and_mcp_surface ... ok
+test instructions::tests::acceptance_gate_managed_contract_routes_project_builds_through_exec_policy ... ok
+test instructions::tests::acceptance_gate_managed_projection_stays_bounded_and_defers_mutable_detail ... ok
+test instructions::tests::acceptance_gate_no_unbounded_exact_defaults_in_managed_contract ... ok
+test instructions::tests::audit_reports_obsolete_hzr_wrappers_and_hook_scope ... ok
+test instructions::tests::repository_managed_contracts_match_canonical_renderer ... ok
+test instructions::tests::test_codex_audit_resolves_the_executable_bootstrap_contract ... ok
+test instructions::tests::test_directive_migration_preserves_unrelated_rtk_prose ... ok
+test instructions::tests::test_install_is_idempotent ... ok
+test instructions::tests::test_install_migrates_ambiguous_legacy_hzr_directives ... ok
+test instructions::tests::test_install_migrates_legacy_commands_without_touching_hzr_block ... ok
+test instructions::tests::test_install_preserves_user_content_and_appends_managed_block ... ok
+test instructions::tests::test_install_retires_legacy_rtk_import ... ok
+test instructions::tests::test_legacy_strip_keeps_prose_mentioning_rtk ... ok
+test instructions::tests::test_managed_block_describes_mcp_and_batch_semantics_exactly ... ok
+test instructions::tests::test_managed_block_forbids_raw_when_policy_can_rewrite ... ok
+test instructions::tests::test_managed_prose_keeps_a_path_with_spaces_on_one_line ... ok
+test instructions::tests::test_managed_prose_never_exceeds_the_wrap_width ... ok
+test instructions::tests::test_managed_surface_uses_bounded_contract_pointer_not_an_import ... ok
+test instructions::tests::test_uninstall_restores_original_body ... ok
+test instructions::tests::test_unterminated_marker_never_truncates_user_content ... ok
+test invocation::tests::test_normalize_leaves_hzr_arguments_unchanged ... ok
+test invocation::tests::test_normalize_preserves_non_utf8_fork_argument ... ok
+test invocation::tests::test_normalize_rewrites_installed_rtk_alias ... ok
+test mcp::tests::acceptance_gate_every_non_dedicated_mcp_tool_has_typed_accounting ... ok
+test mcp::tests::acceptance_gate_mcp_accounting_is_typed_private_and_stage_explicit ... ok
+test mcp::tests::acceptance_gate_registration_snippets_escape_hostile_paths ... ok
+test mcp::tests::mcp_exact_content_accepts_deletion_empty_files_and_whitespace ... ok
+test mcp::tests::mcp_fork_result_never_turns_failed_read_or_write_into_success ... ok
+test mcp::tests::mcp_read_and_write_build_only_confined_typed_fork_requests ... ok
+test mcp::tests::pinned_workspace_conflict_rejects_initialization_before_tools_are_exposed ... ok
+test mcp::tests::read_continuations_above_one_hundred_thousand_lines_are_callable ... ok
+test mcp::tests::test_a_client_launch_directory_that_cannot_be_a_project_is_refused ... ok
+test mcp::tests::test_a_real_project_directory_still_binds ... ok
+test mcp::tests::test_cancellation_notification_identifies_only_valid_request_ids ... ok
+test mcp::tests::test_error_codes_are_standard_json_rpc ... ok
+test mcp::tests::test_every_tool_has_model_guidance_and_typed_schemas ... ok
+test mcp::tests::test_initialize_can_select_one_percent_encoded_client_root ... ok
+test mcp::tests::test_initialize_negotiates_latest_stable_for_unknown_revision ... ok
+test mcp::tests::test_initialize_preserves_a_supported_client_revision ... ok
+test mcp::tests::test_initialize_rebinds_an_unpinned_server_to_the_client_root ... ok
+test mcp::tests::test_initialize_requires_a_protocol_version ... ok
+test mcp::tests::test_initialize_states_the_resolved_workspace_binding ... ok
+test mcp::tests::test_invalid_tool_arguments_are_not_silently_defaulted ... ok
+test mcp::tests::test_lifecycle_is_client_managed_and_never_started_by_init ... ok
+test mcp::tests::test_mcp_refuses_an_uninitialized_or_unselected_workspace ... ok
+test mcp::tests::test_notifications_are_never_answered ... ok
+test mcp::tests::test_representative_structured_content_conforms_to_every_output_schema ... ok
+test mcp::tests::test_the_density_codec_is_reachable_over_mcp ... ok
+test mcp::tests::test_the_registration_snippet_pins_the_workspace ... ok
+test mcp::tests::test_tools_are_rejected_before_initialization ... ok
+test mcp::tests::test_tools_expose_no_direct_engine_access ... ok
+test mcp::tests::test_unavailable_backend_reports_an_error_not_a_fake_success ... ok
+test mcp::tools::tests::acceptance_gate_advertised_input_schema_is_the_runtime_parser_contract ... ok
+test mcp::tools::tests::acceptance_gate_mcp_descriptions_are_unique_and_schema_is_bounded ... ok
+test mcp::tools::tests::acceptance_gate_mcp_inventory_matches_agent_capability_ssot ... ok
+test mcp::tools::tests::tool_validation_reuses_one_schema_registry ... ok
+test memory_migration::tests::migration_refuses_an_active_canonical_owner ... ok
+test memory_migration::tests::migration_rejects_conflicting_ids_without_partial_import ... ok
+test memory_migration::tests::migration_snapshots_merges_and_is_idempotent ... ok
+test migration::tests::test_collect_markers_finds_database_without_following_symlinks ... ok
+test output::tests::test_doctor_labels_permanent_host_limits_separately_from_actionable_warns ... ok
+test output::tests::test_doctor_lists_next_actions_for_actionable_findings_only ... ok
+test output::tests::test_doctor_omits_next_actions_when_only_host_limits_warn ... ok
+test output::tests::test_exit_code_preserves_completed_process_status ... ok
+test output::tests::test_exit_code_uses_timeout_convention ... ok
+test prefix::tests::test_dry_run_reports_change_without_writing ... ok
+test prefix::tests::test_install_is_idempotent_and_executable ... ok
+test prefix::tests::test_install_preserves_current_bundle_symlinks_when_bytes_match ... ok
+test prefix::tests::test_install_replaces_stale_binary ... ok
+test prefix::tests::test_install_requires_confirmation ... ok
+test prefix::tests::test_managed_binaries_exclude_rtk_alias ... ok
+test prefix::tests::test_path_detection_rejects_absent_directory ... ok
+test prefix::tests::test_source_requires_sibling_binary ... ok
+test release_version::tests::apply_version_sync_0_3_8 ... ignored, manual: cargo test -p hzr-cli --bin hzr apply_version_sync_0_3_8 -- --ignored --exact
+test release_version::tests::cargo_lock_update_changes_only_workspace_package_versions ... ok
+test release_version::tests::cargo_manifest_update_preserves_dependency_versions ... ok
+test release_version::tests::changelog_moves_unreleased_entries_under_target_once ... ok
+test release_version::tests::package_lock_update_preserves_dependency_versions ... ok
+test release_version::tests::same_minor_release_keeps_the_stable_release_line ... ok
+test release_version::tests::stale_declared_current_version_names_the_surface ... ok
+test release_version::tests::version_surfaces_exclude_internal_planning_documents ... ok
+test release_version::tests::version_validation_rejects_ambiguous_or_partial_versions ... ok
+test service::tests::test_only_versioned_bundle_layout_is_a_production_install ... ok
+test service::tests::test_public_binary_symlink_resolves_back_to_stable_service ... ok
+test service::tests::test_service_definitions_escape_paths ... ok
+test service::tests::test_service_definitions_use_stable_current_binary ... ok
+test stats::tests::acceptance_gate_a_redacted_bypass_remains_unknown ... ok
+test stats::tests::acceptance_gate_all_json_never_exposes_sensitive_payload_classes ... ok
+test stats::tests::acceptance_gate_bypass_rows_preserve_truthful_family_identity ... ok
+test stats::tests::acceptance_gate_unbounded_all_json_is_refused_with_bounded_alternatives ... ok
+test stats::tests::public_key_is_coalesced_before_report_limit_and_render ... ok
+test stats::tests::test_a_clean_ledger_reports_a_zero_bypass_share_rather_than_nothing ... ok
+test stats::tests::test_build_report_keeps_estimated_savings_separate_from_actual_usage ... ok
+test stats::tests::test_channel_split_always_includes_explicit_mcp_zero ... ok
+test stats::tests::test_default_report_bounds_bypass_tools_and_total_json_cost ... ok
+test stats::tests::test_default_report_bounds_command_history_and_names_recovery ... ok
+test stats::tests::test_default_report_redacts_unbounded_command_details ... ok
+test stats::tests::test_empty_ledger_still_exposes_mcp_zero_in_channel_split ... ok
+test stats::tests::test_project_scoped_report_labels_matched_provider_usage ... ok
+test stats::tests::test_report_exposes_typed_internal_and_final_mode_attribution ... ok
+test stats::tests::test_report_states_the_bypass_share_and_its_replacements ... ok
+test stats::tests::typed_public_key_controls_label_and_subsystem ... ok
+test stats_output::tests::acceptance_gate_a_zero_credit_scope_is_distinguished_from_excluded_history ... ok
+test stats_output::tests::acceptance_gate_bypass_capability_states_are_truthful_and_actionable ... ok
+test stats_output::tests::acceptance_gate_economics_renders_both_scopes_without_summing_evidence ... ok
+test stats_output::tests::acceptance_gate_evasion_names_when_the_open_accounting_gap_started ... ok
+test stats_output::tests::acceptance_gate_evasion_panel_is_bounded_and_aggregate_only ... ok
+test stats_output::tests::acceptance_gate_excluded_history_is_disclosed_with_its_recovery ... ok
+test stats_output::tests::acceptance_gate_family_panel_renders_only_safe_aggregates ... ok
+test stats_output::tests::acceptance_gate_mode_panel_is_stage_aware_and_bounded ... ok
+test stats_output::tests::acceptance_gate_no_cell_can_exceed_its_column ... ok
+test stats_output::tests::acceptance_gate_rerun_tax_is_measured_rather_than_assumed ... ok
+test stats_output::tests::acceptance_gate_stage_excluded_rows_are_reported ... ok
+test stats_output::tests::acceptance_gate_stats_does_not_hide_regression_or_round_up_evidence ... ok
+test stats_output::tests::acceptance_gate_unavailable_pricing_names_the_steps_that_enable_it ... ok
+test stats_output::tests::evasion_panel_lists_every_class_that_occurred ... ok
+test stats_output::tests::recovered_live_coverage_keeps_history_and_producer_breakdown_visible ... ok
+test stats_output::tests::test_a_clean_bypass_record_renders_no_panel ... ok
+test stats_output::tests::test_bypass_share_is_reported_next_to_the_headline_ratio ... ok
+test stats_output::tests::test_channel_split_always_shows_mcp_even_when_zero ... ok
+test stats_output::tests::test_commands_rank_by_absolute_tokens_not_percentage ... ok
+test stats_output::tests::test_complete_coverage_is_limited_to_observed_channels ... ok
+test stats_output::tests::test_empty_ledger_says_not_measured_instead_of_zero_cost ... ok
+test stats_output::tests::test_empty_traffic_still_renders_mcp_zero_in_channel_split ... ok
+test stats_output::tests::test_estimated_and_actual_are_labelled_and_never_share_a_panel ... ok
+test stats_output::tests::test_incomplete_coverage_is_reported_with_remediation ... ok
+test stats_output::tests::test_percentage_is_always_accompanied_by_its_absolutes ... ok
+test stats_output::tests::test_plain_output_contains_no_ansi_escapes ... ok
+test stats_output::tests::test_truncated_command_table_states_what_was_hidden ... ok
+test tdd::tests::test_skill_and_cli_contract_share_optional_selection_and_strict_red_evidence ... ok
+test tests::acceptance_gate_direct_managed_raw_and_proxy_are_refused ... ok
+test tests::acceptance_gate_selected_activation_does_not_require_global_instructions ... ok
+test tests::acceptance_gate_session_start_alerts_when_user_instructions_drift ... ok
+test tests::acceptance_gate_session_start_combines_drift_and_update_without_losing_actions ... ok
+test tests::acceptance_gate_test_alias_forwards_argv_without_reconstruction ... ok
+test tests::activation_rejects_filesystem_root ... ok
+test tests::activation_rejects_user_home ... ok
+test tests::contract_keeps_a_logical_current_source_upgradeable ... ok
+test tests::contract_uses_current_pointer_for_an_installed_release ... ok
+test tests::explicit_full_read_is_forwarded_without_a_fidelity_marker ... ok
+test tests::human_pricing_catalog_row_exposes_bounded_audit_dimensions ... ok
+test tests::public_binary_symlink_resolves_to_the_versioned_source_directory ... ok
+test tests::receipt_import_owns_provenance_and_project_with_explicit_legacy_compatibility ... ok
+test tests::test_canonical_directory_rejects_regular_file ... ok
+test tests::test_payload_limit_reserves_json_envelope_space ... ok
+test update::tests::available_cache_lasts_one_day_but_negative_cache_expires_hourly ... ok
+test update::tests::checksum_manifest_requires_one_exact_artifact_entry ... ok
+test update::tests::installer_candidates_do_not_repeat_an_unsymlinked_executable ... ok
+test update::tests::installer_candidates_survive_a_missing_resolution ... ok
+test update::tests::installer_is_found_through_the_symlink_the_installer_puts_on_path ... ok
+test update::tests::intel_macos_cannot_select_an_update_asset ... ok
+test update::tests::release_assets_must_use_the_official_github_download_url ... ok
+test update::tests::selects_highest_usable_release_including_github_prereleases ... ok
+test update::tests::startup_notice_names_the_only_install_command ... ok
+test update::tests::startup_notice_uses_a_cached_newer_release_without_network ... ok
+test update::tests::test_update_check_exit_code_stays_zero_when_update_is_available ... ok
+test update::tests::test_update_check_json_distinguishes_available_from_current ... ok
+test hook_runner::tests::daemon_unavailable_telemetry_is_a_bounded_durable_counter ... ok
+test hook_runner::tests::upstream_statusline_timeout_is_bounded ... ok
+test hook_runner::tests::acceptance_gate_shared_fixture_reaches_degraded_hook ... ok
+
+test result: ok. 362 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 2.24s
+
+     Running tests/activation_status.rs (target/debug/deps/activation_status-7d0d9183877638a4)
+
+running 2 tests
+test activation_status_human_output_names_mode_and_roots ... ok
+test activation_status_lists_enabled_workspaces_as_json ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+
+     Running tests/direct_raw_policy.rs (target/debug/deps/direct_raw_policy-0c8bc18c1040c69b)
+
+running 2 tests
+test published_contracts_do_not_recommend_the_disabled_direct_raw_route ... ok
+test published_cli_does_not_expose_an_unaccounted_direct_raw_route ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/fork_passthrough.rs (target/debug/deps/fork_passthrough-e0f5adde0fcfc4e4)
+
+running 2 tests
+test direct_fork_forwards_termination_to_owned_group_and_waits ... ok
+test direct_fork_preserves_stdio_exit_and_records_producer_completion ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/init_lifecycle.rs (target/debug/deps/init_lifecycle-449533142a95b880)
+
+running 15 tests
+initialized /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpD2qyzP/config.toml
+data root /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpD2qyzP/data
+initialized_without_git /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpD2qyzP/workspace
+updated claude instructions /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpD2qyzP/home/.claude/CLAUDE.md
+updated codex instructions /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpD2qyzP/home/.codex/AGENTS.md
+updated project Codex MCP /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpD2qyzP/workspace/.codex/config.toml
+visualizer http://127.0.0.1:47391 (served by hzrd)
+mcp client-managed stdio; register once with `hzr install --force`
+enabled /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpJpBAnX/first (project-only activation)
+initialized /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpD2qyzP/config.toml
+data root /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpD2qyzP/data
+already_initialized /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpD2qyzP/workspace
+visualizer http://127.0.0.1:47391 (served by hzrd)
+mcp client-managed stdio; register once with `hzr install --force`
+test concurrent_init_is_serialized_for_one_workspace_and_config ... ok
+enabled /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpJpBAnX/second (project-only activation)
+test concurrent_workspace_activation_retains_both_roots ... ok
+test activation_failure_restores_config_workspace_and_backup_artifacts ... ok
+test init_data_dir_override_preserves_unknown_toml_and_comments ... ok
+test init_dry_run_has_zero_filesystem_mutations ... ok
+test init_failure_does_not_rewrite_existing_index_contents ... ok
+initialized /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmped4pYD/config.toml
+data root /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmped4pYD/data
+initialized_without_git /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmped4pYD/workspace
+updated claude instructions /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmped4pYD/home/.claude/CLAUDE.md
+updated codex instructions /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmped4pYD/home/.codex/AGENTS.md
+updated project Codex MCP /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmped4pYD/workspace/.codex/config.toml
+visualizer http://127.0.0.1:47391 (served by hzrd)
+mcp client-managed stdio; register once with `hzr install --force`
+test init_force_preserves_existing_config_bytes ... ok
+test init_in_git_workspace_leaves_no_lock_or_backup_residue ... ok
+initialized /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp0atIEi/config.toml
+config backup /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp0atIEi/config.toml.hzr-backup-1788558820713-0058b712113f
+data root /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp0atIEi/home/Library/Application Support/dev.headz0r.hzr
+index_initialized /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp0atIEi/workspace
+updated claude instructions /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp0atIEi/home/.claude/CLAUDE.md
+updated codex instructions /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp0atIEi/home/.codex/AGENTS.md
+updated project Codex MCP /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp0atIEi/workspace/.codex/config.toml
+visualizer http://127.0.0.1:47391 (served by hzrd)
+mcp client-managed stdio; register once with `hzr install --force`
+test init_reset_requires_force_and_backs_up_existing_config ... ok
+test init_rollback_preserves_concurrent_file_and_config_edit ... ok
+test init_rolls_back_config_instructions_index_and_registration_after_injected_failure ... ok
+test uninstall_cleans_every_registered_workspace_from_unrelated_cwd ... ok
+HZR ALERT: instruction drift detected (2 reconciled now, 0 still unhealthy; affected: /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp1NypWU/home/.claude/CLAUDE.md, /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp1NypWU/home/.codex/AGENTS.md). Run `hzr doctor` before continuing and report every remaining instruction or fleet finding. Use `hzr doctor --reconcile-fleet --dry-run` before applying fleet repairs.
+test if_needed_from_home_cannot_pin_the_user_codex_fallback ... ok
+test if_needed_preserves_a_tracked_shared_contract ... ok
+test if_needed_reconciles_project_mcp_with_instruction_rollback ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s
+
+     Running tests/init_without_engines.rs (target/debug/deps/init_without_engines-f7cf22d5681596dd)
+
+running 2 tests
+initialized /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpX3tImH/config.toml
+config backup /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpX3tImH/config.toml.hzr-backup-1788558834183-f37004bbb18c
+data root /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpX3tImH/data
+initialized /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpX3tImH/workspace
+updated claude instructions /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpX3tImH/workspace/CLAUDE.local.md
+updated codex instructions /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpX3tImH/workspace/AGENTS.override.md
+updated project Codex MCP /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpX3tImH/workspace/.codex/config.toml
+visualizer http://127.0.0.1:47391 (served by hzrd)
+mcp client-managed stdio; register once with `hzr install --force`
+test acceptance_gate_local_instruction_scope_never_mutates_shared_repository_rules ... ok
+HZR ALERT: instruction drift detected (2 reconciled now, 0 still unhealthy; affected: /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpnd5GwE/home/.claude/CLAUDE.md, /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpnd5GwE/home/.codex/AGENTS.md). Run `hzr doctor` before continuing and report every remaining instruction or fleet finding. Use `hzr doctor --reconcile-fleet --dry-run` before applying fleet repairs.
+test init_succeeds_when_the_index_engine_is_not_installed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s
+
+     Running tests/install_recovery.rs (target/debug/deps/install_recovery-c8d97fed094744ee)
+
+running 4 tests
+test install_dry_run_reports_changes_without_opening_a_write_transaction ... ok
+install: changed=true dry_run=false HZR=7 RTK=0 external-ICM=0
+settings /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/claude/settings.json sha256 ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356 -> eb66fd92d3bf1b38685c2d2054e3b4ddecf894829f596d757f199103aca6b4db
+backup /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/claude/settings.json.hzr-backup-ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356
+prefix /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/bin changed=true on_path=false
+warning: /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/bin is not on PATH; add it so agents can run `hzr` by name
+instructions claude /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/claude/CLAUDE.md changed=true installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/codex/AGENTS.md changed=true installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/workspace/AGENTS.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/workspace/AGENTS.override.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/workspace/CLAUDE.local.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/workspace/CLAUDE.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+client-mcp codex /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/codex/config.toml changed=true direct-icm-removed=0 hzr-registered=true
+client-mcp claude-desktop /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/claude-desktop.json changed=true direct-icm-removed=0 hzr-registered=true
+client-mcp codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/workspace/.codex/config.toml changed=true direct-icm-removed=0 hzr-registered=true
+warning: 8 unmanaged engine process(es) detected (icm=8); HZR never stops them automatically — review with `hzr doctor`
+install: changed=true dry_run=false HZR=7 RTK=0 external-ICM=0
+settings /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/claude/settings.json sha256 ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356 -> eb66fd92d3bf1b38685c2d2054e3b4ddecf894829f596d757f199103aca6b4db
+backup /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/claude/settings.json.hzr-backup-ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356
+prefix /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/bin changed=true on_path=false
+warning: /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/bin is not on PATH; add it so agents can run `hzr` by name
+instructions claude /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/claude/CLAUDE.md changed=true installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/codex/AGENTS.md changed=true installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/workspace-a/AGENTS.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/workspace-a/AGENTS.override.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/workspace-a/CLAUDE.local.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/workspace-a/CLAUDE.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+client-mcp codex /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/codex/config.toml changed=true direct-icm-removed=0 hzr-registered=true
+client-mcp claude-desktop /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/claude-desktop.json changed=true direct-icm-removed=0 hzr-registered=true
+client-mcp codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/workspace-a/.codex/config.toml changed=true direct-icm-removed=0 hzr-registered=true
+warning: 8 unmanaged engine process(es) detected (icm=8); HZR never stops them automatically — review with `hzr doctor`
+install: changed=false dry_run=false HZR=7 RTK=0 external-ICM=0
+settings /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/claude/settings.json sha256 eb66fd92d3bf1b38685c2d2054e3b4ddecf894829f596d757f199103aca6b4db -> eb66fd92d3bf1b38685c2d2054e3b4ddecf894829f596d757f199103aca6b4db
+prefix /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/bin changed=false on_path=false
+warning: /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/bin is not on PATH; add it so agents can run `hzr` by name
+instructions claude /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/claude/CLAUDE.md changed=false installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/codex/AGENTS.md changed=false installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/workspace/AGENTS.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/workspace/AGENTS.override.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/workspace/CLAUDE.local.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/workspace/CLAUDE.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+client-mcp codex /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/codex/config.toml changed=false direct-icm-removed=0 hzr-registered=true
+client-mcp claude-desktop /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/home/claude-desktop.json changed=false direct-icm-removed=0 hzr-registered=true
+client-mcp codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpwfeEfL/workspace/.codex/config.toml changed=false direct-icm-removed=0 hzr-registered=true
+warning: 8 unmanaged engine process(es) detected (icm=8); HZR never stops them automatically — review with `hzr doctor`
+test install_rejects_corrupt_journal_and_serializes_concurrent_runs ... ok
+install: changed=false dry_run=false HZR=7 RTK=0 external-ICM=0
+settings /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/claude/settings.json sha256 eb66fd92d3bf1b38685c2d2054e3b4ddecf894829f596d757f199103aca6b4db -> eb66fd92d3bf1b38685c2d2054e3b4ddecf894829f596d757f199103aca6b4db
+prefix /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/bin changed=false on_path=false
+warning: /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/bin is not on PATH; add it so agents can run `hzr` by name
+instructions claude /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/claude/CLAUDE.md changed=false installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/codex/AGENTS.md changed=false installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/workspace-b/AGENTS.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/workspace-b/AGENTS.override.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/workspace-b/CLAUDE.local.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/workspace-b/CLAUDE.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+client-mcp codex /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/codex/config.toml changed=false direct-icm-removed=0 hzr-registered=true
+client-mcp claude-desktop /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/home/claude-desktop.json changed=true direct-icm-removed=0 hzr-registered=true
+client-mcp codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmp8mQKrX/workspace-b/.codex/config.toml changed=true direct-icm-removed=0 hzr-registered=true
+warning: 8 unmanaged engine process(es) detected (icm=8); HZR never stops them automatically — review with `hzr doctor`
+test completed_install_journal_moves_from_workspace_a_to_b ... ok
+test every_install_stage_is_forward_recoverable ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 49.83s
+
+     Running tests/mcp_capability.rs (target/debug/deps/mcp_capability-a1ef0af243b563b0)
+
+running 1 test
+HZR ALERT: instruction drift detected (2 reconciled now, 0 still unhealthy; affected: /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpAKv23z/home/claude/CLAUDE.md, /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpAKv23z/home/codex/AGENTS.md). Run `hzr doctor` before continuing and report every remaining instruction or fleet finding. Use `hzr doctor --reconcile-fleet --dry-run` before applying fleet repairs.
+test stdio_tools_call_executes_bounded_read_write_and_accounts_success_once ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.70s
+
+     Running tests/mcp_stdio.rs (target/debug/deps/mcp_stdio-1354495977950ef0)
+
+running 3 tests
+test test_mcp_status_reports_native_client_managed_lifecycle ... ok
+test test_stdio_mcp_negotiates_lists_typed_tools_and_exits_on_eof ... ok
+HZR ALERT: instruction drift detected (2 reconciled now, 0 still unhealthy; affected: /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpfMQiqo/home/.claude/CLAUDE.md, /var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/.tmpfMQiqo/home/.codex/AGENTS.md). Run `hzr doctor` before continuing and report every remaining instruction or fleet finding. Use `hzr doctor --reconcile-fleet --dry-run` before applying fleet repairs.
+test test_stdio_mcp_cancels_in_flight_tool_without_late_response ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+     Running tests/native_hook_policy.rs (target/debug/deps/native_hook_policy-e2a9eb93adf6f5dc)
+
+running 1 test
+test acceptance_gate_native_pretool_modes_preserve_exact_requests_without_retry ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/post_tool_output.rs (target/debug/deps/post_tool_output-de86daed0bcc51f1)
+
+running 1 test
+test post_tool_output_requires_accounted_rpc_and_durable_original_before_replacement ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+     Running tests/stats_concurrency.rs (target/debug/deps/stats_concurrency-dde766cd8bf4e739)
+
+running 2 tests
+test read_only_stats_refuses_an_old_schema_without_migrating_it ... ok
+test concurrent_stats_readers_and_writer_share_a_read_only_snapshot_without_lock_errors ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.22s
+
+     Running tests/tdd_cli.rs (target/debug/deps/tdd_cli-50bda23fdf79ac16)
+
+running 2 tests
+test test_tdd_reports_hzr_red_green_refactor_contract ... ok
+test test_tdd_text_distinguishes_tdd_from_post_hoc_tests ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/visualizer_init.rs (target/debug/deps/visualizer_init-0298442dc3ff3b1a)
+
+running 4 tests
+test acceptance_gate_legacy_init_requires_explicit_migration_without_registration ... ok
+test acceptance_gate_init_repairs_instructions_before_legacy_migration ... ok
+test init_is_idempotent_and_registers_the_visualizer_workspace ... ok
+test acceptance_gate_init_repairs_stale_managed_instructions ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running unittests src/lib.rs (target/debug/deps/hzr_codec-0f80b31309a54fab)
+
+running 9 tests
+test tests::test_adaptive_density_requires_positive_value_and_long_output ... ok
+test tests::test_economic_gate_charges_instruction_and_retry_cost ... ok
+test tests::test_high_risk_content_is_never_changed ... ok
+test tests::test_protected_duplicate_falls_back_to_raw ... ok
+test tests::test_shadow_reports_counterfactual_without_changing_content ... ok
+test tests::test_exact_content_is_never_changed ... ok
+test tests::test_structural_transform_preserves_trailing_newline_after_deduplication ... ok
+test tests::test_protected_spans_cover_relative_paths_identifiers_enums_and_json ... ok
+test tests::test_structural_transform_only_removes_exact_duplicate_paragraphs ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (target/debug/deps/hzr_context-b4a41362d188e317)
+
+running 26 tests
+test candidate::tests::test_a_plan_candidate_carries_the_symbols_an_agent_can_jump_to ... ok
+test candidate::tests::test_a_long_outline_is_bounded_and_says_so ... ok
+test candidate::tests::test_long_memory_is_bounded_without_losing_its_latest_tail ... ok
+test candidate::tests::test_equal_content_has_stable_reference ... ok
+test candidate::tests::test_missing_memory_content_becomes_warning ... ok
+test planner::tests::acceptance_gate_fork_backend_metadata_is_closed_and_drives_typed_fallback ... ok
+test candidate::tests::test_search_candidate_resolves_the_smallest_enclosing_symbol ... ok
+test planner::tests::fork_config_fingerprint_changes_on_same_size_rewrite_and_creation ... ok
+test planner::tests::regression_exact_and_graph_scores_keep_independent_calibration_domains ... ok
+test planner::tests::scoped_semantic_paths_keep_workspace_provenance ... ok
+test planner::tests::test_a_chunk_boundary_fragment_is_completed_from_the_recorded_line ... ok
+test planner::tests::test_a_scoped_hit_is_reported_relative_to_the_project_root ... ok
+test planner::tests::test_exact_identifier_routes_symbol_shaped_intent ... ok
+test planner::tests::test_exact_search_scoped_to_a_single_file_pins_the_project_root ... ok
+test planner::tests::test_fork_search_config_rejects_disabled_delegation ... ok
+test planner::tests::test_fork_search_config_rejects_foreign_binary_override ... ok
+test planner::tests::test_fuse_returns_only_content_selected_within_hard_limit ... ok
+test planner::tests::test_only_exact_mode_asks_the_fork_for_a_literal_match ... ok
+test planner::tests::test_plan_request_rejects_non_canonical_memory_kind ... ok
+test planner::tests::test_plan_request_rejects_unbounded_retrieval ... ok
+test planner::tests::test_repair_never_invents_a_line_it_cannot_verify ... ok
+test planner::tests::test_warning_payload_is_bounded_and_reports_truncation ... ok
+test planner::tests::typed_fork_config_rejects_unknown_schema_and_accepts_version_two ... ok
+test planner::tests::serialized_context_budget_includes_metadata_escaping_and_whole_evidence ... ok
+test planner::tests::planner_config_refresh_is_live_and_singleflight ... ok
+test planner::tests::accounted_fork_invocation_registers_its_receipt_context ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+     Running tests/fork_core_integration.rs (target/debug/deps/fork_core_integration-bf87a2e8bbaba6fc)
+
+running 1 test
+test test_search_and_context_use_managed_fork_core_commands ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running unittests src/lib.rs (target/debug/deps/hzr_core-20dd5852b20dafe2)
+
+running 103 tests
+test accounting_coverage::tests::corrupt_state_is_unknown_instead_of_defaulting_to_complete ... ok
+test accounting_coverage::tests::context_snapshot_excludes_other_sessions_and_workspaces ... ok
+test accounting_coverage::tests::concurrent_failure_and_recovery_never_erase_an_event ... ok
+test billing::tests::expired_promotional_price_fails_closed ... ok
+test accounting_coverage::tests::gap_recovery_preserves_closed_duration_and_history ... ok
+test billing::tests::future_and_stale_prices_fail_closed ... ok
+test billing::tests::explicit_missing_override_is_an_error ... ok
+test billing::tests::generic_cache_write_is_distinct_from_anthropic_ttl_dimensions ... ok
+test accounting_coverage::tests::recovery_closes_only_the_exact_surface_and_operation_family ... ok
+test billing::tests::missing_cache_rate_is_unavailable_instead_of_zero ... ok
+test billing::tests::openai_long_context_multiplier_is_explicit_and_bounded ... ok
+test billing::tests::merged_override_revalidates_aliases_against_builtins ... ok
+test billing::tests::public_catalog_prices_exact_and_documented_aliases ... ok
+test billing::tests::qwen_input_band_prices_explicit_cache_create_and_read ... ok
+test billing::tests::receipt_hash_is_stable_and_excludes_plaintext_from_result ... ok
+test billing::tests::raw_estimate_uses_selected_input_basis_and_native_currency ... ok
+test billing::tests::receipt_observation_time_has_bounded_past_and_future_skew ... ok
+test billing::tests::unknown_model_or_method_never_falls_back ... ok
+test billing::tests::pricing_override_read_is_size_bounded_before_parsing ... ok
+test billing::tests::xai_context_tiers_require_explicit_matching_evidence ... ok
+test bounded_file::tests::bounded_reader_rejects_oversized_files ... ok
+test budget::tests::test_a_candidate_without_a_locatable_span_is_demoted ... ok
+test bounded_file::tests::bounded_reader_rejects_symlinks_without_following_them ... ok
+test budget::tests::test_confidence_and_coverage_are_measurements_not_constants ... ok
+test budget::tests::test_memory_cannot_consume_the_whole_budget ... ok
+test budget::tests::test_plan_deduplicates_same_content_reference ... ok
+test budget::tests::test_plan_never_exceeds_hard_budget ... ok
+test budget::tests::test_plan_preserves_calibrated_relevance_over_adjacent_rank ... ok
+test budget::tests::test_plan_rejects_candidates_below_relevance_floor ... ok
+test budget::tests::test_relevance_preserves_engine_magnitude_instead_of_collapsing_to_rrf ... ok
+test budget::tests::test_selection_does_not_reward_brevity_over_relevance ... ok
+test budget::tests::test_token_source_preserves_provider_only_counts ... ok
+test config::tests::test_absent_engine_directory_adopts_only_discovered_bundle ... ok
+test billing::tests::user_catalog_replaces_only_an_exact_pricing_key ... ok
+test config::tests::test_clean_install_defaults_to_fts_only_memory ... ok
+test config::tests::test_config_rejects_disabled_watcher_lifecycle_budget ... ok
+test config::tests::test_config_rejects_non_loopback_bind ... ok
+test config::tests::test_config_rejects_policy_without_input_budget ... ok
+test accounting_coverage::tests::repeated_condition_does_not_inflate_missing_operation_count ... ok
+test config::tests::test_engine_directory_does_not_shadow_system_tools ... ok
+test config::tests::local_instruction_scope_round_trips_without_changing_the_default ... ok
+test config::tests::test_bundle_engine_directory_requires_all_managed_engines ... ok
+test config::tests::test_non_versioned_layout_is_left_unchanged ... ok
+test config::tests::test_config_round_trip ... ok
+test config::tests::test_policy_context_budget_reserves_output_and_safety_margin ... ok
+test config::tests::test_engine_directory_uses_upgrade_stable_current_path ... ok
+test config::tests::test_selected_activation_allows_only_explicit_workspaces_and_round_trips ... ok
+test config::tests::test_public_binary_symlink_discovers_private_bundle_engines ... ok
+test config::tests::test_foreign_or_dangling_current_never_redirects_engines ... ok
+test host_grant::tests::acceptance_gate_a_grant_is_bound_to_its_session_and_its_moment ... ok
+test engines::tests::test_engine_lock_contains_current_grepai ... ok
+test ledger::fleet::tests::fleet_rejects_invalid_windows_and_project_ids_before_opening ... ok
+test config::tests::test_pinned_engine_directory_is_migrated_on_load ... ok
+test config::tests::test_upgrade_switches_engines_through_current ... ok
+test ledger::tests::acceptance_gate_every_recorded_row_belongs_to_exactly_one_counter ... ok
+test ledger::fleet::tests::fleet_read_transaction_excludes_concurrent_writer_and_missing_ledger_stays_absent ... ok
+test ledger::fleet::tests::fleet_window_is_exact_private_and_reconciles_all_dimensions ... ok
+test ledger::tests::acceptance_gate_evasion_and_fidelity_are_payload_free_and_session_bounded ... ok
+test ledger::tests::acceptance_gate_family_summary_groups_and_orders_stably ... ok
+test ledger::tests::acceptance_gate_family_summary_prefers_typed_route_and_classifies_legacy_rows ... ok
+test ledger::tests::acceptance_gate_family_summary_redacts_recorded_payloads ... ok
+test ledger::tests::acceptance_gate_fork_v1_rows_cannot_collapse_44_189_saved_tokens_to_zero ... ok
+test ledger::tests::acceptance_gate_host_grant_keeps_bypass_visible_and_detects_re_refusal ... ok
+test ledger::tests::acceptance_gate_mcp_read_delivery_is_visible_but_not_double_counted ... ok
+test ledger::tests::acceptance_gate_policy_events_are_private_and_never_inflate_execution_accounting ... ok
+test ledger::tests::acceptance_gate_read_pipeline_splits_selection_from_transform ... ok
+test ledger::tests::acceptance_gate_rerun_tax_is_bounded_deduplicated_and_filter_scoped ... ok
+test ledger::tests::acceptance_gate_operation_attribution_migrates_without_sensitive_payloads ... ok
+test ledger::tests::acceptance_gate_seven_day_legacy_raw_families_report_route_capability ... ok
+test ledger::tests::every_evasion_class_survives_the_ledger_round_trip ... ok
+test ledger::tests::fidelity_reason_contradiction_is_typed_without_payload ... ok
+test ledger::tests::acceptance_gate_stats_cutoff_is_inclusive_and_shared_by_snapshot_sections ... ok
+test ledger::tests::acceptance_gate_stored_capability_reconciles_family_and_tool_views ... ok
+test ledger::tests::host_visible_summary_caps_claude_and_marks_unknown_hosts ... ok
+test ledger::tests::project_activity_separates_current_policy_from_legacy_rows ... ok
+test ledger::tests::provider_receipts_are_private_idempotent_and_session_scoped ... ok
+test ledger::tests::acceptance_gate_existing_payloads_are_scrubbed_without_losing_aggregates ... ok
+test ledger::tests::public_stats_key_coalesces_private_commands_and_compatible_versions ... ok
+test ledger::tests::session_roi_hot_queries_use_composite_indexes ... ok
+test ledger::tests::test_ledger_keeps_estimates_out_of_actual_totals ... ok
+test ledger::tests::test_efficiency_and_bypass_summaries_can_be_scoped_to_one_project ... ok
+test ledger::tests::test_legacy_named_database_is_not_migrated_into_itself ... ok
+test ledger::tests::test_price_requires_actual_input_and_output ... ok
+test ledger::tests::identity_hmac_key_integrity_is_versioned_and_fail_closed ... ok
+test ledger::tests::test_accounting_dimensions_are_migrated_and_reported_without_faking_zero_output ... ok
+test ledger::tests::test_proxy_ledger_rows_are_classified_as_raw ... ok
+test ledger::tests::test_read_only_dashboard_summary_does_not_create_a_fresh_ledger ... ok
+test ledger::tests::test_project_activity_is_exactly_scoped_and_reports_unscoped_rows ... ok
+test ledger::tests::test_provider_summary_scopes_to_matching_workspace_and_skips_unscoped_rows ... ok
+test ledger::tests::test_platform_history_migration_snapshots_and_imports_each_row_once ... ok
+test ledger::tests::test_summary_on_empty_database_reports_zero_totals_without_error ... ok
+test ledger::tests::test_unobserved_write_counterfactual_is_neutral_in_summary ... ok
+test operation::tests::acceptance_gate_exact_reader_checks_first_use_token_bound ... ok
+test operation::tests::acceptance_gate_fidelity_checksum_is_bounded_and_budgeted ... ok
+test operation::tests::acceptance_gate_fidelity_reason_mismatch_is_contradicted ... ok
+test operation::tests::direct_hzr_detection_does_not_match_shell_prose ... ok
+test operation::tests::managed_exec_taxonomy_preserves_actionable_leaf_families ... ok
+test operation::tests::test_search_semantic_flags_are_not_reconstructed ... ok
+test operation::tests::test_shell_tools_are_classified_without_a_second_rewrite_authority ... ok
+test operation::tests::test_wrapped_bypass_separator_is_recognized ... ok
+test ledger::tests::typed_exec_keeps_safe_executable_family_without_retaining_arguments ... ok
+test ledger::tests::typed_bypass_route_is_neutral_even_when_command_text_looks_optimized ... ok
+test ledger::tests::test_usage_project_path_column_migrates_idempotently_on_legacy_schema ... ok
+
+test result: ok. 103 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s
+
+     Running tests/bypass_summary.rs (target/debug/deps/bypass_summary-3ba1fc8ee3b32039)
+
+running 3 tests
+test test_bypass_summary_on_a_clean_ledger_is_empty_rather_than_an_error ... ok
+test test_bypass_summary_groups_by_tool_and_carries_the_replacement ... ok
+test test_bypass_summary_separates_bypassed_tokens_from_optimized_tokens ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/codec_accounting.rs (target/debug/deps/codec_accounting-8b94f286483e878a)
+
+running 5 tests
+test test_a_recorded_operation_is_scoped_to_its_project ... ok
+test test_raw_routes_receive_zero_credit_even_when_recorded_counts_differ ... ok
+test test_a_recorded_operation_reaches_the_efficiency_summary ... ok
+test test_an_operation_that_grew_the_output_is_recorded_as_a_regression ... ok
+test test_recent_activity_exposes_only_hashed_request_context ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/operation_classification.rs (target/debug/deps/operation_classification-6292cd238953c7ae)
+
+running 15 tests
+test acceptance_gate_private_ledger_sqlite_is_left_to_the_typed_fork_plan ... ok
+test acceptance_gate_no_raw_for_top_level_hzr_file_aliases ... ok
+test acceptance_gate_no_raw_commands_have_a_first_class_route ... ok
+test acceptance_gate_no_raw_wrapper_around_first_class_hzr_commands ... ok
+test acceptance_gate_raw_fidelity_rejects_unproven_equivalents ... ok
+test test_ambiguous_shell_syntax_is_never_reconstructed_for_automatic_execution ... ok
+test test_bypassed_execution_without_a_replacement_is_still_a_bypass ... ok
+test acceptance_gate_raw_fidelity_uses_a_closed_reason_set_without_echoing_values ... ok
+test test_commands_without_an_equivalent_are_left_alone ... ok
+test test_bypassed_shell_tools_do_not_carry_a_second_rewrite_plan ... ok
+test test_operation_identity_survives_the_bypass_prefix ... ok
+test test_optimized_commands_keep_their_own_subsystem ... ok
+test test_plain_shell_commands_have_no_second_rewrite_authority ... ok
+test test_sql_predicate_matches_the_rust_classifier ... ok
+test test_proxy_and_raw_prefixes_are_classified_as_bypassed ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hzr_daemon-c2cbf1cc55401fb6)
+
+running 106 tests
+test api::read::tests::batch_budget_and_confinement_are_enforced ... ok
+test accounting_sweeper::tests::registered_hook_receipt_is_committed_and_acknowledged ... ok
+test accounting_sweeper::tests::unknown_empty_context_is_not_falsely_recovered_by_age ... ok
+test api::read::tests::exact_continuation_crosses_one_hundred_thousand_lines ... ok
+test api::read::tests::exact_read_preserves_crlf_and_unterminated_eof ... ok
+test api::tests::a_degraded_engine_still_degrades_the_control_plane ... ok
+test api::tests::a_warming_selected_project_prevents_global_ready_state ... ok
+test api::tests::acceptance_gate_approved_checksum_preserves_exact_requested_command ... ok
+test api::tests::acceptance_gate_daemon_fidelity_budget_contradiction_and_policy_event ... ok
+test api::tests::acceptance_gate_exec_plan_carries_only_closed_evasion_metadata ... ok
+test api::tests::acceptance_gate_exec_run_honors_a_valid_grant_without_weakening_deny ... ok
+test api::tests::acceptance_gate_no_raw_for_optimizable_exec_commands ... ok
+test api::tests::acceptance_gate_no_raw_for_top_level_hzr_file_aliases_in_exec ... ok
+test api::tests::acceptance_gate_raw_fidelity_is_typed_before_wrapper_removal ... ok
+test api::read::tests::failed_batch_does_not_commit_read_episode_coverage ... ok
+test api::tests::an_installed_caveman_runtime_is_stopped_until_hzr_agent_launches_it ... ok
+test api::tests::an_on_demand_engine_at_rest_does_not_degrade_the_control_plane ... ok
+test api::tests::an_uninstalled_caveman_runtime_is_reported_as_degraded_not_stopped ... ok
+test api::tests::an_unselected_fleet_backlog_does_not_report_a_rebuild ... ok
+test api::tests::approved_fidelity_completion_is_recorded_once_with_delivered_bytes ... ok
+test api::tests::dashboard_requires_explicit_stable_project_selection ... ok
+test api::tests::dashboard_session_roi_keeps_estimate_and_imported_claim_provenance_distinct ... ok
+test api::tests::exec_caller_path_is_validated_and_applied_to_the_envelope ... ok
+test api::read::tests::full_read_and_revision_bound_expansion_are_exact ... ok
+test api::tests::explicit_full_read_is_preserved_by_exec_without_a_fidelity_marker ... ok
+test api::tests::first_class_gate_does_not_reconstruct_quoted_or_shell_grammar ... ok
+test api::tests::first_class_gate_keeps_raw_when_no_safe_reconstructed_route_exists ... ok
+test api::tests::first_class_gate_preserves_an_ambiguous_shell_ask ... ok
+test api::tests::fts_only_icm_is_ready_with_an_explicit_retrieval_capability ... ok
+test api::tests::index_observatory_does_not_invent_search_traffic ... ok
+test api::tests::index_observatory_reports_only_a_real_recorded_hzr_search ... ok
+test api::tests::index_state_distinguishes_standby_from_active_rebuild ... ok
+test api::tests::managed_execution_budget_is_absolute_across_pre_spawn_work ... ok
+test api::tests::memory_maintenance_never_targets_foreign_or_above_threshold_records ... ok
+test api::tests::post_tool_filter_accepts_only_closed_stdin_argv ... ok
+test api::tests::public_memory_detail_redacts_every_content_bearing_field ... ok
+test api::tests::test_managed_fork_api_confines_read_and_write_paths ... ok
+test api::tests::test_managed_fork_api_rejects_symlink_escape ... ok
+test api::tests::the_caveman_version_comes_from_the_engine_lock ... ok
+test api::tests::typed_managed_patch_keeps_content_out_of_process_arguments ... ok
+test approval::tests::test_pending_approval_is_single_use ... ok
+test auth::tests::test_token_is_stable_and_not_short ... ok
+test auth::tests::test_token_lock_is_created_and_repaired_with_private_permissions ... ok
+test api::read::tests::read_episode_advice_preserves_explicit_content_and_resets_after_compaction ... ok
+test api::tests::exec_caller_path_resolves_a_caller_only_executable ... ok
+test exec_jobs::tests::execution_record_read_rejects_symlink_and_store_quota_reserves_completions ... ok
+test exec_jobs::tests::cancellation_before_dispatch_cannot_be_replayed_into_execution ... ok
+test exec_jobs::tests::ninety_second_job_survives_short_request_budget ... ignored, 90-second real-process probe; run explicitly when execution lifecycle changes
+test exec_jobs::tests::output_budget_omission_is_explicit_and_larger_fetch_is_exact ... ok
+test exec_jobs::tests::cancellation_reaps_the_execution_before_terminal_receipt ... ok
+test exec_jobs::tests::missing_completion_never_polls_running_forever ... ok
+test exec_jobs::tests::restart_marks_unfinished_execution_unknown_without_replaying ... ok
+test exec_jobs::tests::output_pages_preserve_binary_and_utf8_boundaries ... ok
+test exec_jobs::tests::replay_does_not_execute_again_and_workspace_scope_is_enforced ... ok
+test ledger_writer::tests::cancellation_failure_is_typed_and_keeps_durable_state ... ok
+test ledger_writer::tests::concurrent_writes_share_one_initialized_connection ... ok
+test ledger_writer::tests::corrupt_pending_record_is_quarantined_without_killing_daemon ... ok
+test ledger_writer::tests::denied_policy_event_is_audited_without_an_execution_row ... ok
+test ledger_writer::tests::executing_reservation_cannot_be_completed_early_or_cancelled ... ok
+test ledger_writer::tests::fidelity_reservations_are_atomic_and_complete_exactly_once ... ok
+test ledger_writer::tests::fidelity_write_failure_reconciles_exactly_once_after_restart ... ok
+test ledger_writer::tests::post_spawn_executor_failure_preserves_unknown_execution_across_restart ... ok
+test ledger_writer::tests::reserved_and_executing_restart_states_are_bounded_and_visible ... ok
+test lock::tests::test_acquire_refuses_second_owner_and_releases_without_deleting_file ... ok
+test lock::tests::test_acquire_rejects_non_regular_target ... ok
+test lock::tests::test_acquire_rejects_symlink_target ... ok
+test exec_jobs::tests::result_delivery_budget_and_revision_do_not_reexecute ... ok
+test lock::tests::test_acquire_sets_private_permissions ... ok
+test observability::tests::snapshot_is_bounded_cursor_based_and_project_scoped ... ok
+test read_cost::tests::advice_and_envelope_cost_trigger_crossover_after_three_ranges ... ok
+test read_cost::tests::epoch_workspace_and_source_hash_reset_the_advisory ... ok
+test read_cost::tests::repeats_trigger_remaining_evidence_without_suppressing_content ... ok
+test read_cost::tests::scalar_advice_always_fits_the_reserved_response_budget ... ok
+test read_cost::tests::source_byte_counter_matches_json_escaping_without_line_allocations ... ok
+test search_pages::tests::cursor_pages_are_stable_replayable_scoped_and_expire_without_rescan ... ok
+test search_pages::tests::cursor_rejects_malformed_paths_and_reports_snapshot_truncation ... ok
+test search_pages::tests::snapshot_is_private_and_symlink_payload_is_rejected ... ok
+test observability::tests::persisted_ledger_key_keeps_public_identities_stable_across_restart ... ok
+test server::tests::dashboard_memory_topic_identity_cannot_cross_projects ... ok
+test server::tests::fidelity_approval_http_flow_records_exactly_once_and_replay_is_denied ... ok
+test server::tests::fidelity_approval_reports_non_retryable_accounting_failure ... ok
+test exec_jobs::tests::spilled_output_is_bounded_hash_bound_and_confined_to_its_job ... ok
+test server::tests::public_observability_is_bounded_scoped_and_payload_free ... ok
+test server::tests::test_all_routes_require_bearer_authentication ... ok
+test server::tests::test_codec_route_preserves_exact_content ... ok
+test server::tests::test_context_plan_reports_both_managed_services_when_degraded ... ok
+test server::tests::test_dashboard_memory_topic_rejects_non_opaque_identifiers ... ok
+test server::tests::test_dashboard_project_selection_isolates_observatories_and_ledger_activity ... ok
+test server::tests::test_dashboard_rejects_malformed_and_unknown_project_ids ... ok
+test server::tests::test_dashboard_selects_only_a_valid_stable_project_id ... ok
+test server::tests::test_dashboard_snapshot_is_public_but_read_only ... ok
+test server::tests::test_empty_fork_invocation_is_rejected_before_engine_access ... ok
+test server::tests::test_full_memory_topic_details_require_bearer_authentication ... ok
+test server::tests::test_invalid_search_is_rejected_before_engine_access ... ok
+test server::tests::test_memory_route_rejects_user_supplied_project_override ... ok
+test server::tests::test_memory_routes_require_workspace_scope ... ok
+test server::tests::test_unknown_approval_is_rejected_without_execution ... ok
+test server::tests::test_usage_route_records_provider_tokens_separately_from_estimates ... ok
+test state::tests::daemon_icm_transport_is_typed_and_has_no_cli_fallback ... ok
+test state::tests::memory_recovery_backoff_is_exponential_and_bounded ... ok
+test server::tests::fidelity_public_route_enforces_five_operations_and_token_bound_before_spawn ... ok
+test api::tests::acceptance_gate_shared_fixture_reaches_daemon_policy ... ok
+test visualizer::tests::assets_require_a_real_directory_with_an_index ... ok
+test server::tests::project_registry_page_is_bounded_at_thousand_workspace_scale ... ok
+test state::tests::memory_supervision_recovers_flapping_process_without_cli_or_duplicate_store ... ok
+test state::tests::memory_supervision_replaces_alive_unready_child ... ok
+
+test result: ok. 105 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 6.49s
+
+     Running unittests src/main.rs (target/debug/deps/hzrd-56a6d657f8da5834)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grepai_health_routes.rs (target/debug/deps/grepai_health_routes-a9218482839aeea6)
+
+running 1 test
+test live_and_failed_grepai_watcher_are_visible_through_health_and_dashboard ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.71s
+
+     Running tests/shutdown_signal.rs (target/debug/deps/shutdown_signal-ef352ea370df2a71)
+
+running 1 test
+test sigterm_releases_the_daemon_lock_and_exits_successfully ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s
+
+     Running unittests src/lib.rs (target/debug/deps/hzr_engine_contract-497f5d7891d7376d)
+
+running 3 tests
+test tests::rewrite_plan_rejects_inconsistent_policy_metadata ... ok
+test tests::accounting_receipt_is_typed_and_payload_free ... ok
+test tests::every_evasion_class_round_trips_without_payload_fields ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hzr_exec-06e30af6d3263d55)
+
+running 22 tests
+test adapter::tests::acceptance_gate_a_proposed_ask_shows_the_managed_form ... ok
+test adapter::tests::acceptance_gate_every_ask_names_its_class_and_prescribes_a_route ... ok
+test adapter::tests::an_unclassified_command_keeps_the_original_wording ... ok
+test accounting::tests::inventory_counts_only_orphaned_nonempty_receipt_journals ... ok
+test adapter::tests::test_parse_version_finds_fork_semver_token ... ok
+test adapter::tests::capability_batch_fails_closed_when_the_pinned_engine_is_absent ... ok
+test adapter::tests::test_render_argv_round_trips_quotes ... ok
+test capture::tests::test_capture_writer_truncates_at_safe_memory_cap ... ok
+test shell::tests::test_analyze_shell_rejects_and_or_chains ... ok
+test shell::tests::test_analyze_shell_rejects_pipe ... ok
+test shell::tests::test_analyze_shell_rejects_redirects_and_heredoc ... ok
+test shell::tests::test_analyze_shell_rejects_xargs ... ok
+test shell::tests::test_parse_simple_shell_keeps_literal_operators_inside_quotes ... ok
+test shell::tests::test_parse_simple_shell_preserves_quoted_arguments ... ok
+test tests::test_choose_never_worse_keeps_raw_on_tie ... ok
+test tests::test_choose_never_worse_keeps_raw_when_candidate_grows ... ok
+test tests::test_choose_never_worse_selects_strictly_smaller_candidate ... ok
+test capture::tests::test_capture_writer_spills_without_losing_bytes ... ok
+test tests::test_rewrite_decision_serializes_without_exit_code_protocol ... ok
+test tests::test_legacy_rtk_decision_without_route_defaults_to_optimized ... ok
+test accounting::tests::invalid_identity_is_rejected_without_deleting_evidence ... ok
+test accounting::tests::drain_is_retryable_until_explicit_acknowledgement ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/execution.rs (target/debug/deps/execution-726772334f1bef9c)
+
+running 14 tests
+test test_pipeline_ask_never_executes_proposed_command ... ok
+test test_pipeline_allows_hzr_policy_raw_fallback_before_child_start ... ok
+test test_pipeline_never_bypasses_fork_when_managed_spawn_fails ... ok
+test test_dropping_handle_terminates_process_group ... ok
+test test_pipeline_preserves_pipe_semantics_without_rewrite ... ok
+test test_pipeline_preserves_and_or_semantics_without_rewrite ... ok
+test test_pipeline_keeps_xargs_raw ... ok
+test test_pipeline_reports_exact_exit_and_stderr_channels ... ok
+test test_pipeline_preserves_shell_quoting ... ok
+test test_pipeline_reports_exact_unix_signal ... ok
+test test_pipeline_streams_events_without_affecting_capture ... ok
+test test_pipeline_spills_exact_output_after_memory_limit ... ok
+test test_pipeline_cancellation_is_typed ... ok
+test test_pipeline_timeout_terminates_process_group ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/rtk_adapter.rs (target/debug/deps/rtk_adapter-1298cbc46ea7fb92)
+
+running 18 tests
+test test_adapter_exit_three_preserves_fork_approval ... ok
+test test_adapter_exit_four_asks_without_reconstructing_opaque_shell ... ok
+test test_adapter_exit_one_uses_proxy_and_propagates_child_exit ... ok
+test test_adapter_consumes_typed_payload_free_evasion_plan ... ok
+test test_adapter_exit_two_returns_typed_deny ... ok
+test test_adapter_exit_zero_executes_exact_pinned_fork ... ok
+test test_adapter_missing_binary_fails_closed ... ok
+test test_adapter_passes_complete_shell_program_to_fork_rewrite ... ok
+test test_adapter_preserves_compound_fork_rewrite ... ok
+test test_adapter_probe_timeout_fails_closed ... ok
+test test_adapter_rejects_matching_help_and_version_with_wrong_contract_identity ... ok
+test test_adapter_rewrite_timeout_fails_closed ... ok
+test test_adapter_version_mismatch_fails_closed ... ok
+test test_byte_fidelity_mode_requires_the_fork_to_select_proxy ... ok
+test test_decide_in_runs_fork_policy_from_requested_cwd ... ok
+test test_runner_can_disable_tracking_for_observability_canaries ... ok
+test test_runner_executes_exact_argv_with_centralized_runtime_and_stdin ... ok
+test test_std_command_uses_exact_binary_and_centralized_environment ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.40s
+
+     Running unittests src/lib.rs (target/debug/deps/hzr_index-0fc88d5d5386311f)
+
+running 2 tests
+test registry::tests::registry_rejects_oversized_and_symlinked_records ... ok
+test registry::tests::repeated_registration_is_idempotent_and_private ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/index_integration.rs (target/debug/deps/index_integration-7d0aba4666808899)
+
+running 24 tests
+test acceptance_gate_managed_initialization_enables_local_repository_graph ... ok
+test acceptance_gate_initial_scan_survives_without_ready_marker ... ok
+test live_watcher_status_polling_does_not_extend_idle_ttl ... ok
+test test_connect_rejects_unpinned_grepai_version ... ok
+test failed_watcher_status_polling_does_not_extend_its_tombstone_ttl ... ok
+test test_coordinator_keeps_canonical_index_available_with_dormant_nested_index ... ok
+test test_coordinator_refuses_an_active_nested_index_writer ... ok
+test test_coordinator_requires_explicit_legacy_index_migration ... ok
+test test_coordinator_evicts_lru_watcher_at_budget ... ok
+test test_coordinator_reaps_idle_watcher_after_ttl ... ok
+test test_ensure_managed_location_is_read_only_after_initialization ... ok
+test test_coordinator_reuses_one_watcher_for_repeated_prepare ... ok
+test test_linked_worktrees_share_repository_identity_but_not_index_identity ... ok
+test test_managed_discovery_adopts_legacy_project_index_without_second_database ... ok
+test test_managed_discovery_blocks_foreign_symlink_without_mutation ... ok
+test test_managed_initialization_rejects_ambiguous_repository_graph_setting ... ok
+test test_managed_initialization_rejects_symlinked_grepai_config ... ok
+test test_coordinator_status_proves_index_artifacts_and_live_watcher ... ok
+test test_managed_placement_creates_one_central_index_and_project_symlink ... ok
+test test_workspace_does_not_claim_a_nested_git_roots_index ... ok
+test test_workspace_uses_git_root_and_reports_dormant_nested_indexes ... ok
+test test_watch_has_one_owner_and_is_supervised ... ok
+kill: 24106: No such process
+kill: 24037: No such process
+test test_shutdown_attempts_every_watcher_after_first_stop_failure ... ok
+test test_concurrent_prepares_never_exceed_watcher_budget ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.19s
+
+     Running tests/migration.rs (target/debug/deps/migration-ddecfb50e0179d4c)
+
+running 7 tests
+test test_migrate_legacy_index_refuses_active_legacy_writer ... ok
+test test_migrate_legacy_index_refuses_duplicate_indexes_without_mutation ... ok
+test test_migrate_legacy_index_refuses_escaping_inner_symlink ... ok
+test test_migrate_legacy_index_refuses_existing_canonical_target ... ok
+test test_migrate_legacy_index_preserves_bytes_modes_and_safe_symlinks ... ok
+test test_migrate_legacy_index_replay_is_idempotent_and_keeps_backup ... ok
+test test_archive_duplicate_index_is_explicit_hashed_and_idempotent ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running unittests src/lib.rs (target/debug/deps/hzr_memory-102c6d3b809ebaae)
+
+running 21 tests
+test circuit::tests::test_stale_success_cannot_close_newer_open_generation ... ok
+test namespace::tests::test_global_and_project_namespaces_cannot_collide ... ok
+test namespace::tests::test_global_only_scope_excludes_this_project ... ok
+test circuit::tests::test_breaker_allows_only_one_half_open_probe ... ok
+test circuit::tests::test_breaker_opens_at_threshold_and_recovers_half_open ... ok
+test namespace::tests::test_global_topic_accepts_only_user_wide_kinds ... ok
+test namespace::tests::test_namespaced_topic_is_deterministic_and_segment_safe ... ok
+test namespace::tests::test_isolate_project_memories_removes_global_and_cross_repo_records ... ok
+test namespace::tests::test_namespaced_topic_rejects_lossy_or_ambiguous_kinds ... ok
+test namespace::tests::test_project_and_global_recall_never_reaches_another_repository ... ok
+test namespace::tests::test_project_only_scope_is_unchanged_by_the_new_namespace ... ok
+test namespace::tests::test_recall_candidate_limit_is_bounded ... ok
+test namespace::tests::test_topic_belongs_to_project_never_accepts_global_or_foreign_topics ... ok
+test layout::tests::test_token_lock_is_created_and_repaired_with_private_permissions ... ok
+test namespace::tests::test_merge_preserves_cross_namespace_ranking_and_deduplicates ... ok
+test supervisor::tests::legacy_pid_rejects_symlinks_oversized_and_invalid_values ... ok
+test supervisor::tests::runtime_manifest_rejects_symlink_and_wrong_database ... ok
+test supervisor::tests::crash_identity_restores_endpoint_and_attaches_without_second_child ... ok
+test supervisor::tests::pending_launch_and_live_legacy_pid_refuse_another_writer ... ok
+test supervisor::tests::mismatched_process_start_is_never_signalled_or_attached ... ok
+test supervisor::tests::unhealthy_owned_child_is_reaped_and_replaced ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+     Running tests/exact_get.rs (target/debug/deps/exact_get-e2b1f61d6049baf0)
+
+running 1 test
+test exact_get_preserves_content_and_confines_namespaces ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/icm_integration.rs (target/debug/deps/icm_integration-2bc3e5920d1875d3)
+
+running 12 tests
+test test_cli_memory_maintenance_uses_typed_list_before_mutation ... ok
+test test_http_client_uses_authenticated_json_contracts ... ok
+test test_http_transport_does_not_silently_invoke_cli_when_fallback_is_disabled ... ok
+test test_cancelled_start_is_fenced_by_final_stop ... ok
+test test_concurrent_supervisor_starts_create_exactly_one_owner ... ok
+test test_installation_verifier_rejects_wrong_executable_checksum ... ok
+test test_stdio_mcp_store_uses_typed_rpc_without_parsing_tool_text ... ok
+test test_supervisor_owns_one_process_and_second_instance_attaches ... ok
+test test_cli_fallback_parses_json_recall_but_not_human_store_output ... ok
+test test_supervisor_rejects_unverified_legacy_pid_without_spawning_duplicate ... ok
+test test_supervisor_rejects_wrong_icm_version ... ok
+test test_supervisor_restarts_owned_process_after_post_ready_exit ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.67s
+
+     Running tests/project_snapshot.rs (target/debug/deps/project_snapshot-edc6885eac8a0fb5)
+
+running 3 tests
+test missing_canonical_store_is_unavailable_instead_of_ready_and_empty ... ok
+test topic_details_resolve_an_opaque_topic_and_never_cross_repository_scope ... ok
+test project_snapshot_is_scoped_bounded_and_content_free ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (target/debug/deps/hzr_protocol-c8b91acde47cacce)
+
+running 13 tests
+test api::completeness_contract_tests::acceptance_gate_failure_capable_routes_cannot_drop_failures_or_status ... ok
+test api::completeness_contract_tests::acceptance_gate_every_filtered_route_declares_its_completeness ... ok
+test api::tests::test_context_plan_defaults_bound_both_retrieval_sources ... ok
+test api::tests::operation_request_accepts_legacy_payload_without_attribution ... ok
+test api::tests::exec_request_accepts_legacy_payloads_and_carries_caller_path ... ok
+test api::tests::acceptance_gate_operation_attribution_rejects_free_form_dimensions ... ok
+test api::tests::test_memory_prune_defaults_to_preview ... ok
+test api::tests::test_memory_requests_require_workspace_and_reject_project_override ... ok
+test api::tests::test_search_defaults_are_bounded_and_auto ... ok
+test tests::search_accounting_builder_owns_requested_and_effective_mapping ... ok
+test tests::test_token_count_tracks_measurement_source ... ok
+test tests::test_usage_keeps_actual_and_estimated_separate ... ok
+test tests::evasion_wire_contract_is_closed_and_payload_free_for_every_class_and_reason ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+fork-core Clippy baseline 3aa3353d899a0fa403f018310b913a5919095d746744b68e6ac0af65ab8fbfc8 verified (141 warnings)
+warning: field `durability` is never read
+   --> src/bin/../write_core.rs:120:9
+    |
+114 | pub struct WriteStats {
+    |            ---------- field in this struct
+...
+120 |     pub durability: DurabilityMode,
+    |         ^^^^^^^^^^
+    |
+    = note: `WriteStats` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `write_str` is never used
+   --> src/bin/../write_core.rs:145:12
+    |
+140 | impl AtomicWriter {
+    | ----------------- method in this implementation
+...
+145 |     pub fn write_str(&self, path: &Path, content: &str) -> Result<WriteStats> {
+    |            ^^^^^^^^^
+
+warning: unused import: `crate::tracking::ParseFailureSummary`
+ --> src/gain.rs:6:5
+  |
+6 | use crate::tracking::ParseFailureSummary; // fix #200
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::SystemTime`
+ --> src/memory_layer/mod.rs:6:5
+  |
+6 | use std::time::SystemTime;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `is_block_explore_entry` and `is_mem_hook_entry`
+   --> src/memory_layer/mod.rs:378:13
+    |
+378 | use hooks::{is_block_explore_entry, is_mem_hook_entry};
+    |             ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `cache_status_event_label` and `compute_gain_stats`
+   --> src/memory_layer/mod.rs:382:5
+    |
+382 |     cache_status_event_label, compute_gain_stats, is_low_signal_candidate, mem_config,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^
+
+warning: unused doc comment
+  --> src/memory_layer/cache.rs:34:1
+   |
+34 | / /// Thread-local DB path override — set by `isolated_db()` in tests.
+35 | | /// Takes priority over `RTK_MEM_DB_PATH` env var, invisible to other threads.
+   | |_-----------------------------------------------------------------------------^
+   |   |
+   |   rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+   = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `is_available` is never used
+   --> src/ccusage.rs:112:8
+    |
+112 | pub fn is_available() -> bool {
+    |        ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `contains_unattestable_construct` is never used
+   --> src/discover/lexer.rs:453:8
+    |
+453 | pub fn contains_unattestable_construct(cmd: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `contains_substitution` is never used
+   --> src/discover/lexer.rs:466:4
+    |
+466 | fn contains_substitution(cmd: &str) -> bool {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `split_for_permissions` is never used
+   --> src/discover/lexer.rs:522:8
+    |
+522 | pub fn split_for_permissions(cmd: &str) -> Vec<&str> {
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `sequence_index` is never read
+  --> src/discover/provider.rs:21:9
+   |
+11 | pub struct ExtractedCommand {
+   |            ---------------- field in this struct
+...
+21 |     pub sequence_index: usize,
+   |         ^^^^^^^^^^^^^^
+   |
+   = note: `ExtractedCommand` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: function `prefix_contains_rtk_disabled` is never used
+   --> src/discover/registry.rs:451:8
+    |
+451 | pub fn prefix_contains_rtk_disabled(prefix_part: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `cmd_has_rtk_disabled_prefix` is never used
+   --> src/discover/registry.rs:456:8
+    |
+456 | pub fn cmd_has_rtk_disabled_prefix(cmd: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `should_passthrough_run_view` is never used
+   --> src/gh_cmd.rs:713:4
+    |
+713 | fn should_passthrough_run_view(extra_args: &[String]) -> bool {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `line` and `column` are never read
+  --> src/golangci_cmd.rs:13:5
+   |
+ 9 | struct Position {
+   |        -------- fields in this struct
+...
+13 |     line: usize,
+   |     ^^^^
+14 |     #[serde(rename = "Column")]
+15 |     column: usize,
+   |     ^^^^^^
+   |
+   = note: `Position` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `text` is never read
+  --> src/golangci_cmd.rs:23:5
+   |
+19 | struct Issue {
+   |        ----- field in this struct
+...
+23 |     text: String,
+   |     ^^^^
+   |
+   = note: `Issue` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `end_line` is never read
+  --> src/grepai.rs:22:9
+   |
+19 | pub struct GrepaiHit {
+   |            --------- field in this struct
+...
+22 |     pub end_line: usize,
+   |         ^^^^^^^^
+   |
+   = note: `GrepaiHit` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `remove_hash` is never used
+   --> src/integrity.rs:103:8
+    |
+103 | pub fn remove_hash(hook_path: &Path) -> Result<bool> {
+    |        ^^^^^^^^^^^
+
+warning: function `verify_hook` is never used
+   --> src/integrity.rs:127:8
+    |
+127 | pub fn verify_hook() -> Result<IntegrityStatus> {
+    |        ^^^^^^^^^^^
+
+warning: function `runtime_check` is never used
+   --> src/integrity.rs:250:8
+    |
+250 | pub fn runtime_check() -> Result<()> {
+    |        ^^^^^^^^^^^^^
+
+warning: variant `WrongSyntax` is never constructed
+ --> src/learn/detector.rs:8:5
+  |
+5 | pub enum ErrorType {
+  |          --------- variant in this enum
+...
+8 |     WrongSyntax,
+  |     ^^^^^^^^^^^
+  |
+  = note: `ErrorType` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `line` and `message` are never read
+  --> src/lint_cmd.rs:39:5
+   |
+32 | struct PylintDiagnostic {
+   |        ---------------- fields in this struct
+...
+39 |     line: usize,
+   |     ^^^^
+...
+44 |     message: String,
+   |     ^^^^^^^
+   |
+   = note: `PylintDiagnostic` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: constant `CACHE_MAX_PROJECTS` is never used
+  --> src/memory_layer/mod.rs:46:7
+   |
+46 | const CACHE_MAX_PROJECTS: usize = 64;
+   |       ^^^^^^^^^^^^^^^^^^
+
+warning: constant `CACHE_TTL_SECS` is never used
+  --> src/memory_layer/mod.rs:47:7
+   |
+47 | const CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+   |       ^^^^^^^^^^^^^^
+
+warning: constant `MAX_SYMBOLS_PER_FILE` is never used
+  --> src/memory_layer/mod.rs:49:7
+   |
+49 | const MAX_SYMBOLS_PER_FILE: usize = 64; // L3: compile-time fallback (runtime: mem_config())
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `get_dependents` is never used
+   --> src/memory_layer/cache.rs:509:15
+    |
+509 | pub(super) fn get_dependents(project_id: &str, module_name: &str) -> Result<Vec<String>> {
+    |               ^^^^^^^^^^^^^^
+
+warning: function `purge_episodes` is never used
+   --> src/memory_layer/episode.rs:140:8
+    |
+140 | pub fn purge_episodes(retention_days: i64) -> Result<usize> {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `freshness_label` is never used
+   --> src/memory_layer/helpers.rs:195:15
+    |
+195 | pub(super) fn freshness_label(freshness: ArtifactFreshness) -> &'static str {
+    |               ^^^^^^^^^^^^^^^
+
+warning: function `cache_status_event_label` is never used
+   --> src/memory_layer/helpers.rs:204:15
+    |
+204 | pub(super) fn cache_status_event_label(state: &BuildState, refresh: bool) -> &'static str {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `OllamaConfig` is never constructed
+  --> src/memory_layer/ollama.rs:16:12
+   |
+16 | pub struct OllamaConfig {
+   |            ^^^^^^^^^^^^
+
+warning: function `http_post` is never used
+  --> src/memory_layer/ollama.rs:41:4
+   |
+41 | fn http_post(host: &str, path: &str, body: &str, timeout_ms: u64) -> Result<String> {
+   |    ^^^^^^^^^
+
+warning: function `rerank_candidates` is never used
+  --> src/memory_layer/ollama.rs:72:8
+   |
+72 | pub fn rerank_candidates(
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: function `build_rerank_prompt` is never used
+  --> src/memory_layer/ollama.rs:98:4
+   |
+98 | fn build_rerank_prompt(candidates: &[String], task: &str) -> String {
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `parse_rerank_scores` is never used
+   --> src/memory_layer/ollama.rs:114:4
+    |
+114 | fn parse_rerank_scores(json: &str, expected: usize) -> Option<Vec<f32>> {
+    |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `classify_intent_ollama` is never used
+   --> src/memory_layer/ollama.rs:130:8
+    |
+130 | pub fn classify_intent_ollama(task: &str, config: &OllamaConfig) -> Option<(IntentKind, f32)> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `OllamaStatus` is never constructed
+   --> src/memory_layer/ollama.rs:171:12
+    |
+171 | pub struct OllamaStatus {
+    |            ^^^^^^^^^^^^
+
+warning: function `probe_ollama` is never used
+   --> src/memory_layer/ollama.rs:178:8
+    |
+178 | pub fn probe_ollama(config: &OllamaConfig) -> OllamaStatus {
+    |        ^^^^^^^^^^^^
+
+warning: function `apply_stage2` is never used
+   --> src/memory_layer/ranker.rs:163:8
+    |
+163 | pub fn apply_stage2(mut candidates: Vec<Candidate>, rerank_scores: &[f32]) -> Vec<Candidate> {
+    |        ^^^^^^^^^^^^
+
+warning: methods `unwrap`, `tier`, `is_ok`, `map`, and `warnings` are never used
+  --> src/parser/mod.rs:32:12
+   |
+30 | impl<T> ParseResult<T> {
+   | ---------------------- methods in this implementation
+31 |     /// Unwrap the parsed data, panicking on Passthrough
+32 |     pub fn unwrap(self) -> T {
+   |            ^^^^^^
+...
+41 |     pub fn tier(&self) -> u8 {
+   |            ^^^^
+...
+50 |     pub fn is_ok(&self) -> bool {
+   |            ^^^^^
+...
+55 |     pub fn map<U, F>(self, f: F) -> ParseResult<U>
+   |            ^^^
+...
+67 |     pub fn warnings(&self) -> Vec<String> {
+   |            ^^^^^^^^
+
+warning: associated function `parse_with_tier` is never used
+  --> src/parser/mod.rs:88:8
+   |
+76 | pub trait OutputParser: Sized {
+   |           ------------ associated function in this trait
+...
+88 |     fn parse_with_tier(input: &str, max_tier: u8) -> ParseResult<Self::Output> {
+   |        ^^^^^^^^^^^^^^^
+
+warning: enum `ParseError` is never used
+ --> src/parser/error.rs:5:10
+  |
+5 | pub enum ParseError {
+  |          ^^^^^^^^^^
+
+warning: struct `LintResult` is never constructed
+  --> src/parser/types.rs:26:12
+   |
+26 | pub struct LintResult {
+   |            ^^^^^^^^^^
+
+warning: struct `LintIssue` is never constructed
+  --> src/parser/types.rs:36:12
+   |
+36 | pub struct LintIssue {
+   |            ^^^^^^^^^
+
+warning: enum `LintSeverity` is never used
+  --> src/parser/types.rs:46:10
+   |
+46 | pub enum LintSeverity {
+   |          ^^^^^^^^^^^^
+
+warning: struct `BuildOutput` is never constructed
+  --> src/parser/types.rs:71:12
+   |
+71 | pub struct BuildOutput {
+   |            ^^^^^^^^^^^
+
+warning: struct `BundleInfo` is never constructed
+  --> src/parser/types.rs:81:12
+   |
+81 | pub struct BundleInfo {
+   |            ^^^^^^^^^^
+
+warning: struct `RouteInfo` is never constructed
+  --> src/parser/types.rs:88:12
+   |
+88 | pub struct RouteInfo {
+   |            ^^^^^^^^^
+
+warning: struct `GitResult` is never constructed
+  --> src/parser/types.rs:96:12
+   |
+96 | pub struct GitResult {
+   |            ^^^^^^^^^
+
+warning: struct `GitCommit` is never constructed
+   --> src/parser/types.rs:105:12
+    |
+105 | pub struct GitCommit {
+    |            ^^^^^^^^^
+
+warning: struct `GenericOutput` is never constructed
+   --> src/parser/types.rs:114:12
+    |
+114 | pub struct GenericOutput {
+    |            ^^^^^^^^^^^^^
+
+warning: field `status` is never read
+  --> src/playwright_cmd.rs:56:5
+   |
+54 | struct PlaywrightExecution {
+   |        ------------------- field in this struct
+55 |     #[serde(rename = "status")]
+56 |     status: String,
+   |     ^^^^^^
+   |
+   = note: `PlaywrightExecution` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `status` and `duration` are never read
+  --> src/playwright_cmd.rs:64:5
+   |
+62 | struct PlaywrightAttempt {
+   |        ----------------- fields in this struct
+63 |     #[serde(rename = "status")]
+64 |     status: String,
+   |     ^^^^^^
+...
+68 |     duration: f64,
+   |     ^^^^^^^^
+   |
+   = note: `PlaywrightAttempt` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variant `Import` is never constructed
+  --> src/read_symbols.rs:22:5
+   |
+12 | pub enum SymbolKind {
+   |          ---------- variant in this enum
+...
+22 |     Import,
+   |     ^^^^^^
+   |
+   = note: `SymbolKind` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `name` is never used
+  --> src/read_symbols.rs:84:8
+   |
+82 | pub trait SymbolExtractor {
+   |           --------------- method in this trait
+83 |     fn extract(&self, content: &str, lang: &Language) -> Vec<Symbol>;
+84 |     fn name(&self) -> &'static str;
+   |        ^^^^
+
+warning: struct `ReadRequest` is never constructed
+  --> src/read_types.rs:29:12
+   |
+29 | pub struct ReadRequest {
+   |            ^^^^^^^^^^^
+
+warning: fields `row` and `column` are never read
+  --> src/ruff_cmd.rs:10:5
+   |
+ 9 | struct RuffLocation {
+   |        ------------ fields in this struct
+10 |     row: usize,
+   |     ^^^
+11 |     column: usize,
+   |     ^^^^^^
+   |
+   = note: `RuffLocation` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `message` and `location` are never read
+  --> src/ruff_cmd.rs:23:5
+   |
+21 | struct RuffDiagnostic {
+   |        -------------- fields in this struct
+22 |     code: String,
+23 |     message: String,
+   |     ^^^^^^^
+24 |     location: RuffLocation,
+   |     ^^^^^^^^
+   |
+   = note: `RuffDiagnostic` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: function `project_where_clause` is never used
+   --> src/tracking.rs:274:4
+    |
+274 | fn project_where_clause(scoped: bool) -> &'static str {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `get_summary` and `get_recent` are never used
+    --> src/tracking.rs:925:12
+     |
+ 479 | impl Tracker {
+     | ------------ methods in this implementation
+...
+ 925 |     pub fn get_summary(&self) -> Result<GainSummary> {
+     |            ^^^^^^^^^^^
+...
+1359 |     pub fn get_recent(&self, limit: usize) -> Result<Vec<CommandRecord>> {
+     |            ^^^^^^^^^^
+
+warning: constant `CAP_INVENTORY` is never used
+  --> src/truncate.rs:11:11
+   |
+11 | pub const CAP_INVENTORY: usize = 50;
+   |           ^^^^^^^^^^^^^
+
+warning: function `reduced` is never used
+  --> src/truncate.rs:15:14
+   |
+15 | pub const fn reduced(cap: usize, by: usize) -> usize {
+   |              ^^^^^^^
+
+warning: fields `elapsed` and `durability` are never read
+   --> src/write_core.rs:118:9
+    |
+114 | pub struct WriteStats {
+    |            ---------- fields in this struct
+...
+118 |     pub elapsed: Duration,
+    |         ^^^^^^^
+119 |     pub skipped_unchanged: bool,
+120 |     pub durability: DurabilityMode,
+    |         ^^^^^^^^^^
+    |
+    = note: `WriteStats` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: enum `WriteOperation` is never used
+ --> src/write_semantics.rs:2:10
+  |
+2 | pub enum WriteOperation {
+  |          ^^^^^^^^^^^^^^
+
+warning: enum `WriteClass` is never used
+ --> src/write_semantics.rs:9:10
+  |
+9 | pub enum WriteClass {
+  |          ^^^^^^^^^^
+
+warning: struct `WriteSemantics` is never constructed
+  --> src/write_semantics.rs:15:12
+   |
+15 | pub struct WriteSemantics {
+   |            ^^^^^^^^^^^^^^
+
+warning: function `semantics_for` is never used
+  --> src/write_semantics.rs:22:8
+   |
+22 | pub fn semantics_for(operation: WriteOperation) -> WriteSemantics {
+   |        ^^^^^^^^^^^^^
+
+warning: fields `line` and `column` are never read
+  --> src/golangci_cmd.rs:13:5
+   |
+ 9 | struct Position {
+   |        -------- fields in this struct
+...
+13 |     line: usize,
+   |     ^^^^
+14 |     #[serde(rename = "Column")]
+15 |     column: usize,
+   |     ^^^^^^
+   |
+   = note: `Position` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: static `TEST_DB_LOCK` is never used
+   --> src/memory_layer/cache.rs:607:19
+    |
+607 | pub(crate) static TEST_DB_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    |                   ^^^^^^^^^^^^
+
+warning: fields `file`, `level`, `max_lines`, `mode`, and `verbose` are never read
+  --> src/read_types.rs:30:9
+   |
+29 | pub struct ReadRequest {
+   |            ----------- fields in this struct
+30 |     pub file: PathBuf,
+   |         ^^^^
+31 |     pub level: FilterLevel,
+   |         ^^^^^
+...
+34 |     pub max_lines: Option<usize>,
+   |         ^^^^^^^^^
+35 |     pub line_numbers: bool,
+36 |     pub mode: ReadMode,
+   |         ^^^^
+37 |     pub verbose: u8,
+   |         ^^^^^^^
+   |
+   = note: `ReadRequest` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `get_summary` is never used
+   --> src/tracking.rs:925:12
+    |
+479 | impl Tracker {
+    | ------------ method in this implementation
+...
+925 |     pub fn get_summary(&self) -> Result<GainSummary> {
+    |            ^^^^^^^^^^^
+
+warning: field `elapsed` is never read
+   --> src/write_core.rs:118:9
+    |
+114 | pub struct WriteStats {
+    |            ---------- field in this struct
+...
+118 |     pub elapsed: Duration,
+    |         ^^^^^^^
+    |
+    = note: `WriteStats` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+
+running 1830 tests
+....................................................................................... 87/1830
+....................................................................................... 174/1830
+....................................................................................... 261/1830
+....................................................................................... 348/1830
+....................................................................................... 435/1830
+....................................................................................... 522/1830
+....................................................................................... 609/1830
+....................................................................................... 696/1830
+....................................................................................... 783/1830
+....................................................................................... 870/1830
+....................................................................................... 957/1830
+....................................................................................... 1044/1830
+....................................................................................... 1131/1830
+....................................................................................... 1218/1830
+....................................................................................... 1305/1830
+....................................................................................... 1392/1830
+....................................................................................... 1479/1830
+...............................................................................i......ok
+��
+after
+. 1566/1830
+....................................................................................... 1653/1830
+....................................................................................... 1740/1830
+....................................................................................... 1827/1830
+...
+test result: ok. 1829 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.26s
+
+
+running 8 tests
+........
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+
+running 22 tests
+......................
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s
+
+
+running 6 tests
+......
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 2 tests
+recorded..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+
+running 37 tests
+.....................................
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 14 tests
+..............
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+
+running 11 tests
+...........
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.46s
+
+
+running 7 tests
+.......
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+
+running 6 tests
+......
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+fork-core baseline f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16 and current engine 4ddb11cae1f5910a592b45e90b1bfff51cdbf9b93b244944311fa56748a0c28a verified

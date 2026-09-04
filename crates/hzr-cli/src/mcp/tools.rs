@@ -956,9 +956,9 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
                         "context_epoch": {"type": "string", "minLength": 1, "maxLength": 128, "description": "Advisory read-cost episode; change after compaction, fork or resume. Never suppresses requested content."},
                         "session_id": {"type": "string", "minLength": 1, "maxLength": 256},
                         "outline": {"type": "boolean", "default": false},
-                        "from": {"type": "integer", "minimum": 1, "maximum": 100_000},
-                        "to": {"type": "integer", "minimum": 1, "maximum": 100_000},
-                        "max_lines": {"type": "integer", "minimum": 1, "maximum": 100_000}
+                        "from": {"type": "integer", "minimum": 1, "maximum": 4_194_304},
+                        "to": {"type": "integer", "minimum": 1, "maximum": 4_194_304},
+                        "max_lines": {"type": "integer", "minimum": 1, "maximum": 4_194_304}
                     },
                     "required": [],
                     "anyOf": [{"required": ["path"], "not": {"required": ["paths"]}}, {"required": ["paths"], "not": {"required": ["path"]}}],

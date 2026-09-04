@@ -71,7 +71,7 @@ pub async fn read_files(
         ));
     }
     let advice_reserve = if request.context_epoch.is_some() {
-        512
+        crate::read_cost::ADVICE_RESERVE_BYTES
     } else {
         0
     };
@@ -92,6 +92,7 @@ pub async fn read_files(
             "path metadata exceeds the read budget; reduce the batch",
         ));
     }
+    let mut pending_advice = Vec::new();
     for path in &request.paths {
         let mut args = vec!["read".into(), path.clone(), "--level".into(), "none".into()];
         validate_managed_fork_tool(&args, &cwd)?;
@@ -146,7 +147,7 @@ pub async fn read_files(
         // can expand individual lines, so account for it before launching the fork.
         let available = limit
             .saturating_mul(4)
-            .saturating_sub(base + 128 + advice_reserve);
+            .saturating_sub(base + 128 + advice_reserve * (response.files.len() as u64 + 1));
         let mut used = 0;
         for number in from..=end {
             let line = lines[(number - 1) as usize];
@@ -226,38 +227,77 @@ pub async fn read_files(
             file.next_line = (file.to < total).then_some(file.to + 1);
             file.complete = from == 1 && file.to == total;
         }
-        if let (Some(epoch), Some(session)) = (&request.context_epoch, &request.session_id) {
-            file.cost_advice = Some(
-                state
-                    .read_costs
-                    .observe(
-                        [
-                            &cwd.to_string_lossy(),
-                            &absolute.to_string_lossy(),
-                            session,
-                            epoch,
-                            request.agent.as_deref().unwrap_or("unknown"),
-                        ],
-                        &file,
-                        &lines,
-                    )
-                    .await,
-            );
-        }
         response.files.push(file);
         let encoded = serde_json::to_vec(&response)
             .map_err(|error| ApiError::internal(error.to_string()))?
             .len() as u64;
-        if encoded + 32 > limit * 4 {
+        if encoded + 32 + advice_reserve * response.files.len() as u64 > limit * 4 {
             response.files.pop();
             response.remaining_paths.insert(0, path.clone());
             break;
         }
+        if advice_reserve != 0 {
+            pending_advice.push((
+                absolute.to_string_lossy().into_owned(),
+                crate::read_cost::source_json_bytes(source),
+            ));
+        }
     }
-    response.estimated_tokens = (serde_json::to_vec(&response)
-        .map_err(|error| ApiError::internal(error.to_string()))?
-        .len() as u64)
-        .div_ceil(4);
+    // All paths and fork results have succeeded. Reserve the maximal counter width
+    // while allocating the complete response envelope across the returned files.
+    if let (Some(epoch), Some(session)) = (&request.context_epoch, &request.session_id) {
+        if !response.files.is_empty() {
+            response.estimated_tokens = limit;
+            let wire_bytes = serde_json::to_vec(&response)
+                .expect("read response is serializable")
+                .len() as u64;
+            let file_bytes: u64 = response
+                .files
+                .iter()
+                .map(|file| {
+                    serde_json::to_vec(file)
+                        .expect("read result is serializable")
+                        .len() as u64
+                })
+                .sum();
+            let envelope = wire_bytes.saturating_sub(file_bytes);
+            let count = response.files.len() as u64;
+            for (index, (file, (absolute, source_bytes))) in
+                response.files.iter_mut().zip(pending_advice).enumerate()
+            {
+                let allocated = envelope / count + u64::from((index as u64) < envelope % count);
+                file.cost_advice = Some(
+                    state
+                        .read_costs
+                        .observe(
+                            [
+                                &cwd.to_string_lossy(),
+                                &absolute,
+                                session,
+                                epoch,
+                                request.agent.as_deref().unwrap_or("unknown"),
+                            ],
+                            file,
+                            source_bytes,
+                            allocated,
+                        )
+                        .await,
+                );
+            }
+        }
+    }
+    // Counter width is part of the budget too. The bounded reserved advice makes
+    // finalization infallible: no later batch failure can invalidate coverage.
+    loop {
+        let tokens = (serde_json::to_vec(&response)
+            .expect("read response is serializable")
+            .len() as u64)
+            .div_ceil(4);
+        if tokens == response.estimated_tokens {
+            break;
+        }
+        response.estimated_tokens = tokens;
+    }
     Ok(Json(response))
 }
 

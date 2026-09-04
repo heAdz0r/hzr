@@ -1342,9 +1342,9 @@ async fn read(client: &DaemonClient, workspace: &str, arguments: &Value) -> Resu
             context_epoch: optional_string(arguments, "context_epoch")?,
             cwd: workspace.to_owned(),
             paths,
-            from: optional_positive_u64(arguments, "from", 100_000)?,
-            to: optional_positive_u64(arguments, "to", 100_000)?,
-            max_lines: optional_positive_u64(arguments, "max_lines", 100_000)?,
+            from: optional_positive_u64(arguments, "from", 4_194_304)?,
+            to: optional_positive_u64(arguments, "to", 4_194_304)?,
+            max_lines: optional_positive_u64(arguments, "max_lines", 4_194_304)?,
             max_tokens: optional_positive_u64(arguments, "max_tokens", 48_000)?,
             expected_sha256: optional_string(arguments, "expected_sha256")?,
             agent: Some("mcp".into()),
@@ -1371,7 +1371,7 @@ fn read_fork_request(workspace: &str, arguments: &Value) -> Result<ForkRunApiReq
         ("to", "--to"),
         ("max_lines", "--max-lines"),
     ] {
-        if let Some(value) = optional_positive_u64(arguments, key, 100_000)? {
+        if let Some(value) = optional_positive_u64(arguments, key, 4_194_304)? {
             args.extend([flag.to_owned(), value.to_string()]);
         }
     }

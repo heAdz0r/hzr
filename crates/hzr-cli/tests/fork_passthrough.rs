@@ -126,15 +126,16 @@ fn direct_fork_forwards_termination_to_owned_group_and_waits() {
     let deadline = Instant::now() + Duration::from_secs(7);
     let status = loop {
         if let Some(status) = child.try_wait().expect("valid supervised fork fixture") {
-            break status;
+            break Some(status);
         }
         if Instant::now() >= deadline {
             child.kill().expect("valid supervised fork fixture");
             let _ = child.wait();
-            panic!("owned fork did not finish after termination");
+            break None;
         }
         std::thread::sleep(Duration::from_millis(10));
-    };
+    }
+    .expect("owned fork must finish after termination");
     let mut stderr = String::new();
     child
         .stderr

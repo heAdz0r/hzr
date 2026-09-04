@@ -772,11 +772,27 @@ fn mcp_exact_content_accepts_deletion_empty_files_and_whitespace() {
     let unicode = json!({"operation": "create", "path": "file", "content": "λ".repeat(super::MCP_CREATE_CONTENT_MAX_BYTES / 2 + 1)});
     assert!(super::validate_tool_input("hzr_write", &unicode).is_err());
     assert!(write_fork_request("/work", &unicode).is_err());
-    for value in [0, 100_001] {
+    for value in [0, 4_194_305] {
         let read = json!({"path": "file", "max_lines": value});
         assert!(super::validate_tool_input("hzr_read", &read).is_err());
         assert!(read_fork_request("/work", &read).is_err());
     }
+}
+
+#[test]
+fn read_continuations_above_one_hundred_thousand_lines_are_callable() {
+    let continuation = json!({"path":"large.rs","from":100_001,"to":100_002,"max_lines":2,"expected_sha256":"a".repeat(64)});
+    assert!(super::validate_tool_input("hzr_read", &continuation).is_ok());
+    let request = read_fork_request("/work", &continuation).expect("continuation coordinates");
+    assert!(
+        request
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--from", "100001"])
+    );
+    let last = json!({"path":"large.rs","from":4_194_304,"to":4_194_304});
+    assert!(super::validate_tool_input("hzr_read", &last).is_ok());
+    assert!(read_fork_request("/work", &last).is_ok());
 }
 
 #[test]

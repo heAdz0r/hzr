@@ -20,9 +20,9 @@ mod api;
 pub use api::{
     COMPLETENESS_CONTRACTS, CodecApiRequest, CommandTermination, CompletenessContract,
     ContextPlanApiRequest, ContextPlanApiResponse, ContextWarning, ContextWarningCode,
-    DashboardEconomicAmount, DashboardEstimatedEfficiency, DashboardHelpCommand,
-    DashboardIndexArtifacts, DashboardIndexObservatory, DashboardIndexWatcher,
-    DashboardLifecycleEvent, DashboardLifecycleKind, DashboardLocalActivity,
+    DashboardDeliverySummary, DashboardEconomicAmount, DashboardEstimatedEfficiency,
+    DashboardHelpCommand, DashboardIndexArtifacts, DashboardIndexObservatory,
+    DashboardIndexWatcher, DashboardLifecycleEvent, DashboardLifecycleKind, DashboardLocalActivity,
     DashboardLocalOperation, DashboardMemoryDetail, DashboardMemoryEdge,
     DashboardMemoryObservatory, DashboardMemoryRetrieval, DashboardMemoryTopic,
     DashboardMemoryTopicDetails, DashboardObservability, DashboardObservedUsage,
@@ -40,10 +40,10 @@ pub use api::{
     MemoryImportance, MemoryMutationApiResponse, MemoryPruneApiRequest, MemoryRecallApiRequest,
     MemoryScopeSelector, MemoryStoreApiRequest, MemoryUpdateApiRequest, MemoryWriteScope, MustKeep,
     OperationApiRequest, OperationApiResponse, PolicyEventApiRequest, PolicyEventApiResponse,
-    PrefixEffect, ReadApiRequest, ReadApiResponse, ReadCostAdvice, ReadFileResult, SearchApiRequest,
-    SearchApiResponse, SearchHit, SearchLine, SearchMode, SearchPage, SearchSnippet,
-    SearchStrategy, SemanticReadinessApiRequest, SemanticReadinessApiResponse, UsageApiRequest,
-    UsageApiResponse, completeness_contract,
+    PrefixEffect, ReadApiRequest, ReadApiResponse, ReadCostAdvice, ReadFileResult,
+    SearchApiRequest, SearchApiResponse, SearchHit, SearchLine, SearchMode, SearchPage,
+    SearchSnippet, SearchStrategy, SemanticReadinessApiRequest, SemanticReadinessApiResponse,
+    UsageApiRequest, UsageApiResponse, completeness_contract,
 };
 
 /// Delivery metadata that is independent of the search strategy selected by the daemon.

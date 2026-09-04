@@ -549,7 +549,7 @@ exit 64
         assert!(
             payload["session_roi"]["raw_public_estimate_unavailable_reason"]
                 .as_str()
-                .is_some_and(|reason| reason.contains("opt-in"))
+                .is_some_and(|reason| reason.contains("linked, complete host delivery"))
         );
         assert_eq!(
             payload["session_roi"]["top_commands"][0]["command_family"],

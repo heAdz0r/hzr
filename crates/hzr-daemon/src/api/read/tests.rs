@@ -6,6 +6,57 @@ use hzr_exec::{PINNED_RTK_VERSION, expected_engine_identity};
 use hzr_protocol::ReadApiRequest;
 use std::{fs, os::unix::fs::PermissionsExt};
 
+#[tokio::test]
+async fn failed_batch_does_not_commit_read_episode_coverage() {
+    let (dir, state, mut request) = fixture().await;
+    fs::write(dir.path().join("source.rs"), "first\nsecond\n").expect("source");
+    request.context_epoch = Some("epoch".into());
+    request.session_id = Some("session".into());
+    request.max_lines = Some(1);
+    request.paths.push("missing.rs".into());
+    assert!(
+        read_files(State(state.clone()), Json(request.clone()))
+            .await
+            .is_err()
+    );
+    request.paths.pop();
+    let Json(result) = read_files(State(state.clone()), Json(request))
+        .await
+        .expect("fresh result");
+    let advice = result.files[0].cost_advice.as_ref().expect("advice");
+    assert_eq!(advice.requests, 1);
+    assert_eq!(advice.repeated_source_tokens_estimated, 0);
+    assert_eq!(advice.next_missing_from, Some(2));
+    state
+        .index_maintenance_stop
+        .store(true, std::sync::atomic::Ordering::Release);
+    state.context.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn exact_continuation_crosses_one_hundred_thousand_lines() {
+    let (dir, state, mut request) = fixture().await;
+    fs::write(dir.path().join("source.rs"), "x\n".repeat(100_002)).expect("source");
+    request.from = Some(100_000);
+    request.max_lines = Some(1);
+    let Json(first) = read_files(State(state.clone()), Json(request.clone()))
+        .await
+        .expect("first");
+    assert_eq!(first.files[0].next_line, Some(100_001));
+    request.from = first.files[0].next_line;
+    request.expected_sha256 = Some(first.files[0].source_sha256.clone());
+    let Json(next) = read_files(State(state.clone()), Json(request))
+        .await
+        .expect("continuation");
+    assert_eq!(next.files[0].from, 100_001);
+    assert_eq!(next.files[0].content, "x\n");
+    assert_eq!(next.files[0].next_line, Some(100_002));
+    state
+        .index_maintenance_stop
+        .store(true, std::sync::atomic::Ordering::Release);
+    state.context.shutdown().await.expect("shutdown");
+}
+
 async fn fixture() -> (tempfile::TempDir, AppState, ReadApiRequest) {
     let dir = tempfile::tempdir().expect("fixture");
     let engines = dir.path().join("engines");

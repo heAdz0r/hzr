@@ -502,6 +502,7 @@ pub async fn dashboard(
         memory_observatory,
         index_observatory,
         local_activity: DashboardLocalActivity {
+            explicit_delivery: dashboard_delivery_summary(&activity.explicit_delivery),
             project: selected_project_hash.clone(),
             accounting_policy_version: hzr_core::CURRENT_ACCOUNTING_POLICY_VERSION.into(),
             excluded_legacy_operations: activity.excluded_legacy_operations,
@@ -578,6 +579,18 @@ pub async fn dashboard(
     }))
 }
 
+fn dashboard_delivery_summary(
+    summary: &hzr_core::DeliverySummary,
+) -> hzr_protocol::DashboardDeliverySummary {
+    hzr_protocol::DashboardDeliverySummary {
+        operations: summary.operations,
+        tokens_estimated: summary.tokens_estimated,
+        legacy_unknown_stage_operations: summary.legacy_unknown_stage_operations,
+        coverage: summary.coverage.clone(),
+        complete: summary.complete,
+    }
+}
+
 fn dashboard_session_roi(
     config: &hzr_core::Config,
     session: Option<&(
@@ -604,6 +617,7 @@ fn dashboard_session_roi(
         return response;
     };
     response.session_hash = Some(session_hash.clone());
+    response.explicit_delivery = dashboard_delivery_summary(&efficiency.explicit_delivery);
     response.operations = efficiency.operations;
     response.baseline_tokens_estimated = efficiency.baseline_tokens_estimated;
     response.delivered_tokens_estimated = efficiency.delivered_tokens_estimated;
@@ -643,6 +657,13 @@ fn dashboard_session_roi(
         )
     };
 
+    if !efficiency.explicit_delivery.complete {
+        response.raw_public_estimate_unavailable_reason = Some(
+            "producer reductions cannot be priced without linked, complete host delivery evidence"
+                .into(),
+        );
+        return response;
+    }
     let catalog = load_pricing_catalog(config.billing.pricing_file.as_deref());
     if let Ok(catalog) = &catalog {
         response.catalog_identity = Some(catalog.identity.clone());
@@ -4370,9 +4391,15 @@ mod tests {
         assert_eq!(roi.selected_model, "qwen3.5-plus");
         assert_eq!(roi.receipt_provenance.as_deref(), Some("user_supplied"));
         assert!(!roi.receipt_externally_verified);
+        assert!(roi.raw_public_estimate.is_none());
+        assert!(
+            roi.raw_public_estimate_unavailable_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("linked, complete host delivery"))
+        );
         assert_eq!(
-            roi.raw_public_estimate
-                .expect("preliminary estimate")
+            roi.reported_actual
+                .expect("separate imported claim")
                 .currency,
             "CNY"
         );

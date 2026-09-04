@@ -61,9 +61,11 @@ async fn spilled_output_is_bounded_hash_bound_and_confined_to_its_job() {
         .exec_jobs
         .read_record(&path)
         .expect("completed record");
-    let Some(ExecutionOutcome::Completed { result }) = &mut record.snapshot.outcome else {
-        panic!("expected execution result");
-    };
+    let result = match &mut record.snapshot.outcome {
+        Some(ExecutionOutcome::Completed { result }) => Some(result),
+        _ => None,
+    }
+    .expect("expected completed execution result");
     assert!(matches!(
         result.stdout.content,
         hzr_exec::CapturedContent::Spilled { .. }

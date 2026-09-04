@@ -81,7 +81,8 @@ fn acceptance_gate_native_pretool_modes_preserve_exact_requests_without_retry() 
     .expect("read input");
     for mode in ["observe", "steer", "strict"] {
         for tool in ["Read", "Grep", "Edit", "Write"] {
-            let mut request: Value = serde_json::from_slice(&read).unwrap();
+            let mut request: Value =
+                serde_json::from_slice(&read).expect("valid native hook fixture");
             request["tool_name"] = json!(tool);
             request["tool_input"] = json!({"file_path":"/work/file with spaces.md",
                 "offset":100,"limit":20,"pattern":"a.*b","output_mode":"count",
@@ -90,7 +91,7 @@ fn acceptance_gate_native_pretool_modes_preserve_exact_requests_without_retry() 
                 &config_path,
                 &workspace,
                 mode,
-                &serde_json::to_vec(&request).unwrap(),
+                &serde_json::to_vec(&request).expect("valid native hook fixture"),
             );
             assert!(output.status.success());
             assert!(

@@ -1211,6 +1211,8 @@ pub struct DashboardIndexObservatory {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DashboardLocalActivity {
+    #[serde(default)]
+    pub explicit_delivery: DashboardDeliverySummary,
     pub project: Option<String>,
     pub accounting_policy_version: String,
     pub excluded_legacy_operations: u64,
@@ -1378,6 +1380,8 @@ pub struct DashboardSessionCommand {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DashboardSessionRoi {
+    #[serde(default)]
+    pub explicit_delivery: DashboardDeliverySummary,
     pub session_hash: Option<String>,
     pub operations: u64,
     pub baseline_tokens_estimated: u64,
@@ -1398,6 +1402,28 @@ pub struct DashboardSessionRoi {
     pub receipt_provenance: Option<String>,
     pub receipt_externally_verified: bool,
     pub detail: String,
+}
+
+/// Adapter payload estimates, independent of internal producer reductions.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardDeliverySummary {
+    pub operations: u64,
+    pub tokens_estimated: Option<u64>,
+    pub legacy_unknown_stage_operations: u64,
+    pub coverage: String,
+    pub complete: bool,
+}
+
+impl Default for DashboardDeliverySummary {
+    fn default() -> Self {
+        Self {
+            operations: 0,
+            tokens_estimated: None,
+            legacy_unknown_stage_operations: 0,
+            coverage: "unknown_host_ack_and_unlinked_producers".into(),
+            complete: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

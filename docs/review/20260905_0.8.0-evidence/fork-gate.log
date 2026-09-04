@@ -1,0 +1,705 @@
+fork-core Clippy baseline 3aa3353d899a0fa403f018310b913a5919095d746744b68e6ac0af65ab8fbfc8 verified (141 warnings)
+warning: field `durability` is never read
+   --> src/bin/../write_core.rs:120:9
+    |
+114 | pub struct WriteStats {
+    |            ---------- field in this struct
+...
+120 |     pub durability: DurabilityMode,
+    |         ^^^^^^^^^^
+    |
+    = note: `WriteStats` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `write_str` is never used
+   --> src/bin/../write_core.rs:145:12
+    |
+140 | impl AtomicWriter {
+    | ----------------- method in this implementation
+...
+145 |     pub fn write_str(&self, path: &Path, content: &str) -> Result<WriteStats> {
+    |            ^^^^^^^^^
+
+warning: unused import: `crate::tracking::ParseFailureSummary`
+ --> src/gain.rs:6:5
+  |
+6 | use crate::tracking::ParseFailureSummary; // fix #200
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::SystemTime`
+ --> src/memory_layer/mod.rs:6:5
+  |
+6 | use std::time::SystemTime;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `is_block_explore_entry` and `is_mem_hook_entry`
+   --> src/memory_layer/mod.rs:378:13
+    |
+378 | use hooks::{is_block_explore_entry, is_mem_hook_entry};
+    |             ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `cache_status_event_label` and `compute_gain_stats`
+   --> src/memory_layer/mod.rs:382:5
+    |
+382 |     cache_status_event_label, compute_gain_stats, is_low_signal_candidate, mem_config,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^
+
+warning: unused doc comment
+  --> src/memory_layer/cache.rs:34:1
+   |
+34 | / /// Thread-local DB path override — set by `isolated_db()` in tests.
+35 | | /// Takes priority over `RTK_MEM_DB_PATH` env var, invisible to other threads.
+   | |_-----------------------------------------------------------------------------^
+   |   |
+   |   rustdoc does not generate documentation for macro invocations
+   |
+   = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+   = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `is_available` is never used
+   --> src/ccusage.rs:112:8
+    |
+112 | pub fn is_available() -> bool {
+    |        ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `contains_unattestable_construct` is never used
+   --> src/discover/lexer.rs:453:8
+    |
+453 | pub fn contains_unattestable_construct(cmd: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `contains_substitution` is never used
+   --> src/discover/lexer.rs:466:4
+    |
+466 | fn contains_substitution(cmd: &str) -> bool {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `split_for_permissions` is never used
+   --> src/discover/lexer.rs:522:8
+    |
+522 | pub fn split_for_permissions(cmd: &str) -> Vec<&str> {
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `sequence_index` is never read
+  --> src/discover/provider.rs:21:9
+   |
+11 | pub struct ExtractedCommand {
+   |            ---------------- field in this struct
+...
+21 |     pub sequence_index: usize,
+   |         ^^^^^^^^^^^^^^
+   |
+   = note: `ExtractedCommand` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: function `prefix_contains_rtk_disabled` is never used
+   --> src/discover/registry.rs:451:8
+    |
+451 | pub fn prefix_contains_rtk_disabled(prefix_part: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `cmd_has_rtk_disabled_prefix` is never used
+   --> src/discover/registry.rs:456:8
+    |
+456 | pub fn cmd_has_rtk_disabled_prefix(cmd: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `should_passthrough_run_view` is never used
+   --> src/gh_cmd.rs:713:4
+    |
+713 | fn should_passthrough_run_view(extra_args: &[String]) -> bool {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `line` and `column` are never read
+  --> src/golangci_cmd.rs:13:5
+   |
+ 9 | struct Position {
+   |        -------- fields in this struct
+...
+13 |     line: usize,
+   |     ^^^^
+14 |     #[serde(rename = "Column")]
+15 |     column: usize,
+   |     ^^^^^^
+   |
+   = note: `Position` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `text` is never read
+  --> src/golangci_cmd.rs:23:5
+   |
+19 | struct Issue {
+   |        ----- field in this struct
+...
+23 |     text: String,
+   |     ^^^^
+   |
+   = note: `Issue` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `end_line` is never read
+  --> src/grepai.rs:22:9
+   |
+19 | pub struct GrepaiHit {
+   |            --------- field in this struct
+...
+22 |     pub end_line: usize,
+   |         ^^^^^^^^
+   |
+   = note: `GrepaiHit` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `remove_hash` is never used
+   --> src/integrity.rs:103:8
+    |
+103 | pub fn remove_hash(hook_path: &Path) -> Result<bool> {
+    |        ^^^^^^^^^^^
+
+warning: function `verify_hook` is never used
+   --> src/integrity.rs:127:8
+    |
+127 | pub fn verify_hook() -> Result<IntegrityStatus> {
+    |        ^^^^^^^^^^^
+
+warning: function `runtime_check` is never used
+   --> src/integrity.rs:250:8
+    |
+250 | pub fn runtime_check() -> Result<()> {
+    |        ^^^^^^^^^^^^^
+
+warning: variant `WrongSyntax` is never constructed
+ --> src/learn/detector.rs:8:5
+  |
+5 | pub enum ErrorType {
+  |          --------- variant in this enum
+...
+8 |     WrongSyntax,
+  |     ^^^^^^^^^^^
+  |
+  = note: `ErrorType` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `line` and `message` are never read
+  --> src/lint_cmd.rs:39:5
+   |
+32 | struct PylintDiagnostic {
+   |        ---------------- fields in this struct
+...
+39 |     line: usize,
+   |     ^^^^
+...
+44 |     message: String,
+   |     ^^^^^^^
+   |
+   = note: `PylintDiagnostic` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: constant `CACHE_MAX_PROJECTS` is never used
+  --> src/memory_layer/mod.rs:46:7
+   |
+46 | const CACHE_MAX_PROJECTS: usize = 64;
+   |       ^^^^^^^^^^^^^^^^^^
+
+warning: constant `CACHE_TTL_SECS` is never used
+  --> src/memory_layer/mod.rs:47:7
+   |
+47 | const CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+   |       ^^^^^^^^^^^^^^
+
+warning: constant `MAX_SYMBOLS_PER_FILE` is never used
+  --> src/memory_layer/mod.rs:49:7
+   |
+49 | const MAX_SYMBOLS_PER_FILE: usize = 64; // L3: compile-time fallback (runtime: mem_config())
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `get_dependents` is never used
+   --> src/memory_layer/cache.rs:509:15
+    |
+509 | pub(super) fn get_dependents(project_id: &str, module_name: &str) -> Result<Vec<String>> {
+    |               ^^^^^^^^^^^^^^
+
+warning: function `purge_episodes` is never used
+   --> src/memory_layer/episode.rs:140:8
+    |
+140 | pub fn purge_episodes(retention_days: i64) -> Result<usize> {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `freshness_label` is never used
+   --> src/memory_layer/helpers.rs:195:15
+    |
+195 | pub(super) fn freshness_label(freshness: ArtifactFreshness) -> &'static str {
+    |               ^^^^^^^^^^^^^^^
+
+warning: function `cache_status_event_label` is never used
+   --> src/memory_layer/helpers.rs:204:15
+    |
+204 | pub(super) fn cache_status_event_label(state: &BuildState, refresh: bool) -> &'static str {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `OllamaConfig` is never constructed
+  --> src/memory_layer/ollama.rs:16:12
+   |
+16 | pub struct OllamaConfig {
+   |            ^^^^^^^^^^^^
+
+warning: function `http_post` is never used
+  --> src/memory_layer/ollama.rs:41:4
+   |
+41 | fn http_post(host: &str, path: &str, body: &str, timeout_ms: u64) -> Result<String> {
+   |    ^^^^^^^^^
+
+warning: function `rerank_candidates` is never used
+  --> src/memory_layer/ollama.rs:72:8
+   |
+72 | pub fn rerank_candidates(
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: function `build_rerank_prompt` is never used
+  --> src/memory_layer/ollama.rs:98:4
+   |
+98 | fn build_rerank_prompt(candidates: &[String], task: &str) -> String {
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `parse_rerank_scores` is never used
+   --> src/memory_layer/ollama.rs:114:4
+    |
+114 | fn parse_rerank_scores(json: &str, expected: usize) -> Option<Vec<f32>> {
+    |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `classify_intent_ollama` is never used
+   --> src/memory_layer/ollama.rs:130:8
+    |
+130 | pub fn classify_intent_ollama(task: &str, config: &OllamaConfig) -> Option<(IntentKind, f32)> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `OllamaStatus` is never constructed
+   --> src/memory_layer/ollama.rs:171:12
+    |
+171 | pub struct OllamaStatus {
+    |            ^^^^^^^^^^^^
+
+warning: function `probe_ollama` is never used
+   --> src/memory_layer/ollama.rs:178:8
+    |
+178 | pub fn probe_ollama(config: &OllamaConfig) -> OllamaStatus {
+    |        ^^^^^^^^^^^^
+
+warning: function `apply_stage2` is never used
+   --> src/memory_layer/ranker.rs:163:8
+    |
+163 | pub fn apply_stage2(mut candidates: Vec<Candidate>, rerank_scores: &[f32]) -> Vec<Candidate> {
+    |        ^^^^^^^^^^^^
+
+warning: methods `unwrap`, `tier`, `is_ok`, `map`, and `warnings` are never used
+  --> src/parser/mod.rs:32:12
+   |
+30 | impl<T> ParseResult<T> {
+   | ---------------------- methods in this implementation
+31 |     /// Unwrap the parsed data, panicking on Passthrough
+32 |     pub fn unwrap(self) -> T {
+   |            ^^^^^^
+...
+41 |     pub fn tier(&self) -> u8 {
+   |            ^^^^
+...
+50 |     pub fn is_ok(&self) -> bool {
+   |            ^^^^^
+...
+55 |     pub fn map<U, F>(self, f: F) -> ParseResult<U>
+   |            ^^^
+...
+67 |     pub fn warnings(&self) -> Vec<String> {
+   |            ^^^^^^^^
+
+warning: associated function `parse_with_tier` is never used
+  --> src/parser/mod.rs:88:8
+   |
+76 | pub trait OutputParser: Sized {
+   |           ------------ associated function in this trait
+...
+88 |     fn parse_with_tier(input: &str, max_tier: u8) -> ParseResult<Self::Output> {
+   |        ^^^^^^^^^^^^^^^
+
+warning: enum `ParseError` is never used
+ --> src/parser/error.rs:5:10
+  |
+5 | pub enum ParseError {
+  |          ^^^^^^^^^^
+
+warning: struct `LintResult` is never constructed
+  --> src/parser/types.rs:26:12
+   |
+26 | pub struct LintResult {
+   |            ^^^^^^^^^^
+
+warning: struct `LintIssue` is never constructed
+  --> src/parser/types.rs:36:12
+   |
+36 | pub struct LintIssue {
+   |            ^^^^^^^^^
+
+warning: enum `LintSeverity` is never used
+  --> src/parser/types.rs:46:10
+   |
+46 | pub enum LintSeverity {
+   |          ^^^^^^^^^^^^
+
+warning: struct `BuildOutput` is never constructed
+  --> src/parser/types.rs:71:12
+   |
+71 | pub struct BuildOutput {
+   |            ^^^^^^^^^^^
+
+warning: struct `BundleInfo` is never constructed
+  --> src/parser/types.rs:81:12
+   |
+81 | pub struct BundleInfo {
+   |            ^^^^^^^^^^
+
+warning: struct `RouteInfo` is never constructed
+  --> src/parser/types.rs:88:12
+   |
+88 | pub struct RouteInfo {
+   |            ^^^^^^^^^
+
+warning: struct `GitResult` is never constructed
+  --> src/parser/types.rs:96:12
+   |
+96 | pub struct GitResult {
+   |            ^^^^^^^^^
+
+warning: struct `GitCommit` is never constructed
+   --> src/parser/types.rs:105:12
+    |
+105 | pub struct GitCommit {
+    |            ^^^^^^^^^
+
+warning: struct `GenericOutput` is never constructed
+   --> src/parser/types.rs:114:12
+    |
+114 | pub struct GenericOutput {
+    |            ^^^^^^^^^^^^^
+
+warning: field `status` is never read
+  --> src/playwright_cmd.rs:56:5
+   |
+54 | struct PlaywrightExecution {
+   |        ------------------- field in this struct
+55 |     #[serde(rename = "status")]
+56 |     status: String,
+   |     ^^^^^^
+   |
+   = note: `PlaywrightExecution` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `status` and `duration` are never read
+  --> src/playwright_cmd.rs:64:5
+   |
+62 | struct PlaywrightAttempt {
+   |        ----------------- fields in this struct
+63 |     #[serde(rename = "status")]
+64 |     status: String,
+   |     ^^^^^^
+...
+68 |     duration: f64,
+   |     ^^^^^^^^
+   |
+   = note: `PlaywrightAttempt` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variant `Import` is never constructed
+  --> src/read_symbols.rs:22:5
+   |
+12 | pub enum SymbolKind {
+   |          ---------- variant in this enum
+...
+22 |     Import,
+   |     ^^^^^^
+   |
+   = note: `SymbolKind` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `name` is never used
+  --> src/read_symbols.rs:84:8
+   |
+82 | pub trait SymbolExtractor {
+   |           --------------- method in this trait
+83 |     fn extract(&self, content: &str, lang: &Language) -> Vec<Symbol>;
+84 |     fn name(&self) -> &'static str;
+   |        ^^^^
+
+warning: struct `ReadRequest` is never constructed
+  --> src/read_types.rs:29:12
+   |
+29 | pub struct ReadRequest {
+   |            ^^^^^^^^^^^
+
+warning: fields `row` and `column` are never read
+  --> src/ruff_cmd.rs:10:5
+   |
+ 9 | struct RuffLocation {
+   |        ------------ fields in this struct
+10 |     row: usize,
+   |     ^^^
+11 |     column: usize,
+   |     ^^^^^^
+   |
+   = note: `RuffLocation` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `message` and `location` are never read
+  --> src/ruff_cmd.rs:23:5
+   |
+21 | struct RuffDiagnostic {
+   |        -------------- fields in this struct
+22 |     code: String,
+23 |     message: String,
+   |     ^^^^^^^
+24 |     location: RuffLocation,
+   |     ^^^^^^^^
+   |
+   = note: `RuffDiagnostic` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: function `project_where_clause` is never used
+   --> src/tracking.rs:274:4
+    |
+274 | fn project_where_clause(scoped: bool) -> &'static str {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `get_summary` and `get_recent` are never used
+    --> src/tracking.rs:925:12
+     |
+ 479 | impl Tracker {
+     | ------------ methods in this implementation
+...
+ 925 |     pub fn get_summary(&self) -> Result<GainSummary> {
+     |            ^^^^^^^^^^^
+...
+1359 |     pub fn get_recent(&self, limit: usize) -> Result<Vec<CommandRecord>> {
+     |            ^^^^^^^^^^
+
+warning: constant `CAP_INVENTORY` is never used
+  --> src/truncate.rs:11:11
+   |
+11 | pub const CAP_INVENTORY: usize = 50;
+   |           ^^^^^^^^^^^^^
+
+warning: function `reduced` is never used
+  --> src/truncate.rs:15:14
+   |
+15 | pub const fn reduced(cap: usize, by: usize) -> usize {
+   |              ^^^^^^^
+
+warning: fields `elapsed` and `durability` are never read
+   --> src/write_core.rs:118:9
+    |
+114 | pub struct WriteStats {
+    |            ---------- fields in this struct
+...
+118 |     pub elapsed: Duration,
+    |         ^^^^^^^
+119 |     pub skipped_unchanged: bool,
+120 |     pub durability: DurabilityMode,
+    |         ^^^^^^^^^^
+    |
+    = note: `WriteStats` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: enum `WriteOperation` is never used
+ --> src/write_semantics.rs:2:10
+  |
+2 | pub enum WriteOperation {
+  |          ^^^^^^^^^^^^^^
+
+warning: enum `WriteClass` is never used
+ --> src/write_semantics.rs:9:10
+  |
+9 | pub enum WriteClass {
+  |          ^^^^^^^^^^
+
+warning: struct `WriteSemantics` is never constructed
+  --> src/write_semantics.rs:15:12
+   |
+15 | pub struct WriteSemantics {
+   |            ^^^^^^^^^^^^^^
+
+warning: function `semantics_for` is never used
+  --> src/write_semantics.rs:22:8
+   |
+22 | pub fn semantics_for(operation: WriteOperation) -> WriteSemantics {
+   |        ^^^^^^^^^^^^^
+
+warning: fields `line` and `column` are never read
+  --> src/golangci_cmd.rs:13:5
+   |
+ 9 | struct Position {
+   |        -------- fields in this struct
+...
+13 |     line: usize,
+   |     ^^^^
+14 |     #[serde(rename = "Column")]
+15 |     column: usize,
+   |     ^^^^^^
+   |
+   = note: `Position` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: static `TEST_DB_LOCK` is never used
+   --> src/memory_layer/cache.rs:607:19
+    |
+607 | pub(crate) static TEST_DB_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    |                   ^^^^^^^^^^^^
+
+warning: fields `file`, `level`, `max_lines`, `mode`, and `verbose` are never read
+  --> src/read_types.rs:30:9
+   |
+29 | pub struct ReadRequest {
+   |            ----------- fields in this struct
+30 |     pub file: PathBuf,
+   |         ^^^^
+31 |     pub level: FilterLevel,
+   |         ^^^^^
+...
+34 |     pub max_lines: Option<usize>,
+   |         ^^^^^^^^^
+35 |     pub line_numbers: bool,
+36 |     pub mode: ReadMode,
+   |         ^^^^
+37 |     pub verbose: u8,
+   |         ^^^^^^^
+   |
+   = note: `ReadRequest` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `get_summary` is never used
+   --> src/tracking.rs:925:12
+    |
+479 | impl Tracker {
+    | ------------ method in this implementation
+...
+925 |     pub fn get_summary(&self) -> Result<GainSummary> {
+    |            ^^^^^^^^^^^
+
+warning: field `elapsed` is never read
+   --> src/write_core.rs:118:9
+    |
+114 | pub struct WriteStats {
+    |            ---------- field in this struct
+...
+118 |     pub elapsed: Duration,
+    |         ^^^^^^^
+    |
+    = note: `WriteStats` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+
+running 1830 tests
+....................................................................................... 87/1830
+....................................................................................... 174/1830
+....................................................................................... 261/1830
+....................................................................................... 348/1830
+....................................................................................... 435/1830
+....................................................................................... 522/1830
+....................................................................................... 609/1830
+....................................................................................... 696/1830
+....................................................................................... 783/1830
+....................................................................................... 870/1830
+....................................................................................... 957/1830
+....................................................................................... 1044/1830
+....................................................................................... 1131/1830
+....................................................................................... 1218/1830
+....................................................................................... 1305/1830
+....................................................................................... 1392/1830
+....................................................................................... 1479/1830
+...............................................................................i......ok
+��
+after
+. 1566/1830
+....................................................................................... 1653/1830
+....................................................................................... 1740/1830
+....................................................................................... 1827/1830
+...
+test result: ok. 1829 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.93s
+
+
+running 8 tests
+........
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+
+running 22 tests
+......................
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+
+running 6 tests
+......
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 2 tests
+recorded..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+
+running 37 tests
+.....................................
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 14 tests
+..............
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+
+running 11 tests
+...........
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.53s
+
+
+running 7 tests
+.......
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+
+running 6 tests
+......
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+fork-core baseline f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16 and current engine 4ddb11cae1f5910a592b45e90b1bfff51cdbf9b93b244944311fa56748a0c28a verified

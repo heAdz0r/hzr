@@ -126,6 +126,7 @@ struct ReportOptions {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct StatsReport {
+    pub explicit_delivery: hzr_core::DeliverySummary,
     pub hzr_version: &'static str,
     pub scope: String,
     pub direct_savings: DirectSavings,
@@ -365,7 +366,14 @@ pub async fn collect(
             recovery: Some(recovery),
         },
     );
-    let catalog = if report.host_visible_savings.complete {
+    report.explicit_delivery = snapshot.explicit_delivery;
+    let catalog = if !report.explicit_delivery.complete {
+        report.raw_public_estimate_unavailable_reason = Some(
+            "producer reductions cannot be priced without linked, complete host delivery evidence"
+                .into(),
+        );
+        None
+    } else if report.host_visible_savings.complete {
         if config.billing.public_estimate_enabled {
             match load_pricing_catalog(config.billing.pricing_file.as_deref()) {
                 Ok(catalog) => Some(catalog),
@@ -733,6 +741,7 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
     });
 
     StatsReport {
+        explicit_delivery: hzr_core::DeliverySummary::default(),
         hzr_version: env!("CARGO_PKG_VERSION"),
         scope,
         direct_savings: DirectSavings {

@@ -480,7 +480,7 @@ fn write_local_reduction(
     writeln!(
         output,
         "│  {:<22}{:<22}{:<24}  │",
-        "RAW BEFORE (UPPER)", "RAW AFTER (UPPER)", "OPERATIONS"
+        "PRODUCER INPUT", "PRODUCER OUTPUT", "PRODUCER OPERATIONS"
     )?;
     writeln!(
         output,
@@ -492,7 +492,7 @@ fn write_local_reduction(
     writeln!(
         output,
         "│  {:<22}{:<22}{:<24}  │",
-        "HOST-VISIBLE BEFORE", "HOST-VISIBLE AFTER", "UNCAPPED HOST OPS"
+        "MODELED CAPPED INPUT", "MODELED CAPPED OUTPUT", "UNCAPPED HOST OPS"
     )?;
     writeln!(
         output,
@@ -1038,10 +1038,19 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
             "├─ RERUN TAX: 0 measured repeats of an already-filtered command (measured, not assumed)"
         )?;
     }
+    writeln!(
+        output,
+        "├─ explicit adapter delivery: {} token(s), {} record(s); host receipt/linkage unproven",
+        report
+            .explicit_delivery
+            .tokens_estimated
+            .map_or_else(|| "unknown".into(), format_count),
+        format_count(report.explicit_delivery.operations)
+    )?;
     if report.stage_exclusion.operations > 0 {
         writeln!(
             output,
-            "├─ {} further operation(s) / {} delivered token(s) are delivery or control-plane",
+            "├─ {} further operation(s) / {} estimated token(s) have non-producer stages",
             format_count(report.stage_exclusion.operations),
             format_count(report.stage_exclusion.delivered_tokens_estimated)
         )?;
@@ -1359,6 +1368,7 @@ mod tests {
     fn report(usage: LedgerSummary, commands: Vec<CommandSavings>) -> StatsReport {
         let by_command_total = commands.len();
         StatsReport {
+            explicit_delivery: hzr_core::DeliverySummary::default(),
             hzr_version: "0.4.6",
             scope: "global lifetime".into(),
             direct_savings: DirectSavings {
@@ -1676,10 +1686,10 @@ mod tests {
             .expect("ratio line");
         assert!(ratio_line.contains("NET TOKEN CHANGE"));
         // And the inputs it derives from appear above it.
-        assert!(rendered.contains("RAW BEFORE (UPPER)"));
-        assert!(rendered.contains("RAW AFTER (UPPER)"));
-        assert!(rendered.contains("HOST-VISIBLE BEFORE"));
-        assert!(rendered.contains("HOST-VISIBLE AFTER"));
+        assert!(rendered.contains("PRODUCER INPUT"));
+        assert!(rendered.contains("PRODUCER OUTPUT"));
+        assert!(rendered.contains("MODELED CAPPED INPUT"));
+        assert!(rendered.contains("MODELED CAPPED OUTPUT"));
     }
 
     #[test]
@@ -2105,7 +2115,9 @@ mod tests {
         let rendered = render(&report);
 
         assert!(rendered.contains("205"));
-        assert!(rendered.contains("delivery or control-plane"));
+        assert!(rendered.contains("non-producer stages"));
+        assert!(rendered.contains("explicit adapter delivery: unknown"));
+        assert!(rendered.contains("host receipt/linkage unproven"));
         assert!(rendered.contains("double-count"));
     }
 

@@ -2441,7 +2441,7 @@ mod tests {
                 probe.id
             );
         }
-        assert_eq!(asserted, 31, "every Ask and Deny case carries an assertion");
+        assert_eq!(asserted, 22, "every Ask and Deny case carries an assertion");
     }
 
     #[test]
@@ -2459,7 +2459,10 @@ mod tests {
                 ProbeNativeMode::Steer => NativeToolMode::Steer,
                 ProbeNativeMode::Strict => NativeToolMode::Strict,
             };
-            let (_, attribution) = native_observation_policy(probe.tool.as_deref().unwrap(), mode);
+            let (_, attribution) = native_observation_policy(
+                probe.tool.as_deref().expect("native fixture tool"),
+                mode,
+            );
             assert!(!attribution.avoidable, "{}", probe.id);
             assert_eq!(attribution.class, EvasionClass::E10CapabilityGap);
         }

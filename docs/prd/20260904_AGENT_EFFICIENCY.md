@@ -1,7 +1,7 @@
 # HZR: task-level agent efficiency and host interception PRD
 
 Date: 2026-09-04. Source baseline: fbf204d48704160407e3f06035ac32b9cf0bc67a, workspace and installed HZR 0.7.1.
-Status: approved for P0 and P1 implementation by the user after the fresh audit; P2 deferred to other agents. Separate visualizer UI implementation is also authorized.
+Status: P0/P1 and visualizer implementation approved after the fresh audit. On 2026-09-05 the user also approved including the already implemented P2 branch `feat/prd-p2-agent-efficiency` (`9016b29`) in version 0.8.0. Historical findings below describe the audit baseline; implementation and final gates are tracked separately.
 Authoritative evidence: current source, new local probes, current official host documentation, and the attached seven-day observed-usage audit. Previous PRDs were not used.
 
 ## 1. Product decision
@@ -547,7 +547,7 @@ Required regressions include:
 - Stats fixed windows, zero observations, orphan receipt isolation and deleted workspaces.
 - Dirty worktrees and preservation of unrelated user configuration.
 
-Current validation results and limitations are recorded in ../review/20260904_195133_Verification.md. A red complete gate remains red even if the failure is explained or a targeted isolated rerun passes.
+The pre-change baseline is recorded in ../review/20260904_195133_Verification.md. Integrated 0.8.0 implementation status, passing source gates and remaining rollout limits are recorded in [the release verification report](../review/20260905_0.8.0-Verification.md). A red complete gate remains red even if the failure is explained or a targeted isolated rerun passes.
 
 ## 10. End-to-end evaluation protocol
 
@@ -597,7 +597,7 @@ Per-transform rollback must retain the same permission boundary and return exact
 
 Distribution includes canonical contracts and generated instruction surfaces, CLI/MCP schema registrations, managed agent bridge, bundled engine identities, platform smoke tests and checksums. Update only affected release surfaces. Do not edit immutable import manifests to hide engine changes.
 
-The user approved P0 and P1 implementation after this audit, and separately approved immediate visualizer UI work. P2 remains deferred. No release, cleanup of existing processes, global configuration migration or paid model benchmark is included. UI scope and validation are recorded in ../review/20260904_UI-Design.md.
+The user approved P0 and P1 implementation after this audit, and separately approved immediate visualizer UI work. On September 5, the user also approved including the already implemented P2 branch `feat/prd-p2-agent-efficiency` (`9016b29`) in 0.8.0. This includes prefix-effect-aware placement, concise generation defaults, instruction tiers and explicit uncalibrated ranking metadata; it does not establish real deferred server-catalog loading or calibrated retrieval quality. Source preparation and isolated bundle verification are included. Publication, cleanup of existing processes, global configuration migration and paid model benchmarks remain separate. UI scope and validation are recorded in ../review/20260904_UI-Design.md.
 
 ## 13. Current primary references
 

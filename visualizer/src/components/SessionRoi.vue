@@ -17,9 +17,10 @@ defineProps<{ roi: DashboardSessionRoi }>();
     </div>
     <div v-if="roi.operations" class="session-token-line">
       <div><span>Recorded operations</span><strong>{{ formatCount(roi.operations) }}</strong></div>
-      <div><span>Estimated output flow</span><strong>{{ formatCount(roi.baseline_tokens_estimated) }} → {{ formatCount(roi.delivered_tokens_estimated) }}</strong></div>
+      <div><span>Producer output estimates</span><strong>{{ formatCount(roi.baseline_tokens_estimated) }} → {{ formatCount(roi.delivered_tokens_estimated) }}</strong></div>
       <div><span>Estimated net reduction</span><strong :class="{ 'value-negative': roi.net_avoided_tokens_estimated < 0 }">{{ formatSignedCount(roi.net_avoided_tokens_estimated) }}</strong></div>
     </div>
+    <p>Explicit adapter delivery: <strong>{{ roi.explicit_delivery?.tokens_estimated == null ? "Unknown" : formatCount(roi.explicit_delivery.tokens_estimated) + " estimated tokens" }}</strong>. Separate from producer output; complete host receipt and causal linkage are unproven.</p>
     <div class="session-command-list">
       <strong>Top command families · output estimates</strong>
       <ol v-if="roi.top_commands.length">

@@ -153,7 +153,7 @@ function routeDetail(operation: DashboardLocalOperation): string {
             <AppIcon name="folder" :size="13" />private scope
           </span>
           <strong>{{ operation.operation }}</strong>
-          <div class="output-bars" :aria-label="`${operation.baseline_tokens_estimated} raw baseline tokens and ${operation.delivered_tokens_estimated} delivered tokens`">
+          <div class="output-bars" :aria-label="`${operation.baseline_tokens_estimated} producer baseline tokens and ${operation.delivered_tokens_estimated} produced tokens`">
             <span class="baseline-bar" :style="{ width: width(operation.baseline_tokens_estimated) }"></span>
             <span class="delivered-bar" :style="{ width: width(operation.delivered_tokens_estimated) }"></span>
           </div>
@@ -180,7 +180,7 @@ function routeDetail(operation: DashboardLocalOperation): string {
             <div><dt>Route</dt><dd>{{ routeDetail(operation) }}</dd></div>
             <div><dt>Latency</dt><dd>{{ operation.execution_ms }}ms</dd></div>
             <div><dt>Baseline estimate</dt><dd>{{ formatCount(operation.baseline_tokens_estimated) }} tokens</dd></div>
-            <div><dt>Delivered estimate</dt><dd>{{ formatCount(operation.delivered_tokens_estimated) }} tokens</dd></div>
+            <div><dt>Produced estimate</dt><dd>{{ formatCount(operation.delivered_tokens_estimated) }} tokens</dd></div>
             <div><dt>Credited delta</dt><dd>{{ formatSignedCount(creditedSaving(operation)) }} tokens</dd></div>
             <div class="wide"><dt>Measurement</dt><dd><code>{{ measurement }}</code></dd></div>
           </dl>

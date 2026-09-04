@@ -123,7 +123,8 @@ mod tests {
     fn claude_argument_rewrite_does_not_grant_permissions() {
         let output = json!({"hookSpecificOutput":{"hookEventName":"PreToolUse",
             "permissionDecision":"allow","updatedInput": input()["tool_input"]}});
-        let adapted = adapt_response(HookHost::Claude, &input(), output, false).unwrap();
+        let adapted = adapt_response(HookHost::Claude, &input(), output, false)
+            .expect("supported host response fixture");
         assert!(
             adapted["hookSpecificOutput"]
                 .get("permissionDecision")
@@ -141,7 +142,8 @@ mod tests {
         assert!(adapt_response(HookHost::Codex, &input(), output.clone(), false).is_none());
         assert!(adapt_response(HookHost::Codex, &input(), output, true).is_some());
         let ask = json!({"hookSpecificOutput":{"permissionDecision":"ask","updatedInput":{}}});
-        let result = adapt_response(HookHost::Codex, &input(), ask, true).unwrap();
+        let result = adapt_response(HookHost::Codex, &input(), ask, true)
+            .expect("supported host response fixture");
         assert_eq!(result["hookSpecificOutput"]["permissionDecision"], "deny");
         assert!(result["hookSpecificOutput"].get("updatedInput").is_none());
     }
@@ -179,7 +181,8 @@ mod tests {
         for host in [HookHost::Claude, HookHost::Codex] {
             let denial = json!({"hookSpecificOutput":{"hookEventName":"PreToolUse",
                 "permissionDecision":"deny","permissionDecisionReason":"outside allowed workspace"}});
-            let result = adapt_response(host, &input(), denial.clone(), false).unwrap();
+            let result = adapt_response(host, &input(), denial.clone(), false)
+                .expect("supported host response fixture");
             assert_eq!(result, denial);
         }
     }

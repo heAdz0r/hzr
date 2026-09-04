@@ -166,7 +166,9 @@ impl FleetStatsSnapshot {
             host_coverage: "unknown; observed ledger rows are not all host operations".into(),
             measurement: "estimated_utf8_bytes_div_4_v1; not provider billing".into(),
             producer_scope: "internal_transport only; never add to explicit delivery".into(),
-            delivery_coverage: "unknown_host_ack_and_unlinked_producers; zero delivery records mean unknown total".into(),
+            delivery_coverage:
+                "unknown_host_ack_and_unlinked_producers; zero delivery records mean unknown total"
+                    .into(),
             economic_claim_ready: false,
             economic_claim_blockers: vec![
                 "complete host delivery and input coverage are unproven".into(),

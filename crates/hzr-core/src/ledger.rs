@@ -26,8 +26,8 @@ use crate::billing::{
     receipt_payload_hash, validate_receipt, validate_receipt_observed_at,
 };
 
-mod fleet;
 mod delivery;
+mod fleet;
 pub use delivery::DeliverySummary;
 pub use fleet::{
     FleetDimension, FleetMetrics, FleetOperationGroup, FleetProject, FleetStatsQuery,
@@ -345,6 +345,8 @@ pub struct EfficiencyOperationSummary {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProjectActivitySummary {
+    #[serde(default)]
+    pub explicit_delivery: DeliverySummary,
     pub operations: u64,
     pub optimized_operations: u64,
     pub raw_operations: u64,
@@ -2371,7 +2373,12 @@ impl Ledger {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(LedgerError::Database)?;
-        summary.explicit_delivery = self.delivery_summary_for_scope(project_hash, None, false, Some((session_hash, legacy_session_hash)))?;
+        summary.explicit_delivery = self.delivery_summary_for_scope(
+            project_hash,
+            None,
+            false,
+            Some((session_hash, legacy_session_hash)),
+        )?;
         summary.total_observed_operations = total_observed;
         summary.stage_excluded_operations = stage_excluded;
         summary.excluded_legacy_operations = excluded_legacy;
@@ -3928,6 +3935,7 @@ impl Ledger {
                 params![project_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
                 |row| {
                     Ok(ProjectActivitySummary {
+                        explicit_delivery: DeliverySummary::default(),
                         operations: row.get(0)?,
                         optimized_operations: 0,
                         raw_operations: 0,
@@ -3948,6 +3956,8 @@ impl Ledger {
                 },
             )
             .map_err(LedgerError::Database)?;
+        summary.explicit_delivery =
+            self.delivery_summary_for_scope(Some(&project_hash), None, false, None)?;
         summary.unscoped_operations = self
             .connection
             .query_row(
@@ -4737,9 +4747,9 @@ mod tests {
                     timestamp, original_cmd, rtk_cmd, input_tokens, output_tokens,
                     saved_tokens, savings_pct, exec_time_ms, project_path, channel,
                     measurement, route, operation_kind, producer_version,
-                    accounting_policy_version
+                    accounting_policy_version, accounting_stage
                  ) VALUES (datetime(?1, 'unixepoch'), '', ?2, ?3, ?3, 0, 0, 0, '',
-                           'hook_cli', 'estimated', ?4, ?5, 'test', ?6)",
+                           'hook_cli', 'estimated', ?4, ?5, 'test', ?6, 'internal_transport')",
                 params![
                     timestamp,
                     command,
@@ -5196,9 +5206,23 @@ mod tests {
             let compatibility = ledger
                 .efficiency_summary_scoped(None, None, true)
                 .expect("compatibility aggregates");
-            assert_eq!(compatibility.operations, 1);
-            assert_eq!(compatibility.baseline_tokens_estimated, 25);
-            assert_eq!(compatibility.delivered_tokens_estimated, 25);
+            // Privacy migration preserves history, but cannot invent its accounting stage.
+            assert_eq!(compatibility.operations, 0);
+            assert_eq!(compatibility.baseline_tokens_estimated, 0);
+            assert_eq!(compatibility.delivered_tokens_estimated, 0);
+            assert_eq!(compatibility.stage_excluded_operations, 1);
+            assert_eq!(compatibility.stage_excluded_delivered_tokens_estimated, 25);
+            let delivery = ledger
+                .delivery_summary(
+                    StatsQuery {
+                        include_legacy_versions: true,
+                        ..StatsQuery::default()
+                    },
+                    None,
+                )
+                .expect("historical stage evidence");
+            assert_eq!(delivery.legacy_unknown_stage_operations, 1);
+            assert_eq!(delivery.tokens_estimated, None);
             let current = ledger.efficiency_summary().expect("current aggregates");
             assert_eq!(current.operations, 0);
             assert_eq!(current.excluded_legacy_operations, 1);
@@ -5341,10 +5365,10 @@ mod tests {
             evasion: None,
         };
         let final_delivery = AccountingAttribution {
-            stage: AccountingStage::FinalDelivery,
+            stage: AccountingStage::StandaloneDelivery,
             ..internal
         };
-        for (baseline, delivered, detail) in [(100, 20, &internal), (20, 20, &final_delivery)] {
+        for (baseline, delivered, detail) in [(100, 20, &internal), (30, 30, &final_delivery)] {
             ledger
                 .record_operation_attributed_with_detail(
                     "hzr read",
@@ -5419,7 +5443,8 @@ mod tests {
             summary
                 .by_mode
                 .iter()
-                .any(|mode| mode.stage == AccountingStage::FinalDelivery && mode.operations == 1)
+                .any(|mode| mode.stage == AccountingStage::StandaloneDelivery
+                    && mode.operations == 1)
         );
         let bypass = ledger.bypass_summary().expect("bypass summary");
         assert_eq!(bypass.lifetime.operations, 0);
@@ -5433,7 +5458,36 @@ mod tests {
         // The delivery and control-plane rows are excluded from the ratio, not from existence.
         // Counting them is what lets the two panels be reconciled instead of merely disagreeing.
         assert_eq!(summary.stage_excluded_operations, 2);
-        assert_eq!(summary.stage_excluded_delivered_tokens_estimated, 30);
+        assert_eq!(summary.stage_excluded_delivered_tokens_estimated, 40);
+        assert_eq!(project.explicit_delivery.tokens_estimated, Some(30));
+        let stats = ledger
+            .stats_snapshot(StatsQuery::default())
+            .expect("stats snapshot");
+        assert_eq!(stats.efficiency.baseline_tokens_estimated, 100);
+        assert_eq!(stats.efficiency.delivered_tokens_estimated, 20);
+        assert_eq!(stats.explicit_delivery.operations, 1);
+        assert_eq!(stats.explicit_delivery.tokens_estimated, Some(30));
+        assert!(!stats.explicit_delivery.complete);
+        let session = ledger
+            .session_efficiency_summary("session")
+            .expect("session");
+        assert_eq!(session.baseline_tokens_estimated, 100);
+        assert_eq!(session.delivered_tokens_estimated, 20);
+        assert_eq!(session.explicit_delivery.tokens_estimated, Some(30));
+        let fleet = Ledger::fleet_stats_read_only(
+            &directory.path().join("ledger.sqlite"),
+            super::FleetStatsQuery {
+                since_unix_seconds: 0,
+                until_unix_seconds: 4_000_000_000,
+                project_id: None,
+                include_legacy_versions: false,
+            },
+        )
+        .expect("fleet");
+        assert_eq!(fleet.totals.baseline_tokens_estimated, 100);
+        assert_eq!(fleet.totals.delivered_tokens_estimated, 20);
+        assert_eq!(fleet.totals.explicit_delivery_tokens_estimated, 30);
+        assert!(!fleet.economic_claim_ready);
     }
 
     /// The re-run tax must be bounded, de-duplicated, and blind to unfiltered repeats.
@@ -5994,10 +6048,10 @@ mod tests {
         ledger
             .connection
             .execute(
-                "UPDATE commands SET accounting_policy_version = ?1",
+                "UPDATE commands SET accounting_policy_version = ?1, accounting_stage = 'internal_transport'",
                 [CURRENT_ACCOUNTING_POLICY_VERSION],
             )
-            .expect("current-policy scope fixture");
+            .expect("current-policy producer scope fixture");
 
         let activity = ledger
             .project_activity("/work/a")
@@ -6050,6 +6104,13 @@ mod tests {
                     ('2026-08-01T10:03:00Z', 'cat b', 'read', 500, 5, 495, 99.0, 7, '/work/b');",
             )
             .expect("summary fixture");
+        ledger
+            .connection
+            .execute(
+                "UPDATE commands SET accounting_stage = 'internal_transport'",
+                [],
+            )
+            .expect("known producer stages for the project-scope fixture");
         drop(ledger);
         let ledger = Ledger::open(&path).expect("scrubbed ledger");
 
@@ -6142,8 +6203,30 @@ mod tests {
         assert_eq!(second.imported_commands, 0);
         assert_eq!(second.imported_parse_failures, 0);
         assert!(!second.changed);
-        assert_eq!(summary.operations, 2);
-        assert_eq!(summary.net_avoided_tokens_estimated, 60);
+        // Imported rows survive, but their missing stage is not evidence of production.
+        assert_eq!(summary.operations, 0);
+        assert_eq!(summary.net_avoided_tokens_estimated, 0);
+        assert_eq!(summary.stage_excluded_operations, 2);
+        let delivery = ledger
+            .delivery_summary(
+                StatsQuery {
+                    include_legacy_versions: true,
+                    ..StatsQuery::default()
+                },
+                None,
+            )
+            .expect("imported stage evidence");
+        assert_eq!(delivery.legacy_unknown_stage_operations, 2);
+        assert_eq!(delivery.tokens_estimated, None);
+        let retained: (u64, i64) = ledger
+            .connection
+            .query_row(
+                "SELECT COUNT(*), SUM(input_tokens - output_tokens) FROM commands",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("retained imported aggregates");
+        assert_eq!(retained, (2, 60));
         assert_eq!(
             std::fs::read(&source_path).expect("source after migration"),
             source_before,
