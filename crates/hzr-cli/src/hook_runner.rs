@@ -23,7 +23,7 @@ use hzr_protocol::{
     AccountingOperationMode, AccountingRoute, AccountingStage, ContextPlanApiRequest,
     EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, ExecApiRequest,
     FidelityValidation, FilterPlacement, HOST_EXECUTION_GRANT_ENV, HostExecutionGrant,
-    HostPermissionMode, OperationApiRequest, PolicyDecision, PolicyEventApiRequest,
+    HostPermissionMode, OperationApiRequest, PolicyDecision, PolicyEventApiRequest, PrefixEffect,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -287,7 +287,9 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     // Fidelity attribution is authoritative when present; otherwise the daemon's classification
     // of this exact command is what the recording process needs.
     let evasion = fidelity_evasion.or(managed_evasion);
-    let decision = apply_filter_placement(config, input, decision);
+    // A command rewrite shapes the one tool result this call is about to append; it never
+    // rewrites content the provider already cached, so it is append-class at every turn position.
+    let decision = apply_filter_placement(config, input, PrefixEffect::Append, decision);
     let decision = honor_host_permission_mode(input, decision);
     let decision = attach_hook_evasion(raw, decision, evasion.as_ref());
     let decision = attach_policy_feedback(config, input, decision);
@@ -871,20 +873,25 @@ fn host_grants_execution(input: &Value) -> bool {
         .is_some_and(|mode| mode.eq_ignore_ascii_case("bypassPermissions"))
 }
 
-/// Decline a mid-turn filter when policy says the request prefix must stay put.
+/// Decline a mid-turn *history mutation* when policy says the request prefix must stay put.
 ///
 /// Delivered bytes and billed input are different axes. A harness that caches the request prefix
-/// bills a cached read far below a fresh one, and a filter firing mid-turn rewrites content the
-/// prefix already carries — invalidating everything after it. So a route can cut delivered bytes
+/// bills a cached read far below a fresh one, and a transform that rewrites content the prefix
+/// already carries invalidates everything cached after it. So a route can cut delivered bytes
 /// hard and still raise the provider's billed input.
 ///
-/// Under `FilterPlacement::Anywhere` — the shipped default — nothing changes. Under
-/// `TurnBoundary`, only the first operation of a turn is filtered and the rest run raw, tracked,
-/// with the deferral counted so the reduction it costs is visible rather than silently absent.
-/// A Deny is untouched: prefix stability is not a reason to run something policy forbids.
+/// The causal model matters, though: appending a shaped tool result does not move the cached
+/// prefix, however deep into the turn it lands. The earlier version of this policy deferred every
+/// mid-turn filter and therefore gave up reduction on operations that could never have invalidated
+/// anything. Under `FilterPlacement::Anywhere` — the shipped default — nothing changes. Under
+/// `TurnBoundary`, an [`PrefixEffect::Append`] is filtered at any position and counted, while a
+/// [`PrefixEffect::HistoryMutation`] is filtered only on the turn's first operation; later ones run
+/// raw, tracked, with the deferral counted so the reduction it costs stays visible. A Deny is
+/// untouched: prefix stability is not a reason to run something policy forbids.
 fn apply_filter_placement(
     config: &Config,
     input: &Value,
+    effect: PrefixEffect,
     decision: RewriteDecision,
 ) -> RewriteDecision {
     let placement = config.policy.filter_placement;
@@ -897,7 +904,17 @@ fn apply_filter_placement(
     let at_boundary = read_session(config, input)
         .map(|state| state.operations_this_turn <= 1)
         .unwrap_or(true);
-    if placement.permits(at_boundary) {
+    if placement.permits(effect, at_boundary) {
+        if effect == PrefixEffect::Append
+            && !at_boundary
+            && matches!(decision, RewriteDecision::AllowRewrite { .. })
+        {
+            // Counted so the arm comparison can see what the corrected model kept: these are the
+            // operations the old turn-boundary rule would have run raw.
+            let _ = update_session(config, input, |state| {
+                state.placement_append_filtered_operations += 1;
+            });
+        }
         return decision;
     }
     match decision {
@@ -906,9 +923,10 @@ fn apply_filter_placement(
                 state.placement_deferred_operations += 1;
             });
             RewriteDecision::allow_raw(format!(
-                "filter placement policy `{}` keeps the request prefix stable mid-turn; this \
-                 operation ran unfiltered and earns no savings credit",
-                placement.as_str()
+                "filter placement policy `{}` defers a `{}` transform mid-turn to keep the cached \
+                 request prefix stable; this operation ran unfiltered and earns no savings credit",
+                placement.as_str(),
+                effect.as_str()
             ))
         }
         other => other,
@@ -1221,11 +1239,19 @@ struct SessionFeedback {
     /// `FilterPlacement::TurnBoundary` expressible without asking the harness for turn metadata it
     /// does not send.
     operations_this_turn: u64,
-    /// Operations that ran raw because the placement policy declined to filter mid-turn.
+    /// History-mutating operations that ran raw because the placement policy declined to filter
+    /// them mid-turn.
     ///
     /// Counted so the trade is visible: a policy that protects the cached prefix necessarily gives
     /// up reduction, and an operator comparing arms needs the size of what was given up.
     placement_deferred_operations: u64,
+    /// Append-class operations filtered mid-turn under `TurnBoundary` because appending a shaped
+    /// tool result cannot invalidate the cached prefix.
+    ///
+    /// This is the reduction the corrected causal model keeps and the previous
+    /// defer-everything rule threw away; the counter is what lets an arm comparison size it.
+    #[serde(default)]
+    placement_append_filtered_operations: u64,
 }
 
 fn agent_identity(input: &Value) -> &'static str {
@@ -2358,6 +2384,7 @@ mod tests {
     };
     use hzr_protocol::{
         EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, FidelityValidation,
+        PrefixEffect,
     };
     use tempfile::tempdir;
 
@@ -2784,14 +2811,13 @@ mod tests {
         }
     }
 
-    /// Placement is a real policy dimension, and the default arm is unchanged.
-    ///
-    /// The point of the dimension is that delivered bytes and billed input are different axes: a
-    /// filter firing mid-turn rewrites content a cached request prefix already carries. Under the
-    /// default the behaviour must be byte-for-byte what shipped, or the benchmark comparing the
-    /// two arms is comparing against something that already moved.
+    /// The turn-boundary arm exists so a billed-input benchmark can hold the cached request prefix
+    /// still. Its first version deferred *every* mid-turn filter, which modelled a `PreToolUse`
+    /// command rewrite as if it rewrote history; it does not — the shaped output is appended after
+    /// the cached prefix. Under the default the behaviour must be byte-for-byte what shipped, or
+    /// the benchmark comparing the two arms is comparing against something that already moved.
     #[test]
-    fn acceptance_gate_filter_placement_defers_mid_turn_only_when_policy_says_so() {
+    fn acceptance_gate_filter_placement_defers_only_history_mutations_mid_turn() {
         let directory = tempdir().expect("temporary directory");
         let mut config = Config {
             data_dir: directory.path().to_path_buf(),
@@ -2804,46 +2830,78 @@ mod tests {
             reason: "managed route".into(),
         };
 
-        // Default arm: placement never intervenes, whatever the turn position.
-        for _ in 0..3 {
-            let _ = update_session(&config, &input, |state| {
-                state.operations_this_turn = state.operations_this_turn.saturating_add(1);
-            });
-            assert!(
-                matches!(
-                    apply_filter_placement(&config, &input, rewrite()),
-                    RewriteDecision::AllowRewrite { .. }
-                ),
-                "the shipped default must keep filtering wherever the route applies"
-            );
+        // Default arm: placement never intervenes, whatever the turn position or effect.
+        for effect in [PrefixEffect::Append, PrefixEffect::HistoryMutation] {
+            for _ in 0..3 {
+                let _ = update_session(&config, &input, |state| {
+                    state.operations_this_turn = state.operations_this_turn.saturating_add(1);
+                });
+                assert!(
+                    matches!(
+                        apply_filter_placement(&config, &input, effect, rewrite()),
+                        RewriteDecision::AllowRewrite { .. }
+                    ),
+                    "the shipped default must keep filtering wherever the route applies"
+                );
+            }
+        }
+        let state = read_session(&config, &input).expect("session state");
+        assert_eq!(
+            (
+                state.placement_deferred_operations,
+                state.placement_append_filtered_operations
+            ),
+            (0, 0),
+            "the default arm must not count placement decisions it never made"
+        );
+
+        // Turn-boundary arm: the turn's first operation filters regardless of effect.
+        config.policy.filter_placement = hzr_protocol::FilterPlacement::TurnBoundary;
+        for effect in [PrefixEffect::Append, PrefixEffect::HistoryMutation] {
+            let _ = update_session(&config, &input, |state| state.operations_this_turn = 1);
+            assert!(matches!(
+                apply_filter_placement(&config, &input, effect, rewrite()),
+                RewriteDecision::AllowRewrite { .. }
+            ));
         }
 
-        // Turn-boundary arm: the turn's first operation still filters.
-        config.policy.filter_placement = hzr_protocol::FilterPlacement::TurnBoundary;
-        let _ = update_session(&config, &input, |state| state.operations_this_turn = 1);
-        assert!(matches!(
-            apply_filter_placement(&config, &input, rewrite()),
-            RewriteDecision::AllowRewrite { .. }
-        ));
-
-        // ...and a later one runs raw, with the forgone reduction counted rather than hidden.
+        // Mid-turn, an appended tool result cannot move the cached prefix: it still filters, and
+        // the reduction the old rule would have forgone is counted.
         let _ = update_session(&config, &input, |state| state.operations_this_turn = 2);
-        let deferred = apply_filter_placement(&config, &input, rewrite());
+        assert!(
+            matches!(
+                apply_filter_placement(&config, &input, PrefixEffect::Append, rewrite()),
+                RewriteDecision::AllowRewrite { .. }
+            ),
+            "an append-class filter mid-turn does not invalidate the prefix and must not be deferred"
+        );
+
+        // A history mutation mid-turn runs raw, with the forgone reduction counted rather than
+        // hidden.
+        let deferred =
+            apply_filter_placement(&config, &input, PrefixEffect::HistoryMutation, rewrite());
         assert!(
             matches!(&deferred, RewriteDecision::AllowRaw { reason }
-                if reason.contains("turn_boundary") && reason.contains("no savings credit")),
-            "a deferral must name the policy and admit it earns no credit: {deferred:?}"
+                if reason.contains("turn_boundary")
+                    && reason.contains("history_mutation")
+                    && reason.contains("no savings credit")),
+            "a deferral must name the policy and the effect and admit it earns no credit: {deferred:?}"
         );
         let state = read_session(&config, &input).expect("session state");
         assert_eq!(
-            state.placement_deferred_operations, 1,
-            "reduction given up to protect the prefix must be measurable"
+            (
+                state.placement_deferred_operations,
+                state.placement_append_filtered_operations
+            ),
+            (1, 1),
+            "both sides of the trade must be measurable"
         );
 
         // A deny is not a prefix question.
         let denied = apply_filter_placement(
             &config,
             &input,
+            PrefixEffect::HistoryMutation,
             RewriteDecision::Deny {
                 reason: "explicit deny".into(),
             },

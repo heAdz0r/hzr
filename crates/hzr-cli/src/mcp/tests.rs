@@ -414,6 +414,7 @@ fn representative_output(name: &str) -> Option<Value> {
                 "hard_limit": 100,
                 "coverage": 1.0,
                 "confidence": 0.8,
+                "ranking": {"method": "top_candidate_separation_v1", "calibrated": false},
                 "budget_exceeded": false
             },
             "contents": {"sha256:abc": "struct Ledger"},
@@ -531,6 +532,16 @@ fn test_the_density_codec_is_reachable_over_mcp() {
             .as_str()
             .is_some_and(|description| description.contains("never earns provider-billed credit")),
         "the tool must not imply that a returned transform replaced the final assistant response"
+    );
+    // F15: the codec is an evaluation tool. Its own description must say so, because the
+    // description is the only guidance an agent sees when the instruction block is not loaded.
+    assert!(
+        codec["description"].as_str().is_some_and(|description| {
+            description.contains("not a default step")
+                && description.contains("cannot refund tokens already emitted")
+        }),
+        "the codec must not invite a post-generation round trip: {}",
+        codec["description"]
     );
 }
 

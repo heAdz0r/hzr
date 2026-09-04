@@ -141,13 +141,19 @@ pub fn print_context(response: &ContextPlanApiResponse) -> io::Result<()> {
     let mut output = stdout.lock();
     writeln!(
         output,
-        "context selected={} rejected={} tokens={}/{} coverage={:.2} confidence={:.2}",
+        "context selected={} rejected={} tokens={}/{} coverage={:.2} confidence={:.2} ({}{})",
         response.pack.selected.len(),
         response.pack.rejected.len(),
         response.pack.used.value,
         response.pack.hard_limit,
         response.pack.coverage,
-        response.pack.confidence
+        response.pack.confidence,
+        response.pack.ranking.method,
+        if response.pack.ranking.calibrated {
+            ""
+        } else {
+            ", uncalibrated"
+        }
     )?;
     if let Some(planner) = &response.planner {
         writeln!(

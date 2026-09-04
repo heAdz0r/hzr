@@ -44,7 +44,8 @@ Then prefer these tools — they reach the same single store and index as the CL
 - `hzr_memory_update` — replace one superseded memory after namespace verification.
 - `hzr_memory_forget` — delete one invalid memory after namespace verification.
 - `hzr_memory_prune` — preview or remove low-weight memories in one namespace.
-- `hzr_codec` — return an applied tool-payload transform or a shadow counterfactual. Codex
+- `hzr_codec` — evaluation only: an applied duplicate-paragraph transform or a shadow
+  counterfactual. Not a default step for generated prose; write concisely instead. Codex
   cannot expose global final-response replacement, so instructed global coverage receives zero
   credit until a trusted host confirms delivery.
 

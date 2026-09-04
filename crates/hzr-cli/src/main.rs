@@ -3004,8 +3004,14 @@ fn session_start_payload(
     }))
 }
 
+/// The SessionStart line about answer length.
+///
+/// Concise generation is an instruction, not a transform. The earlier notice told every agent to
+/// send long prose back through `hzr_codec`, which spends the answer's tokens to write it, again
+/// as tool arguments, again as the returned payload and again in the final message, to remove
+/// only exact duplicate paragraphs. (F15, PRD 2026-09-04)
 fn response_codec_session_notice() -> &'static str {
-    "HZR CODEC: Claude Code cannot expose a global final-response replacement hook. For long low- or medium-risk prose where compression is useful, call `hzr_codec` once and use its returned `content`. Otherwise coverage is instructed-only and receives zero economic credit; `shadow` is measurement only."
+    "HZR CODEC: write concisely by default and keep technical content exact. Do not route generated prose through `hzr_codec`; a post-generation transform cannot refund emitted tokens. Use `hzr_codec` only on explicit request or with `profile: \"shadow\"` to measure a counterfactual. Claude Code exposes no global final-response replacement hook, so coverage stays instructed-only with zero economic credit."
 }
 
 fn reconcile_session_surfaces(

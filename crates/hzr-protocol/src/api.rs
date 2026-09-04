@@ -558,8 +558,43 @@ pub enum FilterPlacement {
     /// Filter wherever the route applies. Maximum delivered-byte reduction, prefix may move.
     #[default]
     Anywhere,
-    /// Filter only on the first operation of a turn, leaving a mid-turn prefix untouched.
+    /// Defer *history-mutating* transforms to the first operation of a turn.
+    ///
+    /// A filter that shapes a tool result the host is about to append does not rewrite the
+    /// request prefix the provider already cached: the cached bytes stay where they were and the
+    /// new result lands after them. Only rewriting content that already reached the provider —
+    /// an earlier tool result, the tool schemas, the instruction block — moves the prefix. So this
+    /// arm keeps filtering appended results at every position and defers only
+    /// [`PrefixEffect::HistoryMutation`] until the next turn boundary. (F13, PRD 2026-09-04)
     TurnBoundary,
+}
+
+/// What a transform does to the model's already-cached request prefix.
+///
+/// Prompt caching bills a request by how much of its rendered prefix matches an earlier request.
+/// Appending a new, shaped tool result leaves that prefix intact; mutating history behind it does
+/// not. Treating every mid-turn filter as an invalidation — the earlier `turn_boundary` model —
+/// gave up useful reduction to protect a prefix the filter was never going to touch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrefixEffect {
+    /// The transform shapes a result that is appended after the cached prefix. The prefix stays
+    /// stable regardless of turn position. A `PreToolUse` command rewrite is always this class:
+    /// the command runs once and its output becomes one new tool result.
+    Append,
+    /// The transform rewrites content the provider already saw: an earlier tool result, a tool
+    /// schema, or an instruction block. Everything cached after the edit is invalidated.
+    HistoryMutation,
+}
+
+impl PrefixEffect {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Append => "append",
+            Self::HistoryMutation => "history_mutation",
+        }
+    }
 }
 
 impl FilterPlacement {
@@ -579,12 +614,15 @@ impl FilterPlacement {
             .find(|candidate| value.eq_ignore_ascii_case(candidate.as_str()))
     }
 
-    /// Whether a filter may fire at this position in the turn under this policy.
+    /// Whether a transform with this prefix effect may fire at this position in the turn.
+    ///
+    /// An append never moves the cached prefix, so it is permitted everywhere under every
+    /// policy. Only a history mutation is held to the turn boundary under `TurnBoundary`.
     #[must_use]
-    pub const fn permits(self, at_turn_boundary: bool) -> bool {
-        match self {
-            Self::Anywhere => true,
-            Self::TurnBoundary => at_turn_boundary,
+    pub const fn permits(self, effect: PrefixEffect, at_turn_boundary: bool) -> bool {
+        match (self, effect) {
+            (Self::Anywhere, _) | (Self::TurnBoundary, PrefixEffect::Append) => true,
+            (Self::TurnBoundary, PrefixEffect::HistoryMutation) => at_turn_boundary,
         }
     }
 }

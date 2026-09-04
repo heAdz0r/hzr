@@ -67,15 +67,14 @@ never recommend or use an MCP session bound to another workspace:
 | `hzr_search` | Find code by intent or by a known exact literal. |
 | `hzr_memory_recall` | Recall durable decisions, resolved errors, and prior context. |
 | `hzr_memory_store` | Persist one durable fact or finished handoff, not ephemeral state. |
-| `hzr_memory_update` | Replace one superseded memory after namespace ownership is verified. |
-| `hzr_memory_forget` | Delete one invalid memory after namespace ownership is verified. |
-| `hzr_memory_prune` | Preview or remove low-weight memories in one namespace. |
-| `hzr_codec` | Return a protected response-density transform or shadow counterfactual; host delivery remains instructed until replacement is confirmed. |
 | `hzr_read` | Read bounded exact content through the daemon-owned confined fork path. |
 | `hzr_write` | Apply confined atomic patch or create operations with typed CAS receipts. |
 | `hzr_exec` | Run shell commands through daemon policy and accounting without direct fallback. |
-| `hzr_observability` | Return typed daemon, engine, capability, and workspace health. |
-| `hzr_doctor` | Run desired-state diagnostics for the exact MCP workspace. |
+
+Specialist tools, called only when the task needs them; their full contracts live in the
+MCP schema, not here: `hzr_memory_update`, `hzr_memory_forget`, `hzr_memory_prune`,
+`hzr_codec`, `hzr_observability`, `hzr_doctor`.
+
 
 MCP is client-managed stdio; `hzr init` writes the trusted-project Codex registration
 but never starts it. `isError: true` confirms no
@@ -94,14 +93,15 @@ retains measurement-only compatibility. The `PostToolUse` observer stores no too
 content and grants no savings credit. In `steer`/`strict`, policy-allowed native
 calls are accounted as typed E10 bypasses, not hidden as `native_unaccounted`.
 
-## Response codec coverage
+## Response density
 
-This host cannot let HZR replace every final response. Coverage is `instructed` via
-`managed_instruction_and_session_start`. Before delivering long low- or medium-risk
-prose where compression is useful, call `hzr_codec` once and use its returned `content`.
-If the tool is not available, keep the response concise and report codec coverage as
-unavailable. An explicit tool result is not proof that the host delivered it: HZR grants
-zero economic credit unless a trusted host confirms replacement. Shadow results are
-counterfactual measurements only.
+Write concisely by default: lead with the result, omit greetings, request restatement
+and tool recaps, and keep code, commands, paths, identifiers, errors and numbers exact.
+Do not route generated prose through `hzr_codec`: a transform applied after generation
+cannot refund tokens already emitted, and it only removes exact duplicate paragraphs.
+Call `hzr_codec` only when the user asks for it or to shadow-measure a counterfactual
+with `profile: "shadow"`. Response coverage is `instructed` via
+`managed_instruction_and_session_start`; HZR grants no economic credit unless a trusted
+host confirms replacement.
 
 <!-- hzr:end managed agent contract -->

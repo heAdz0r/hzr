@@ -60,19 +60,19 @@
     }
   ],
   "mcp_tools": [
-    { "name": "hzr_context_plan", "purpose": "Build bounded graph-first evidence for unfamiliar or cross-cutting work." },
-    { "name": "hzr_search", "purpose": "Find code by intent or by a known exact literal." },
-    { "name": "hzr_memory_recall", "purpose": "Recall durable decisions, resolved errors, and prior context." },
-    { "name": "hzr_memory_store", "purpose": "Persist one durable fact or finished handoff, not ephemeral state." },
-    { "name": "hzr_memory_update", "purpose": "Replace one superseded memory after namespace ownership is verified." },
-    { "name": "hzr_memory_forget", "purpose": "Delete one invalid memory after namespace ownership is verified." },
-    { "name": "hzr_memory_prune", "purpose": "Preview or remove low-weight memories in one namespace." },
-    { "name": "hzr_codec", "purpose": "Return a protected response-density transform or shadow counterfactual; host delivery remains instructed until replacement is confirmed." },
-    { "name": "hzr_read", "purpose": "Read bounded exact content through the daemon-owned confined fork path." },
-    { "name": "hzr_write", "purpose": "Apply confined atomic patch or create operations with typed CAS receipts." },
-    { "name": "hzr_exec", "purpose": "Run shell commands through daemon policy and accounting without direct fallback." },
-    { "name": "hzr_observability", "purpose": "Return typed daemon, engine, capability, and workspace health." },
-    { "name": "hzr_doctor", "purpose": "Run desired-state diagnostics for the exact MCP workspace." }
+    { "name": "hzr_context_plan", "tier": "core", "purpose": "Build bounded graph-first evidence for unfamiliar or cross-cutting work." },
+    { "name": "hzr_search", "tier": "core", "purpose": "Find code by intent or by a known exact literal." },
+    { "name": "hzr_memory_recall", "tier": "core", "purpose": "Recall durable decisions, resolved errors, and prior context." },
+    { "name": "hzr_memory_store", "tier": "core", "purpose": "Persist one durable fact or finished handoff, not ephemeral state." },
+    { "name": "hzr_memory_update", "tier": "specialist", "purpose": "Replace one superseded memory after namespace ownership is verified." },
+    { "name": "hzr_memory_forget", "tier": "specialist", "purpose": "Delete one invalid memory after namespace ownership is verified." },
+    { "name": "hzr_memory_prune", "tier": "specialist", "purpose": "Preview or remove low-weight memories in one namespace." },
+    { "name": "hzr_codec", "tier": "specialist", "purpose": "Evaluation-only duplicate-paragraph transform or shadow counterfactual; not a default step for generated prose, and it earns no economic credit until a trusted host confirms replacement." },
+    { "name": "hzr_read", "tier": "core", "purpose": "Read bounded exact content through the daemon-owned confined fork path." },
+    { "name": "hzr_write", "tier": "core", "purpose": "Apply confined atomic patch or create operations with typed CAS receipts." },
+    { "name": "hzr_exec", "tier": "core", "purpose": "Run shell commands through daemon policy and accounting without direct fallback." },
+    { "name": "hzr_observability", "tier": "specialist", "purpose": "Return typed daemon, engine, capability, and workspace health." },
+    { "name": "hzr_doctor", "tier": "specialist", "purpose": "Run desired-state diagnostics for the exact MCP workspace." }
   ],
   "harnesses": {
     "claude": {
@@ -82,7 +82,8 @@
         "global_replacement": false,
         "coverage": "instructed",
         "mechanism": "managed_instruction_and_session_start",
-        "economic_credit": false
+        "economic_credit": false,
+        "default_prose_policy": "concise_generation_no_post_hoc_transform"
       }
     },
     "codex": {
@@ -92,7 +93,8 @@
         "global_replacement": false,
         "coverage": "instructed",
         "mechanism": "managed_instruction",
-        "economic_credit": false
+        "economic_credit": false,
+        "default_prose_policy": "concise_generation_no_post_hoc_transform"
       }
     },
     "managed_agent": {
