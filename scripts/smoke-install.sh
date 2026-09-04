@@ -345,7 +345,46 @@ printf '{"cwd":"%s","tool_name":"Bash","tool_input":{"command":"cat main.rs"}}\n
         PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" \
         "${HZR_INSTALLED_BIN}/hzr" hooks dispatch
     ) >"${HZR_SMOKE_TEMP}/hook.json"
-grep -F "hookSpecificOutput" "${HZR_SMOKE_TEMP}/hook.json" >/dev/null
+if [[ -s "${HZR_SMOKE_TEMP}/hook.json" ]]; then
+  echo "eventless hook payload was treated as a supported host event" >&2
+  exit 1
+fi
+for HZR_HOOK_PERMISSION in absent default bypassPermissions; do
+  "${HZR_INSTALLED_ROOT}/engines/node" -e '
+    const [cwd, mode] = process.argv.slice(1);
+    const payload = {
+      cwd, hook_event_name: "PreToolUse", session_id: "smoke-hook-" + mode,
+      tool_name: "Bash", tool_input: {command: "cat main.rs", timeout: 1000}
+    };
+    if (mode !== "absent") payload.permission_mode = mode;
+    process.stdout.write(JSON.stringify(payload));
+  ' "${HZR_SMOKE_TEMP}/workspace" "${HZR_HOOK_PERMISSION}" | (
+    cd "${HZR_SMOKE_TEMP}/workspace"
+    HOME="${HZR_SMOKE_TEMP}/home" \
+      PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" \
+      "${HZR_INSTALLED_BIN}/hzr" hooks dispatch
+  ) >"${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json"
+  "${HZR_INSTALLED_ROOT}/engines/node" - \
+    "${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json" "${HZR_HOOK_PERMISSION}" <<'NODE'
+const [file, mode] = process.argv.slice(2);
+const output = JSON.parse(require("fs").readFileSync(file, "utf8")).hookSpecificOutput;
+const rewritten = output?.updatedInput?.command;
+if (output?.hookEventName !== "PreToolUse" ||
+    typeof rewritten !== "string" || rewritten === "cat main.rs" ||
+    !rewritten.includes("hzr") || !rewritten.includes("main.rs") ||
+    output.updatedInput.timeout !== 1000) {
+  throw new Error("supported hook did not preserve metadata and provide a managed rewrite: " + mode);
+}
+const decision = output.permissionDecision;
+const preservesPermission = mode === "bypassPermissions"
+  ? decision === "allow"
+  : decision === undefined || decision === "ask";
+if (!preservesPermission) {
+  throw new Error("hook did not preserve the host permission boundary: " +
+    mode + " returned " + JSON.stringify(decision));
+}
+NODE
+done
 run_hzr doctor --workspace "${HZR_SMOKE_TEMP}/workspace" --json \
   >"${HZR_SMOKE_TEMP}/doctor.json"
 grep -F '"bundle_node"' "${HZR_SMOKE_TEMP}/doctor.json" >/dev/null
@@ -353,6 +392,7 @@ grep -F '"daemon_service"' "${HZR_SMOKE_TEMP}/doctor.json" >/dev/null
 
 # Project-only adoption must be a real activation boundary, not merely a project-scoped index.
 mkdir -p "${HZR_SMOKE_TEMP}/baseline"
+printf 'baseline\n' >"${HZR_SMOKE_TEMP}/baseline/baseline.txt"
 (
   cd "${HZR_SMOKE_TEMP}/workspace"
   run_hzr install --project-only --force --skip-service --json >/dev/null
@@ -365,8 +405,13 @@ if ! grep -F "init --if-enabled --quiet --session-start-hook" "${HZR_CLAUDE_SETT
   echo "project-only adoption did not localize instructions and MCP ownership" >&2
   exit 1
 fi
-printf '%s\n' \
-  '{"tool_name":"Bash","tool_input":{"command":"cat baseline.txt"}}' \
+"${HZR_INSTALLED_ROOT}/engines/node" -e '
+  process.stdout.write(JSON.stringify({
+    cwd: process.argv[1], hook_event_name: "PreToolUse",
+    permission_mode: "bypassPermissions", session_id: "smoke-baseline",
+    tool_name: "Bash", tool_input: {command: "cat baseline.txt"}
+  }));
+' "${HZR_SMOKE_TEMP}/baseline" \
   | (
       cd "${HZR_SMOKE_TEMP}/baseline"
       HOME="${HZR_SMOKE_TEMP}/home" \

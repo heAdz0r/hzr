@@ -1,0 +1,194 @@
+
+Installing HZR v0.8.0 (darwin-arm64)
+
+[1/5] Using the local release archive
+      /tmp/hzr-0.8.0-release.qBfn3s/hzr-v0.8.0-darwin-arm64.tar.gz
+[2/5] Verifying the download
+      checksum matches the published SHA256SUMS
+[3/5] Unpacking and checking the bundle contents
+      every file matches the internal bundle manifest
+[4/5] Placing the files and command-line entry points
+      /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/versions/v0.8.0-darwin-arm64
+      hzr, hzrd, rtk -> /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin
+[5/5] Registering this project and starting the background service
+      initializing the current workspace registry
+HZR ALERT: instruction drift detected (2 reconciled now, 0 still unhealthy; affected: /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.claude/CLAUDE.md, /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.codex/AGENTS.md). Run `hzr doctor` before continuing and report every remaining instruction or fleet finding. Use `hzr doctor --reconcile-fleet --dry-run` before applying fleet repairs.
+      installing agent hooks and instructions
+install: changed=true dry_run=false HZR=7 RTK=0 external-ICM=0
+settings /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.claude/settings.json sha256 ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356 -> a564b80bef982b3ca6ebcce51f7048390a6dedbc9356882e704d9fd778124f19
+backup /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.claude/settings.json.hzr-backup-ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356
+prefix /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin changed=false on_path=false
+warning: /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin is not on PATH; add it so agents can run `hzr` by name
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.claude/CLAUDE.md changed=false installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.codex/AGENTS.md changed=false installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/workspace/AGENTS.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/workspace/AGENTS.override.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/workspace/CLAUDE.local.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/workspace/CLAUDE.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+client-mcp codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.codex/config.toml changed=true direct-icm-removed=0 hzr-registered=true
+client-mcp claude-desktop /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/Library/Application Support/Claude/claude_desktop_config.json changed=true direct-icm-removed=0 hzr-registered=true
+client-mcp codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/workspace/.codex/config.toml changed=false direct-icm-removed=0 hzr-registered=true
+visualizer status active=true definition=/private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/Library/LaunchAgents/dev.headz0r.hzr.hzrd.plist
+warning: 8 unmanaged engine process(es) detected (icm=8); HZR never stops them automatically — review with `hzr doctor`
+      installing or restarting the background daemon service
+service install manager=Launchd active=true changed=true definition=/private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/Library/LaunchAgents/dev.headz0r.hzr.hzrd.plist binary=/private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/current/bin/hzrd
+      removed 0 inactive HZR release(s)
+
+HZR v0.8.0 is installed.
+
+What went where
+  Program files    /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/versions/v0.8.0-darwin-arm64
+  Active version   /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/current -> the directory above
+  Commands         /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin/{hzr,hzrd,rtk}
+  Data and memory  /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr
+
+Agent integration
+  Claude Code hooks and the global HZR blocks in CLAUDE.md / AGENTS.md are configured.
+  Existing files were backed up before being changed.
+
+Background service
+  hzrd runs as your own user service and listens only on this machine.
+  Dashboard        http://127.0.0.1:47391/
+  Stop or check    hzr daemon service stop | status
+
+Next steps
+  1. Make the commands reachable. /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin is not on your PATH yet:
+
+       echo 'export PATH="/private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin:$PATH"' >> /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.zshrc
+       exec zsh -l
+
+  2. Confirm the install is healthy:
+
+       hzr doctor --workspace .
+
+  3. Open a project and use it. From inside any repository:
+
+       hzr search "where is the request timeout set"
+       hzr stats
+
+Help
+  Command list     hzr --help
+  Documentation    https://github.com/heAdz0r/hzr
+  Remove HZR       hzr uninstall --force, then rm -rf /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr and the commands above
+
+HZR clean-install smoke passed without external Node.js, RTK, grepai, or ICM
+
+Installing HZR v0.8.0 (darwin-arm64)
+
+[1/5] Using the local release archive
+      /tmp/hzr-0.8.0-release.qBfn3s/hzr-v0.8.0-darwin-arm64.tar.gz
+[2/5] Verifying the download
+      checksum matches the published SHA256SUMS
+[3/5] Unpacking and checking the bundle contents
+      every file matches the internal bundle manifest
+[4/5] Placing the files and command-line entry points
+      /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/versions/v0.8.0-darwin-arm64
+      hzr, hzrd, rtk -> /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin
+[5/5] Registering this project and starting the background service
+      initializing the current workspace registry
+      installing agent hooks and instructions
+install: changed=true dry_run=false HZR=7 RTK=0 external-ICM=0
+settings /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.claude/settings.json sha256 e0265d304fd5f7a83ff74fca0ee81c1bbe6135722b93265192da9dd1a22e96a4 -> a564b80bef982b3ca6ebcce51f7048390a6dedbc9356882e704d9fd778124f19
+backup /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.claude/settings.json.hzr-backup-e0265d304fd5f7a83ff74fca0ee81c1bbe6135722b93265192da9dd1a22e96a4
+prefix /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin changed=false on_path=false
+warning: /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin is not on PATH; add it so agents can run `hzr` by name
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.claude/CLAUDE.md changed=false installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.codex/AGENTS.md changed=false installed=true legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/workspace/AGENTS.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/workspace/AGENTS.override.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/workspace/CLAUDE.local.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+instructions claude /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/workspace/CLAUDE.md changed=false installed=false legacy-rtk-imports-removed=0 legacy-directives-migrated=0
+client-mcp codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.codex/config.toml changed=false direct-icm-removed=0 hzr-registered=true
+client-mcp claude-desktop /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/Library/Application Support/Claude/claude_desktop_config.json changed=false direct-icm-removed=0 hzr-registered=true
+client-mcp codex /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/workspace/.codex/config.toml changed=false direct-icm-removed=0 hzr-registered=true
+visualizer status active=true definition=/private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/Library/LaunchAgents/dev.headz0r.hzr.hzrd.plist
+warning: 8 unmanaged engine process(es) detected (icm=8); HZR never stops them automatically — review with `hzr doctor`
+      installing or restarting the background daemon service
+service install manager=Launchd active=true changed=false definition=/private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/Library/LaunchAgents/dev.headz0r.hzr.hzrd.plist binary=/private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/current/bin/hzrd
+      removed 0 inactive HZR release(s)
+
+HZR v0.8.0 is installed.
+
+What went where
+  Program files    /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/versions/v0.8.0-darwin-arm64
+  Active version   /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/current -> the directory above
+  Commands         /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin/{hzr,hzrd,rtk}
+  Data and memory  /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr
+
+Agent integration
+  Claude Code hooks and the global HZR blocks in CLAUDE.md / AGENTS.md are configured.
+  Existing files were backed up before being changed.
+
+Background service
+  hzrd runs as your own user service and listens only on this machine.
+  Dashboard        http://127.0.0.1:47391/
+  Stop or check    hzr daemon service stop | status
+
+Next steps
+  1. Make the commands reachable. /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin is not on your PATH yet:
+
+       echo 'export PATH="/private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin:$PATH"' >> /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.zshrc
+       exec zsh -l
+
+  2. Confirm the install is healthy:
+
+       hzr doctor --workspace .
+
+  3. Open a project and use it. From inside any repository:
+
+       hzr search "where is the request timeout set"
+       hzr stats
+
+Help
+  Command list     hzr --help
+  Documentation    https://github.com/heAdz0r/hzr
+  Remove HZR       hzr uninstall --force, then rm -rf /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr and the commands above
+
+HZR same-version re-attestation rejects tampered, missing, and symlink-injected roots
+
+Installing HZR v0.8.0-upgrade-smoke (darwin-arm64)
+
+[1/5] Using the local release archive
+      /tmp/hzr-0.8.0-release.qBfn3s/hzr-v0.8.0-darwin-arm64.tar.gz
+[2/5] Verifying the download
+      checksum matches the published SHA256SUMS
+[3/5] Unpacking and checking the bundle contents
+      every file matches the internal bundle manifest
+[4/5] Placing the files and command-line entry points
+      /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/versions/v0.8.0-upgrade-smoke-darwin-arm64
+      hzr, hzrd, rtk -> /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin
+[5/5] Registering this project and starting the background service
+      initializing the current workspace registry
+HZR ALERT: instruction drift detected (2 reconciled now, 0 still unhealthy; affected: /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.claude/CLAUDE.md, /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.codex/AGENTS.md). Run `hzr doctor` before continuing and report every remaining instruction or fleet finding. Use `hzr doctor --reconcile-fleet --dry-run` before applying fleet repairs.
+      removed 1 inactive HZR release(s)
+
+HZR v0.8.0-upgrade-smoke is installed.
+
+What went where
+  Program files    /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/versions/v0.8.0-upgrade-smoke-darwin-arm64
+  Active version   /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr/current -> the directory above
+  Commands         /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin/{hzr,hzrd,rtk}
+  Data and memory  /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr
+
+Next steps
+  1. Make the commands reachable. /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin is not on your PATH yet:
+
+       echo 'export PATH="/private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/bin:$PATH"' >> /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.zshrc
+       exec zsh -l
+
+  2. Confirm the install is healthy:
+
+       hzr doctor --workspace .
+
+  3. Open a project and use it. From inside any repository:
+
+       hzr search "where is the request timeout set"
+       hzr stats
+
+Help
+  Command list     hzr --help
+  Documentation    https://github.com/heAdz0r/hzr
+  Remove HZR       hzr uninstall --force, then rm -rf /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn/home/.local/share/hzr and the commands above
+
+HZR upgrade smoke passed: current repointed, inactive releases pruned, and all four engines follow it
+retained smoke workspace at /private/var/folders/6f/grwjq0y960v3c9d4h7sz0_nr0000gn/T/hzr-install-smoke.r3dxvn

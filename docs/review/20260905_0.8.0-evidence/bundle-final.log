@@ -1,0 +1,704 @@
+[1/9] Verifying fork-core provenance and parity
+fork-core baseline f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16 and current engine a44fc6a256b36d71f09134ac4c66b4954400b4e6f2f1fa01e133b65ddcc9fc0d verified
+[2/9] Downloading and staging the pinned Node.js runtime
+[3/9] Building the pinned grepai engine
+Reused cached grepai for darwin-arm64
+[4/9] Building the pinned ICM engine
+Reused cached icm for darwin-arm64
+[5/9] Building the managed RTK fork-core
+   Compiling libc v0.2.180
+   Compiling proc-macro2 v1.0.106
+   Compiling unicode-ident v1.0.22
+   Compiling quote v1.0.43
+   Compiling version_check v0.9.5
+   Compiling serde_core v1.0.228
+   Compiling cfg-if v1.0.4
+   Compiling crossbeam-utils v0.8.21
+   Compiling memchr v2.7.6
+   Compiling serde v1.0.228
+   Compiling zerocopy v0.8.33
+   Compiling find-msvc-tools v0.1.8
+   Compiling generic-array v0.14.7
+   Compiling ahash v0.8.12
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.16.1
+   Compiling shlex v1.3.0
+   Compiling typenum v1.20.1
+   Compiling once_cell v1.21.3
+   Compiling indexmap v2.13.0
+   Compiling cc v1.2.54
+   Compiling aho-corasick v1.1.4
+   Compiling winnow v0.7.14
+   Compiling syn v2.0.114
+   Compiling crossbeam-epoch v0.9.18
+   Compiling vcpkg v0.2.15
+   Compiling bitflags v2.10.0
+   Compiling utf8parse v0.2.2
+   Compiling regex-syntax v0.8.8
+   Compiling autocfg v1.5.0
+   Compiling toml_write v0.1.2
+   Compiling pkg-config v0.3.32
+   Compiling anstyle-parse v0.2.7
+   Compiling num-traits v0.2.19
+   Compiling crossbeam-deque v0.8.6
+   Compiling anstyle-query v1.1.5
+   Compiling rayon-core v1.13.0
+   Compiling colorchoice v1.0.4
+   Compiling libsqlite3-sys v0.28.0
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling same-file v1.0.6
+   Compiling anstyle v1.0.13
+   Compiling log v0.4.29
+   Compiling zmij v1.0.16
+   Compiling getrandom v0.3.4
+   Compiling rustix v1.1.3
+   Compiling anstream v0.6.21
+   Compiling walkdir v2.5.0
+   Compiling serde_spanned v0.6.9
+   Compiling toml_datetime v0.6.11
+   Compiling regex-automata v0.4.13
+   Compiling toml_edit v0.22.27
+   Compiling serde_derive v1.0.228
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling errno v0.3.14
+   Compiling bstr v1.12.1
+   Compiling hashbrown v0.14.5
+   Compiling toml v0.8.23
+   Compiling itoa v1.0.17
+   Compiling core-foundation-sys v0.8.7
+   Compiling strsim v0.11.1
+   Compiling clap_lex v0.7.7
+   Compiling thiserror v1.0.69
+   Compiling serde_json v1.0.149
+   Compiling heck v0.5.0
+   Compiling option-ext v0.2.0
+   Compiling anyhow v1.0.100
+   Compiling dirs-sys v0.4.1
+   Compiling clap_derive v4.5.49
+   Compiling clap_builder v4.5.54
+   Compiling rtk v0.44.1-fork.1 (/Users/andrew/Programming/hzr/fork-core/rtk)
+   Compiling iana-time-zone v0.1.64
+   Compiling hashlink v0.9.1
+   Compiling globset v0.4.18
+   Compiling digest v0.10.7
+   Compiling thiserror-impl v1.0.69
+   Compiling cpufeatures v0.2.17
+   Compiling filetime v0.2.27
+   Compiling fsevent-sys v4.1.0
+   Compiling crossbeam-channel v0.5.15
+   Compiling csv-core v0.1.13
+   Compiling smallvec v1.15.1
+   Compiling lazy_static v1.5.0
+   Compiling fallible-streaming-iterator v0.1.9
+   Compiling either v1.15.0
+   Compiling ryu v1.0.23
+   Compiling fastrand v2.3.0
+   Compiling fallible-iterator v0.3.0
+   Compiling clap v4.5.54
+   Compiling csv v1.4.0
+   Compiling rayon v1.11.0
+   Compiling notify v6.1.1
+   Compiling hzr-engine-contract v0.0.0 (/Users/andrew/Programming/hzr/crates/hzr-engine-contract)
+   Compiling tempfile v3.24.0
+   Compiling chrono v0.4.43
+   Compiling colored v2.2.0
+   Compiling sha2 v0.10.9
+   Compiling ignore v0.4.25
+   Compiling dirs v5.0.1
+   Compiling regex v1.12.2
+   Compiling fs2 v0.4.3
+   Compiling which v8.0.5
+   Compiling xxhash-rust v0.8.15
+   Compiling rusqlite v0.31.0
+warning: field `durability` is never read
+   --> src/bin/../write_core.rs:120:9
+    |
+114 | pub struct WriteStats {
+    |            ---------- field in this struct
+...
+120 |     pub durability: DurabilityMode,
+    |         ^^^^^^^^^^
+    |
+    = note: `WriteStats` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: method `write_str` is never used
+   --> src/bin/../write_core.rs:145:12
+    |
+140 | impl AtomicWriter {
+    | ----------------- method in this implementation
+...
+145 |     pub fn write_str(&self, path: &Path, content: &str) -> Result<WriteStats> {
+    |            ^^^^^^^^^
+
+warning: unused import: `crate::tracking::ParseFailureSummary`
+ --> src/gain.rs:6:5
+  |
+6 | use crate::tracking::ParseFailureSummary; // fix #200
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::SystemTime`
+ --> src/memory_layer/mod.rs:6:5
+  |
+6 | use std::time::SystemTime;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `is_block_explore_entry` and `is_mem_hook_entry`
+   --> src/memory_layer/mod.rs:378:13
+    |
+378 | use hooks::{is_block_explore_entry, is_mem_hook_entry};
+    |             ^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `cache_status_event_label` and `compute_gain_stats`
+   --> src/memory_layer/mod.rs:382:5
+    |
+382 |     cache_status_event_label, compute_gain_stats, is_low_signal_candidate, mem_config,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^
+
+warning: `rtk` (bin "write_bench_tool") generated 2 warnings
+warning: function `is_available` is never used
+   --> src/ccusage.rs:112:8
+    |
+112 | pub fn is_available() -> bool {
+    |        ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `contains_unattestable_construct` is never used
+   --> src/discover/lexer.rs:453:8
+    |
+453 | pub fn contains_unattestable_construct(cmd: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `contains_substitution` is never used
+   --> src/discover/lexer.rs:466:4
+    |
+466 | fn contains_substitution(cmd: &str) -> bool {
+    |    ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `split_for_permissions` is never used
+   --> src/discover/lexer.rs:522:8
+    |
+522 | pub fn split_for_permissions(cmd: &str) -> Vec<&str> {
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `sequence_index` is never read
+  --> src/discover/provider.rs:21:9
+   |
+11 | pub struct ExtractedCommand {
+   |            ---------------- field in this struct
+...
+21 |     pub sequence_index: usize,
+   |         ^^^^^^^^^^^^^^
+   |
+   = note: `ExtractedCommand` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: function `prefix_contains_rtk_disabled` is never used
+   --> src/discover/registry.rs:451:8
+    |
+451 | pub fn prefix_contains_rtk_disabled(prefix_part: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `cmd_has_rtk_disabled_prefix` is never used
+   --> src/discover/registry.rs:456:8
+    |
+456 | pub fn cmd_has_rtk_disabled_prefix(cmd: &str) -> bool {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `should_passthrough_run_view` is never used
+   --> src/gh_cmd.rs:713:4
+    |
+713 | fn should_passthrough_run_view(extra_args: &[String]) -> bool {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `line` and `column` are never read
+  --> src/golangci_cmd.rs:13:5
+   |
+ 9 | struct Position {
+   |        -------- fields in this struct
+...
+13 |     line: usize,
+   |     ^^^^
+14 |     #[serde(rename = "Column")]
+15 |     column: usize,
+   |     ^^^^^^
+   |
+   = note: `Position` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `text` is never read
+  --> src/golangci_cmd.rs:23:5
+   |
+19 | struct Issue {
+   |        ----- field in this struct
+...
+23 |     text: String,
+   |     ^^^^
+   |
+   = note: `Issue` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: field `end_line` is never read
+  --> src/grepai.rs:22:9
+   |
+19 | pub struct GrepaiHit {
+   |            --------- field in this struct
+...
+22 |     pub end_line: usize,
+   |         ^^^^^^^^
+   |
+   = note: `GrepaiHit` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: function `remove_hash` is never used
+   --> src/integrity.rs:103:8
+    |
+103 | pub fn remove_hash(hook_path: &Path) -> Result<bool> {
+    |        ^^^^^^^^^^^
+
+warning: function `verify_hook` is never used
+   --> src/integrity.rs:127:8
+    |
+127 | pub fn verify_hook() -> Result<IntegrityStatus> {
+    |        ^^^^^^^^^^^
+
+warning: function `runtime_check` is never used
+   --> src/integrity.rs:250:8
+    |
+250 | pub fn runtime_check() -> Result<()> {
+    |        ^^^^^^^^^^^^^
+
+warning: variant `WrongSyntax` is never constructed
+ --> src/learn/detector.rs:8:5
+  |
+5 | pub enum ErrorType {
+  |          --------- variant in this enum
+...
+8 |     WrongSyntax,
+  |     ^^^^^^^^^^^
+  |
+  = note: `ErrorType` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: fields `line` and `message` are never read
+  --> src/lint_cmd.rs:39:5
+   |
+32 | struct PylintDiagnostic {
+   |        ---------------- fields in this struct
+...
+39 |     line: usize,
+   |     ^^^^
+...
+44 |     message: String,
+   |     ^^^^^^^
+   |
+   = note: `PylintDiagnostic` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: constant `CACHE_MAX_PROJECTS` is never used
+  --> src/memory_layer/mod.rs:46:7
+   |
+46 | const CACHE_MAX_PROJECTS: usize = 64;
+   |       ^^^^^^^^^^^^^^^^^^
+
+warning: constant `CACHE_TTL_SECS` is never used
+  --> src/memory_layer/mod.rs:47:7
+   |
+47 | const CACHE_TTL_SECS: u64 = 24 * 60 * 60;
+   |       ^^^^^^^^^^^^^^
+
+warning: constant `MAX_SYMBOLS_PER_FILE` is never used
+  --> src/memory_layer/mod.rs:49:7
+   |
+49 | const MAX_SYMBOLS_PER_FILE: usize = 64; // L3: compile-time fallback (runtime: mem_config())
+   |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `get_dependents` is never used
+   --> src/memory_layer/cache.rs:509:15
+    |
+509 | pub(super) fn get_dependents(project_id: &str, module_name: &str) -> Result<Vec<String>> {
+    |               ^^^^^^^^^^^^^^
+
+warning: function `purge_episodes` is never used
+   --> src/memory_layer/episode.rs:140:8
+    |
+140 | pub fn purge_episodes(retention_days: i64) -> Result<usize> {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `freshness_label` is never used
+   --> src/memory_layer/helpers.rs:195:15
+    |
+195 | pub(super) fn freshness_label(freshness: ArtifactFreshness) -> &'static str {
+    |               ^^^^^^^^^^^^^^^
+
+warning: function `cache_status_event_label` is never used
+   --> src/memory_layer/helpers.rs:204:15
+    |
+204 | pub(super) fn cache_status_event_label(state: &BuildState, refresh: bool) -> &'static str {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `OllamaConfig` is never constructed
+  --> src/memory_layer/ollama.rs:16:12
+   |
+16 | pub struct OllamaConfig {
+   |            ^^^^^^^^^^^^
+
+warning: function `http_post` is never used
+  --> src/memory_layer/ollama.rs:41:4
+   |
+41 | fn http_post(host: &str, path: &str, body: &str, timeout_ms: u64) -> Result<String> {
+   |    ^^^^^^^^^
+
+warning: function `rerank_candidates` is never used
+  --> src/memory_layer/ollama.rs:72:8
+   |
+72 | pub fn rerank_candidates(
+   |        ^^^^^^^^^^^^^^^^^
+
+warning: function `build_rerank_prompt` is never used
+  --> src/memory_layer/ollama.rs:98:4
+   |
+98 | fn build_rerank_prompt(candidates: &[String], task: &str) -> String {
+   |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `parse_rerank_scores` is never used
+   --> src/memory_layer/ollama.rs:114:4
+    |
+114 | fn parse_rerank_scores(json: &str, expected: usize) -> Option<Vec<f32>> {
+    |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `classify_intent_ollama` is never used
+   --> src/memory_layer/ollama.rs:130:8
+    |
+130 | pub fn classify_intent_ollama(task: &str, config: &OllamaConfig) -> Option<(IntentKind, f32)> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: struct `OllamaStatus` is never constructed
+   --> src/memory_layer/ollama.rs:171:12
+    |
+171 | pub struct OllamaStatus {
+    |            ^^^^^^^^^^^^
+
+warning: function `probe_ollama` is never used
+   --> src/memory_layer/ollama.rs:178:8
+    |
+178 | pub fn probe_ollama(config: &OllamaConfig) -> OllamaStatus {
+    |        ^^^^^^^^^^^^
+
+warning: function `apply_stage2` is never used
+   --> src/memory_layer/ranker.rs:163:8
+    |
+163 | pub fn apply_stage2(mut candidates: Vec<Candidate>, rerank_scores: &[f32]) -> Vec<Candidate> {
+    |        ^^^^^^^^^^^^
+
+warning: methods `unwrap`, `tier`, `is_ok`, `map`, and `warnings` are never used
+  --> src/parser/mod.rs:32:12
+   |
+30 | impl<T> ParseResult<T> {
+   | ---------------------- methods in this implementation
+31 |     /// Unwrap the parsed data, panicking on Passthrough
+32 |     pub fn unwrap(self) -> T {
+   |            ^^^^^^
+...
+41 |     pub fn tier(&self) -> u8 {
+   |            ^^^^
+...
+50 |     pub fn is_ok(&self) -> bool {
+   |            ^^^^^
+...
+55 |     pub fn map<U, F>(self, f: F) -> ParseResult<U>
+   |            ^^^
+...
+67 |     pub fn warnings(&self) -> Vec<String> {
+   |            ^^^^^^^^
+
+warning: associated function `parse_with_tier` is never used
+  --> src/parser/mod.rs:88:8
+   |
+76 | pub trait OutputParser: Sized {
+   |           ------------ associated function in this trait
+...
+88 |     fn parse_with_tier(input: &str, max_tier: u8) -> ParseResult<Self::Output> {
+   |        ^^^^^^^^^^^^^^^
+
+warning: enum `ParseError` is never used
+ --> src/parser/error.rs:5:10
+  |
+5 | pub enum ParseError {
+  |          ^^^^^^^^^^
+
+warning: struct `LintResult` is never constructed
+  --> src/parser/types.rs:26:12
+   |
+26 | pub struct LintResult {
+   |            ^^^^^^^^^^
+
+warning: struct `LintIssue` is never constructed
+  --> src/parser/types.rs:36:12
+   |
+36 | pub struct LintIssue {
+   |            ^^^^^^^^^
+
+warning: enum `LintSeverity` is never used
+  --> src/parser/types.rs:46:10
+   |
+46 | pub enum LintSeverity {
+   |          ^^^^^^^^^^^^
+
+warning: struct `BuildOutput` is never constructed
+  --> src/parser/types.rs:71:12
+   |
+71 | pub struct BuildOutput {
+   |            ^^^^^^^^^^^
+
+warning: struct `BundleInfo` is never constructed
+  --> src/parser/types.rs:81:12
+   |
+81 | pub struct BundleInfo {
+   |            ^^^^^^^^^^
+
+warning: struct `RouteInfo` is never constructed
+  --> src/parser/types.rs:88:12
+   |
+88 | pub struct RouteInfo {
+   |            ^^^^^^^^^
+
+warning: struct `GitResult` is never constructed
+  --> src/parser/types.rs:96:12
+   |
+96 | pub struct GitResult {
+   |            ^^^^^^^^^
+
+warning: struct `GitCommit` is never constructed
+   --> src/parser/types.rs:105:12
+    |
+105 | pub struct GitCommit {
+    |            ^^^^^^^^^
+
+warning: struct `GenericOutput` is never constructed
+   --> src/parser/types.rs:114:12
+    |
+114 | pub struct GenericOutput {
+    |            ^^^^^^^^^^^^^
+
+warning: field `status` is never read
+  --> src/playwright_cmd.rs:56:5
+   |
+54 | struct PlaywrightExecution {
+   |        ------------------- field in this struct
+55 |     #[serde(rename = "status")]
+56 |     status: String,
+   |     ^^^^^^
+   |
+   = note: `PlaywrightExecution` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `status` and `duration` are never read
+  --> src/playwright_cmd.rs:64:5
+   |
+62 | struct PlaywrightAttempt {
+   |        ----------------- fields in this struct
+63 |     #[serde(rename = "status")]
+64 |     status: String,
+   |     ^^^^^^
+...
+68 |     duration: f64,
+   |     ^^^^^^^^
+   |
+   = note: `PlaywrightAttempt` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: variant `Import` is never constructed
+  --> src/read_symbols.rs:22:5
+   |
+12 | pub enum SymbolKind {
+   |          ---------- variant in this enum
+...
+22 |     Import,
+   |     ^^^^^^
+   |
+   = note: `SymbolKind` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `name` is never used
+  --> src/read_symbols.rs:84:8
+   |
+82 | pub trait SymbolExtractor {
+   |           --------------- method in this trait
+83 |     fn extract(&self, content: &str, lang: &Language) -> Vec<Symbol>;
+84 |     fn name(&self) -> &'static str;
+   |        ^^^^
+
+warning: struct `ReadRequest` is never constructed
+  --> src/read_types.rs:29:12
+   |
+29 | pub struct ReadRequest {
+   |            ^^^^^^^^^^^
+
+warning: fields `row` and `column` are never read
+  --> src/ruff_cmd.rs:10:5
+   |
+ 9 | struct RuffLocation {
+   |        ------------ fields in this struct
+10 |     row: usize,
+   |     ^^^
+11 |     column: usize,
+   |     ^^^^^^
+   |
+   = note: `RuffLocation` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `message` and `location` are never read
+  --> src/ruff_cmd.rs:23:5
+   |
+21 | struct RuffDiagnostic {
+   |        -------------- fields in this struct
+22 |     code: String,
+23 |     message: String,
+   |     ^^^^^^^
+24 |     location: RuffLocation,
+   |     ^^^^^^^^
+   |
+   = note: `RuffDiagnostic` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: function `project_where_clause` is never used
+   --> src/tracking.rs:274:4
+    |
+274 | fn project_where_clause(scoped: bool) -> &'static str {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `get_summary` and `get_recent` are never used
+    --> src/tracking.rs:925:12
+     |
+ 479 | impl Tracker {
+     | ------------ methods in this implementation
+...
+ 925 |     pub fn get_summary(&self) -> Result<GainSummary> {
+     |            ^^^^^^^^^^^
+...
+1359 |     pub fn get_recent(&self, limit: usize) -> Result<Vec<CommandRecord>> {
+     |            ^^^^^^^^^^
+
+warning: constant `CAP_INVENTORY` is never used
+  --> src/truncate.rs:11:11
+   |
+11 | pub const CAP_INVENTORY: usize = 50;
+   |           ^^^^^^^^^^^^^
+
+warning: function `reduced` is never used
+  --> src/truncate.rs:15:14
+   |
+15 | pub const fn reduced(cap: usize, by: usize) -> usize {
+   |              ^^^^^^^
+
+warning: fields `elapsed` and `durability` are never read
+   --> src/write_core.rs:118:9
+    |
+114 | pub struct WriteStats {
+    |            ---------- fields in this struct
+...
+118 |     pub elapsed: Duration,
+    |         ^^^^^^^
+119 |     pub skipped_unchanged: bool,
+120 |     pub durability: DurabilityMode,
+    |         ^^^^^^^^^^
+    |
+    = note: `WriteStats` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: enum `WriteOperation` is never used
+ --> src/write_semantics.rs:2:10
+  |
+2 | pub enum WriteOperation {
+  |          ^^^^^^^^^^^^^^
+
+warning: enum `WriteClass` is never used
+ --> src/write_semantics.rs:9:10
+  |
+9 | pub enum WriteClass {
+  |          ^^^^^^^^^^
+
+warning: struct `WriteSemantics` is never constructed
+  --> src/write_semantics.rs:15:12
+   |
+15 | pub struct WriteSemantics {
+   |            ^^^^^^^^^^^^^^
+
+warning: function `semantics_for` is never used
+  --> src/write_semantics.rs:22:8
+   |
+22 | pub fn semantics_for(operation: WriteOperation) -> WriteSemantics {
+   |        ^^^^^^^^^^^^^
+
+warning: `rtk` (bin "rtk") generated 64 warnings (run `cargo fix --bin "rtk" -p rtk` to apply 4 suggestions)
+    Finished `release` profile [optimized] target(s) in 1m 11s
+[6/9] Installing the pinned Caveman runtime
+npm warn deprecated prebuild-install@7.1.3: No longer maintained. Please contact the author of the relevant native addon; alternatives are available.
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+
+added 220 packages, and audited 222 packages in 2s
+
+34 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+[7/9] Testing and building the visualizer
+bun install v1.2.19 (aad3abea)
+
++ @vitejs/plugin-vue@6.0.8
++ typescript@5.9.3
++ vite@8.2.0
++ vue-tsc@3.3.9
++ @types/cytoscape@3.31.0
++ cytoscape@3.34.0
++ vue@3.5.40
+
+57 packages installed [48.00ms]
+bun test v1.2.19 (aad3abea)
+
+src/utils.test.ts:
+(pass) dashboard formatters > keeps missing provider cost distinct from a derived estimate [0.31ms]
+(pass) dashboard formatters > formats preliminary native-currency amounts without hidden FX [0.11ms]
+(pass) dashboard formatters > formats exact units and signs [0.09ms]
+(pass) dashboard formatters > formats relative time without future negative values [0.04ms]
+(pass) dashboard formatters > defines a text label for every service state
+(pass) dashboard formatters > retains a successful snapshot when a later refresh fails
+(pass) project filtering > filters by visible digest or stable project identity [0.15ms]
+(pass) project filtering > combines query and state filters [0.07ms]
+
+src/observability.test.ts:
+(pass) privacy-safe observability timeline > groups correlated spans, preserves stage order, and surfaces failures [0.18ms]
+(pass) privacy-safe observability timeline > serialized component input has no content-bearing fields
+(pass) privacy-safe observability timeline > surfaces approval continuations as a visible causal link [0.10ms]
+(pass) privacy-safe observability timeline > merges cursor deltas with hard bounds and preserves truncation evidence [0.08ms]
+(pass) privacy-safe observability timeline > refresh backoff resets on success and doubles to a cap [0.07ms]
+
+src/detail-request.test.ts:
+(pass) DetailRequestCoordinator > rejects an A response after the selected project switches to B [0.24ms]
+(pass) DetailRequestCoordinator > cached topic A invalidates an older in-flight topic B in the same project
+(pass) DetailRequestCoordinator > late project B refresh cannot clear or replace selected project C
+(pass) DetailRequestCoordinator > late A observability delta cannot merge into the replacement B snapshot
+
+src/evidence.test.ts:
+(pass) bounded activity exploration > combines route, agent and session without changing the source snapshot
+(pass) bounded activity exploration > makes regressions and missing attribution discoverable
+(pass) zero baseline is unknown, while output growth stays negative
+(pass) comparison bars never invent nonzero output or overflow
+
+ 21 pass
+ 0 fail
+ 56 expect() calls
+Ran 21 tests across 4 files. [20.00ms]
+$ vue-tsc --noEmit && vite build
+vite v8.2.0 building client environment for production...
+[2Ktransforming...✓ 44 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                       0.57 kB │ gzip:   0.33 kB
+dist/assets/app.css                  61.22 kB │ gzip:  12.30 kB
+dist/assets/app.js                  142.79 kB │ gzip:  49.38 kB
+dist/assets/chunk-cytoscape.esm.js  434.75 kB │ gzip: 137.79 kB
+
+✓ built in 597ms
+[8/9] Building HZR binaries and assembling provenance
+   Compiling hzr-exec v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-exec)
+   Compiling hzr-context v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-context)
+   Compiling hzr-daemon v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-daemon)
+   Compiling hzr-cli v0.8.0 (/Users/andrew/Programming/hzr/crates/hzr-cli)
+    Finished `release` profile [optimized] target(s) in 1m 09s
+[9/9] Generating the manifest and smoke-testing the bundle
+HZR assembled bundle smoke passed
+HZR bundle built at /tmp/hzr-0.8.0-final.0PFqEM

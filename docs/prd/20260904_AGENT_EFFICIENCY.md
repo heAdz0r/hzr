@@ -4,6 +4,11 @@ Date: 2026-09-04. Source baseline: fbf204d48704160407e3f06035ac32b9cf0bc67a, wor
 Status: P0/P1 and visualizer implementation approved after the fresh audit. On 2026-09-05 the user also approved including the already implemented P2 branch `feat/prd-p2-agent-efficiency` (`9016b29`) in version 0.8.0. Historical findings below describe the audit baseline; implementation and final gates are tracked separately.
 Authoritative evidence: current source, new local probes, current official host documentation, and the attached seven-day observed-usage audit. Previous PRDs were not used.
 
+Implementation status (2026-09-05): approved P0/P1 engineering changes and the named P2 branch
+are integrated into the 0.8.0 candidate. Complete source, native bundle and isolated full
+install/upgrade checks passed. See [the final verification report](../review/20260905_0.8.0-Verification.md)
+for exact commits, results and the remaining economic/real-host rollout gates.
+
 ## 1. Product decision
 
 Keep the engine assets and the single control plane. Change the optimization objective.
