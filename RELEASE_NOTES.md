@@ -2,8 +2,8 @@
 
 HZR 0.8.0 redesigns the dashboard and corrects execution, retrieval and accounting behavior
 that could increase agent work or make local output reduction look like proven task savings.
-These notes describe the source release candidate. Publication, installed-client coverage and
-provider-billed savings require separate verification.
+Local installation and client coverage are verified separately from source checks.
+Provider-billed savings require task-level evidence and are not claimed by this release.
 
 ## A dashboard for operational decisions
 
@@ -55,5 +55,13 @@ also approved inclusion of the completed P2 branch `feat/prd-p2-agent-efficiency
 cache-prefix-aware placement, concise generation by default, tiered instructions and explicitly
 uncalibrated ranking diagnostics. Calibration and a real paired economic evaluation remain
 unproven; this release does not invent either result. The 0.8.0 verification report records
-exact checks and remaining release requirements. Source verification does not reconfigure
-existing user integrations.
+exact source and isolated installation checks. Existing integrations adopt the new runtime when
+the installed bundle is updated; source verification alone does not reconfigure clients.
+
+## Upgrade
+
+Run `hzr update` to install the latest published bundle, then run `hzr doctor` in each active
+workspace. Run `hzr doctor --reconcile-fleet --dry-run` to inspect managed configuration updates
+and `hzr doctor --reconcile-fleet` to apply them across registered workspaces. Existing project
+files and durable memory are retained. Reconnect running MCP clients after the upgrade so they
+start the new binary.
