@@ -1,29 +1,18 @@
-use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::Path;
+use std::time::Duration;
 
 use hzr_core::{AccountingCoverageStore, AccountingReceiptContextStore};
 use hzr_exec::{
-    AccountingDrainStatus, AccountingEngineIdentityPolicy, accounting_lock_correlation,
-    acknowledge_accounting, drain_accounting, drain_accounting_with_policy,
-    remove_accounting_locks,
+    AccountingDrainStatus, AccountingEngineIdentityPolicy, acknowledge_accounting,
+    drain_accounting, drain_accounting_with_policy,
 };
 use hzr_protocol::AccountingChannel;
 
 use crate::AppState;
 
-/// 0.8.3: a registration that neither completed nor produced receipts within a day is retired.
-/// The gap it opened stays in the coverage state (nothing recovers it), so retiring the file does
-/// not fake a recovery; keeping it only made every sweep slower and the directory grow until the
-/// 20 000-context registration cap rejected new commands.
+#[cfg(test)]
 const ABANDONED_CONTEXT_TTL_SECS: u64 = 24 * 60 * 60;
-/// 0.8.3: producers registered this recently keep the sweeper on its one-second cadence.
-const ACTIVE_CONTEXT_WINDOW_SECS: u64 = 120;
-/// 0.8.3: sweep cadence while no producer is active and nothing drained.
-const IDLE_SWEEP_SECS: u64 = 5;
-/// 0.8.3: stale lock files removed per sweep, so one backlog cannot stall receipt draining.
-const STALE_LOCKS_PER_SWEEP: usize = 500;
 
 // 0.8.1: receipt journals without a registered context (daemon-free rewrites before 0.8.1,
 // crashed producers) are drained after this grace period so they stop counting as undrained.

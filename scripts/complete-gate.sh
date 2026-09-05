@@ -15,7 +15,6 @@ case "${HZR_GATE_MODE}" in
       usage
     fi
     cd "${HZR_REPOSITORY_ROOT}"
-    scripts/target-hygiene.sh # 0.8.2: bound target/debug before the locked builds add to it
     python3 scripts/verify-release-gates.py --self-test
     bash -n scripts/*.sh
     cargo fmt --all --check
