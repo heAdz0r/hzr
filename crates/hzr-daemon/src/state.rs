@@ -467,10 +467,12 @@ mod tests {
         config.cli_fallback = false;
         config.startup_timeout = Duration::from_secs(1);
         config.request_timeout = Duration::from_millis(100);
-        config.cli_timeout = Duration::from_secs(1);
+        // 0.8.3: the `--version` probe spawns a process; under parallel test load one second
+        // was not enough and the fixture reported a timeout that had nothing to do with recovery.
+        config.cli_timeout = Duration::from_secs(5);
         config.shutdown_timeout = Duration::from_secs(1);
         let memory = Arc::new(IcmSupervisor::new(config)?);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if memory.client().readiness().await.is_ok() {
                     break;
@@ -499,7 +501,9 @@ mod tests {
         ));
 
         let mut degraded = Vec::new();
-        let recovered = tokio::time::timeout(Duration::from_secs(3), async {
+        // 0.8.3: the window bounds a loaded machine, not the recovery itself, which takes tens
+        // of milliseconds; three seconds failed with default test threads on a busy workstation.
+        let recovered = tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 if let MemoryStartState::Degraded(reason) = &*state.read().await {
                     if degraded.last() != Some(reason) {
