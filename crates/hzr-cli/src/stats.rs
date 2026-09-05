@@ -694,6 +694,14 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
             .3
             .saturating_add(command.net_avoided_tokens_estimated);
     }
+    // 0.8.3: explicitly unmeasured passthrough rows carry no tokens and therefore no per-command
+    // aggregate, so the bypass subsystem showed fewer calls than the OPTIMIZER BYPASS panel
+    // computed from the same rows (4.2K against 4.5K on one ledger). Count them here so both
+    // panels report the same number of operations; they still contribute no tokens.
+    if gain.unmeasured_bypass_operations > 0 {
+        let totals = subsystems.entry("bypass").or_default();
+        totals.0 = totals.0.saturating_add(gain.unmeasured_bypass_operations);
+    }
     let mut by_subsystem = subsystems
         .into_iter()
         .map(
@@ -1132,6 +1140,34 @@ mod tests {
                 .iter()
                 .any(|note| note.contains("never mixed with provider usage"))
         );
+    }
+
+    // 0.8.3: the bypass subsystem and the OPTIMIZER BYPASS panel count the same operations.
+    #[test]
+    fn unmeasured_bypass_operations_count_in_the_bypass_subsystem() {
+        let gain = EfficiencySummary {
+            operations: 2,
+            total_observed_operations: 5,
+            unmeasured_bypass_operations: 3,
+            ..EfficiencySummary::default()
+        };
+        let report = build_report(
+            gain,
+            LedgerSummary::default(),
+            "global_lifetime",
+            AccountingCoverage::default_complete(),
+            BypassSummary::default(),
+            "global lifetime".into(),
+        );
+
+        let bypass = report
+            .by_subsystem
+            .iter()
+            .find(|subsystem| subsystem.subsystem == "bypass")
+            .expect("unmeasured passthrough rows appear as bypass operations");
+        assert_eq!(bypass.operations, 3);
+        assert_eq!(bypass.net_avoided_tokens_estimated, 0);
+        assert_eq!(report.traffic_coverage.unmeasured_bypass_operations, 3);
     }
 
     #[test]

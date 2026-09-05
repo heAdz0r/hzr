@@ -44,6 +44,18 @@ attaches it to the receipts; the approved command carries the engine environment
 opens with a comment naming what it is, and nothing else. Only the T4 fidelity hatch, which has
 no registration, still exports its attribution.
 
+## Coverage figures add up
+
+The ACCOUNTING COVERAGE section of `hzr stats` printed three numbers that could not be
+reconciled: "67 daemon-free rewrite(s) remain absent historically", "missing accounting rows by
+producer: fork=3" and "6 closed gap interval(s) · 3674s missing". The 67 also counted operations
+imported from the pre-typed counters and producer gaps, the producer line had no column for
+daemon-free rewrites, and the seconds were a gap duration. The total is now itemized into parts
+that sum to it, the surface line is labelled as producer gaps, the seconds are labelled as closed
+gap duration, and the JSON exposes the two missing counters. The `bypass` row of WHERE IT WAS
+AVOIDED now counts the unmeasured passthrough operations that OPTIMIZER BYPASS already counted, so
+the two panels agree.
+
 ## Build artefacts are bounded
 
 Cargo never removes superseded artefacts, and with full debug info for every dependency variant

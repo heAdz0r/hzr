@@ -1097,9 +1097,11 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
             || "last recovery unknown".to_owned(),
             |unix| format!("last recovered unix {unix}"),
         );
+        // 0.8.3: the seconds are the duration of the closed gaps, not a count of anything
+        // missing; the missing operations are itemized on the lines below.
         writeln!(
             output,
-            "├─ {} closed gap interval(s) retained · {}s missing · {recovered}",
+            "├─ {} closed gap interval(s) retained · {}s of closed gap · {recovered}",
             coverage.closed_intervals, coverage.closed_gap_seconds
         )?;
         writeln!(
@@ -1117,34 +1119,39 @@ fn write_integrity(output: &mut impl Write, report: &StatsReport, color: bool) -
             output,
             "├─ start the daemon (`hzr daemon service status`); its receipt sweeper closes live fork gaps"
         )?;
-    } else if coverage.lifetime_rewrites > 0 {
-        writeln!(
-            output,
-            "├─ {} daemon-free rewrite(s) remain absent historically",
-            coverage.lifetime_rewrites
-        )?;
     }
+    // 0.8.3: one total, itemized so it reconciles. `lifetime_rewrites` used to be printed as
+    // "daemon-free rewrites" although it also counted producer gaps and the imported pre-typed
+    // total, while the producer line omitted the rewrite surface: 67 "rewrites" stood next to
+    // "fork=3" and six intervals with no way to add them up.
     let typed_missing = coverage
         .hook_missing_operations
         .saturating_add(coverage.cli_missing_operations)
         .saturating_add(coverage.mcp_missing_operations)
         .saturating_add(coverage.fork_producer_missing_operations);
+    if coverage.lifetime_rewrites > 0 {
+        let undrained = if coverage.undrained_receipts > 0 {
+            format!(" · {} undrained receipt(s)", coverage.undrained_receipts)
+        } else {
+            String::new()
+        };
+        writeln!(
+            output,
+            "├─ {} operation(s) absent from the ledger historically: {} before producer classification · {} daemon-free rewrite(s) · {} producer gap(s){undrained}",
+            coverage.lifetime_rewrites,
+            coverage.legacy_missing_operations,
+            coverage.rewrite_missing_operations,
+            typed_missing
+        )?;
+    }
     if typed_missing > 0 {
         writeln!(
             output,
-            "├─ missing accounting rows by producer: hook={} cli={} mcp={} fork={}",
+            "├─ producer gaps by surface: hook={} cli={} mcp={} fork={}",
             coverage.hook_missing_operations,
             coverage.cli_missing_operations,
             coverage.mcp_missing_operations,
             coverage.fork_producer_missing_operations
-        )?;
-    }
-    let unclassified_missing =
-        (coverage.daemon_unavailable_operations as u64).saturating_sub(typed_missing);
-    if unclassified_missing > 0 {
-        writeln!(
-            output,
-            "├─ {unclassified_missing} migrated missing operation(s) have no producer classification"
         )?;
     }
     for note in &report.notes {
@@ -1713,7 +1720,7 @@ mod tests {
     fn recovered_live_coverage_keeps_history_and_producer_breakdown_visible() {
         let mut report = report(LedgerSummary::default(), Vec::new());
         report.coverage = AccountingCoverage {
-            lifetime_rewrites: 3,
+            lifetime_rewrites: 10,
             daemon_unavailable_operations: 10,
             live_complete: true,
             historical_complete: false,
@@ -1729,9 +1736,12 @@ mod tests {
 
         let rendered = render(&report);
         assert!(rendered.contains("LIVE RECOVERED · HISTORICAL PARTIAL"));
-        assert!(rendered.contains("1 closed gap interval(s) retained · 720s missing"));
+        assert!(rendered.contains("1 closed gap interval(s) retained · 720s of closed gap"));
         assert!(rendered.contains("absent historical rows were not backfilled"));
-        assert!(rendered.contains("hook=4 cli=2 mcp=3 fork=1"));
+        assert!(rendered.contains(
+            "10 operation(s) absent from the ledger historically: 0 before producer classification · 0 daemon-free rewrite(s) · 10 producer gap(s)"
+        ));
+        assert!(rendered.contains("producer gaps by surface: hook=4 cli=2 mcp=3 fork=1"));
         assert!(!rendered.contains("successful MCP operation"));
         assert!(!rendered.contains("reconciled"));
         let json = serde_json::to_value(&report).expect("stats JSON");
@@ -1739,6 +1749,41 @@ mod tests {
         assert_eq!(json["coverage"]["historical_complete"], false);
         assert_eq!(json["coverage"]["closed_gap_seconds"], 720);
         assert_eq!(json["coverage"]["mcp_missing_operations"], 3);
+        assert_eq!(json["coverage"]["rewrite_missing_operations"], 0);
+        assert_eq!(json["coverage"]["legacy_missing_operations"], 0);
+    }
+
+    // 0.8.3: the historical total itemizes into parts that add up to it.
+    #[test]
+    fn absent_operations_itemize_into_legacy_rewrite_and_producer_gaps() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.coverage = AccountingCoverage {
+            lifetime_rewrites: 69,
+            daemon_unavailable_operations: 3,
+            live_complete: true,
+            historical_complete: false,
+            closed_intervals: 6,
+            last_recovered_at_unix: Some(1_788_610_767),
+            closed_gap_seconds: 3_674,
+            fork_producer_missing_operations: 3,
+            rewrite_missing_operations: 4,
+            legacy_missing_operations: 60,
+            undrained_receipts: 2,
+            ..AccountingCoverage::default()
+        };
+
+        let rendered = render(&report);
+        assert!(rendered.contains(
+            "69 operation(s) absent from the ledger historically: 60 before producer classification · 4 daemon-free rewrite(s) · 3 producer gap(s) · 2 undrained receipt(s)"
+        ));
+        assert!(rendered.contains("producer gaps by surface: hook=0 cli=0 mcp=0 fork=3"));
+        assert!(
+            !rendered.contains("daemon-free rewrite(s) remain absent"),
+            "the old unitemized line must not reappear"
+        );
+        let json = serde_json::to_value(&report).expect("stats JSON");
+        assert_eq!(json["coverage"]["rewrite_missing_operations"], 4);
+        assert_eq!(json["coverage"]["legacy_missing_operations"], 60);
     }
 
     /// A missing MCP key looks like the channel is unaccounted; the split must show mcp=0.

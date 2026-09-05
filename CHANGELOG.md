@@ -37,6 +37,17 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   it onto receipts that arrive without one; only the T4 fidelity hatch, which has no registration,
   keeps the environment transport. The engine environment block now starts with a comment naming
   what it is.
+- `hzr stats` coverage figures could not be reconciled with each other: "67 daemon-free
+  rewrite(s) remain absent historically" stood next to "missing accounting rows by producer:
+  fork=3" and "6 closed gap interval(s) · 3674s missing", because the historical total also
+  counted the imported pre-typed operations and producer gaps, the producer line omitted the
+  `rewrite_daemon` surface, and the seconds were a gap duration. The total is now itemized
+  ("N operation(s) absent from the ledger historically: A before producer classification · B
+  daemon-free rewrite(s) · C producer gap(s)"), the surface line is labelled "producer gaps by
+  surface", the closed-gap line says "of closed gap", and the JSON gains
+  `rewrite_missing_operations` and `legacy_missing_operations`. The WHERE IT WAS AVOIDED
+  `bypass` row now counts the explicitly unmeasured passthrough operations that OPTIMIZER
+  BYPASS already counted, so both panels show the same operations (4.5K, not 4.2K against 4.5K).
 
 ## [0.8.2] - 2026-09-05
 
