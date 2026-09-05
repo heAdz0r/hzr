@@ -52,6 +52,7 @@ def workflow_job(workflow: str, name: str) -> str:
 
 def verify_script(script: str, build_script: str, fork_verifier: str) -> None:
     for command in (
+        "scripts/target-hygiene.sh",  # 0.8.3: bounded target hygiene precedes the locked builds
         "python3 scripts/verify-release-gates.py --self-test",
         "bash -n scripts/*.sh",
         "cargo fmt --all --check",
@@ -149,6 +150,9 @@ class ReleaseGateRegressionTests(unittest.TestCase):
                 f"#!/bin/sh\ntouch {marker}\n"
             )
             (scripts / "build-bundle.sh").write_text("#!/bin/sh\nexit 0\n")
+            # 0.8.3: the gate runs the target hygiene first; the fixture stubs it like the
+            # other scripts so the test exercises the gate's ordering, not the real sweep.
+            (scripts / "target-hygiene.sh").write_text("#!/bin/sh\nexit 0\n")
             for path in scripts.iterdir():
                 path.chmod(0o755)
             log = repository / "cargo.log"
