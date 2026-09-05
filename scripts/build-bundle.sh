@@ -283,12 +283,17 @@ fi
 verify_sha256 \
   "cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586" \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
+# 0.8.1: the parent watchdog makes an owned `icm serve` exit with its launcher.
+verify_sha256 \
+  "c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8" \
+  "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-exit-with-parent.patch"
 hzr_build_stage "Building the pinned ICM engine"
 HZR_RUST_TOOLCHAIN_KEY="$(component_cache_key "$(rustc -Vv)" "$(cargo -V)")"
 HZR_ICM_LICENSE_SOURCE="${HZR_BUILD_TEMP}/icm.LICENSE"
 HZR_ICM_CACHE_KEY="$(component_cache_key \
   icm 0.10.61 c3a1bac7cfe401b55fd66af16dfc0c774c02167a \
   cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586 \
+  c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8 \
   embeddings-static,http-api,backend-sqlite "${HZR_PLATFORM}" \
   "${HZR_RUST_TOOLCHAIN_KEY}" "${HZR_BUILD_SCRIPT_SHA256}")"
 if restore_cached_component \
@@ -306,6 +311,10 @@ else
     "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
   git -C "${HZR_BUILD_TEMP}/icm" apply \
     "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
+  git -C "${HZR_BUILD_TEMP}/icm" apply --check \
+    "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-exit-with-parent.patch"
+  git -C "${HZR_BUILD_TEMP}/icm" apply \
+    "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-exit-with-parent.patch"
   cargo build \
     --manifest-path "${HZR_BUILD_TEMP}/icm/Cargo.toml" \
     --locked --release --package icm-cli \
@@ -493,6 +502,9 @@ install -m 0644 \
 install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
+install -m 0644 \
+  "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-exit-with-parent.patch" \
+  "${HZR_PROVENANCE_OUTPUT}/patches/icm/0.10.61-exit-with-parent.patch"
 
 hzr_build_stage "Generating the manifest and smoke-testing the bundle"
 "${HZR_REPOSITORY_ROOT}/scripts/generate-bundle-manifest.sh" "${HZR_OUTPUT_ROOT}"

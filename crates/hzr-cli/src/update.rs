@@ -118,6 +118,22 @@ pub async fn execute(json: bool, check_only: bool) -> Result<ExitCode> {
 
     let installer = locate_installer()?;
     invoke_installer(&installer, &release, &archive_path, &checksums_path, json)?;
+    // 0.8.1: the freshly installed binary reconciles every registered workspace, prunes stale
+    // registrations and stops orphaned engines right away, and records the reference state.
+    let executable = std::env::current_exe().context("failed to locate the current hzr binary")?;
+    let installed = infer_bin_dir(&executable)
+        .map(|bin_dir| bin_dir.join("hzr"))
+        .filter(|candidate| candidate.is_file())
+        .unwrap_or(executable);
+    let config = hzr_core::Config::load_or_default(&hzr_core::ConfigPaths::discover().config_file)
+        .context("failed to load the HZR config after the update")?;
+    let reference_state_ok = match crate::post_upgrade::run_foreground(&config, &installed, json) {
+        Ok(success) => success,
+        Err(error) => {
+            eprintln!("HZR reference-state reconciliation did not run: {error:#}");
+            false
+        }
+    };
     if json {
         println!(
             "{}",
@@ -126,10 +142,16 @@ pub async fn execute(json: bool, check_only: bool) -> Result<ExitCode> {
                 "previous_version": current.to_string(),
                 "installed_version": release.version.to_string(),
                 "prerelease": release.prerelease,
+                "reference_state_reconciled": reference_state_ok,
             })
         );
     } else {
         println!("Updated HZR from {current} to {}.", release.version);
+        if !reference_state_ok {
+            println!(
+                "Reference-state reconciliation reported findings; review `hzr doctor` above."
+            );
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

@@ -59,11 +59,15 @@ Examples:
 
 pub const DOCTOR_LONG_ABOUT: &str = "\
 Verify current managed instructions, pins, ownership, daemon health, and duplicate indexes for one workspace. \
-Use `--fix` to transactionally migrate one unambiguous legacy index with a retained backup. \
-Duplicate or conflicting indexes remain unchanged and fail with their exact paths. Stale \
-instructions remain read-only by default. `--reconcile-fleet` repairs managed instructions and \
-project Codex pins only for registered workspaces. Add `--migrate-legacy-indexes` to migrate \
-unambiguous root indexes; duplicate archives always require an explicit reported command.";
+Use `--fix` to transactionally migrate one unambiguous legacy index with a retained backup and \
+to stop engine processes that outlived a removed HZR installation (orphans are re-verified by PID \
+and argv; foreign processes are never signalled). Duplicate or conflicting indexes remain \
+unchanged and fail with their exact paths. Stale instructions remain read-only by default. \
+`--reconcile-fleet` repairs managed instructions and project Codex pins for registered \
+workspaces and prunes registrations whose root directory was deleted. Add \
+`--migrate-legacy-indexes` to migrate unambiguous root indexes; duplicate archives always \
+require an explicit reported command. The first session on a new HZR version schedules \
+`hzr doctor --reconcile-fleet --fix` once; `reference_state` reports whether it completed.";
 
 pub const DOCTOR_AFTER_HELP: &str = "\
 Examples:
@@ -72,6 +76,7 @@ Examples:
   hzr doctor --fix --workspace /path/to/project
   hzr doctor --reconcile-fleet --dry-run
   hzr doctor --reconcile-fleet --migrate-legacy-indexes --dry-run
+  hzr doctor --reconcile-fleet --fix
   hzr doctor --json
 ";
 

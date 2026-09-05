@@ -6,12 +6,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use fs2::FileExt;
 use hzr_core::{
-    AccountingCoverageStore, AccountingGapEvent, AccountingGapSurface, ActivationMode, Config,
-    FidelityAllowance, FidelityBudget, FidelityPreflight, Ledger, OperationRoute,
-    RawFidelityRequest, RawPublicEstimate, RawPublicEstimateRequest, SessionEconomicSummary,
-    SessionEfficiencySummary, SessionEvasionSummary, fidelity_preflight_required,
-    first_class_replacement, load_pricing_catalog, price_avoided_input_tokens,
-    privacy_identity_hash, raw_fidelity_request,
+    AccountingCoverageStore, AccountingGapEvent, AccountingGapSurface,
+    AccountingReceiptContextStore, ActivationMode, Config, FidelityAllowance, FidelityBudget,
+    FidelityPreflight, Ledger, OperationRoute, RawFidelityRequest, RawPublicEstimate,
+    RawPublicEstimateRequest, SessionEconomicSummary, SessionEfficiencySummary,
+    SessionEvasionSummary, fidelity_preflight_required, first_class_replacement,
+    load_pricing_catalog, price_avoided_input_tokens, privacy_identity_hash, raw_fidelity_request,
 };
 use hzr_exec::{
     CanonicalCommand, ForkRuntimePaths, HOST_GRANT_APPLIED_ENV, PinnedRtkAdapter, RewriteDecision,
@@ -310,6 +310,22 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
             let _ = record_degraded_rewrite_for_input(config, input);
             let notice = accounting_transition(config, input, true);
             let outcome = fallback_decision(config, raw, &cwd).await;
+            // 0.8.1: a daemon-free rewrite still makes fork-core write receipts under a local
+            // correlation. Without a context file those receipts stayed undrained forever, so
+            // register the same context the daemon would have; the sweeper drains it later.
+            if let Some(correlation_id) = outcome.accounting_correlation_id.as_deref() {
+                if let Err(error) = AccountingReceiptContextStore::new(&config.data_dir)
+                    .register_with_channel(
+                        correlation_id,
+                        &cwd,
+                        Some(&agent_attribution(input)),
+                        input.get("session_id").and_then(Value::as_str),
+                        AccountingChannel::HookCli,
+                    )
+                {
+                    eprintln!("HZR daemon-free accounting context was not registered: {error}");
+                }
+            }
             (outcome.decision, notice, outcome.evasion)
         }
     };

@@ -52,6 +52,13 @@ only brings the `icm-cli` package version in upstream's committed `Cargo.lock` f
 source package version `0.10.61`, allowing the otherwise unchanged source to build under `--locked`.
 Patch SHA-256: `cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586`.
 
+HZR also applies `patches/icm/0.10.61-exit-with-parent.patch` to the pinned ICM source. The patch
+adds an opt-in parent watchdog to `icm serve`: when the launcher exports `ICM_EXIT_WITH_PARENT_PID`,
+the server exits once that parent process is gone, so an HZR daemon that was killed or crashed can
+no longer leave an orphaned memory server behind. Modified-source distributions must retain ICM's
+Apache-2.0 license and identify this change. Patch SHA-256:
+`c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8`.
+
 HZR replaces caveman-code's vulnerable `extract-zip` 2.0.1 dependency with the vendored
 BSD-2-Clause compatibility fork under `integrations/caveman-code/vendor/extract-zip`. The fork
 preserves the API used by caveman-code for fresh extraction roots while validating lexical and

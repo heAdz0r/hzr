@@ -480,6 +480,21 @@ pub fn print_fleet_reconcile(report: &crate::diagnostics::FleetReconcileReport) 
             entry.error
         )?;
     }
+    // 0.8.1: deleted worktrees leave registrations behind; say what happened to each one.
+    for entry in &report.stale_registrations {
+        writeln!(
+            output,
+            "  stale registration {}: {} ({}){}",
+            entry.workspace.display(),
+            entry.state,
+            entry.reason,
+            entry
+                .error
+                .as_ref()
+                .map(|error| format!(" - {error}"))
+                .unwrap_or_default()
+        )?;
+    }
     // A refreshed block next to a surviving user directive is still a finding. Name those
     // files so the refresh cannot read as "this workspace is now clean".
     for path in &report.conflicts_left_for_the_owner {
@@ -487,6 +502,24 @@ pub fn print_fleet_reconcile(report: &crate::diagnostics::FleetReconcileReport) 
             output,
             "  conflict left for the owner: {} (user-authored directives are never rewritten)",
             path.display()
+        )?;
+    }
+    Ok(())
+}
+
+/// 0.8.1: one line per orphaned engine `--fix` acted on.
+pub fn print_orphan_cleanup(outcomes: &[crate::foreign::OrphanStopOutcome]) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    if outcomes.is_empty() {
+        return writeln!(output, "orphaned engines: none to stop");
+    }
+    writeln!(output, "orphaned engines: {} signalled", outcomes.len())?;
+    for outcome in outcomes {
+        writeln!(
+            output,
+            "  {} pid {}: {:?} - {}",
+            outcome.engine, outcome.pid, outcome.state, outcome.detail
         )?;
     }
     Ok(())
@@ -774,6 +807,7 @@ mod tests {
             repair: None,
             fidelity_reconcile: None,
             fleet_reconcile: None,
+            orphan_cleanup: None,
         }
     }
 

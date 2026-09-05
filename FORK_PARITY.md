@@ -1,7 +1,7 @@
-# HZR 0.8.0 — fork-core parity ledger
+# HZR 0.8.1 — fork-core parity ledger
 
 **Audit date:** 2026-09-03
-**Status:** HZR 0.8.0 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
+**Status:** HZR 0.8.1 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -42,7 +42,7 @@ The 0.6.0 gate verified current engine manifest
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
 
-### 0.8.0 diagnostic fidelity delta
+### 0.8.1 diagnostic fidelity delta
 
 Failed Rust test wrappers retain the complete stdout/stderr failure blocks, including
 unindented anyhow errors, assertion values and source locations. Cargo output is identified
@@ -58,7 +58,7 @@ passthrough; post-tool filtering never fabricates a host-delivery acknowledgemen
 and engine version remain unchanged; CURRENT_ENGINE identifies this HZR-owned delta.
 Full deterministic parity and the inherited warning ratchet remain required before release.
 
-The 0.8.0 router no longer requires optimizer approval for interpreter reads or aggregate
+The 0.8.1 router no longer requires optimizer approval for interpreter reads or aggregate
 commands solely because no equivalent filter exists. Unsupported commands retain tracked
 fallback; typed SQL, archive and remote-log safety restrictions remain. Read-only SQLite SELECT
 queries, including ledger diagnostics and the optional `-readonly` flag, use the bounded SQLite

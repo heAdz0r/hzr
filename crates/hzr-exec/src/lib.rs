@@ -15,8 +15,9 @@ mod shell;
 
 pub use accounting::{
     AccountingDrain, AccountingDrainIssue, AccountingDrainIssueKind, AccountingDrainStatus,
-    AccountingJournalInventory, AccountingJournalKind, accounting_journal_inventory,
-    acknowledge_accounting, drain_accounting,
+    AccountingEngineIdentityPolicy, AccountingJournalInventory, AccountingJournalKind,
+    accounting_journal_inventory, acknowledge_accounting, drain_accounting,
+    drain_accounting_with_policy,
 };
 pub use adapter::{
     AccountedForkExecution, ForkAccountingHandle, ForkCoreConfig, ForkCoreInvocation,

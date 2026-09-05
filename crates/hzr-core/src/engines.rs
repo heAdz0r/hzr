@@ -80,9 +80,20 @@ mod tests {
             .iter()
             .find(|engine| engine.name == "icm")
             .expect("ICM pin");
+        // 0.8.1: the Cargo.lock refresh plus the parent-watchdog patch.
+        assert_eq!(
+            icm.patches,
+            [
+                "patches/icm/0.10.61-refresh-workspace-lock.patch",
+                "patches/icm/0.10.61-exit-with-parent.patch"
+            ]
+        );
         assert_eq!(
             icm.patch_sha256,
-            ["cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586"]
+            [
+                "cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586",
+                "c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8"
+            ]
         );
 
         let caveman_code = manifest

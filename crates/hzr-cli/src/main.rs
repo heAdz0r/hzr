@@ -20,6 +20,7 @@ mod mcp;
 mod memory_migration;
 mod migration;
 mod output;
+mod post_upgrade; // 0.8.1
 mod prefix;
 mod read_cli;
 mod release_version;
@@ -480,6 +481,13 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 None
             };
+            // 0.8.1: `--fix` also stops engine children whose HZR installation is gone. They are
+            // re-verified by PID and argv before any signal; foreign processes are never touched.
+            let orphan_cleanup = if fix {
+                Some(foreign::stop_orphaned(&foreign::scan(&config.data_dir)?))
+            } else {
+                None
+            };
             let fidelity_reconcile = match resolve_fidelity {
                 Some(reservation_id) => {
                     let resolution = match (acknowledge_executed, prove_not_executed) {
@@ -504,6 +512,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             report.repair = repair;
             report.fidelity_reconcile = fidelity_reconcile;
             report.fleet_reconcile = fleet_reconcile;
+            report.orphan_cleanup = orphan_cleanup; // 0.8.1
             if let Some(fleet) = &report.fleet_reconcile {
                 let completion = fleet.completion_check();
                 if completion.status == diagnostics::CheckStatus::Error {
@@ -515,6 +524,8 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     &report.response_codec_coverage,
                 );
             }
+            // 0.8.1: a doctor run launched as the post-upgrade reconciliation records its outcome.
+            post_upgrade::record_completion_from_env(&config, &report);
             if cli.json {
                 print_json(&report)?;
             } else {
@@ -523,6 +534,9 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 }
                 if let Some(fleet) = &report.fleet_reconcile {
                     print_fleet_reconcile(fleet)?;
+                }
+                if let Some(cleanup) = &report.orphan_cleanup {
+                    output::print_orphan_cleanup(cleanup)?; // 0.8.1
                 }
                 print_doctor(&report)?;
             }
@@ -2781,6 +2795,16 @@ async fn initialize_if_needed(
     } else {
         service::ensure_running_if_installed()?
     };
+    // 0.8.1: the first session on a new HZR version schedules one detached fleet-wide doctor
+    // pass (`--reconcile-fleet --fix`) so every registered workspace, index and engine returns
+    // to the reference state without exceeding the SessionStart hook budget. The installer's
+    // `--skip-service` call is excluded: `hzr install --force` is still rewriting files then.
+    let reference_state = if skip_service {
+        None
+    } else {
+        post_upgrade::schedule_if_needed(&config, &workspace_root)
+            .unwrap_or_else(|error| Some(post_upgrade::ScheduleOutcome::failed(error)))
+    };
 
     if json {
         print_json(&serde_json::json!({
@@ -2797,6 +2821,7 @@ async fn initialize_if_needed(
             "project_codex_mcp": project_mcp,
             "dashboard": dashboard,
             "daemon_service": service_report,
+            "reference_state": reference_state, // 0.8.1
             "mcp": mcp::lifecycle_metadata(),
         }))?;
     } else if !quiet {

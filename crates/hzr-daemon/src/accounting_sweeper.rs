@@ -3,13 +3,24 @@ use std::path::Path;
 use std::time::Duration;
 
 use hzr_core::{AccountingCoverageStore, AccountingReceiptContextStore};
-use hzr_exec::{AccountingDrainStatus, acknowledge_accounting, drain_accounting};
+use hzr_exec::{
+    AccountingDrainStatus, AccountingEngineIdentityPolicy, acknowledge_accounting,
+    drain_accounting, drain_accounting_with_policy,
+};
 use hzr_protocol::AccountingChannel;
 
 use crate::AppState;
 
 #[cfg(test)]
 const ABANDONED_CONTEXT_TTL_SECS: u64 = 24 * 60 * 60;
+
+// 0.8.1: receipt journals without a registered context (daemon-free rewrites before 0.8.1,
+// crashed producers) are drained after this grace period so they stop counting as undrained.
+const ORPHAN_JOURNAL_GRACE_SECS: u64 = 600;
+const ORPHAN_JOURNALS_PER_SWEEP: usize = 200;
+/// Project attribution for receipts recovered without a context. It is a visible label, not a
+/// guess at which workspace produced the operations.
+pub const UNATTRIBUTED_PROJECT_PATH: &str = "unattributed";
 
 pub fn register(
     state: &AppState,
@@ -80,7 +91,137 @@ pub async fn sweep_once(state: &AppState) -> Result<usize, String> {
             }
         }
     }
+    committed += sweep_orphan_journals(state, &directory).await?; // 0.8.1
     Ok(committed)
+}
+
+/// 0.8.1: drain receipt journals that have no context file.
+///
+/// The correlation was never registered (daemon-free rewrite) or its context was retired, so
+/// the receipts can only be recorded as `unattributed`. Recording them is still more honest
+/// than an ever-growing undrained count: the token measurements are real, only the workspace
+/// is unknown. Rejected batches are quarantined as `.rejected` and recorded as a producer gap.
+async fn sweep_orphan_journals(state: &AppState, directory: &Path) -> Result<usize, String> {
+    let now = std::time::SystemTime::now();
+    let mut orphans = Vec::new();
+    for entry in fs::read_dir(directory)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        let Some(correlation_id) = orphan_journal_correlation(&path) else {
+            continue;
+        };
+        if directory
+            .join(format!("accounting-context-{correlation_id}.json"))
+            .is_file()
+        {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() || metadata.len() == 0 {
+            continue;
+        }
+        let age = metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .map_or(0, |age| age.as_secs());
+        if age < ORPHAN_JOURNAL_GRACE_SECS {
+            continue;
+        }
+        orphans.push((correlation_id, path));
+    }
+    orphans.sort();
+    orphans.dedup_by(|left, right| left.0 == right.0);
+    let mut committed = 0;
+    for (correlation_id, path) in orphans.into_iter().take(ORPHAN_JOURNALS_PER_SWEEP) {
+        let runner = state.rtk.runner().map_err(|error| error.to_string())?;
+        let handle = runner
+            .accounting_handle(&correlation_id)
+            .map_err(|error| error.to_string())?;
+        // The producer may have been an earlier fork-core build (the journal predates an
+        // upgrade); the receipt is validated against the identity it recorded.
+        let drained =
+            drain_accounting_with_policy(&handle, AccountingEngineIdentityPolicy::RecordedBuild)
+                .map_err(|error| error.to_string())?;
+        let batch_id = match &drained.status {
+            AccountingDrainStatus::Empty => continue,
+            AccountingDrainStatus::Ready { batch_id } if drained.failures.is_empty() => {
+                batch_id.clone()
+            }
+            AccountingDrainStatus::Ready { .. } | AccountingDrainStatus::Rejected { .. } => {
+                quarantine_orphan_journal(state, &path, &drained.status);
+                continue;
+            }
+        };
+        for receipt in drained.receipts {
+            state
+                .ledger
+                .record_engine_receipt(
+                    receipt,
+                    UNATTRIBUTED_PROJECT_PATH.to_owned(),
+                    None,
+                    None,
+                    AccountingChannel::HookCli,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            committed += 1;
+        }
+        acknowledge_accounting(&handle, &batch_id).map_err(|error| error.to_string())?;
+        // A successful recovery closes the gap an earlier rejected orphan batch may have opened.
+        let _ = AccountingCoverageStore::new(&state.config.data_dir).recover(orphan_gap_event());
+    }
+    Ok(committed)
+}
+
+fn orphan_gap_event() -> hzr_core::AccountingGapEvent {
+    hzr_core::AccountingGapEvent {
+        surface: hzr_core::AccountingGapSurface::ForkProducer,
+        workspace_hash: None,
+        session_hash: None,
+        operation_family: Some("orphan_receipt_rejected".into()),
+        at_unix: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .max(1),
+    }
+}
+
+fn orphan_journal_correlation(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let rest = name.strip_prefix("accounting-receipts-")?;
+    let correlation_id = rest
+        .strip_suffix(".jsonl")
+        .or_else(|| rest.strip_suffix(".jsonl.pending"))?;
+    (correlation_id.len() == 32
+        && correlation_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()))
+    .then(|| correlation_id.to_owned())
+}
+
+fn quarantine_orphan_journal(state: &AppState, path: &Path, status: &AccountingDrainStatus) {
+    let recorded =
+        AccountingCoverageStore::new(&state.config.data_dir).ensure_missing(orphan_gap_event());
+    if let Err(error) = &recorded {
+        tracing::error!(%error, "orphan receipt rejection could not be recorded");
+        return;
+    }
+    // The drain rotated the journal to `.pending`; quarantine every pending file of the batch.
+    for candidate in [path.to_path_buf(), path.with_extension("jsonl.pending")] {
+        if candidate.is_file() {
+            let quarantine = candidate.with_extension("rejected");
+            if let Err(error) = fs::rename(&candidate, &quarantine) {
+                tracing::warn!(%error, journal = %candidate.display(), "orphan journal quarantine failed");
+            }
+        }
+    }
+    tracing::warn!(?status, journal = %path.display(), "orphan receipt journal rejected");
 }
 
 async fn sweep_context(
@@ -392,5 +533,126 @@ exit 64
                 .live_complete,
             "missing receipts remain unresolved after cleanup"
         );
+    }
+
+    // 0.8.1: journals whose context never existed are recovered as `unattributed` once old.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn orphan_receipt_journal_without_context_is_recovered_after_grace() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().expect("temporary directory");
+        let engines = directory.path().join("engines");
+        fs::create_dir_all(&engines).expect("engine directory");
+        let binary = engines.join("rtk");
+        let contract = serde_json::to_string(&expected_engine_identity().expect("engine identity"))
+            .expect("contract JSON");
+        fs::write(
+            &binary,
+            format!(
+                r#"#!/bin/sh
+if test "${{1:-}}" = --version; then
+  printf 'rtk %s\n' '{PINNED_RTK_VERSION}'
+  exit 0
+fi
+if test "${{1:-}}" = contract && test "${{2:-}}" = --json; then
+  printf '%s\n' '{contract}'
+  exit 0
+fi
+if test "${{1:-}}" = rewrite && test "${{2:-}}" = --help; then
+  printf 'Usage: rtk rewrite [ARGS]... Raw command to rewrite\n'
+  exit 0
+fi
+if test "${{1:-}}" = proxy && test "${{2:-}}" = --help; then
+  printf 'Usage: rtk proxy [ARGS]... Execute command without filtering\n'
+  exit 0
+fi
+exit 64
+"#
+            ),
+        )
+        .expect("fake rtk");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).expect("permissions");
+        let mut config = Config {
+            data_dir: directory.path().join("data"),
+            ..Config::default()
+        };
+        config.engines.auto_start_icm = false;
+        config.engines.directory = Some(engines);
+        let state = AppState::initialize(config).await.expect("state");
+        let paths = ForkRuntimePaths::from_data_root(&state.config.data_dir);
+        paths.ensure_layout().expect("fork layout");
+        let correlation_id = "abcdefabcdefabcdefabcdefabcdef01";
+        let journal = paths
+            .accounting_receipt_journal
+            .parent()
+            .expect("journal parent")
+            .join(format!("accounting-receipts-{correlation_id}.jsonl"));
+        // The journal predates an upgrade: the producer was an earlier build of the contract.
+        let mut earlier_build = expected_engine_identity().expect("engine identity");
+        earlier_build.manifest_sha256 = "0".repeat(64);
+        earlier_build.content_manifest_sha256 = "1".repeat(64);
+        let receipt = EngineAccountingReceipt {
+            contract_version: ENGINE_CONTRACT_VERSION,
+            engine: earlier_build,
+            correlation_id: correlation_id.to_owned(),
+            sequence: 1,
+            occurred_at_unix_ms: 1,
+            baseline_tokens: 1062,
+            delivered_tokens: 56,
+            execution_ms: 2,
+            measurement: AccountingMeasurement::Estimated,
+            route: AccountingRoute::Optimized,
+            attribution: AccountingAttribution {
+                operation: AccountingOperationKind::Exec,
+                mode: AccountingOperationMode::ExecRun,
+                stage: AccountingStage::InternalTransport,
+                requested_mode: None,
+                effective_mode: None,
+                search_strategy: None,
+                search_fallback_code: None,
+                include_content: None,
+                limit: None,
+                path_scope_count: None,
+                filter_level: None,
+                from_line: None,
+                to_line: None,
+                source_bytes: None,
+                evasion: None,
+            },
+            host_grant_applied: false,
+        };
+        fs::write(
+            &journal,
+            format!(
+                "{}\n",
+                serde_json::to_string(&receipt).expect("receipt JSON")
+            ),
+        )
+        .expect("orphan journal");
+        // Fresh journals may still belong to a producer whose context is about to appear.
+        assert_eq!(sweep_once(&state).await.expect("fresh orphan sweep"), 0);
+        assert!(journal.exists(), "a fresh orphan journal is left alone");
+        let old = std::time::SystemTime::now()
+            - std::time::Duration::from_secs(super::ORPHAN_JOURNAL_GRACE_SECS + 60);
+        fs::File::options()
+            .write(true)
+            .open(&journal)
+            .expect("journal handle")
+            .set_modified(old)
+            .expect("age the journal");
+        assert_eq!(sweep_once(&state).await.expect("aged orphan sweep"), 1);
+        assert!(
+            !journal.exists(),
+            "drained journal is acknowledged and removed"
+        );
+        assert!(!journal.with_extension("jsonl.pending").exists());
+        assert_eq!(
+            hzr_exec::accounting_journal_inventory(&state.config.data_dir)
+                .expect("inventory")
+                .undrained_receipts,
+            0
+        );
+        assert_eq!(sweep_once(&state).await.expect("replay"), 0);
     }
 }

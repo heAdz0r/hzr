@@ -1,0 +1,48 @@
+diff --git a/crates/icm-cli/src/main.rs b/crates/icm-cli/src/main.rs
+index 53ba7ad..f65c929 100644
+--- a/crates/icm-cli/src/main.rs
++++ b/crates/icm-cli/src/main.rs
+@@ -1579,6 +1579,26 @@ fn cmd_embeddings(action: &EmbeddingsAction) -> Result<()> {
+     Ok(())
+ }
+ 
++/// HZR: poll the parent PID and exit once the launcher is gone. Without this an ICM server
++/// launched by a supervisor that was SIGKILLed or crashed keeps its database open forever.
++#[cfg(unix)]
++fn spawn_parent_watchdog(parent: u32) {
++    let _ = std::thread::Builder::new()
++        .name("hzr-parent-watchdog".into())
++        .spawn(move || loop {
++            // SAFETY: getppid has no preconditions and cannot fail.
++            let current = unsafe { libc::getppid() } as u32;
++            if current != parent {
++                eprintln!("icm: launcher process {parent} exited; shutting down");
++                std::process::exit(0);
++            }
++            std::thread::sleep(std::time::Duration::from_secs(2));
++        });
++}
++
++#[cfg(not(unix))]
++fn spawn_parent_watchdog(_parent: u32) {}
++
+ fn main() -> Result<()> {
+     // Reset SIGPIPE to default so piped commands (e.g. `icm export | head`)
+     // don't panic on broken pipe.
+@@ -1600,6 +1620,16 @@ fn main() -> Result<()> {
+         .init();
+ 
+     let cli = Cli::parse();
++    // HZR: an owned `serve` child must never outlive the daemon that launched it. When the
++    // launcher exports its PID, exit as soon as the parent changes (reparenting to init).
++    if let Some(parent) = std::env::var("ICM_EXIT_WITH_PARENT_PID")
++        .ok()
++        .and_then(|value| value.parse::<u32>().ok())
++    {
++        if matches!(cli.command, Commands::Serve { .. }) {
++            spawn_parent_watchdog(parent);
++        }
++    }
+     let cfg = config::load_config()?;
+     let embeddings_enabled =
+         cfg.embeddings.enabled && !cli.no_embeddings && std::env::var("ICM_NO_EMBEDDINGS").is_err();

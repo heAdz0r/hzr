@@ -1,67 +1,52 @@
-# HZR 0.8.0
+# HZR 0.8.1
 
-HZR 0.8.0 redesigns the dashboard and corrects execution, retrieval and accounting behavior
-that could increase agent work or make local output reduction look like proven task savings.
-Local installation and client coverage are verified separately from source checks.
-Provider-billed savings require task-level evidence and are not claimed by this release.
+HZR 0.8.1 is a doctor and lifecycle hotfix. It repairs the two findings that kept `hzr doctor`
+red after the 0.8.0 upgrade, makes accounting recover from daemon-free intervals, and adds a
+post-upgrade pass that brings every registered workspace, index and engine back to the reference
+state without visiting each project.
 
-## A dashboard for operational decisions
+## Doctor findings that could not be fixed
 
-Overview, Projects, Memory & index and System separate service availability, local output
-estimates and economic evidence. Project/activity filters, responsive navigation, loading,
-error and stale states make failures and uncertainty visible. Unmeasured savings are shown
-as not established.
+- `hzr_doctor` over MCP rejected its own output because the 0.8.0 `readiness` field was missing
+  from the strict tool schema. The schema now declares every report field.
+- ICM servers whose launching daemon had been killed, crashed or torn down by a release smoke
+  fixture were reported as foreign duplicate owners with no supported remedy. Doctor now
+  distinguishes `orphaned_engine_processes` (HZR installation removed, parent exited) from
+  foreign processes, and `hzr doctor --fix` stops the orphans after re-verifying PID and argv.
+  Foreign processes are still never signalled.
+- The bundled ICM engine exits with its launcher when the daemon sets
+  `ICM_EXIT_WITH_PARENT_PID`, so the orphan class cannot reappear from a killed daemon.
 
-## Commands that finish and evidence that stays exact
+## Accounting that recovers
 
-- Durable execution jobs expose start, bounded wait and cancellation with stable IDs.
-  Repeated starts do not replay side effects; interrupted jobs stay explicit.
-- Failed test wrappers retain error blocks, assertions and source locations. Unknown failure
-  formats preserve captured output. Successful summaries retain compiler warning signals.
-- Git diff checks, quiet mode and exit-code mode preserve native status and exact diagnostics.
-  A failed Git validation cannot be reported as a successful HZR command.
-- Explicit full reads remain valid when the whole file is needed. Typed reads add batch
-  budgets, exact ranges, SHA-256 snapshot checks and completeness metadata.
-- Interpreter reads without an equivalent filter no longer trigger optimizer-only approval.
-  Read-only SQLite diagnostics use the managed bounded engine.
-- Scoped semantic and graph paths resolve against the correct workspace. Context plans budget
-  delivered evidence, expose optional memory retrieval and support exact memory expansion.
+Hook rewrites made while the daemon was down produced fork receipts under a correlation that
+never had a context file; those receipts stayed "undrained" indefinitely. The hook now registers
+the context locally, and the daemon sweeper drains context-less journals older than ten minutes as
+`unattributed` operations. Rejected batches are quarantined and recorded as a producer gap.
 
-## One control plane, explicit ownership
+## Fleets that converge
 
-ICM ownership survives daemon restarts through verified runtime records. SIGTERM follows graceful
-shutdown; repeatedly unready owned children recover without killing attached or foreign processes.
-Producer accounting and execution channels retain typed attribution. Fleet statistics read one
-consistent time window, retain historical project IDs and provide private JSON export.
-
-MCP adds typed read and execution lifecycle controls, accepts valid empty writes and adds exact
-memory lookup. Host adapters preserve host permission decisions and avoid blocking native reads
-merely to force a retry through HZR.
-
-## Measured claims
-
-The new paired-task harness requires task-bound provider usage, independent acceptance and
-matched configurations. It tracks rereads and rejected-task cost. Offline fixtures validate the
-measurement protocol; they do not establish economic superiority.
-
-The earlier cache experiment now rejects aggregate counters as per-run evidence. Local bytes/4
-estimates, provider usage, host delivery and completed-task quality remain distinct. No billed
-or total-task savings percentage is claimed without a real paired evaluation.
-
-## Scope and verification
-
-The implementation follows the fresh September 4 audit and its approved P0/P1 scope. The user
-also approved inclusion of the completed P2 branch `feat/prd-p2-agent-efficiency` (`9016b29`):
-cache-prefix-aware placement, concise generation by default, tiered instructions and explicitly
-uncalibrated ranking diagnostics. Calibration and a real paired economic evaluation remain
-unproven; this release does not invent either result. The 0.8.0 verification report records
-exact source and isolated installation checks. Existing integrations adopt the new runtime when
-the installed bundle is updated; source verification alone does not reconfigure clients.
+- Registrations whose worktree directory was deleted are pruned during
+  `hzr doctor --reconcile-fleet` instead of failing the fleet closure forever. A root whose
+  parent directory is also absent is retained in case the volume is unmounted.
+- The first `hzr init --if-needed` (the SessionStart hook) on a new version schedules one
+  detached `hzr doctor --reconcile-fleet --fix`; `hzr update` runs it in the foreground. The
+  marker `runtime/reference-state.json` and the `reference_state` doctor check show whether the
+  pass completed, is still running, or ended with findings.
 
 ## Upgrade
 
-Run `hzr update` to install the latest published bundle, then run `hzr doctor` in each active
-workspace. Run `hzr doctor --reconcile-fleet --dry-run` to inspect managed configuration updates
-and `hzr doctor --reconcile-fleet` to apply them across registered workspaces. Existing project
-files and durable memory are retained. Reconnect running MCP clients after the upgrade so they
-start the new binary.
+```bash
+hzr update
+```
+
+or
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/heAdz0r/hzr/v0.8.1/install.sh | sh
+```
+
+After installing, open any HZR session or run `hzr doctor --reconcile-fleet --fix` once. The
+reconciliation stops orphaned engines, prunes stale registrations and refreshes managed
+instruction blocks and Codex pins in every registered workspace. Open MCP sessions must be
+reconnected so clients pick up the new schema.

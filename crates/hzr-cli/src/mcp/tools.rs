@@ -362,7 +362,13 @@ fn doctor_schema() -> Value {
                 "type": "array",
                 "items": {"type": "object"}
             },
-            "repair": {"type": ["object", "null"]}
+            // 0.8.1: readiness has been part of the report since 0.8.0; the strict output
+            // contract rejected every live hzr_doctor call until it was declared here.
+            "readiness": {"type": "object"},
+            "repair": {"type": ["object", "null"]},
+            "fidelity_reconcile": {"type": ["object", "null"]},
+            "fleet_reconcile": {"type": ["object", "null"]},
+            "orphan_cleanup": {"type": ["array", "null"], "items": {"type": "object"}}
         }),
         &[
             "hzr_version",
@@ -370,6 +376,7 @@ fn doctor_schema() -> Value {
             "data_dir",
             "workspace",
             "healthy",
+            "readiness",
             "checks",
             "client_workspace_bindings",
             "response_codec_coverage",

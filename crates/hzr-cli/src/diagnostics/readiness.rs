@@ -44,6 +44,7 @@ impl ReadinessReport {
                         | "degraded_rewrites"
                         | "undrained_receipts"
                         | "foreign_engine_processes"
+                        | "orphaned_engine_processes" // 0.8.1
                 ) && !name.starts_with("global_codec")
             },
             &["hzr_on_path", "hook_ownership"],
@@ -54,7 +55,10 @@ impl ReadinessReport {
             |name| {
                 matches!(
                     name,
-                    "daemon_process" | "daemon_service" | "foreign_engine_processes"
+                    "daemon_process"
+                        | "daemon_service"
+                        | "foreign_engine_processes"
+                        | "orphaned_engine_processes" // 0.8.1
                 )
             },
             &["daemon_process"],

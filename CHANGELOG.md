@@ -4,6 +4,37 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-05
+
+### Fixed
+
+- `hzr_doctor` over MCP failed its own output contract on every call because the 0.8.0
+  `readiness` field was never declared in the tool schema; the schema now covers `readiness`,
+  `fidelity_reconcile`, `fleet_reconcile` and the new `orphan_cleanup` field.
+- ICM servers launched by a daemon that was killed, crashed or torn down by a release smoke
+  fixture survived as orphans and were reported as foreign duplicate owners forever. Doctor now
+  classifies an engine whose HZR installation is gone and whose parent has exited as
+  `orphaned_engine_processes`, and `hzr doctor --fix` stops those processes after re-verifying
+  PID and argv. Foreign processes are still never signalled.
+- The pinned ICM engine gained an opt-in parent watchdog (`ICM_EXIT_WITH_PARENT_PID`), which the
+  daemon supervisor sets, so an owned `icm serve` exits with its launcher instead of outliving it.
+  The release install smoke also terminates every engine launched from its fixture.
+- Daemon-free hook rewrites produced fork receipts under a correlation that never had a context
+  file, so thousands of receipts stayed "undrained" and the accounting readiness stayed degraded.
+  The hook now registers the same context the daemon would have, and the daemon sweeper drains
+  context-less journals older than ten minutes as `unattributed` operations (rejected batches are
+  quarantined and recorded as a producer gap).
+- Fleet reconciliation failed permanently on registrations whose worktree directory had been
+  deleted. Those registrations are now pruned (`stale_registrations`) when the parent directory
+  still exists; an absent parent is retained in case a volume is unmounted.
+
+### Added
+
+- Post-upgrade reference-state reconciliation: the first `hzr init --if-needed` on a new version
+  records `runtime/reference-state.json` and launches one detached
+  `hzr doctor --reconcile-fleet --fix` whose JSON report lands under `reports/`; `hzr update`
+  runs the same pass in the foreground. Doctor reports the outcome as `reference_state`.
+
 ## [0.8.0] - 2026-09-05
 
 ### Added
@@ -1580,6 +1611,7 @@ First public HZR release.
 [0.6.2]: https://github.com/heAdz0r/hzr/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/heAdz0r/hzr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0
+[0.8.1]: https://github.com/heAdz0r/hzr/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/heAdz0r/hzr/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/heAdz0r/hzr/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/heAdz0r/hzr/compare/v0.6.6...v0.7.0

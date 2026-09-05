@@ -232,7 +232,7 @@ pub enum Command {
         /// Workspace root to diagnose (defaults to the current directory)
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
-        /// Safely migrate one unambiguous legacy .grepai before diagnosing
+        /// Safely migrate one unambiguous legacy .grepai and stop orphaned HZR-launched engines before diagnosing
         #[arg(long)]
         fix: bool,
         /// Refresh the managed contract block in every registered workspace reporting a stale one

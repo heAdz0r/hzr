@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-<a href="Cargo.toml"><img alt="Version 0.8.0" src="https://img.shields.io/badge/version-0.8.0-e64a19"></a>
+<a href="Cargo.toml"><img alt="Version 0.8.1" src="https://img.shields.io/badge/version-0.8.1-e64a19"></a>
   <a href="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/heAdz0r/hzr/releases"><img alt="Release" src="https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/control_plane-Apache--2.0-37474f"></a>
@@ -109,7 +109,7 @@ and [recorded run](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RES
 
 ## Install
 
-HZR 0.8.0 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
+HZR 0.8.1 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
 Apple Silicon. Intel macOS is no longer supported. System Git is the only engine prerequisite; Node.js, RTK,
 grepai, and ICM are bundled. Windows is not currently published.
 
@@ -117,7 +117,7 @@ Download, inspect, then run the installer:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.8.0/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.8.1/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -326,7 +326,14 @@ not a fix. One command repairs them:
 ```bash
 hzr doctor --reconcile-fleet --dry-run   # exact files first
 hzr doctor --reconcile-fleet
+hzr doctor --reconcile-fleet --fix       # also stop orphaned engines, prune deleted worktrees
 ```
+
+Since 0.8.1 the first session on a new HZR version schedules this pass once, detached from the
+SessionStart hook, and `hzr update` runs it in the foreground. `runtime/reference-state.json`
+and the `reference_state` doctor check report whether it completed, is still running, or ended
+with findings. Registrations whose worktree directory was deleted are pruned; a root whose parent
+directory is also absent is retained in case the volume is unmounted.
 
 It refreshes stale blocks and creates missing managed Claude/Codex instruction surfaces and
 Codex project MCP pins for already registered workspaces. Claude Code `.mcp.json` remains an
@@ -370,7 +377,7 @@ policy: no repository file can buy an exception to a bypass HZR could replace at
 
 ## Honest boundaries
 
-| Guarantee | 0.8.0 posture |
+| Guarantee | 0.8.1 posture |
 |---|---|
 | one versioned control plane and pinned engine bundle | implemented |
 | one canonical index owner per worktree | implemented |

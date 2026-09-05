@@ -480,6 +480,7 @@ fn representative_output(name: &str) -> Option<Value> {
             "data_dir": "/data",
             "workspace": "/work",
             "healthy": true,
+            "readiness": {"installation": {"status": "ready"}, "economic_claim_ready": false},
             "checks": [{"name": "binding", "status": "pass", "detail": "exact"}],
             "client_workspace_bindings": [],
             "response_codec_coverage": []

@@ -106,6 +106,9 @@ pub struct DoctorReport {
     pub fidelity_reconcile: Option<hzr_protocol::FidelityReconcileReceipt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fleet_reconcile: Option<FleetReconcileReport>,
+    // 0.8.1: `--fix` reports every orphaned HZR-launched engine it signalled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orphan_cleanup: Option<Vec<foreign::OrphanStopOutcome>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -479,6 +482,8 @@ pub struct FleetReconcileReport {
     pub legacy_indexes: Vec<FleetLegacyIndexAction>,
     pub workspace_errors: Vec<FleetWorkspaceError>,
     pub skipped_disabled: Vec<PathBuf>,
+    // 0.8.1: registrations whose root directory was deleted (removed worktrees) and their fate.
+    pub stale_registrations: Vec<FleetStaleRegistration>,
     /// Files whose managed block is stale *and* which also carry a user-authored directive.
     /// The block is still refreshed; the conflicting line is reported, never rewritten.
     pub conflicts_left_for_the_owner: Vec<PathBuf>,
@@ -503,7 +508,18 @@ impl FleetReconcileReport {
         let pending_preview = self.dry_run
             && (self.rewritten.iter().any(|entry| entry.changed)
                 || self.project_codex_mcp.iter().any(|entry| entry.changed)
-                || self.local_excludes.iter().any(|entry| entry.changed));
+                || self.local_excludes.iter().any(|entry| entry.changed)
+                // 0.8.1: a stale registration that would be pruned is still pending work.
+                || self
+                    .stale_registrations
+                    .iter()
+                    .any(|entry| entry.state == "would_prune"));
+        let write_errors = write_errors.saturating_add(
+            self.stale_registrations
+                .iter()
+                .filter(|entry| entry.error.is_some())
+                .count(),
+        );
         let unresolved_indexes = self
             .legacy_indexes
             .iter()
@@ -551,6 +567,20 @@ pub struct FleetProjectMcpRewrite {
 pub struct FleetWorkspaceError {
     pub workspace: PathBuf,
     pub error: String,
+}
+
+/// 0.8.1: a registered workspace whose root directory no longer exists.
+///
+/// `state` is `would_prune` (dry run), `pruned` (registry directory removed) or `failed`.
+/// Roots whose parent directory is also absent are never pruned: an unmounted volume must
+/// not lose its registration, so those stay in `workspace_errors`.
+#[derive(Clone, Debug, Serialize)]
+pub struct FleetStaleRegistration {
+    pub workspace: PathBuf,
+    pub registry_directory: PathBuf,
+    pub state: &'static str,
+    pub reason: String,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -688,6 +718,7 @@ pub async fn reconcile_fleet_contracts(
         legacy_indexes: Vec::new(),
         workspace_errors: Vec::new(),
         skipped_disabled: Vec::new(),
+        stale_registrations: Vec::new(), // 0.8.1
         conflicts_left_for_the_owner: Vec::new(),
         refused: None,
     };
@@ -715,10 +746,8 @@ pub async fn reconcile_fleet_contracts(
             continue;
         }
         if !registration.root.is_dir() {
-            report.workspace_errors.push(FleetWorkspaceError {
-                workspace: registration.root,
-                error: "registered workspace root is absent or not a directory".to_owned(),
-            });
+            // 0.8.1: a deleted root (parent still present) is pruned instead of failing forever.
+            reconcile_stale_registration(config, registration, dry_run, &mut report);
             continue;
         }
         let verified = match Workspace::discover_managed_fast(
@@ -905,6 +934,80 @@ pub async fn reconcile_fleet_contracts(
         }
     }
     report
+}
+
+/// 0.8.1: retire the registration of a workspace whose root directory was deleted.
+///
+/// Only the exact `workspaces/<repository>/<worktree>` directory named by the registration is
+/// removed, and only when the root's parent still exists (so the root was deleted rather than
+/// unmounted). The index inside it indexed a tree that no longer exists.
+fn reconcile_stale_registration(
+    config: &Config,
+    registration: hzr_index::WorkspaceRegistration,
+    dry_run: bool,
+    report: &mut FleetReconcileReport,
+) {
+    let parent_present = registration.root.parent().is_some_and(Path::is_dir);
+    let root_exists = registration.root.exists();
+    if !parent_present || root_exists {
+        report.workspace_errors.push(FleetWorkspaceError {
+            workspace: registration.root,
+            error: if root_exists {
+                "registered workspace root is not a directory".to_owned()
+            } else {
+                "registered workspace root is absent and so is its parent; retained in case the volume is unmounted".to_owned()
+            },
+        });
+        return;
+    }
+    let registry_directory = config
+        .data_dir
+        .join("workspaces")
+        .join(&registration.repository_id)
+        .join(&registration.worktree_id);
+    let reason = format!(
+        "root directory {} was deleted while {} remains",
+        registration.root.display(),
+        registration
+            .root
+            .parent()
+            .map_or_else(String::new, |parent| parent.display().to_string())
+    );
+    if !registration
+        .index_directory
+        .starts_with(&registry_directory)
+        || !registry_directory.is_dir()
+    {
+        report.stale_registrations.push(FleetStaleRegistration {
+            workspace: registration.root,
+            registry_directory,
+            state: "failed",
+            reason,
+            error: Some("registration does not name its own registry directory".to_owned()),
+        });
+        return;
+    }
+    if dry_run {
+        report.stale_registrations.push(FleetStaleRegistration {
+            workspace: registration.root,
+            registry_directory,
+            state: "would_prune",
+            reason,
+            error: None,
+        });
+        return;
+    }
+    let (state, error) = match std::fs::remove_dir_all(&registry_directory) {
+        Ok(()) => ("pruned", None),
+        Err(error) => ("failed", Some(error.to_string())),
+    };
+    report.stale_registrations.push(FleetStaleRegistration {
+        workspace: registration.root,
+        registry_directory,
+        state,
+        reason,
+        error,
+    });
 }
 
 async fn reconcile_legacy_index(
@@ -1620,15 +1723,12 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         ));
     }
     // Report only. Stopping foreign processes stays an explicit user decision (§11).
+    // 0.8.1: orphaned HZR launches (installation removed, parent gone) are the one exception:
+    // they are reported separately and `hzr doctor --fix` stops them.
     match foreign::scan(&config.data_dir) {
         Ok(report) => {
             if report.unmanaged_active_total() > 0 {
-                let detail = report
-                    .unmanaged_by_engine
-                    .iter()
-                    .map(|(engine, count)| format!("{engine}={count}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                let detail = foreign::ForeignReport::engine_summary(&report.unmanaged_by_engine);
                 checks.push(check(
                     "foreign_engine_processes",
                     CheckStatus::Error,
@@ -1641,6 +1741,23 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             } else {
                 checks.push(check(
                     "foreign_engine_processes",
+                    CheckStatus::Pass,
+                    "none detected",
+                ));
+            }
+            if report.orphaned_total() > 0 {
+                let detail = foreign::ForeignReport::engine_summary(&report.orphaned_by_engine);
+                checks.push(check(
+                    "orphaned_engine_processes",
+                    CheckStatus::Warning,
+                    format!(
+                        "{} orphaned HZR-launched engine process(es) ({detail}) outlived a removed installation; run `hzr doctor --fix` to stop them",
+                        report.orphaned_total()
+                    ),
+                ));
+            } else {
+                checks.push(check(
+                    "orphaned_engine_processes",
                     CheckStatus::Pass,
                     "none detected",
                 ));
@@ -1675,12 +1792,19 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 &error,
             ));
             checks.push(check(
+                "orphaned_engine_processes",
+                CheckStatus::Warning,
+                &error,
+            )); // 0.8.1
+            checks.push(check(
                 "foreign_engine_wrappers",
                 CheckStatus::Warning,
                 error,
             ));
         }
     }
+    // 0.8.1: the post-upgrade reference-state reconciliation must have run for this version.
+    checks.push(crate::post_upgrade::reference_state_check(config));
     match hook_runner::degraded_rewrite_coverage(config) {
         // A closed gap is a pass, not a permanent warning — the ledger is whole again and
         // the history stays visible in the detail line.
@@ -2009,6 +2133,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         repair: None,
         fidelity_reconcile: None,
         fleet_reconcile: None,
+        orphan_cleanup: None, // 0.8.1
     }
 }
 

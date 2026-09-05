@@ -385,6 +385,9 @@ impl IcmSupervisor {
             .arg("--db")
             .arg(&self.layout.database)
             .stderr(Stdio::from(stderr))
+            // 0.8.1: the patched ICM exits on its own once this supervisor's process is gone, so
+            // a SIGKILLed or crashed daemon can no longer leave an orphaned memory server behind.
+            .env("ICM_EXIT_WITH_PARENT_PID", std::process::id().to_string())
             .kill_on_drop(true);
         if !self.config.embeddings {
             command.arg("--no-embeddings");

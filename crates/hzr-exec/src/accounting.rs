@@ -135,10 +135,27 @@ pub struct AccountingDrain {
     pub status: AccountingDrainStatus,
 }
 
+/// 0.8.1: which engine build a drained receipt may come from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccountingEngineIdentityPolicy {
+    /// The receipt must come from the currently pinned fork-core build (live producers).
+    Exact,
+    /// The receipt must be self-consistent under the identity it recorded. Used for journals
+    /// recovered after an upgrade, whose producer was an earlier build of the same contract.
+    RecordedBuild,
+}
+
 pub fn drain_accounting(handle: &ForkAccountingHandle) -> Result<AccountingDrain, ExecError> {
+    drain_accounting_with_policy(handle, AccountingEngineIdentityPolicy::Exact)
+}
+
+pub fn drain_accounting_with_policy(
+    handle: &ForkAccountingHandle,
+    policy: AccountingEngineIdentityPolicy,
+) -> Result<AccountingDrain, ExecError> {
     let lock = open_drain_lock(handle)?;
     FileExt::lock_exclusive(&lock).map_err(|source| accounting_io_error(handle, source))?;
-    let result = drain_accounting_locked(handle);
+    let result = drain_accounting_locked(handle, policy);
     let _ = FileExt::unlock(&lock);
     result
 }
@@ -167,7 +184,10 @@ pub fn acknowledge_accounting(
     result
 }
 
-fn drain_accounting_locked(handle: &ForkAccountingHandle) -> Result<AccountingDrain, ExecError> {
+fn drain_accounting_locked(
+    handle: &ForkAccountingHandle,
+    policy: AccountingEngineIdentityPolicy,
+) -> Result<AccountingDrain, ExecError> {
     let mut pending = pending_journals(handle);
     if pending.is_empty() {
         rotate_active_journals(handle)?;
@@ -229,7 +249,12 @@ fn drain_accounting_locked(handle: &ForkAccountingHandle) -> Result<AccountingDr
                             Some(line_number),
                         ));
                     }
-                    if receipt.engine != expected_engine {
+                    // 0.8.1: recovered journals validate against the build that wrote them.
+                    let accepted_engine = match policy {
+                        AccountingEngineIdentityPolicy::Exact => &expected_engine,
+                        AccountingEngineIdentityPolicy::RecordedBuild => &receipt.engine,
+                    };
+                    if receipt.engine != *accepted_engine {
                         return Ok(rejected(
                             journal,
                             AccountingDrainIssueKind::EngineIdentityMismatch,
@@ -237,7 +262,7 @@ fn drain_accounting_locked(handle: &ForkAccountingHandle) -> Result<AccountingDr
                         ));
                     }
                     if receipt.correlation_id != journal.correlation_id
-                        || !receipt.is_valid_for(&expected_engine)
+                        || !receipt.is_valid_for(accepted_engine)
                     {
                         return Ok(rejected(
                             journal,
@@ -262,7 +287,9 @@ fn drain_accounting_locked(handle: &ForkAccountingHandle) -> Result<AccountingDr
                             Some(line_number),
                         ));
                     }
-                    if failure.engine != expected_engine {
+                    if policy == AccountingEngineIdentityPolicy::Exact
+                        && failure.engine != expected_engine
+                    {
                         return Ok(rejected(
                             journal,
                             AccountingDrainIssueKind::EngineIdentityMismatch,

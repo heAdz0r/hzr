@@ -40,8 +40,14 @@ commit = "c3a1bac7cfe401b55fd66af16dfc0c774c02167a"
 repository = "https://github.com/rtk-ai/icm"
 license = "Apache-2.0"
 binary = "icm"
-patches = ["patches/icm/0.10.61-refresh-workspace-lock.patch"]
-patch_sha256 = ["cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586"]
+patches = [
+  "patches/icm/0.10.61-refresh-workspace-lock.patch",
+  "patches/icm/0.10.61-exit-with-parent.patch",
+]
+patch_sha256 = [
+  "cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586",
+  "c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8",
+]
 
 [[engine]]
 name = "rtk"
