@@ -66,3 +66,13 @@ unwrap_used = "deny"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# 0.8.2: `target/debug` reached 58 GB and filled the disk. Cargo never removes superseded
+# artefacts, and full DWARF for every dependency variant is what made each of them large.
+# Line tables keep panic locations and backtraces readable; dependencies carry no debug info.
+# `CARGO_PROFILE_DEV_DEBUG=2 cargo build` restores full debug info for one build.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

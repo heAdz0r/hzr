@@ -172,7 +172,19 @@ fn persist_original(
         lock.metadata()?.is_file(),
         "quota lock is not a regular file"
     );
-    fs2::FileExt::try_lock_exclusive(&lock)?;
+    // 0.8.2: a sibling observer may hold the quota lock for a few milliseconds; wait briefly
+    // instead of failing the recovery on the first EAGAIN. A lock held longer still refuses.
+    let mut attempts = 0u32;
+    loop {
+        match fs2::FileExt::try_lock_exclusive(&lock) {
+            Ok(()) => break,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && attempts < 25 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
     // Dropping the descriptor releases the process lock even on early return.
     crate::adoption::validate_lifecycle_target(path)?;
     match fs::symlink_metadata(path) {

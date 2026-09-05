@@ -427,15 +427,61 @@ fn pending_path(path: &Path) -> PathBuf {
 }
 
 fn open_journal_lock(path: &Path) -> Result<File, ExecError> {
-    let mut value: OsString = path.as_os_str().to_owned();
-    value.push(".lock");
-    open_private_lock(Path::new(&value))
+    open_private_lock(&journal_lock_path(path)) // 0.8.2: one path builder shared with removal
 }
 
 fn open_drain_lock(handle: &ForkAccountingHandle) -> Result<File, ExecError> {
+    open_private_lock(&drain_lock_path(handle)) // 0.8.2: one path builder shared with removal
+}
+
+// 0.8.2: lock paths are built in one place so `remove_accounting_locks` cannot drift from the
+// files the drain and rotation actually create.
+fn journal_lock_path(path: &Path) -> PathBuf {
+    let mut value: OsString = path.as_os_str().to_owned();
+    value.push(".lock");
+    PathBuf::from(value)
+}
+
+fn drain_lock_path(handle: &ForkAccountingHandle) -> PathBuf {
     let mut value: OsString = handle.receipt_journal.as_os_str().to_owned();
     value.push(".drain.lock");
-    open_private_lock(Path::new(&value))
+    PathBuf::from(value)
+}
+
+/// 0.8.2: remove the lock files a correlation leaves behind.
+///
+/// Every drain created `<journal>.drain.lock` and every append or rotation created
+/// `<journal>.lock`, and nothing ever removed them: the fork directory accumulated two files
+/// per command forever (18 500 on one workstation) and every daemon sweep listed all of them.
+/// The caller decides when the producer is provably gone — a completed or abandoned context, or
+/// an orphan whose journals are absent — so a live producer never loses its lock.
+pub fn remove_accounting_locks(handle: &ForkAccountingHandle) -> Result<(), ExecError> {
+    for path in [
+        journal_lock_path(&handle.receipt_journal),
+        journal_lock_path(&handle.failure_journal),
+        drain_lock_path(handle),
+    ] {
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(ExecError::PrepareForkRuntime { path, source }),
+        }
+    }
+    Ok(())
+}
+
+/// 0.8.2: the correlation a lock file in the fork directory belongs to, or `None` for any other
+/// file. The sweeper uses it to remove locks whose producer left no context and no journal.
+#[must_use]
+pub fn accounting_lock_correlation(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_str()?;
+    let rest = name
+        .strip_prefix("accounting-receipts-")
+        .or_else(|| name.strip_prefix("accounting-failures-"))?;
+    let correlation_id = rest
+        .strip_suffix(".jsonl.lock")
+        .or_else(|| rest.strip_suffix(".jsonl.drain.lock"))?;
+    valid_correlation_id(correlation_id).then(|| correlation_id.to_owned())
 }
 
 fn open_private_lock(path: &Path) -> Result<File, ExecError> {
@@ -590,6 +636,40 @@ mod tests {
         assert_eq!(inventory.undrained_receipt_journals, 1);
         assert_eq!(inventory.undrained_receipts, 2);
         assert!(inventory.oldest_modified_at_unix.is_some());
+        Ok(())
+    }
+
+    // 0.8.2: locks are removed only on request and their absence is not an error.
+    #[test]
+    fn lock_files_are_removed_on_request_and_identified_by_correlation() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let paths = ForkRuntimePaths::from_data_root(directory.path());
+        paths.ensure_layout()?;
+        let correlation_id = "0123456789abcdef0123456789abcdef";
+        let handle = fixture_handle(&paths, correlation_id)?;
+        assert_eq!(
+            drain_accounting(&handle)?.status,
+            AccountingDrainStatus::Empty
+        );
+        let drain_lock = drain_lock_path(&handle);
+        assert!(drain_lock.exists(), "a drain creates its lock file");
+        assert_eq!(
+            accounting_lock_correlation(&drain_lock).as_deref(),
+            Some(correlation_id)
+        );
+        assert_eq!(
+            accounting_lock_correlation(&journal_lock_path(&handle.failure_journal)).as_deref(),
+            Some(correlation_id)
+        );
+        assert_eq!(accounting_lock_correlation(&handle.receipt_journal), None);
+        assert_eq!(
+            accounting_lock_correlation(Path::new("accounting-receipts-nothex.jsonl.lock")),
+            None
+        );
+
+        remove_accounting_locks(&handle)?;
+        assert!(!drain_lock.exists());
+        remove_accounting_locks(&handle)?;
         Ok(())
     }
 
