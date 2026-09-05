@@ -1174,6 +1174,11 @@ struct SessionFeedback {
     /// defer-everything rule threw away; the counter is what lets an arm comparison size it.
     #[serde(default)]
     placement_append_filtered_operations: u64,
+    /// 0.8.2: model id reported by the host status line (Claude Code sends `model.id`), so the
+    /// Stop scorecard prices avoided tokens at the model actually in use instead of the
+    /// configured default.
+    #[serde(default)]
+    observed_model_id: Option<String>,
 }
 
 fn agent_identity(input: &Value) -> &'static str {
@@ -1319,11 +1324,27 @@ fn scorecard_message(
     efficiency: Option<&SessionEfficiencySummary>,
     economics: Option<&SessionEconomicSummary>,
 ) -> String {
-    let complete_efficiency = (!state.accounting_was_degraded)
-        .then_some(efficiency)
-        .flatten();
-    let (potential, billed) = economic_message(config, complete_efficiency, economics);
-    let (savings, commands) = match complete_efficiency {
+    // 0.8.2: a degraded interval no longer withholds the measured part of the session. The
+    // measured totals are a lower bound and the unmeasured interval is reported beside them.
+    let partial = state.accounting_was_degraded;
+    let (potential, billed) = economic_message(
+        config,
+        state.observed_model_id.as_deref(),
+        efficiency,
+        economics,
+        partial,
+    );
+    let coverage_note = if partial {
+        format!(
+            " | PARTIAL: {}s across {} operation(s) unmeasured while accounting was degraded ({}% of observed session)",
+            session_degraded_seconds(state, unix_now()),
+            state.accounting_degraded_operations,
+            session_degraded_percent(state, unix_now()),
+        )
+    } else {
+        String::new()
+    };
+    let (savings, commands) = match efficiency {
         Some(summary) if summary.operations > 0 => {
             let reduction_pct = if summary.baseline_tokens_estimated == 0 {
                 0.0
@@ -1392,7 +1413,7 @@ fn scorecard_message(
             (
                 outcome,
                 format!(
-                    "Measured commands (ratio rows): {} | excluded: {} stage + {} unmeasured/native + {} earlier-policy | hook-only events: {}\nTop measured: {}",
+                    "Measured commands (ratio rows): {} | excluded: {} stage + {} unmeasured/native + {} earlier-policy | hook-only events: {}{coverage_note}\nTop measured: {}",
                     summary.operations,
                     summary.stage_excluded_operations,
                     non_ratio,
@@ -1407,7 +1428,7 @@ fn scorecard_message(
                 "Savings: not measured yet (no session command executions); {potential}"
             ),
             format!(
-                "Measured commands (ratio rows): 0 | observed ledger rows: {} | hook-only events: {}",
+                "Measured commands (ratio rows): 0 | observed ledger rows: {} | hook-only events: {}{coverage_note}",
                 summary.total_observed_operations,
                 state.operations.saturating_sub(summary.total_observed_operations),
             ),
@@ -1427,7 +1448,12 @@ fn scorecard_message(
             "Measured commands: unknown | Top: unknown".to_owned(),
         ),
     };
-    let policy = match session_summary.filter(|_| !state.accounting_was_degraded) {
+    let partial_evidence = if partial {
+        " | leakage covers measured operations only"
+    } else {
+        ""
+    };
+    let policy = match session_summary {
         Some(summary) => {
             let top_class = match summary.top_class {
                 Some(EvasionClass::E10CapabilityGap) => "e10-capability-gap",
@@ -1451,7 +1477,7 @@ fn scorecard_message(
                 format!("asked {}", summary.policy_asks)
             };
             format!(
-                "Policy: prevented {} ({} native denial); {asked}; avoidable leakage {} ops / {} tokens ({leakage_meaning})\nEvidence: prevented output not estimated | top evasion {top_class} | grant-applied operations {} | hook events {}",
+                "Policy: prevented {} ({} native denial); {asked}; avoidable leakage {} ops / {} tokens ({leakage_meaning})\nEvidence: prevented output not estimated | top evasion {top_class} | grant-applied operations {} | hook events {}{partial_evidence}",
                 prevented,
                 state.native_denials,
                 summary.avoidable_operations,
@@ -1477,8 +1503,10 @@ fn scorecard_message(
 
 fn economic_message(
     config: &Config,
+    observed_model: Option<&str>,
     efficiency: Option<&SessionEfficiencySummary>,
     economics: Option<&SessionEconomicSummary>,
+    partial: bool,
 ) -> (String, String) {
     let billed = economics
         .and_then(|summary| summary.reported_actual.as_ref())
@@ -1508,21 +1536,47 @@ fn economic_message(
         .net_avoided_tokens_estimated
         .max(0)
         .unsigned_abs();
+    // 0.8.2: the host-reported model wins over the configured default when the catalog knows
+    // it; an unknown observed model falls back to the configured selection.
+    fn request<'a>(
+        config: &'a Config,
+        model: &'a str,
+        avoided_tokens: u64,
+    ) -> RawPublicEstimateRequest<'a> {
+        RawPublicEstimateRequest {
+            harness: &config.billing.harness,
+            provider: &config.billing.provider,
+            model,
+            method: &config.billing.method,
+            request_input_tokens: config.billing.request_input_tokens,
+            basis: config.billing.effective_pricing_basis(),
+            avoided_tokens,
+        }
+    }
+    let observed = observed_model
+        .filter(|_| config.billing.harness == "claude_code")
+        .filter(|model| *model != config.billing.model);
     let estimate =
         load_pricing_catalog(config.billing.pricing_file.as_deref()).and_then(|catalog| {
-            price_avoided_input_tokens(
-                &catalog,
-                RawPublicEstimateRequest {
-                    harness: &config.billing.harness,
-                    provider: &config.billing.provider,
-                    model: &config.billing.model,
-                    method: &config.billing.method,
-                    request_input_tokens: config.billing.request_input_tokens,
-                    basis: config.billing.effective_pricing_basis(),
-                    avoided_tokens,
-                },
-            )
+            let configured = || {
+                price_avoided_input_tokens(
+                    &catalog,
+                    request(config, &config.billing.model, avoided_tokens),
+                )
+            };
+            match observed {
+                Some(model) => {
+                    price_avoided_input_tokens(&catalog, request(config, model, avoided_tokens))
+                        .or_else(|_| configured())
+                }
+                None => configured(),
+            }
         });
+    let partial_note = if partial {
+        " lower bound over measured operations only"
+    } else {
+        ""
+    };
     let potential = match estimate {
         Ok(RawPublicEstimate {
             currency,
@@ -1533,7 +1587,7 @@ fn economic_message(
             price_table_identity,
             ..
         }) => format!(
-            "potential public-list value {currency} {} preliminary ({model}/{method}, basis={pricing_basis}, catalog={price_table_identity}; not an invoice)",
+            "potential public-list value {currency} {} preliminary{partial_note} ({model}/{method}, basis={pricing_basis}, catalog={price_table_identity}; not an invoice)",
             format_microunits(savings_microunits),
         ),
         Err(error) => {
@@ -1695,6 +1749,7 @@ pub fn statusline(config: &Config) {
             println!("{rendered}");
         }
     }
+    remember_observed_model(config, &input); // 0.8.2
     let state = read_session(config, &input);
     let status = match session_accounting_coverage(config, &input) {
         Err(_) => "ACCOUNTING: UNKNOWN",
@@ -1705,6 +1760,26 @@ pub fn statusline(config: &Config) {
         Ok(_) => accounting_statusline(state.as_ref()),
     };
     println!("{status}");
+}
+
+/// 0.8.2: the status line is the only host surface that names the model. Record it once per
+/// change so the scorecard can price avoided tokens at that model.
+fn remember_observed_model(config: &Config, input: &Value) {
+    let Some(model) = input.pointer("/model/id").and_then(Value::as_str) else {
+        return;
+    };
+    if model.is_empty() || model.len() > 128 {
+        return;
+    }
+    let known = read_session(config, input)
+        .is_some_and(|state| state.observed_model_id.as_deref() == Some(model));
+    if known {
+        return;
+    }
+    let model = model.to_owned();
+    let _ = update_session_at(config, input, unix_now(), |state| {
+        state.observed_model_id = Some(model);
+    });
 }
 
 fn accounting_statusline(state: Option<&SessionFeedback>) -> &'static str {
@@ -2327,8 +2402,8 @@ mod tests {
         degraded_rewrite_coverage, degraded_rewrite_coverage_at, fallback_decision,
         honor_host_permission_mode, hook_fidelity_preflight, native_observation_policy,
         read_session, reconcile_host_grant, record_accounting_gap_now, record_degraded_rewrite_at,
-        render_command, run_statusline_upstream, scorecard_message, steer_to_first_class,
-        update_session,
+        remember_observed_model, render_command, run_statusline_upstream, scorecard_message,
+        steer_to_first_class, update_session,
     };
 
     #[cfg(unix)]
@@ -3051,7 +3126,7 @@ mod tests {
         };
 
         let (potential, billed) =
-            super::economic_message(&Config::default(), None, Some(&economics));
+            super::economic_message(&Config::default(), None, None, Some(&economics), false);
         let message = format!("{potential}\n{billed}");
 
         assert!(message.contains("opt-in disabled"));
@@ -3094,7 +3169,7 @@ mod tests {
     }
 
     #[test]
-    fn acceptance_gate_degraded_scorecard_withholds_partial_totals() {
+    fn acceptance_gate_degraded_scorecard_reports_measured_part_as_lower_bound() {
         let state = SessionFeedback {
             operations: 10,
             accounting_was_degraded: true,
@@ -3116,10 +3191,64 @@ mod tests {
             None,
         );
 
-        assert!(message.contains("session accounting was degraded"));
-        assert!(message.contains("partial ledger totals withheld"));
-        assert!(!message.contains("Saved (estimated net): 900"));
-        assert!(!message.contains("avoidable leakage 0 ops"));
+        // 0.8.2: the measured part is reported as a lower bound next to the unmeasured interval.
+        assert!(message.contains("Saved (estimated net): 900"), "{message}");
+        assert!(message.contains("PARTIAL:"), "{message}");
+        assert!(
+            message.contains("unmeasured while accounting was degraded"),
+            "{message}"
+        );
+        assert!(!message.contains("withheld"), "{message}");
+        assert!(message.contains("avoidable leakage 0 ops"), "{message}");
+        assert!(
+            message.contains("leakage covers measured operations only"),
+            "{message}"
+        );
+    }
+
+    // 0.8.2: the model the host reports through the status line prices the estimate.
+    #[test]
+    fn observed_status_line_model_prices_the_estimate_over_the_configured_default() {
+        let directory = tempdir().expect("temporary directory");
+        let mut config = config(directory.path());
+        config.billing.public_estimate_enabled = true;
+        config.billing.harness = "claude_code".into();
+        config.billing.provider = "anthropic".into();
+        config.billing.model = "claude-opus-5".into();
+        config.billing.method = "standard".into();
+        config.billing.pricing_basis = "input".into();
+        let input = serde_json::json!({
+            "session_id": "statusline-session",
+            "cwd": directory.path(),
+            "model": {"id": "claude-fable-5-1", "display_name": "Fable 5.1"}
+        });
+        remember_observed_model(&config, &input);
+        let state = read_session(&config, &input).expect("session state");
+        assert_eq!(state.observed_model_id.as_deref(), Some("claude-fable-5-1"));
+        let efficiency = SessionEfficiencySummary {
+            operations: 1,
+            baseline_tokens_estimated: 1_000_000,
+            delivered_tokens_estimated: 0,
+            gross_avoided_tokens_estimated: 1_000_000,
+            net_avoided_tokens_estimated: 1_000_000,
+            ..SessionEfficiencySummary::default()
+        };
+        let message = scorecard_message(&config, &state, None, Some(&efficiency), None);
+        assert!(message.contains("claude-fable-5-1/standard"), "{message}");
+        assert!(
+            message.contains("potential public-list value USD 10.000000"),
+            "{message}"
+        );
+        // An unknown observed model falls back to the configured selection.
+        let unknown = serde_json::json!({
+            "session_id": "statusline-session",
+            "cwd": directory.path(),
+            "model": {"id": "claude-unreleased-9"}
+        });
+        remember_observed_model(&config, &unknown);
+        let state = read_session(&config, &unknown).expect("session state");
+        let message = scorecard_message(&config, &state, None, Some(&efficiency), None);
+        assert!(message.contains("claude-opus-5/standard"), "{message}");
     }
 
     #[test]

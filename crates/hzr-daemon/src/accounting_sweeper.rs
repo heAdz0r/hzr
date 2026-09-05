@@ -515,9 +515,15 @@ exit 64
 
         assert_eq!(sweep_once(&state).await.expect("sweep"), 0);
         assert!(path.exists(), "age does not prove producer completion");
+        // 0.8.2: a registration is pending inside the producer grace; inspect it as settled.
+        let settled = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            + hzr_core::FORK_PRODUCER_PENDING_GRACE_SECS;
         assert!(
             !AccountingCoverageStore::new(&state.config.data_dir)
-                .snapshot(2)
+                .snapshot(settled)
                 .expect("coverage")
                 .live_complete
         );
@@ -528,7 +534,7 @@ exit 64
         assert!(!path.exists());
         assert!(
             !AccountingCoverageStore::new(&state.config.data_dir)
-                .snapshot(2)
+                .snapshot(settled)
                 .expect("coverage")
                 .live_complete,
             "missing receipts remain unresolved after cleanup"

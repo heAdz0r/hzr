@@ -4,6 +4,31 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-05
+
+### Fixed
+
+- Every prompt and status line reported `ACCOUNTING: DEGRADED` while the previous command was
+  still draining its receipts: a fork-producer registration was counted as an open gap the moment
+  it was created. Registrations younger than 10 minutes are now `pending_producer_operations`
+  (in flight, not evidence); they become gaps only when receipts fail to arrive in time.
+- The Stop scorecard withheld every measured total as soon as the session had one degraded
+  interval (for example a daemon restart during `hzr release`). It now reports the measured part
+  as a lower bound with the unmeasured interval beside it, prices it as a lower bound, and keeps
+  the leakage figures with a "measured operations only" note.
+
+### Added
+
+- The Claude Code status line hook records the host-reported `model.id`; the scorecard prices
+  avoided tokens at that model when the catalog knows it and falls back to `[billing].model`
+  otherwise.
+- Public pricing catalog `hzr-public-api-pricing-2026-09-05-v1` (38 entries, retrieved
+  2026-09-05 from the providers' own pricing pages): adds Claude Fable 5.1 (`claude-fable-5-1`),
+  GPT-6 Astra (`gpt-6-astra`, short and long context), GPT-5.5, GPT-5.4, GPT-5.4 mini,
+  Gemini 3.8 Flash (standard and batch) and Grok 4.5 (short and long context). All previously
+  listed rows were re-verified unchanged. Claude Mythos 5.1 has no public list price and is not
+  inferred.
+
 ## [0.8.1] - 2026-09-05
 
 ### Fixed
@@ -1620,6 +1645,7 @@ First public HZR release.
 [0.6.2]: https://github.com/heAdz0r/hzr/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/heAdz0r/hzr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0
+[0.8.2]: https://github.com/heAdz0r/hzr/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/heAdz0r/hzr/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/heAdz0r/hzr/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/heAdz0r/hzr/compare/v0.7.0...v0.7.1

@@ -11,7 +11,7 @@ mod operation;
 pub use accounting_coverage::{
     AccountingCoverageError, AccountingCoverageSnapshot, AccountingCoverageStore,
     AccountingGapEvent, AccountingGapInterval, AccountingGapSurface, AccountingReceiptContext,
-    AccountingReceiptContextStore,
+    AccountingReceiptContextStore, FORK_PRODUCER_PENDING_GRACE_SECS,
 };
 pub use billing::{
     BUILTIN_PRICING_CATALOG_IDENTITY, BillingError, EconomicAmount, EconomicScopeSummary,

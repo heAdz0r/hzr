@@ -50,6 +50,13 @@ pub struct AccountingGapInterval {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct AccountingCoverageSnapshot {
     pub open_intervals: usize,
+    /// 0.8.2: fork-producer registrations younger than
+    /// [`FORK_PRODUCER_PENDING_GRACE_SECS`] whose receipts have not drained yet. A command that
+    /// is still running (or whose receipts the sweeper has not reached) is in flight, not a
+    /// gap; counting it as one made every prompt and status line report `DEGRADED` while the
+    /// previous command was still finishing.
+    #[serde(default)]
+    pub pending_producer_operations: u64,
     pub closed_intervals: usize,
     pub open_missing_operations: u64,
     pub lifetime_missing_operations: u64,
@@ -586,6 +593,10 @@ fn validate_state(state: &AccountingCoverageState) -> Result<(), AccountingCover
     Ok(())
 }
 
+/// How long a fork-producer registration may wait for its receipts before it counts as a gap.
+/// Matches the daemon sweeper's orphan-journal grace so the two views agree.
+pub const FORK_PRODUCER_PENDING_GRACE_SECS: u64 = 600;
+
 fn snapshot(
     state: &AccountingCoverageState,
     context: Option<(&str, &str)>,
@@ -612,6 +623,19 @@ fn snapshot(
             {
                 continue;
             }
+        }
+        // 0.8.2: an open producer registration inside the grace window is in flight, not
+        // evidence of a gap; it becomes one only when receipts fail to arrive in time.
+        if interval.recovered_at_unix.is_none()
+            && interval.surface == AccountingGapSurface::ForkProducer
+            && interval.operation_family.is_none()
+            && now_unix.saturating_sub(interval.last_failure_at_unix)
+                < FORK_PRODUCER_PENDING_GRACE_SECS
+        {
+            result.pending_producer_operations = result
+                .pending_producer_operations
+                .saturating_add(interval.missing_operations);
+            continue;
         }
         result.historical_complete = false;
         result.lifetime_missing_operations = result
@@ -667,6 +691,43 @@ fn snapshot(
 }
 
 #[cfg(test)]
+mod pending_producer_tests {
+    use super::*;
+
+    // 0.8.2: a registration whose receipts have not drained yet is pending, not a gap.
+    #[test]
+    fn in_flight_producer_registration_is_pending_until_the_grace_elapses() {
+        let directory = tempfile::tempdir().expect("directory");
+        let store = AccountingCoverageStore::new(directory.path());
+        let event = AccountingGapEvent {
+            surface: AccountingGapSurface::ForkProducer,
+            workspace_hash: Some("sha256:workspace".into()),
+            session_hash: Some("sha256:session".into()),
+            operation_family: None,
+            at_unix: 1_000,
+        };
+        store.record_missing(event.clone()).expect("registration");
+        let fresh = store.snapshot(1_000 + 5).expect("snapshot");
+        assert!(fresh.live_complete);
+        assert!(fresh.historical_complete);
+        assert_eq!(fresh.pending_producer_operations, 1);
+        assert_eq!(fresh.open_missing_operations, 0);
+        let late = store
+            .snapshot(1_000 + FORK_PRODUCER_PENDING_GRACE_SECS)
+            .expect("snapshot");
+        assert!(!late.live_complete);
+        assert_eq!(late.pending_producer_operations, 0);
+        assert_eq!(late.open_missing_operations, 1);
+        store.recover(event).expect("recover");
+        let recovered = store
+            .snapshot(1_000 + FORK_PRODUCER_PENDING_GRACE_SECS + 1)
+            .expect("snapshot");
+        assert!(recovered.live_complete);
+        assert_eq!(recovered.closed_intervals, 1);
+    }
+}
+
+#[cfg(test)]
 mod tests {
 
     #[test]
@@ -708,7 +769,10 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{AccountingCoverageStore, AccountingGapEvent, AccountingGapSurface};
+    use super::{
+        AccountingCoverageStore, AccountingGapEvent, AccountingGapSurface,
+        FORK_PRODUCER_PENDING_GRACE_SECS,
+    };
 
     fn event(at_unix: u64) -> AccountingGapEvent {
         AccountingGapEvent {
@@ -764,7 +828,10 @@ mod tests {
         writer.join().expect("writer thread");
         recovery.join().expect("recovery thread");
 
-        let snapshot = store.snapshot(40).expect("snapshot");
+        // Registrations are pending inside the grace window; inspect them as settled gaps.
+        let snapshot = store
+            .snapshot(40 + FORK_PRODUCER_PENDING_GRACE_SECS)
+            .expect("snapshot");
         assert_eq!(snapshot.lifetime_missing_operations, 2);
         assert!(snapshot.open_intervals <= 1);
         assert!(snapshot.closed_intervals <= 1);
@@ -791,14 +858,15 @@ mod tests {
         let store = AccountingCoverageStore::new(directory.path());
         store.record_missing(event(10)).expect("failure");
 
+        let settled = 20 + FORK_PRODUCER_PENDING_GRACE_SECS;
         let matching = store
-            .snapshot_for_context("session-hash", "workspace-hash", 20)
+            .snapshot_for_context("session-hash", "workspace-hash", settled)
             .expect("matching session");
         let other = store
-            .snapshot_for_context("other-session", "workspace-hash", 20)
+            .snapshot_for_context("other-session", "workspace-hash", settled)
             .expect("other session");
         let other_workspace = store
-            .snapshot_for_context("session-hash", "other-workspace", 20)
+            .snapshot_for_context("session-hash", "other-workspace", settled)
             .expect("other workspace");
         assert!(!matching.live_complete);
         assert!(other.live_complete);
@@ -818,7 +886,9 @@ mod tests {
         store.record_missing(mcp.clone()).expect("MCP failure");
 
         assert_eq!(store.recover(mcp).expect("MCP recovery"), 1);
-        let snapshot = store.snapshot(20).expect("snapshot");
+        let snapshot = store
+            .snapshot(20 + FORK_PRODUCER_PENDING_GRACE_SECS)
+            .expect("snapshot");
         assert_eq!(snapshot.open_intervals, 1);
         assert_eq!(snapshot.fork_producer_missing_operations, 1);
         assert_eq!(snapshot.mcp_missing_operations, 1);

@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::bounded_file::{BoundedFileError, read_bounded_regular_file};
 
-pub const BUILTIN_PRICING_CATALOG_IDENTITY: &str = "hzr-public-api-pricing-2026-08-26-v1";
+pub const BUILTIN_PRICING_CATALOG_IDENTITY: &str = "hzr-public-api-pricing-2026-09-05-v1";
 pub const PRICING_CATALOG_SCHEMA_VERSION: u16 = 1;
 pub const PRICING_OVERRIDE_MAX_BYTES: u64 = 1_048_576;
 pub const PROVIDER_RECEIPT_MAX_AGE_MS: u64 = 366 * 24 * 60 * 60 * 1_000;
@@ -238,7 +238,7 @@ pub enum BillingError {
 
 pub fn builtin_pricing_catalog() -> Result<PricingCatalog, BillingError> {
     let mut catalog: PricingCatalog = serde_json::from_str(include_str!(
-        "../../../data/pricing/public-api-pricing-2026-08-26-v1.json"
+        "../../../data/pricing/public-api-pricing-2026-09-05-v1.json"
     ))
     .map_err(|source| BillingError::CatalogParse {
         path: Path::new("<embedded-public-pricing>").to_path_buf(),
@@ -817,7 +817,7 @@ mod tests {
         let mut override_catalog = PricingCatalog {
             schema_version: 1,
             identity: "customer-contract-2026-v1".into(),
-            retrieved_at: "2026-08-26".into(),
+            retrieved_at: "2026-09-05".into(),
             max_age_days: Some(30),
             entries: vec![builtin_pricing_catalog().expect("builtin").entries[0].clone()],
         };
@@ -1109,7 +1109,7 @@ mod tests {
         let override_catalog = PricingCatalog {
             schema_version: PRICING_CATALOG_SCHEMA_VERSION,
             identity: "customer-collision-v1".into(),
-            retrieved_at: "2026-08-26".into(),
+            retrieved_at: "2026-09-05".into(),
             max_age_days: Some(30),
             entries: vec![colliding],
         };

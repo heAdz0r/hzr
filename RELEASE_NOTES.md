@@ -1,55 +1,38 @@
-# HZR 0.8.1
+# HZR 0.8.2
 
-HZR 0.8.1 is a doctor and lifecycle hotfix. It repairs the two findings that kept `hzr doctor`
-red after the 0.8.0 upgrade, makes accounting recover from daemon-free intervals, and adds a
-post-upgrade pass that brings every registered workspace, index and engine back to the reference
-state without visiting each project.
+HZR 0.8.2 makes session accounting and the Stop scorecard behave the way an operator expects:
+in-flight commands are no longer reported as accounting gaps, a degraded interval no longer
+hides the measured part of the session, and the public price estimate uses the model the host
+actually reports, priced from a catalog refreshed on 2026-09-05.
 
-## Doctor findings that could not be fixed
+## In flight is not degraded
 
-- `hzr_doctor` over MCP rejected its own output because the 0.8.0 `readiness` field was missing
-  from the strict tool schema. The schema now declares every report field.
-- ICM servers whose launching daemon had been killed, crashed or torn down by a release smoke
-  fixture were reported as foreign duplicate owners with no supported remedy. Doctor now
-  distinguishes `orphaned_engine_processes` (HZR installation removed, parent exited) from
-  foreign processes, and `hzr doctor --fix` stops the orphans after re-verifying PID and argv.
-  Foreign processes are still never signalled.
-- The bundled ICM engine exits with its launcher when the daemon sets
-  `ICM_EXIT_WITH_PARENT_PID`, so the orphan class cannot reappear from a killed daemon.
+Every managed command registers a fork-producer context before it runs and recovers it when its
+receipts drain. Until 0.8.1 that registration counted as an open gap from the first millisecond,
+so the prompt hook, the status line and the scorecard flipped to `ACCOUNTING: DEGRADED` whenever
+the previous command was still finishing; sessions accumulated hours of "degraded" time while
+the daemon was healthy. Registrations younger than ten minutes are now `pending_producer_operations`
+and are excluded from `live_complete`; they become gaps only when receipts fail to arrive.
 
-## Accounting that recovers
+## A lower bound beats "unknown"
 
-Hook rewrites made while the daemon was down produced fork receipts under a correlation that
-never had a context file; those receipts stayed "undrained" indefinitely. The hook now registers
-the context locally, and the daemon sweeper drains context-less journals older than ten minutes as
-`unattributed` operations, accepting receipts written by an earlier fork-core build. Rejected
-batches are quarantined and recorded as a producer gap. Doctor's accounting checks now describe
-the current state (journals waiting for the daemon, open gap intervals) instead of summing
-lifetime totals that kept readiness degraded forever.
+The scorecard used to withhold every total once the session had any degraded interval, even a
+ten-second daemon restart. It now prints the measured savings, marks them `PARTIAL` with the
+unmeasured seconds and operation count, labels the public-list value a lower bound over measured
+operations only, and keeps leakage figures with the same qualifier. Unknown stays unknown only
+when the ledger itself is unavailable.
 
-## Fleets that converge
+## Priced at the model in use
 
-- Registrations whose worktree directory was deleted are pruned during
-  `hzr doctor --reconcile-fleet` instead of failing the fleet closure forever. A root whose
-  parent directory is also absent is retained in case the volume is unmounted.
-- The first `hzr init --if-needed` (the SessionStart hook) on a new version schedules one
-  detached `hzr doctor --reconcile-fleet --fix`; `hzr update` runs it in the foreground. The
-  marker `runtime/reference-state.json` and the `reference_state` doctor check show whether the
-  pass completed, is still running, or ended with findings.
+The Claude Code status line hook records `model.id`; the scorecard prices avoided tokens at that
+model when the catalog knows it and otherwise falls back to `[billing].model`. The embedded
+catalog `hzr-public-api-pricing-2026-09-05-v1` adds Claude Fable 5.1, GPT-6 Astra (short/long
+context), GPT-5.5, GPT-5.4 and GPT-5.4 mini, Gemini 3.8 Flash and Grok 4.5, each with its
+provider source URL; all earlier rows were re-verified unchanged. Estimates remain public-list
+potentials, never invoices.
 
 ## Upgrade
 
-```bash
-hzr update
-```
-
-or
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/heAdz0r/hzr/v0.8.1/install.sh | sh
-```
-
-After installing, open any HZR session or run `hzr doctor --reconcile-fleet --fix` once. The
-reconciliation stops orphaned engines, prunes stale registrations and refreshes managed
-instruction blocks and Codex pins in every registered workspace. Open MCP sessions must be
-reconnected so clients pick up the new schema.
+`hzr update` installs 0.8.2 and runs the reference-state pass; the first session on the new
+version schedules it otherwise. Reconnect open MCP sessions after the upgrade. Full details:
+`docs/releases/v0.8.2.md` and `CHANGELOG.md`.

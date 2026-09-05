@@ -1,6 +1,6 @@
 {
   "name": "@headz0r/hzr-caveman-code-bridge",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "private": true,
   "type": "module",
   "engines": {
