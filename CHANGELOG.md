@@ -4,6 +4,8 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-05
+
 ### Fixed
 
 - `target/debug` grew without bound (58 GB on one workstation, which filled the disk) because
@@ -1677,6 +1679,7 @@ First public HZR release.
 [0.6.2]: https://github.com/heAdz0r/hzr/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/heAdz0r/hzr/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/heAdz0r/hzr/compare/v0.5.1...v0.6.0
+[0.8.3]: https://github.com/heAdz0r/hzr/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/heAdz0r/hzr/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/heAdz0r/hzr/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/heAdz0r/hzr/compare/v0.7.1...v0.8.0
