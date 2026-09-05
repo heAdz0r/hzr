@@ -2219,6 +2219,7 @@ pub(crate) async fn execute_command(
         request.agent.as_deref(),
         request.session_id.as_deref(),
         request.channel,
+        None, // 0.8.3: the execution envelope sets the attribution for the engine itself
     )?;
     let mut envelope = ExecutionEnvelope::allow_raw(command);
     envelope.decision = decision;
@@ -2614,6 +2615,7 @@ pub async fn exec_approval(
         pending.agent.as_deref(),
         pending.session_id.as_deref(),
         pending.channel,
+        None, // 0.8.3: the execution envelope sets the attribution for the engine itself
     )?;
     let accounting_correlation_id = pending.accounting_correlation_id.clone();
     let mut envelope = ExecutionEnvelope::allow_raw(pending.requested);
@@ -3296,6 +3298,7 @@ pub async fn exec_rewrite(
         request.agent.as_deref(),
         request.session_id.as_deref(),
         request.channel,
+        outcome.evasion, // 0.8.3: the hook no longer exports this into the command
     )?;
     record_exec_policy_event(&state, &request, &cwd, outcome.evasion.as_ref(), &decision).await?;
     // The attribution travels with the decision: the hook forwards it to the process that will
@@ -3324,17 +3327,19 @@ fn register_accounting_context(
     agent: Option<&str>,
     session_id: Option<&str>,
     channel: Option<hzr_protocol::AccountingChannel>,
+    evasion: Option<hzr_protocol::EvasionAttribution>, // 0.8.3: travels with the registration
 ) -> Result<(), ApiError> {
     let Some(correlation_id) = correlation_id else {
         return Ok(());
     };
-    crate::accounting_sweeper::register(
+    crate::accounting_sweeper::register_attributed(
         state,
         correlation_id,
         workspace,
         agent,
         session_id,
         channel.unwrap_or(hzr_protocol::AccountingChannel::HookCli),
+        evasion,
     )
     .map_err(|error| ApiError::internal(format!("accounting receipt registration failed: {error}")))
 }

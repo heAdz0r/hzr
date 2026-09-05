@@ -315,12 +315,13 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
             // register the same context the daemon would have; the sweeper drains it later.
             if let Some(correlation_id) = outcome.accounting_correlation_id.as_deref() {
                 if let Err(error) = AccountingReceiptContextStore::new(&config.data_dir)
-                    .register_with_channel(
+                    .register_with_attribution(
                         correlation_id,
                         &cwd,
                         Some(&agent_attribution(input)),
                         input.get("session_id").and_then(Value::as_str),
                         AccountingChannel::HookCli,
+                        outcome.evasion, // 0.8.3: classification travels with the registration
                     )
                 {
                     eprintln!("HZR daemon-free accounting context was not registered: {error}");
@@ -482,12 +483,20 @@ fn hook_fidelity_preflight(
     }
 }
 
-/// Carry the classification into the process that will record the command.
+/// Carry a T4 fidelity attribution into the process that will record the command.
 ///
-/// Two different guarantees share this path. For a fidelity request the attribution is a
-/// precondition: an unattributed T4 execution must not happen silently, so a failure becomes an
-/// Ask. For every other command the attribution is accounting, and accounting must never turn a
-/// working command into a prompt — a failure there leaves the decision exactly as it was.
+/// 0.8.3: an ordinary command's classification no longer travels here. It is stored with the
+/// accounting registration (the daemon stores its own classification when it registers the
+/// correlation; the daemon-free path registers with the hook's) and the sweeper copies it onto
+/// the receipts. The approved command the host inspects therefore stays free of exported policy
+/// JSON: a multi-line script carrying `"evasion"`, `"avoidable": true` and a `PATH` prefix was
+/// exactly what a permission classifier reading the tool input could not tell from an actual
+/// evasion, and it refused commands as harmless as `df -h | tail -1`.
+///
+/// The fidelity hatch keeps the environment transport: its command runs raw or enters
+/// `hzr exec run` directly, has no engine registration to carry the attribution, and already
+/// names the hatch in plain text. There the attribution is a precondition — an unattributed T4
+/// execution must not happen silently — so a failure becomes an Ask.
 fn attach_hook_evasion(
     raw: &str,
     decision: RewriteDecision,
@@ -496,58 +505,48 @@ fn attach_hook_evasion(
     let Some(evasion) = evasion else {
         return decision;
     };
-    let strict = evasion.hatch_marker;
+    if !evasion.hatch_marker {
+        return decision; // 0.8.3: attributed through the registration, see above
+    }
     let Ok(encoded) = serde_json::to_string(evasion) else {
-        return if strict {
-            RewriteDecision::Ask {
-                proposed: Some(CanonicalCommand::shell(raw)),
-                reason: "T4 fidelity attribution could not be serialized".into(),
-            }
-        } else {
-            decision
+        return RewriteDecision::Ask {
+            proposed: Some(CanonicalCommand::shell(raw)),
+            reason: "T4 fidelity attribution could not be serialized".into(),
         };
     };
     match decision {
-        RewriteDecision::AllowRaw { .. } if strict => {
-            match attributed_hook_command(&encoded, raw) {
-                Some(command) => RewriteDecision::AllowRewrite {
-                    command: CanonicalCommand::shell(command),
-                    source: RewriteSource::HzrPolicy,
-                    reason: "T4 fidelity execution carries closed typed attribution".into(),
-                },
-                None => RewriteDecision::Ask {
-                    proposed: Some(CanonicalCommand::shell(raw)),
-                    reason: "T4 fidelity execution needs explicit approval on this host".into(),
-                },
-            }
-        }
+        RewriteDecision::AllowRaw { .. } => match attributed_hook_command(&encoded, raw) {
+            Some(command) => RewriteDecision::AllowRewrite {
+                command: CanonicalCommand::shell(command),
+                source: RewriteSource::HzrPolicy,
+                reason: "T4 fidelity execution carries closed typed attribution".into(),
+            },
+            None => RewriteDecision::Ask {
+                proposed: Some(CanonicalCommand::shell(raw)),
+                reason: "T4 fidelity execution needs explicit approval on this host".into(),
+            },
+        },
         RewriteDecision::AllowRewrite {
             command,
             source,
             reason,
         } => {
-            let unchanged = |command, source, reason| RewriteDecision::AllowRewrite {
-                command,
-                source,
-                reason,
-            };
             let refuse = || RewriteDecision::Ask {
                 proposed: Some(CanonicalCommand::shell(raw)),
                 reason: "T4 fidelity execution could not preserve the approved command".into(),
             };
             let Ok(rendered) = render_command(&command) else {
-                return if strict {
-                    refuse()
-                } else {
-                    unchanged(command, source, reason)
-                };
+                return refuse();
             };
             match attributed_hook_command(&encoded, &rendered) {
                 // The source and reason stay the agent-facing ones the decision already carried;
                 // only the environment the command runs in changes.
-                Some(attributed) => unchanged(CanonicalCommand::shell(attributed), source, reason),
-                None if strict => refuse(),
-                None => unchanged(command, source, reason),
+                Some(attributed) => RewriteDecision::AllowRewrite {
+                    command: CanonicalCommand::shell(attributed),
+                    source,
+                    reason,
+                },
+                None => refuse(),
             }
         }
         other => other,
@@ -2397,7 +2396,7 @@ mod tests {
     use super::{
         HookFidelityPreflight, SessionFeedback, accounting_statusline, accounting_transition,
         accounting_transition_at, agent_attribution, agent_identity, apply_filter_placement,
-        attach_host_grant, attach_policy_feedback, attach_session_attribution,
+        attach_hook_evasion, attach_host_grant, attach_policy_feedback, attach_session_attribution,
         close_open_accounting_gaps, context_brief, deepest_registered_root,
         degraded_rewrite_coverage, degraded_rewrite_coverage_at, fallback_decision,
         honor_host_permission_mode, hook_fidelity_preflight, native_observation_policy,
@@ -2863,6 +2862,63 @@ mod tests {
             .status()
             .expect("returned command starts");
         assert_eq!(status.code(), Some(0), "live repro must not exit 77");
+    }
+
+    /// 0.8.3: an ordinary classification stays in the accounting registration; only the fidelity
+    /// hatch, which has no registration, is still exported into the command it approves.
+    #[cfg(unix)]
+    #[test]
+    fn ordinary_classification_is_not_exported_into_the_approved_command() {
+        fn approved(decision: RewriteDecision) -> Option<String> {
+            match decision {
+                RewriteDecision::AllowRewrite { command, .. } => render_command(&command).ok(),
+                _ => None,
+            }
+        }
+        let rewrite = || RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("rtk grep -n needle README.md"),
+            source: RewriteSource::HzrPolicy,
+            reason: "replacement".into(),
+        };
+        let ordinary = EvasionAttribution {
+            class: EvasionClass::E5PipelineOrRedirect,
+            wrapper_depth: 0,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 2,
+            hatch_marker: false,
+            avoidable: true,
+            tier: EnforcementTier::T1NamedCorrection,
+            fidelity_reason: None,
+            fidelity_validation: FidelityValidation::NotRequested,
+        };
+
+        let command = approved(attach_hook_evasion(
+            "grep -n needle README.md | head",
+            rewrite(),
+            Some(&ordinary),
+        ))
+        .expect("approval must stay an approval");
+        assert_eq!(command, "rtk grep -n needle README.md");
+        assert!(!command.contains("HZR_INTERNAL_EVASION_JSON"));
+
+        let hatch = EvasionAttribution {
+            hatch_marker: true,
+            tier: EnforcementTier::T4HatchQuarantine,
+            fidelity_validation: FidelityValidation::Valid,
+            ..ordinary
+        };
+        let attributed = approved(attach_hook_evasion(
+            "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=checksum hzr exec run 'shasum a'",
+            rewrite(),
+            Some(&hatch),
+        ))
+        .expect("approval must stay an approval");
+        assert!(
+            attributed.starts_with("export HZR_INTERNAL_EVASION_JSON='"),
+            "the hatch keeps its attribution: {attributed}"
+        );
+        assert!(attributed.ends_with("rtk grep -n needle README.md"));
     }
 
     /// The executed command must carry the session that will be charged for it.

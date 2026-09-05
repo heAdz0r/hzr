@@ -4,6 +4,38 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Fixed
+
+- `target/debug` grew without bound (58 GB on one workstation, which filled the disk) because
+  Cargo never removes superseded artefacts and every dependency variant carried full debug info.
+  The dev profile now emits line tables only and no debug info for dependencies, and
+  `scripts/target-hygiene.sh` (run first by `scripts/complete-gate.sh`) removes artefacts idle
+  for more than seven days and resets a debug directory that still exceeds 20 GB.
+- The daemon sweeper listed the fork directory twice and ran a full drain attempt for every
+  registered context every second, idle or not; every drain and every producer append created a
+  lock file that nothing removed (18 500 in one fork directory); a rejected receipt batch was
+  retried every second forever, rewriting the coverage state on each retry. macOS flagged `hzrd`
+  at 70 % CPU with every sample in `write(2)` and 8.6 GB written in 27 minutes. The sweeper now
+  lists the directory once, drains only correlations that have journals, retires completed and
+  abandoned (24 h) registrations together with their locks, removes stale locks, quarantines a
+  rejected batch once as `.rejected` with one closed gap, and idles at five seconds when no
+  producer is active.
+- Every successful command left a closed "gap" in `accounting-coverage.json` because its
+  in-flight registration was closed instead of removed on recovery: 2 067 of 2 071 intervals on
+  one workstation were successful commands, the file had grown to 714 KB and was rewritten and
+  fsynced twice per command. Registrations recovered inside the pending grace are removed,
+  intervals written that way by earlier versions are pruned on the next write, and a repeated
+  inspection of one open condition rewrites the state at most once a minute.
+- The PreToolUse hook exported the command's policy classification as JSON into the approved
+  command (`export HZR_INTERNAL_EVASION_JSON='{"class":"e5_pipeline_or_redirect",…,"avoidable":true,…}'`
+  ahead of the engine environment and the rewritten command). A host permission classifier that
+  inspects the tool input saw a multi-line script about "evasion" and refused ordinary commands
+  such as `df -h | tail -1`. The classification now travels with the accounting registration
+  (`AccountingReceiptContext.evasion`, `register_with_attribution`) and the daemon sweeper copies
+  it onto receipts that arrive without one; only the T4 fidelity hatch, which has no registration,
+  keeps the environment transport. The engine environment block now starts with a comment naming
+  what it is.
+
 ## [0.8.2] - 2026-09-05
 
 ### Fixed

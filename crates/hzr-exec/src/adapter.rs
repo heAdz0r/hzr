@@ -198,8 +198,10 @@ impl ForkRuntimePaths {
                 .ok_or_else(|| ExecError::NonUtf8ForkRuntimePath {
                     path: binary_directory.to_owned(),
                 })?;
+        // 0.8.3: the first line says what this block is. A host that inspects the approved
+        // command sees an environment prelude for a managed engine, not an anonymous script.
         Ok(format!(
-            "unset RTK_DB_PATH\nRTK_MEM_DB_PATH={}\nRTK_TEE_DIR={}\nRTK_AUDIT_DIR={}\n{ACCOUNTING_RECEIPT_JOURNAL_ENV}={}\n{ACCOUNTING_FAILURE_JOURNAL_ENV}={}\n{ACCOUNTING_CORRELATION_ENV}={}\nRTK_TEE=0\nRTK_HISTORY_DAYS=0\nRTK_TRACKING_DISABLED=0\nRTK_TELEMETRY_DISABLED=1\nPATH={}${{PATH:+\":$PATH\"}}\nexport RTK_MEM_DB_PATH RTK_TEE_DIR RTK_AUDIT_DIR {ACCOUNTING_RECEIPT_JOURNAL_ENV} {ACCOUNTING_FAILURE_JOURNAL_ENV} {ACCOUNTING_CORRELATION_ENV} RTK_TEE RTK_HISTORY_DAYS RTK_TRACKING_DISABLED RTK_TELEMETRY_DISABLED PATH\n",
+            "# HZR managed route: engine environment for the command that follows; accounting is attributed by correlation, output is filtered by fork-core.\nunset RTK_DB_PATH\nRTK_MEM_DB_PATH={}\nRTK_TEE_DIR={}\nRTK_AUDIT_DIR={}\n{ACCOUNTING_RECEIPT_JOURNAL_ENV}={}\n{ACCOUNTING_FAILURE_JOURNAL_ENV}={}\n{ACCOUNTING_CORRELATION_ENV}={}\nRTK_TEE=0\nRTK_HISTORY_DAYS=0\nRTK_TRACKING_DISABLED=0\nRTK_TELEMETRY_DISABLED=1\nPATH={}${{PATH:+\":$PATH\"}}\nexport RTK_MEM_DB_PATH RTK_TEE_DIR RTK_AUDIT_DIR {ACCOUNTING_RECEIPT_JOURNAL_ENV} {ACCOUNTING_FAILURE_JOURNAL_ENV} {ACCOUNTING_CORRELATION_ENV} RTK_TEE RTK_HISTORY_DAYS RTK_TRACKING_DISABLED RTK_TELEMETRY_DISABLED PATH\n",
             shell_quote(path_text(&self.memory_db)?),
             shell_quote(path_text(&self.tee_dir)?),
             shell_quote(path_text(&self.audit_dir)?),

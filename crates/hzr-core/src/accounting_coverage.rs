@@ -11,6 +11,10 @@ use thiserror::Error;
 const COVERAGE_SCHEMA_VERSION: u32 = 1;
 const MAX_IDENTITY_BYTES: usize = 256;
 const MAX_INTERVALS: usize = 100_000;
+/// 0.8.3: a repeated inspection of one unresolved condition refreshes its timestamp at most this
+/// often. The daemon sweeper re-inspects every second; rewriting and fsyncing the whole state
+/// file for each look was a measured write storm.
+const REPEATED_FAILURE_REWRITE_SECS: u64 = 60;
 const ACCOUNTING_CONTEXT_PREFIX: &str = "accounting-context-";
 const ACCOUNTING_CONTEXT_SUFFIX: &str = ".json";
 const MAX_ACCOUNTING_CONTEXT_BYTES: u64 = 16 * 1024;
@@ -125,6 +129,11 @@ pub struct AccountingReceiptContext {
     pub completed_at_unix: Option<u64>,
     #[serde(default = "default_accounting_channel")]
     pub channel: hzr_protocol::AccountingChannel,
+    /// 0.8.3: how the command was classified when it was approved. The hook used to export this
+    /// as JSON into the approved command's environment; it now travels with the registration and
+    /// the daemon attaches it to the receipts it drains.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evasion: Option<hzr_protocol::EvasionAttribution>,
 }
 
 fn default_accounting_channel() -> hzr_protocol::AccountingChannel {
@@ -187,6 +196,28 @@ impl AccountingReceiptContextStore {
         session_id: Option<&str>,
         channel: hzr_protocol::AccountingChannel,
     ) -> Result<(), AccountingCoverageError> {
+        self.register_with_attribution(
+            correlation_id,
+            project_path,
+            agent,
+            session_id,
+            channel,
+            None,
+        )
+    }
+
+    /// 0.8.3: register a producer together with the classification of the command it will run.
+    /// The daemon copies `evasion` onto every receipt of this correlation that arrives without
+    /// one, so the approved command no longer has to carry the classification in its environment.
+    pub fn register_with_attribution(
+        &self,
+        correlation_id: &str,
+        project_path: &Path,
+        agent: Option<&str>,
+        session_id: Option<&str>,
+        channel: hzr_protocol::AccountingChannel,
+        evasion: Option<hzr_protocol::EvasionAttribution>,
+    ) -> Result<(), AccountingCoverageError> {
         validate_correlation_id(correlation_id)?;
         let context = AccountingReceiptContext {
             correlation_id: correlation_id.to_owned(),
@@ -196,6 +227,7 @@ impl AccountingReceiptContextStore {
             registered_at_unix: unix_now(),
             completed_at_unix: None,
             channel,
+            evasion,
         };
         let path = self.context_path(correlation_id);
         let parent = path.parent().ok_or_else(|| {
@@ -214,19 +246,7 @@ impl AccountingReceiptContextStore {
                     .into(),
             ));
         }
-        let mut temporary =
-            NamedTempFile::new_in(parent).map_err(|source| context_io(&path, source))?;
-        serde_json::to_writer(&mut temporary, &context)?;
-        temporary
-            .write_all(b"\n")
-            .map_err(|source| context_io(&path, source))?;
-        temporary
-            .as_file()
-            .sync_all()
-            .map_err(|source| context_io(&path, source))?;
-        temporary
-            .persist(&path)
-            .map_err(|error| context_io(&path, error.error))?;
+        write_context(&path, &context)?;
         if let Err(error) =
             AccountingCoverageStore::new(&self.data_root).record_missing(context.gap_event())
         {
@@ -242,20 +262,7 @@ impl AccountingReceiptContextStore {
         let path = self.context_path(correlation_id);
         let mut context = self.read(&path)?;
         context.completed_at_unix = Some(unix_now());
-        let parent = path
-            .parent()
-            .ok_or_else(|| AccountingCoverageError::Invalid("context parent missing".into()))?;
-        let mut temporary =
-            NamedTempFile::new_in(parent).map_err(|source| context_io(&path, source))?;
-        serde_json::to_writer(&mut temporary, &context)?;
-        temporary
-            .as_file()
-            .sync_all()
-            .map_err(|source| context_io(&path, source))?;
-        temporary
-            .persist(&path)
-            .map_err(|error| context_io(&path, error.error))?;
-        Ok(())
+        write_context(&path, &context) // 0.8.3: one atomic writer for every context update
     }
 
     #[must_use]
@@ -345,11 +352,20 @@ impl AccountingCoverageStore {
             });
             match interval {
                 Some(interval) => {
-                    interval.last_failure_at_unix =
-                        interval.last_failure_at_unix.max(event.at_unix);
+                    let mut changed = false; // 0.8.3: report whether the state needs a rewrite
                     if count_repetition {
                         interval.missing_operations = interval.missing_operations.saturating_add(1);
+                        changed = true;
                     }
+                    // 0.8.3: a bare re-inspection moves the timestamp at most once a minute.
+                    let advanced = event.at_unix.saturating_sub(interval.last_failure_at_unix);
+                    if advanced > 0
+                        && (count_repetition || advanced >= REPEATED_FAILURE_REWRITE_SECS)
+                    {
+                        interval.last_failure_at_unix = event.at_unix;
+                        changed = true;
+                    }
+                    Ok(changed)
                 }
                 None => {
                     if state.intervals.len() >= MAX_INTERVALS {
@@ -367,9 +383,9 @@ impl AccountingCoverageStore {
                         recovered_at_unix: None,
                         missing_operations: 1,
                     });
+                    Ok(true)
                 }
             }
-            Ok(())
         })?;
         self.snapshot(event.at_unix)
     }
@@ -381,19 +397,27 @@ impl AccountingCoverageStore {
         }
         let mut recovered = 0;
         self.with_exclusive_state(|state| {
-            for interval in &mut state.intervals {
-                if interval.recovered_at_unix.is_none()
+            state.intervals.retain_mut(|interval| {
+                let matches = interval.recovered_at_unix.is_none()
                     && interval.surface == event.surface
                     && interval.workspace_hash == event.workspace_hash
                     && interval.session_hash == event.session_hash
-                    && interval.operation_family == event.operation_family
-                {
-                    interval.recovered_at_unix =
-                        Some(event.at_unix.max(interval.last_failure_at_unix));
-                    recovered += 1;
+                    && interval.operation_family == event.operation_family;
+                if !matches {
+                    return true;
                 }
-            }
-            Ok(())
+                recovered += 1;
+                // 0.8.3: a producer registration recovered inside its grace was in flight, never
+                // a gap. Closing it instead made every successful command a "historical gap":
+                // 2 067 of 2 071 intervals on one workstation were such commands, the state
+                // file grew to 714 KB and was rewritten twice per command.
+                if is_settled_registration(interval, event.at_unix) {
+                    return false;
+                }
+                interval.recovered_at_unix = Some(event.at_unix.max(interval.last_failure_at_unix));
+                true
+            });
+            Ok(recovered > 0)
         })?;
         Ok(recovered)
     }
@@ -407,7 +431,7 @@ impl AccountingCoverageStore {
         }
         self.with_exclusive_state(|state| {
             state.legacy_missing_operations = legacy_missing_operations;
-            Ok(())
+            Ok(true) // 0.8.3: the closure reports whether the state changed
         })
     }
 
@@ -449,15 +473,20 @@ impl AccountingCoverageStore {
         Ok(snapshot(&state, context, now_unix))
     }
 
+    /// Runs `update` under the exclusive lock and rewrites the state only when it reports a change.
     fn with_exclusive_state(
         &self,
-        update: impl FnOnce(&mut AccountingCoverageState) -> Result<(), AccountingCoverageError>,
+        update: impl FnOnce(&mut AccountingCoverageState) -> Result<bool, AccountingCoverageError>,
     ) -> Result<(), AccountingCoverageError> {
         let lock = self.open_lock()?;
         lock.lock_exclusive().map_err(|source| self.io(source))?;
         let mut state = self.read_state()?;
-        update(&mut state)?;
-        self.write_state(&state)?;
+        // 0.8.3: an unchanged state is not rewritten; a changed one is pruned of settled
+        // registrations first, which also migrates files written by earlier versions.
+        if update(&mut state)? {
+            prune_settled_registrations(&mut state);
+            self.write_state(&state)?;
+        }
         FileExt::unlock(&lock).map_err(|source| self.io(source))
     }
 
@@ -538,6 +567,29 @@ fn context_io(path: &Path, source: std::io::Error) -> AccountingCoverageError {
     }
 }
 
+/// 0.8.3: atomically replace a registration context (temporary file, fsync, rename).
+fn write_context(
+    path: &Path,
+    context: &AccountingReceiptContext,
+) -> Result<(), AccountingCoverageError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AccountingCoverageError::Invalid("context parent missing".into()))?;
+    let mut temporary = NamedTempFile::new_in(parent).map_err(|source| context_io(path, source))?;
+    serde_json::to_writer(&mut temporary, context)?;
+    temporary
+        .write_all(b"\n")
+        .map_err(|source| context_io(path, source))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|source| context_io(path, source))?;
+    temporary
+        .persist(path)
+        .map_err(|error| context_io(path, error.error))?;
+    Ok(())
+}
+
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -596,6 +648,26 @@ fn validate_state(state: &AccountingCoverageState) -> Result<(), AccountingCover
 /// How long a fork-producer registration may wait for its receipts before it counts as a gap.
 /// Matches the daemon sweeper's orphan-journal grace so the two views agree.
 pub const FORK_PRODUCER_PENDING_GRACE_SECS: u64 = 600;
+
+/// 0.8.3: a fork-producer registration whose receipts drained inside the pending grace. It was
+/// in flight the whole time and is removed on recovery instead of being kept as a closed gap.
+fn is_settled_registration(interval: &AccountingGapInterval, recovered_at_unix: u64) -> bool {
+    interval.surface == AccountingGapSurface::ForkProducer
+        && interval.operation_family.is_none()
+        && recovered_at_unix.saturating_sub(interval.last_failure_at_unix)
+            < FORK_PRODUCER_PENDING_GRACE_SECS
+}
+
+/// 0.8.3: drop closed intervals that were settled registrations. Earlier versions closed them
+/// instead of removing them, so a state file could hold thousands of successful commands as
+/// "historical gaps"; pruning on write migrates such a file the first time it changes.
+fn prune_settled_registrations(state: &mut AccountingCoverageState) {
+    state.intervals.retain(|interval| {
+        !interval
+            .recovered_at_unix
+            .is_some_and(|recovered| is_settled_registration(interval, recovered))
+    });
+}
 
 fn snapshot(
     state: &AccountingCoverageState,
@@ -718,12 +790,128 @@ mod pending_producer_tests {
         assert!(!late.live_complete);
         assert_eq!(late.pending_producer_operations, 0);
         assert_eq!(late.open_missing_operations, 1);
-        store.recover(event).expect("recover");
+        // 0.8.3: receipts that arrive after the grace close a real gap.
+        let mut late_recovery = event;
+        late_recovery.at_unix = 1_000 + FORK_PRODUCER_PENDING_GRACE_SECS + 1;
+        store.recover(late_recovery).expect("recover");
         let recovered = store
             .snapshot(1_000 + FORK_PRODUCER_PENDING_GRACE_SECS + 1)
             .expect("snapshot");
         assert!(recovered.live_complete);
+        assert!(!recovered.historical_complete);
         assert_eq!(recovered.closed_intervals, 1);
+    }
+
+    // 0.8.3: a registration recovered inside the grace never was a gap and leaves nothing behind.
+    #[test]
+    fn recovery_inside_the_grace_removes_the_registration_instead_of_closing_a_gap() {
+        let directory = tempfile::tempdir().expect("directory");
+        let store = AccountingCoverageStore::new(directory.path());
+        let event = AccountingGapEvent {
+            surface: AccountingGapSurface::ForkProducer,
+            workspace_hash: Some("sha256:workspace".into()),
+            session_hash: Some("sha256:session".into()),
+            operation_family: None,
+            at_unix: 1_000,
+        };
+        store.record_missing(event.clone()).expect("registration");
+        let mut prompt_recovery = event;
+        prompt_recovery.at_unix = 1_005;
+        assert_eq!(store.recover(prompt_recovery).expect("recover"), 1);
+        let settled = store
+            .snapshot(1_000 + FORK_PRODUCER_PENDING_GRACE_SECS + 1)
+            .expect("snapshot");
+        assert!(settled.live_complete);
+        assert!(settled.historical_complete);
+        assert_eq!(settled.closed_intervals, 0);
+        assert_eq!(settled.lifetime_missing_operations, 0);
+        assert_eq!(settled.closed_gap_seconds, 0);
+    }
+
+    // 0.8.3: state files written by earlier versions lose their settled registrations on the
+    // next write; real gaps and their totals are kept.
+    #[test]
+    fn settled_registrations_written_by_earlier_versions_are_pruned_on_the_next_write() {
+        let directory = tempfile::tempdir().expect("directory");
+        let ledger = directory.path().join("ledger");
+        std::fs::create_dir_all(&ledger).expect("ledger directory");
+        std::fs::write(
+            ledger.join("accounting-coverage.json"),
+            concat!(
+                r#"{"schema_version":1,"legacy_missing_operations":0,"intervals":["#,
+                r#"{"surface":"fork_producer","workspace_hash":"w","session_hash":"s","#,
+                r#""operation_family":null,"started_at_unix":100,"last_failure_at_unix":100,"#,
+                r#""recovered_at_unix":103,"missing_operations":1},"#,
+                r#"{"surface":"mcp","workspace_hash":"w","session_hash":"s","#,
+                r#""operation_family":"search","started_at_unix":200,"last_failure_at_unix":200,"#,
+                r#""recovered_at_unix":260,"missing_operations":2}]}"#,
+                "\n"
+            ),
+        )
+        .expect("legacy state");
+        let store = AccountingCoverageStore::new(directory.path());
+        assert_eq!(
+            store
+                .snapshot(10_000)
+                .expect("legacy read")
+                .closed_intervals,
+            2
+        );
+
+        store
+            .record_missing(AccountingGapEvent {
+                surface: AccountingGapSurface::Cli,
+                workspace_hash: Some("w".into()),
+                session_hash: Some("s".into()),
+                operation_family: Some("read".into()),
+                at_unix: 10_000,
+            })
+            .expect("first write after upgrade");
+        let migrated = store.snapshot(10_000).expect("migrated read");
+        assert_eq!(migrated.closed_intervals, 1);
+        assert_eq!(migrated.open_intervals, 1);
+        assert_eq!(migrated.lifetime_missing_operations, 3);
+        assert_eq!(migrated.mcp_missing_operations, 2);
+        assert_eq!(migrated.closed_gap_seconds, 60);
+    }
+
+    // 0.8.3: inspecting one open condition again rewrites the state at most once a minute.
+    #[test]
+    fn repeated_inspection_refreshes_the_timestamp_at_most_once_a_minute() {
+        let directory = tempfile::tempdir().expect("directory");
+        let store = AccountingCoverageStore::new(directory.path());
+        let state_path = directory.path().join("ledger/accounting-coverage.json");
+        let event = |at_unix| AccountingGapEvent {
+            surface: AccountingGapSurface::ForkProducer,
+            workspace_hash: None,
+            session_hash: None,
+            operation_family: Some("invalid_accounting_context".into()),
+            at_unix,
+        };
+        store.record_missing(event(1_000)).expect("first failure");
+        let written = std::fs::read(&state_path).expect("state");
+
+        store.ensure_missing(event(1_030)).expect("inspection");
+        assert_eq!(
+            std::fs::read(&state_path).expect("state"),
+            written,
+            "an inspection inside the minute leaves the file untouched"
+        );
+        assert_eq!(
+            store
+                .snapshot(1_030)
+                .expect("snapshot")
+                .last_failure_at_unix,
+            Some(1_000)
+        );
+
+        store
+            .ensure_missing(event(1_060))
+            .expect("later inspection");
+        assert_ne!(std::fs::read(&state_path).expect("state"), written);
+        let refreshed = store.snapshot(1_060).expect("snapshot");
+        assert_eq!(refreshed.last_failure_at_unix, Some(1_060));
+        assert_eq!(refreshed.open_missing_operations, 1);
     }
 }
 
@@ -892,5 +1080,84 @@ mod tests {
         assert_eq!(snapshot.open_intervals, 1);
         assert_eq!(snapshot.fork_producer_missing_operations, 1);
         assert_eq!(snapshot.mcp_missing_operations, 1);
+    }
+}
+
+// 0.8.3: the command classification is stored with the registration.
+#[cfg(test)]
+mod attribution_tests {
+    use hzr_protocol::{
+        AccountingChannel, EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm,
+        FidelityValidation,
+    };
+
+    use super::AccountingReceiptContextStore;
+
+    fn classification() -> EvasionAttribution {
+        EvasionAttribution {
+            class: EvasionClass::E5PipelineOrRedirect,
+            wrapper_depth: 0,
+            interpreter: None,
+            path_form: EvasionPathForm::Bare,
+            stage_count: 3,
+            hatch_marker: false,
+            avoidable: true,
+            tier: EnforcementTier::T1NamedCorrection,
+            fidelity_reason: None,
+            fidelity_validation: FidelityValidation::NotRequested,
+        }
+    }
+
+    #[test]
+    fn registration_keeps_the_classification_and_reads_contexts_written_without_one() {
+        let directory = tempfile::tempdir().expect("directory");
+        let store = AccountingReceiptContextStore::new(directory.path());
+        let project = directory.path().join("project");
+        let correlation_id = "0123456789abcdef0123456789abcdef";
+        store
+            .register_with_attribution(
+                correlation_id,
+                &project,
+                Some("claude-code"),
+                Some("s1"),
+                AccountingChannel::HookCli,
+                Some(classification()),
+            )
+            .expect("attributed registration");
+        let path = store.context_path(correlation_id);
+        let context = store.read(&path).expect("context");
+        assert_eq!(context.evasion, Some(classification()));
+        store.complete(correlation_id).expect("completion");
+        let completed = store.read(&path).expect("completed context");
+        assert_eq!(
+            completed.evasion,
+            Some(classification()),
+            "completion keeps the classification"
+        );
+        assert!(completed.completed_at_unix.is_some());
+
+        // A context written by 0.8.2 has no `evasion` field at all.
+        let legacy_id = "fedcba9876543210fedcba9876543210";
+        std::fs::write(
+            store.context_path(legacy_id),
+            format!(
+                r#"{{"correlation_id":"{legacy_id}","project_path":"{}","agent":null,"session_id":null,"registered_at_unix":1,"channel":"hook_cli"}}"#,
+                project.display()
+            ),
+        )
+        .expect("legacy context");
+        let legacy = store
+            .read(&store.context_path(legacy_id))
+            .expect("legacy context parses");
+        assert_eq!(legacy.evasion, None);
+        let plain_id = "00000000000000000000000000000001";
+        store
+            .register_with_channel(plain_id, &project, None, None, AccountingChannel::Mcp)
+            .expect("plain registration");
+        let plain = std::fs::read_to_string(store.context_path(plain_id)).expect("plain context");
+        assert!(
+            !plain.contains("evasion"),
+            "an unclassified registration does not serialize the field: {plain}"
+        );
     }
 }

@@ -14,10 +14,19 @@ mod model;
 mod shell;
 
 pub use accounting::{
-    AccountingDrain, AccountingDrainIssue, AccountingDrainIssueKind, AccountingDrainStatus,
-    AccountingEngineIdentityPolicy, AccountingJournalInventory, AccountingJournalKind,
-    accounting_journal_inventory, acknowledge_accounting, drain_accounting,
+    AccountingDrain,
+    AccountingDrainIssue,
+    AccountingDrainIssueKind,
+    AccountingDrainStatus,
+    AccountingEngineIdentityPolicy,
+    AccountingJournalInventory,
+    AccountingJournalKind,
+    accounting_journal_inventory,
+    accounting_lock_correlation,
+    acknowledge_accounting,
+    drain_accounting,
     drain_accounting_with_policy,
+    remove_accounting_locks, // 0.8.3
 };
 pub use adapter::{
     AccountedForkExecution, ForkAccountingHandle, ForkCoreConfig, ForkCoreInvocation,
