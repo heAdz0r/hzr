@@ -1988,6 +1988,8 @@ pub struct AccountingCoverage {
     pub cli_missing_operations: u64,
     pub mcp_missing_operations: u64,
     pub fork_producer_missing_operations: u64,
+    // 0.8.1: receipt journals still waiting for the daemon (inventory, not lifetime totals).
+    pub undrained_receipts: usize,
 }
 
 #[cfg(test)]
@@ -2262,6 +2264,7 @@ fn degraded_rewrite_coverage_at(config: &Config, now_unix: u64) -> Result<Accoun
         fork_producer_missing_operations: snapshot
             .fork_producer_missing_operations
             .saturating_add(u64::try_from(undrained).unwrap_or(u64::MAX)),
+        undrained_receipts: undrained, // 0.8.1
     })
 }
 

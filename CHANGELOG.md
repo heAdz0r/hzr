@@ -24,9 +24,18 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
   The hook now registers the same context the daemon would have, and the daemon sweeper drains
   context-less journals older than ten minutes as `unattributed` operations (rejected batches are
   quarantined and recorded as a producer gap).
+- Doctor's `undrained_receipts`/`degraded_rewrites` checks summed lifetime per-surface gap
+  totals, so one past gap kept accounting readiness degraded forever. They now report journals
+  actually waiting for the daemon and open gap intervals; closed history stays in the detail.
 - Fleet reconciliation failed permanently on registrations whose worktree directory had been
   deleted. Those registrations are now pruned (`stale_registrations`) when the parent directory
   still exists; an absent parent is retained in case a volume is unmounted.
+
+- `cargo test` of the CLI rewrote the developer's real `~/.claude/CLAUDE.md` and
+  `~/.codex/AGENTS.md`: fixture fleet reconciliation resolved user-global surfaces from the real
+  home directory. Fleet reconciliation no longer touches user-global surfaces (they belong to
+  `hzr init`/`hzr install`), and a development build refuses to write user-global instruction
+  files outside the system temporary directory.
 
 ### Added
 

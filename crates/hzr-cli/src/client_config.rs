@@ -1128,7 +1128,7 @@ fn canonical_or_owned(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn path_is_in_system_temp(path: &Path) -> bool {
+pub(crate) fn path_is_in_system_temp(path: &Path) -> bool {
     let mut cursor = path;
     let mut missing = Vec::new();
     while !cursor.exists() {

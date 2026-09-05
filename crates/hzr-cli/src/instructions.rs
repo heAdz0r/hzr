@@ -906,12 +906,46 @@ pub fn install(
     )
 }
 
+/// 0.8.1: a development or test binary must never rewrite the user's real global
+/// `CLAUDE.md`/`AGENTS.md`. Unit tests that reconcile a fixture fleet resolved the global
+/// surfaces from the real home directory and removed (or re-pointed) the production managed
+/// block on every `cargo test`. Writes stay possible under the system temporary directory,
+/// which is where every fixture home lives.
+fn refuse_dev_global_write(target: &crate::activation::InstructionTarget) -> Result<()> {
+    if target.location != crate::activation::InstructionLocation::UserGlobal {
+        return Ok(());
+    }
+    let Ok(binary) = std::env::current_exe() else {
+        return Ok(());
+    };
+    let normalized = binary.to_string_lossy().replace('\\', "/");
+    let is_dev = ["/target/debug/", "/target/release/"]
+        .iter()
+        .any(|marker| normalized.contains(marker));
+    if is_dev
+        && !target
+            .path
+            .parent()
+            .is_some_and(crate::client_config::path_is_in_system_temp)
+    {
+        bail!(
+            "refusing to write user-global {} with development binary {}; only fixture homes under the system temporary directory are writable from a development build",
+            target.path.display(),
+            binary.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn install_target(
     target: &crate::activation::InstructionTarget,
     contract_path: &Path,
     dry_run: bool,
     confirmed: bool,
 ) -> Result<InstructionReport> {
+    if !dry_run {
+        refuse_dev_global_write(target)?; // 0.8.1
+    }
     install_inner(
         target.surface,
         &target.path,
@@ -955,6 +989,9 @@ pub fn uninstall_target(
     dry_run: bool,
     confirmed: bool,
 ) -> Result<InstructionReport> {
+    if !dry_run {
+        refuse_dev_global_write(target)?; // 0.8.1
+    }
     uninstall(target.surface, &target.path, dry_run, confirmed)
 }
 
@@ -1606,5 +1643,36 @@ mod tests {
                 out.len()
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod dev_global_guard_tests {
+    use std::path::PathBuf;
+
+    use crate::activation::{InstructionLocation, InstructionTarget};
+
+    // 0.8.1: the test binary lives under target/debug, so this is the production hazard itself.
+    #[test]
+    fn development_binary_refuses_to_touch_a_real_global_instruction_file() {
+        let target = InstructionTarget {
+            surface: super::Surface::Claude,
+            path: PathBuf::from("/nonexistent-home-for-hzr-tests/.claude/CLAUDE.md"),
+            location: InstructionLocation::UserGlobal,
+        };
+        let error = super::uninstall_target(&target, false, true)
+            .expect_err("a development build must not write outside the temporary directory");
+        assert!(error.to_string().contains("development binary"), "{error}");
+        assert!(
+            super::uninstall_target(&target, true, true).is_ok(),
+            "a dry run writes nothing and stays allowed"
+        );
+        let fixture = tempfile::tempdir().expect("fixture home");
+        let temporary = InstructionTarget {
+            surface: super::Surface::Claude,
+            path: fixture.path().join(".claude/CLAUDE.md"),
+            location: InstructionLocation::UserGlobal,
+        };
+        assert!(super::uninstall_target(&temporary, false, true).is_ok());
     }
 }

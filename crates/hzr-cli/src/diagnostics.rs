@@ -804,7 +804,14 @@ pub async fn reconcile_fleet_contracts(
                 continue;
             }
         };
-        for target in &instruction_state.desired {
+        // 0.8.1: user-global surfaces belong to `hzr init`/`hzr install`, which reconcile them
+        // once per machine. Rewriting them from every registered workspace produced spurious
+        // "refreshed" reports and let fixture fleets in tests reach the real home directory.
+        for target in instruction_state
+            .desired
+            .iter()
+            .filter(|target| target.location != activation::InstructionLocation::UserGlobal)
+        {
             if target.path.starts_with(&registration.root) {
                 if let Err(error) = confined_workspace_target(&registration.root, &target.path) {
                     report.rewritten.push(FleetContractRewrite {
@@ -855,7 +862,11 @@ pub async fn reconcile_fleet_contracts(
                 }),
             }
         }
-        for target in &instruction_state.obsolete {
+        for target in instruction_state
+            .obsolete
+            .iter()
+            .filter(|target| target.location != activation::InstructionLocation::UserGlobal)
+        {
             match activation::is_tracked_shared_instruction(&registration.root, target) {
                 Ok(true) => continue,
                 Ok(false) => {}
@@ -1806,26 +1817,18 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     // 0.8.1: the post-upgrade reference-state reconciliation must have run for this version.
     checks.push(crate::post_upgrade::reference_state_check(config));
     match hook_runner::degraded_rewrite_coverage(config) {
-        // A closed gap is a pass, not a permanent warning — the ledger is whole again and
-        // the history stays visible in the detail line.
-        Ok(coverage) if coverage.complete && coverage.lifetime_rewrites == 0 => checks.push(
-            check("degraded_rewrites", CheckStatus::Pass, "none recorded"),
-        ),
-        Ok(coverage) if coverage.complete => checks.push(check(
-            "degraded_rewrites",
-            CheckStatus::Pass,
-            format!(
-                "{} historical daemon-free rewrite(s), all reconciled",
-                coverage.lifetime_rewrites
-            ),
-        )),
-        Ok(coverage) if coverage.fork_producer_missing_operations > 0 => {
+        // 0.8.1: readiness describes the current state. Journals still waiting for the daemon
+        // and open gaps degrade accounting; closed intervals are history and stay visible in
+        // the detail line (and in `hzr stats`) instead of degrading readiness forever. The
+        // previous logic summed lifetime per-surface totals, so one past gap kept
+        // `undrained_receipts` red permanently.
+        Ok(coverage) if coverage.undrained_receipts > 0 => {
             checks.push(check(
                 "undrained_receipts",
                 CheckStatus::Warning,
                 format!(
                     "{} fork receipt operation(s) await daemon drain",
-                    coverage.fork_producer_missing_operations
+                    coverage.undrained_receipts
                 ),
             ));
             checks.push(check(
@@ -1841,16 +1844,21 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             "degraded_rewrites",
             CheckStatus::Warning,
             format!(
-                "{} daemon-free rewrite(s) are not in the ledger; the next managed rewrite reconciles them",
-                coverage.unreconciled_rewrites
+                "{} operation(s) are not in the ledger yet ({} open gap interval(s)); the next managed rewrite or receipt drain reconciles them",
+                coverage.unreconciled_rewrites, coverage.open_intervals
             ),
+        )),
+        Ok(coverage) if coverage.lifetime_rewrites == 0 => checks.push(check(
+            "degraded_rewrites",
+            CheckStatus::Pass,
+            "none recorded",
         )),
         Ok(coverage) => checks.push(check(
             "degraded_rewrites",
-            CheckStatus::Warning,
+            CheckStatus::Pass,
             format!(
-                "{} historical daemon-free rewrite(s); accounting completeness could not be established",
-                coverage.lifetime_rewrites
+                "live accounting complete; {} historical gap operation(s) across {} closed interval(s) remain recorded",
+                coverage.lifetime_rewrites, coverage.closed_intervals
             ),
         )),
         Err(error) => checks.push(check("degraded_rewrites", CheckStatus::Warning, error)),

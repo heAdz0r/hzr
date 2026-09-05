@@ -22,7 +22,10 @@ state without visiting each project.
 Hook rewrites made while the daemon was down produced fork receipts under a correlation that
 never had a context file; those receipts stayed "undrained" indefinitely. The hook now registers
 the context locally, and the daemon sweeper drains context-less journals older than ten minutes as
-`unattributed` operations. Rejected batches are quarantined and recorded as a producer gap.
+`unattributed` operations, accepting receipts written by an earlier fork-core build. Rejected
+batches are quarantined and recorded as a producer gap. Doctor's accounting checks now describe
+the current state (journals waiting for the daemon, open gap intervals) instead of summing
+lifetime totals that kept readiness degraded forever.
 
 ## Fleets that converge
 
