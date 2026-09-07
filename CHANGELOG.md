@@ -4,6 +4,13 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-09-07
+
+### Fixed
+
+- Exact numbered file reads now compare equivalent numbered presentations instead of counting requested line numbers as transform regression. Output and historical ledger rows are unchanged.
+- Claude Code completion feedback recovers the latest matching assistant model from a bounded transcript tail when status-line capture is absent or stale. Status-line model capture now precedes the upstream renderer.
+
 ## [0.8.3] - 2026-09-05
 
 ### Fixed

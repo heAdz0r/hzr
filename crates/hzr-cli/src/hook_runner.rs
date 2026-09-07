@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1653,6 +1653,11 @@ pub async fn feedback(config: &Config) {
             state = read_session(config, &input).unwrap_or(state);
         }
     }
+    if matches!(event, "Stop" | "SubagentStop") {
+        if let Some(model) = transcript_model(&input) {
+            state.observed_model_id = Some(model);
+        }
+    }
     let session_summaries =
         input
             .get("session_id")
@@ -1742,13 +1747,13 @@ pub fn statusline(config: &Config) {
     if hook_workspace_root(config, &input).is_none() {
         return;
     }
+    remember_observed_model(config, &input);
     if let Some(upstream) = statusline_upstream() {
         let bytes = serde_json::to_vec(&input).unwrap_or_default();
         if let Some(rendered) = run_statusline_upstream(&upstream, &bytes) {
             println!("{rendered}");
         }
     }
-    remember_observed_model(config, &input); // 0.8.2
     let state = read_session(config, &input);
     let status = match session_accounting_coverage(config, &input) {
         Err(_) => "ACCOUNTING: UNKNOWN",
@@ -1779,6 +1784,51 @@ fn remember_observed_model(config: &Config, input: &Value) {
     let _ = update_session_at(config, input, unix_now(), |state| {
         state.observed_model_id = Some(model);
     });
+}
+
+fn transcript_model(input: &Value) -> Option<String> {
+    const MAX_TAIL_BYTES: u64 = 256 * 1024;
+    let session = input.get("session_id")?.as_str()?;
+    let path_key = if input.get("hook_event_name").and_then(Value::as_str) == Some("SubagentStop") {
+        "agent_transcript_path"
+    } else {
+        "transcript_path"
+    };
+    let path = Path::new(input.get(path_key)?.as_str()?);
+    if !fs::symlink_metadata(path).ok()?.file_type().is_file() {
+        return None;
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK);
+    }
+    let mut file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let start = metadata.len().saturating_sub(MAX_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut tail = Vec::new();
+    file.take(MAX_TAIL_BYTES).read_to_end(&mut tail).ok()?;
+    let mut lines = tail.split(|byte| *byte == b'\n');
+    if start > 0 {
+        lines.next();
+    }
+    lines.rev().find_map(|line| {
+        let record: Value = serde_json::from_slice(line).ok()?;
+        if record.get("type")?.as_str()? != "assistant"
+            || record.get("sessionId")?.as_str()? != session
+        {
+            return None;
+        }
+        let model = record.pointer("/message/model")?.as_str()?;
+        (!model.is_empty() && model.len() <= 128 && model != "<synthetic>")
+            .then(|| model.to_owned())
+    })
 }
 
 fn accounting_statusline(state: Option<&SessionFeedback>) -> &'static str {
@@ -3267,6 +3317,103 @@ mod tests {
         assert!(
             message.contains("leakage covers measured operations only"),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn stop_model_uses_latest_matching_assistant_metadata_from_bounded_tail() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("session.jsonl");
+        let mut transcript = "x".repeat(300_000);
+        transcript.push('\n');
+        for (kind, session, model) in [
+            ("assistant", "session", "claude-opus-5"),
+            ("assistant", "session", "claude-fable-5-1"),
+            ("assistant", "other-session", "claude-opus-5"),
+            ("user", "session", "claude-opus-5"),
+            ("assistant", "session", "<synthetic>"),
+        ] {
+            transcript.push_str(
+                &serde_json::json!({
+                    "type": kind, "sessionId": session, "message": {"model": model}
+                })
+                .to_string(),
+            );
+            transcript.push('\n');
+        }
+        transcript.push_str("{incomplete");
+        std::fs::write(&path, transcript).expect("write transcript");
+        let input = serde_json::json!({"session_id": "session", "transcript_path": path});
+        let model = super::transcript_model(&input).expect("matching model");
+        assert_eq!(model, "claude-fable-5-1");
+        assert!(
+            super::transcript_model(&serde_json::json!({
+                "session_id": "session", "transcript_path": path,
+                "hook_event_name": "SubagentStop"
+            }))
+            .is_none(),
+            "a subagent must not borrow the root transcript model"
+        );
+        assert_eq!(
+            super::transcript_model(&serde_json::json!({
+                "session_id": "session", "agent_transcript_path": path,
+                "hook_event_name": "SubagentStop"
+            }))
+            .as_deref(),
+            Some("claude-fable-5-1")
+        );
+        let mut config = config(directory.path());
+        config.billing.public_estimate_enabled = true;
+        config.billing.harness = "claude_code".into();
+        config.billing.provider = "anthropic".into();
+        config.billing.model = "claude-opus-5".into();
+        config.billing.method = "standard".into();
+        config.billing.pricing_basis = "input".into();
+        let efficiency = SessionEfficiencySummary {
+            net_avoided_tokens_estimated: 1_000_000,
+            ..SessionEfficiencySummary::default()
+        };
+        let (message, _) =
+            super::economic_message(&config, Some(&model), Some(&efficiency), None, false);
+        assert!(message.contains("claude-fable-5-1/standard"), "{message}");
+        assert!(message.contains("USD 10.000000"), "{message}");
+        assert!(
+            super::transcript_model(&serde_json::json!({
+                "session_id": "unrelated", "transcript_path": path
+            }))
+            .is_none()
+        );
+        assert!(
+            super::transcript_model(&serde_json::json!({
+                "session_id": "session", "transcript_path": directory.path()
+            }))
+            .is_none()
+        );
+        assert!(
+            super::transcript_model(&serde_json::json!({
+                "session_id": "session", "transcript_path": directory.path().join("missing")
+            }))
+            .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_model_rejects_symlink_transcripts() {
+        let directory = tempdir().expect("temporary directory");
+        let source = directory.path().join("source.jsonl");
+        std::fs::write(
+            &source,
+            r#"{"type":"assistant","sessionId":"s","message":{"model":"claude-fable-5-1"}}"#,
+        )
+        .expect("write transcript");
+        let link = directory.path().join("link.jsonl");
+        std::os::unix::fs::symlink(&source, &link).expect("symlink");
+        assert!(
+            super::transcript_model(&serde_json::json!({
+                "session_id": "s", "transcript_path": link
+            }))
+            .is_none()
         );
     }
 

@@ -435,10 +435,19 @@ pub fn run(
         delivered.push('\n');
     }
     print!("{delivered}");
+    // Numbered reads must compare against the same presentation requested by the caller.
+    let baseline = if line_numbers {
+        std::borrow::Cow::Owned(read_render::format_with_line_numbers_from(
+            &content,
+            from.unwrap_or(1),
+        ))
+    } else {
+        std::borrow::Cow::Borrowed(content.as_str())
+    };
     timer.track_attributed(
         "read <path omitted>",
         "rtk read",
-        &content,
+        &baseline,
         &delivered,
         attribution,
     );

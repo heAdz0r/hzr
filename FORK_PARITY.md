@@ -1,7 +1,7 @@
-# HZR 0.8.3 — fork-core parity ledger
+# HZR 0.8.4 — fork-core parity ledger
 
 **Audit date:** 2026-09-03
-**Status:** HZR 0.8.3 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
+**Status:** HZR 0.8.4 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -41,6 +41,17 @@ The 0.6.0 gate verified current engine manifest
 `be0459b8d4dde1a76dcfe836afd77fe0432cf5cb22e83845c522c4568f6a3f53`, 1,940 passed tests,
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
+
+### 0.8.4 numbered-read accounting delta
+
+File reads with requested line numbers now use the same numbered presentation on both
+sides of the transform comparison, matching the existing stdin-reader contract. Exact
+numbered reads preserve output bytes and source coordinates while recording zero transform
+savings. Unnumbered reads and recovery-notice accounting are unchanged. Regression fixtures
+cover full and ranged reads, Unicode, and a missing trailing newline. Historical ledger rows
+are not rewritten. The immutable import baseline and engine version remain unchanged;
+CURRENT_ENGINE identifies this delta, with the complete deterministic gate and inherited
+warning ratchet required.
 
 ### 0.8.3 diagnostic fidelity delta
 
