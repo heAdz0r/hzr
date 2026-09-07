@@ -165,7 +165,7 @@ mod tests {
         assert_eq!(agtx.patches, ["patches/agtx/1.0.4-readonly-observer.patch"]);
         assert_eq!(
             agtx.patch_sha256,
-            ["c7ad1c32074acc470edca6738ba3dd74e0845c7d62712337ded6052ad197a90d"]
+            ["13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8"]
         );
     }
 }

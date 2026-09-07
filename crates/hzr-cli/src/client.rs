@@ -341,15 +341,18 @@ impl DaemonClient {
         self.post("/v1/billing/receipts", receipt).await
     }
 
-    // 0.8.7: agtx Agent Observatory control. Every one of these is a mutation
+    // 0.8.602: agtx Agent Observatory control. Every one of these is a mutation
     // or an operator read, so all of them go through the authenticated routes.
     pub async fn agents_status(&self) -> Result<AgentsStatusResponse, ClientError> {
         self.get("/v1/agents/status").await
     }
 
     /// Make a running daemon adopt the enrollment set the CLI just wrote.
-    pub async fn agents_reload(&self) -> Result<AgentsStatusResponse, ClientError> {
-        self.post("/v1/agents/reload", &serde_json::json!({})).await
+    pub async fn agents_reload(
+        &self,
+        enrollments: &hzr_core::AgtxConfig,
+    ) -> Result<AgentsStatusResponse, ClientError> {
+        self.post("/v1/agents/reload", enrollments).await
     }
 
     pub async fn agents_sync(

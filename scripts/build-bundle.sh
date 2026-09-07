@@ -362,7 +362,7 @@ fi
 hzr_build_stage "Building the optional agtx observer (flag-gated)"
 if [[ "${HZR_BUILD_AGTX_OBSERVER}" == 1 ]]; then
   HZR_AGTX_COMMIT="d307c4c182dff19a65370a50403185cb826f7f49"
-  HZR_AGTX_PATCH_DIGEST="c7ad1c32074acc470edca6738ba3dd74e0845c7d62712337ded6052ad197a90d"
+  HZR_AGTX_PATCH_DIGEST="13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8"
   verify_sha256 \
     "${HZR_AGTX_PATCH_DIGEST}" \
     "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch"

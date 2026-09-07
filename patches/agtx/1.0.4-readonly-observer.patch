@@ -117,10 +117,10 @@ index 53d0aae..432d82e 100644
  pub mod tui;
 diff --git a/src/observer/mod.rs b/src/observer/mod.rs
 new file mode 100644
-index 0000000..5c25a82
+index 0000000..e6f0b05
 --- /dev/null
 +++ b/src/observer/mod.rs
-@@ -0,0 +1,862 @@
+@@ -0,0 +1,884 @@
 +//! Bounded, read-only snapshot export for an external monitor.
 +//!
 +//! This is the whole of the observer surface: one request in, one snapshot out,
@@ -161,7 +161,7 @@ index 0000000..5c25a82
 +
 +/// Identity of this patch series, so a consumer can tell an adapted binary from
 +/// an upstream one that happens to share a version string.
-+pub const PATCH_IDENTITY: &str = "hzr-agtx-readonly-observer-1";
++pub const PATCH_IDENTITY: &str = "hzr-agtx-readonly-observer-2";
 +
 +pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
 +pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -510,7 +510,21 @@ index 0000000..5c25a82
 +    }
 +
 +    if request.include_hook_status {
-+        let read = attach_hook_status(&request.project_path, &mut tasks, now_ms, &mut warnings);
++        let enrolled_root = request.project_path.canonicalize()?;
++        let mut read = false;
++        for task in &mut tasks {
++            let task_root: Option<String> = db.conn().query_row(
++                "SELECT worktree_path FROM tasks WHERE id = ?1",
++                [&task.source_task_id], |row| row.get(0),
++            )?;
++            let candidate = task_root.as_deref().map(Path::new).unwrap_or(&enrolled_root);
++            let Ok(root) = candidate.canonicalize() else { continue };
++            if !root.starts_with(&enrolled_root) {
++                warnings.push(SnapshotWarning::new("hook_worktree_outside_enrollment", 1));
++                continue;
++            }
++            read |= attach_hook_status(&root, std::slice::from_mut(task), now_ms, &mut warnings);
++        }
 +        capabilities.hook_status = read;
 +    }
 +
@@ -558,9 +572,7 @@ index 0000000..5c25a82
 +        schema_version: PROTOCOL_SCHEMA_VERSION,
 +        request_id: request.request_id.clone(),
 +        upstream_version: env!("CARGO_PKG_VERSION").to_string(),
-+        upstream_commit: option_env!("AGTX_OBSERVER_UPSTREAM_COMMIT")
-+            .unwrap_or("unknown")
-+            .to_string(),
++        upstream_commit: "d307c4c182dff19a65370a50403185cb826f7f49".to_string(),
 +        patch_identity: PATCH_IDENTITY.to_string(),
 +        source_instance_id,
 +        observed_at_ms: now_ms,
@@ -893,8 +905,12 @@ index 0000000..5c25a82
 +    warnings: &mut Vec<SnapshotWarning>,
 +) -> bool {
 +    let status_dir = worktree.join(STATUS_DIR);
-+    if !status_dir.is_dir() {
-+        return false;
++    // Reject links in the directory chain, not just at the final file.
++    for directory in [worktree.join(".agtx"), status_dir.clone()] {
++        if !std::fs::symlink_metadata(&directory).is_ok_and(|meta| meta.is_dir()) {
++            warnings.push(SnapshotWarning::new("hook_directory_refused", 1));
++            return false;
++        }
 +    }
 +    let now_secs = now_ms / 1_000;
 +    let mut refused = 0u32;
@@ -915,9 +931,15 @@ index 0000000..5c25a82
 +            refused = refused.saturating_add(1);
 +            continue;
 +        }
-+        let Ok(raw) = std::fs::read_to_string(&path) else {
++        let Ok(file) = std::fs::File::open(&path) else {
 +            continue;
 +        };
++        let mut raw = String::new();
++        let cap = crate::agent::hook_status::MAX_PAYLOAD_BYTES;
++        if file.take(cap as u64 + 1).read_to_string(&mut raw).is_err() || raw.len() > cap {
++            refused = refused.saturating_add(1);
++            continue;
++        }
 +        let Ok(status) = serde_json::from_str::<AgentHookStatus>(&raw) else {
 +            refused = refused.saturating_add(1);
 +            continue;
@@ -983,12 +1005,15 @@ index 0000000..5c25a82
 +
 +#[cfg(test)]
 +mod tests;
+diff --git a/src/observer/mod.rs.rtk-lock b/src/observer/mod.rs.rtk-lock
+new file mode 100644
+index 0000000..e69de29
 diff --git a/src/observer/readonly.rs b/src/observer/readonly.rs
 new file mode 100644
-index 0000000..2cb11df
+index 0000000..ef4eba8
 --- /dev/null
 +++ b/src/observer/readonly.rs
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,195 @@
 +//! Read-only access to an agtx store.
 +//!
 +//! [`Database::open_project`] and [`Database::open_global`] are constructors for
@@ -1034,6 +1059,8 @@ index 0000000..2cb11df
 +        // `query_only` makes any accidental write a runtime error rather than a
 +        // silent mutation of somebody else's board.
 +        conn.pragma_update(None, "query_only", "ON")?;
++        // All reads for this handle share one SQLite snapshot, including WAL.
++        conn.execute_batch("BEGIN DEFERRED TRANSACTION")?;
 +        Ok(Self {
 +            conn,
 +            path: path.to_path_buf(),
@@ -1182,13 +1209,61 @@ index 0000000..2cb11df
 +        assert_eq!(layout.index_db(), Path::new("/tmp/root/index.db"));
 +    }
 +}
+diff --git a/src/observer/readonly.rs.rtk-lock b/src/observer/readonly.rs.rtk-lock
+new file mode 100644
+index 0000000..e69de29
 diff --git a/src/observer/tests.rs b/src/observer/tests.rs
 new file mode 100644
-index 0000000..650204b
+index 0000000..1f8f97e
 --- /dev/null
 +++ b/src/observer/tests.rs
-@@ -0,0 +1,487 @@
+@@ -0,0 +1,533 @@
 +use super::*;
++
++#[test]
++fn task_hook_uses_its_enrolled_worktree_instead_of_board_root() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "running", None);
++    let task_root = store.project.join(".agtx/worktrees/task-a");
++    std::fs::create_dir_all(task_root.join(".agtx/status")).unwrap();
++    conn.execute("UPDATE tasks SET worktree_path = ?1 WHERE id = 'task-a'",
++        [task_root.to_string_lossy().as_ref()]).unwrap();
++    std::fs::write(task_root.join(".agtx/status/task-a.json"),
++        r#"{"ts":1788258200,"state":"working","agent":"claude","session_id":"session-a"}"#).unwrap();
++    let mut req = request(&store);
++    req.include_hook_status = true;
++    let response = snapshot(&req, 1788258200000).unwrap();
++    assert_eq!(response.tasks[0].hook.as_ref().unwrap().session_id.as_deref(), Some("session-a"));
++}
++
++
++#[test]
++#[cfg(unix)]
++fn linked_hook_directory_is_not_followed() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "running", None);
++    let external = store._dir.path().join("outside");
++    std::fs::create_dir_all(external.join("status")).unwrap();
++    std::os::unix::fs::symlink(&external, store.project.join(".agtx")).unwrap();
++    std::fs::write(external.join("status/task-a.json"),
++        r#"{"ts":1788258200,"state":"working","agent":"claude","session_id":"private"}"#).unwrap();
++    let mut req = request(&store);
++    req.include_hook_status = true;
++    let response = snapshot(&req, 1788258200000).unwrap();
++    assert!(response.tasks.iter().all(|task| task.hook.is_none()));
++    assert!(response.warnings.iter().any(|warning| warning.code == "hook_directory_refused"));
++}
++
++#[test]
++fn snapshot_producer_commit_is_pinned_without_build_environment() {
++    let store = store();
++    let _conn = seed(&store);
++    let response = snapshot(&request(&store), 1788258200000).unwrap();
++    assert_eq!(response.upstream_commit, "d307c4c182dff19a65370a50403185cb826f7f49");
++}
++
 +use rusqlite::{params, Connection};
 +use std::path::PathBuf;
 +
@@ -1247,7 +1322,7 @@ index 0000000..650204b
 +    conn.execute(
 +        "INSERT INTO tasks (id, title, status, agent, project_id, worktree_path, cycle,
 +                            referenced_tasks, created_at, updated_at)
-+         VALUES (?1, ?2, ?3, 'claude', 'proj-1', '/work/repo', 2, ?4,
++         VALUES (?1, ?2, ?3, 'claude', 'proj-1', NULL, 2, ?4,
 +                 '2026-09-01T10:00:00+00:00', '2026-09-01T11:00:00+00:00')",
 +        params![id, format!("secret title for {id}"), status, refs],
 +    )
@@ -1330,6 +1405,7 @@ index 0000000..650204b
 +    let conn = seed(&store);
 +    insert_task(&conn, "task-a", "running", None);
 +    insert_task(&conn, "task-b", "review", Some("task-a, task-missing"));
++    conn.execute("UPDATE tasks SET worktree_path = ?1", [store.project.to_string_lossy().as_ref()]).unwrap();
 +    seed_index(&store);
 +    drop(conn);
 +
@@ -1675,6 +1751,9 @@ index 0000000..650204b
 +    request.data_root = PathBuf::from("relative/root");
 +    assert!(snapshot(&request, NOW_MS).is_err());
 +}
+diff --git a/src/observer/tests.rs.rtk-lock b/src/observer/tests.rs.rtk-lock
+new file mode 100644
+index 0000000..e69de29
 diff --git a/src/tui/dep_graph.rs b/src/tui/dep_graph.rs
 index 0a39c8f..430073c 100644
 --- a/src/tui/dep_graph.rs

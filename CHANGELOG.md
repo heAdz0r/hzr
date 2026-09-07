@@ -4,6 +4,19 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.602] - 2026-09-08
+
+- Review and harden the opt-in agtx Observatory: bounded helper IO, atomic pinned
+  installation, correct custom-config reload and disable/re-enable lifecycle.
+- Restore explicit privacy publication defaults; isolate project/session joins,
+  map linked HZR accounting identities and reject aggregate overflow.
+- Stop accruing productive time from stale evidence; label current-catalog
+  estimates and lifetime-session accounting accurately.
+- Update the observer patch to revision 2 with pinned producer identity,
+  transaction-consistent reads and confined nested-worktree hook discovery.
+- Keep the adapted helper out of default binary distribution pending its
+  recorded license provenance gate; document incomplete PRD acceptance work.
+
 ## [0.8.7] - 2026-09-07
 
 ### Added
@@ -1746,3 +1759,4 @@ First public HZR release.
 [0.7.1]: https://github.com/heAdz0r/hzr/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/heAdz0r/hzr/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/heAdz0r/hzr/compare/v0.6.5...v0.6.6
+[0.8.602]: https://github.com/heAdz0r/hzr/compare/v0.8.7...v0.8.602

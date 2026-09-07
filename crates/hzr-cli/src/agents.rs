@@ -31,7 +31,7 @@ pub const AGTX_COMMIT: &str = "d307c4c182dff19a65370a50403185cb826f7f49";
 pub const AGTX_VERSION: &str = "1.0.4";
 pub const AGTX_PATCH: &str = "patches/agtx/1.0.4-readonly-observer.patch";
 pub const AGTX_PATCH_SHA256: &str =
-    "c7ad1c32074acc470edca6738ba3dd74e0845c7d62712337ded6052ad197a90d";
+    "13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8";
 
 const OBSERVER_BINARY: &str = "hzr-agtx-observer";
 /// Import files are bounded well below the daemon's body limit.
@@ -60,8 +60,8 @@ pub async fn execute(
                 from_binary,
                 source_dir,
                 force,
-            } => install_component(config, from_binary, source_dir, force, json),
-            AgentsComponentCommand::Status => component_status(config, json),
+            } => install_component(config, from_binary, source_dir, force, json).await,
+            AgentsComponentCommand::Status => component_status(config, json).await,
         },
         AgentsCommand::Enable {
             project,
@@ -90,27 +90,21 @@ pub async fn execute(
 ///
 /// Identity comes from the binary itself, never from its file name: a file
 /// called `hzr-agtx-observer` proves nothing about what is inside it.
-fn probe(path: &Path) -> Option<(String, u32, String)> {
-    let output = Command::new(path).arg("--version").output().ok()?;
-    let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let mut version = None;
-    let mut schema = None;
-    let mut patch = None;
-    for (index, field) in line.split_whitespace().enumerate() {
-        if index == 1 {
-            version = Some(field.to_string());
-        } else if let Some(value) = field.strip_prefix("schema=") {
-            schema = value.parse::<u32>().ok();
-        } else if let Some(value) = field.strip_prefix("patch=") {
-            patch = Some(value.to_string());
-        }
+async fn probe(path: &Path) -> Option<(String, u32, String)> {
+    let info = hzr_daemon::probe_agent_component(path.to_path_buf()).await;
+    if !info.usable() {
+        return None;
     }
-    Some((version?, schema?, patch?))
+    Some((
+        info.version?,
+        info.protocol_schema_version?,
+        info.patch_identity?,
+    ))
 }
 
-fn component_status(config: &Config, json: bool) -> Result<ExitCode> {
+async fn component_status(config: &Config, json: bool) -> Result<ExitCode> {
     let path = component_path(config);
-    let identity = path.is_file().then(|| probe(&path)).flatten();
+    let identity = probe(&path).await;
     let compatible = identity.as_ref().is_some_and(|(_, schema, patch)| {
         *schema == AGENT_SNAPSHOT_SCHEMA_VERSION && patch == AGENT_OBSERVER_PATCH_IDENTITY
     });
@@ -146,6 +140,14 @@ fn component_status(config: &Config, json: bool) -> Result<ExitCode> {
 }
 
 fn repository_root() -> Option<PathBuf> {
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(root) = executable.parent().and_then(Path::parent) {
+            let bundled = root.join("share/hzr");
+            if bundled.join(AGTX_PATCH).is_file() && bundled.join("engines.lock.toml").is_file() {
+                return Some(bundled);
+            }
+        }
+    }
     let mut directory = std::env::current_dir().ok()?;
     loop {
         if directory.join("patches/agtx").is_dir() && directory.join("engines.lock.toml").is_file()
@@ -156,7 +158,7 @@ fn repository_root() -> Option<PathBuf> {
     }
 }
 
-fn install_component(
+async fn install_component(
     config: &Config,
     from_binary: Option<PathBuf>,
     source_dir: Option<PathBuf>,
@@ -165,7 +167,7 @@ fn install_component(
 ) -> Result<ExitCode> {
     let destination = component_path(config);
     if destination.is_file() && !force {
-        let identity = probe(&destination);
+        let identity = probe(&destination).await;
         if identity.as_ref().is_some_and(|(_, schema, patch)| {
             *schema == AGENT_SNAPSHOT_SCHEMA_VERSION && patch == AGENT_OBSERVER_PATCH_IDENTITY
         }) {
@@ -175,7 +177,7 @@ fn install_component(
                     destination.display()
                 );
             }
-            return component_status(config, json);
+            return component_status(config, json).await;
         }
     }
     if let Some(parent) = destination.parent() {
@@ -183,11 +185,14 @@ fn install_component(
             .with_context(|| format!("create component directory {}", parent.display()))?;
     }
 
+    let workspace;
     let built = match from_binary {
         // An operator-supplied build. Still probed: HZR installs an identity it
         // verified, not a path somebody typed.
         Some(path) => {
-            let identity = probe(&path).context("supplied binary does not report an identity")?;
+            let identity = probe(&path)
+                .await
+                .context("supplied binary does not report an identity")?;
             if identity.1 != AGENT_SNAPSHOT_SCHEMA_VERSION
                 || identity.2 != AGENT_OBSERVER_PATCH_IDENTITY
             {
@@ -201,23 +206,43 @@ fn install_component(
             }
             path
         }
-        None => build_component(source_dir)?,
+        None => {
+            workspace = build_component(source_dir)?;
+            workspace
+                .path()
+                .join("target/release")
+                .join(OBSERVER_BINARY)
+        }
     };
 
-    std::fs::copy(&built, &destination)
-        .with_context(|| format!("install {} to {}", built.display(), destination.display()))?;
+    let parent = destination
+        .parent()
+        .context("component directory is missing")?;
+    let staged = tempfile::NamedTempFile::new_in(parent)?.into_temp_path();
+    std::fs::copy(&built, &staged).with_context(|| format!("stage {}", built.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
     }
-    // Verify after activation the same way every other pinned component is:
-    // an install that cannot prove its identity is not an install.
-    component_status(config, json)
+    let identity = probe(&staged)
+        .await
+        .context("staged observer has no valid identity")?;
+    if identity.0 != AGTX_VERSION
+        || identity.1 != AGENT_SNAPSHOT_SCHEMA_VERSION
+        || identity.2 != AGENT_OBSERVER_PATCH_IDENTITY
+    {
+        bail!("staged observer identity does not match the pinned component");
+    }
+    std::fs::File::open(&staged)?.sync_all()?;
+    staged
+        .persist(&destination)
+        .context("activate observer atomically")?;
+    component_status(config, json).await
 }
 
 /// Build the observer from the pinned upstream commit plus the pinned patch.
-fn build_component(source_dir: Option<PathBuf>) -> Result<PathBuf> {
+fn build_component(source_dir: Option<PathBuf>) -> Result<tempfile::TempDir> {
     let root = repository_root().context(
         "run `hzr agents component install` from an HZR checkout, or pass --from-binary",
     )?;
@@ -233,34 +258,39 @@ fn build_component(source_dir: Option<PathBuf>) -> Result<PathBuf> {
         );
     }
 
-    let workspace = match source_dir {
-        Some(directory) => directory,
-        None => {
-            let temporary = std::env::temp_dir().join(format!("hzr-agtx-{AGTX_COMMIT}"));
-            if !temporary.join(".git").is_dir() {
-                std::fs::create_dir_all(&temporary)?;
-                eprintln!("fetching pinned agtx {AGTX_VERSION} ({AGTX_COMMIT})");
-                run(&temporary, "git", &["init", "--quiet"])?;
-                run(
-                    &temporary,
-                    "git",
-                    &["remote", "add", "origin", AGTX_REPOSITORY],
-                )?;
-                run(
-                    &temporary,
-                    "git",
-                    &["fetch", "--quiet", "--depth", "1", "origin", AGTX_COMMIT],
-                )?;
-                run(&temporary, "git", &["checkout", "--quiet", "FETCH_HEAD"])?;
-            } else {
-                run(&temporary, "git", &["checkout", "--quiet", "--", "."])?;
-            }
-            temporary
-        }
+    // Never build from a predictable shared directory or execute untracked
+    // files from an operator's checkout. Fetch the pinned tree into a private
+    // temporary repository, leaving the supplied source untouched.
+    let temporary = tempfile::Builder::new()
+        .prefix("hzr-agtx-build-")
+        .tempdir()?;
+    let workspace = temporary.path();
+    let source = match source_dir {
+        Some(directory) => directory.canonicalize()?.to_string_lossy().into_owned(),
+        None => AGTX_REPOSITORY.to_string(),
     };
+    run(workspace, "git", &["init", "--quiet"])?;
+    run(
+        workspace,
+        "git",
+        &[
+            "fetch",
+            "--quiet",
+            "--depth",
+            "1",
+            "--",
+            &source,
+            AGTX_COMMIT,
+        ],
+    )?;
+    run(
+        workspace,
+        "git",
+        &["checkout", "--quiet", "--detach", "FETCH_HEAD"],
+    )?;
 
     let head = std::process::Command::new("git")
-        .current_dir(&workspace)
+        .current_dir(workspace)
         .args(["rev-parse", "HEAD"])
         .output()
         .context("resolve the checked-out agtx commit")?;
@@ -272,13 +302,12 @@ fn build_component(source_dir: Option<PathBuf>) -> Result<PathBuf> {
     let patch_argument = patch.to_string_lossy().into_owned();
     // `apply --check` first: a partially applied patch would leave a tree that
     // builds into something nobody pinned.
-    if run(&workspace, "git", &["apply", "--check", &patch_argument]).is_ok() {
-        run(&workspace, "git", &["apply", &patch_argument])?;
-    }
+    run(workspace, "git", &["apply", "--check", &patch_argument])?;
+    run(workspace, "git", &["apply", &patch_argument])?;
 
     eprintln!("building {OBSERVER_BINARY} (this compiles the pinned agtx source once)");
     run(
-        &workspace,
+        workspace,
         "cargo",
         &["build", "--locked", "--release", "--bin", OBSERVER_BINARY],
     )?;
@@ -286,7 +315,7 @@ fn build_component(source_dir: Option<PathBuf>) -> Result<PathBuf> {
     if !built.is_file() {
         bail!("build finished but {} is missing", built.display());
     }
-    Ok(built)
+    Ok(temporary)
 }
 
 fn run(directory: &Path, program: &str, args: &[&str]) -> Result<()> {
@@ -351,7 +380,7 @@ async fn enable(
         enabled: true,
     });
     updated.write(config_path)?;
-    let reload = reload_daemon(config).await;
+    let reload = reload_daemon(&updated).await;
 
     if json {
         print_json(&serde_json::json!({
@@ -375,7 +404,7 @@ async fn enable(
 }
 
 async fn disable(
-    config: &Config,
+    _config: &Config,
     config_path: &Path,
     project: &Path,
     json: bool,
@@ -386,7 +415,7 @@ async fn disable(
     let mut updated = Config::load_or_default(config_path)?;
     let changed = updated.integrations.agtx.disable_project(&project);
     updated.write(config_path)?;
-    let reload = reload_daemon(config).await;
+    let reload = reload_daemon(&updated).await;
     if json {
         print_json(&serde_json::json!({
             "disabled": changed,
@@ -410,7 +439,7 @@ async fn disable(
 /// not an error: it will read the new file when it starts.
 async fn reload_daemon(config: &Config) -> Option<AgentsStatusResponse> {
     let client = DaemonClient::from_config(config).ok()?;
-    client.agents_reload().await.ok()
+    client.agents_reload(&config.integrations.agtx).await.ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -604,6 +633,55 @@ pub fn onboarding_commands() -> [&'static str; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn component_activation_replaces_symlink_atomically_and_rejects_failed_binary() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let directory = tempfile::tempdir().expect("temp");
+        let config = Config {
+            data_dir: directory.path().join("data"),
+            ..Config::default()
+        };
+        let destination = component_path(&config);
+        std::fs::create_dir_all(destination.parent().expect("parent")).expect("mkdir");
+        let victim = directory.path().join("unrelated");
+        std::fs::write(&victim, "keep").expect("victim");
+        symlink(&victim, &destination).expect("symlink");
+        let source = directory.path().join("observer");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' '{} {} schema={} patch={}'\n",
+            OBSERVER_BINARY,
+            AGTX_VERSION,
+            AGENT_SNAPSHOT_SCHEMA_VERSION,
+            AGENT_OBSERVER_PATCH_IDENTITY
+        );
+        std::fs::write(&source, &script).expect("source");
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        install_component(&config, Some(source.clone()), None, true, true)
+            .await
+            .expect("install");
+        assert!(
+            !std::fs::symlink_metadata(&destination)
+                .expect("metadata")
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&victim).expect("victim intact"),
+            "keep"
+        );
+        let installed = std::fs::read(&destination).expect("installed");
+        std::fs::write(&source, format!("{script}exit 7\n")).expect("bad source");
+        assert!(
+            install_component(&config, Some(source), None, true, true)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read(&destination).expect("still installed"),
+            installed
+        );
+    }
 
     #[test]
     fn the_pinned_patch_digest_matches_the_checked_in_patch() {

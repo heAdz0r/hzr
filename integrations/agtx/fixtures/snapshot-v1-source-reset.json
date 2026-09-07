@@ -3,7 +3,7 @@
   "request_id": "fixture-0005",
   "upstream_version": "1.0.4",
   "upstream_commit": "d307c4c182dff19a65370a50403185cb826f7f49",
-  "patch_identity": "hzr-agtx-readonly-observer-1",
+  "patch_identity": "hzr-agtx-readonly-observer-2",
   "source_instance_id": "gen:5c1d0bb9a2e74f30",
   "observed_at_ms": 1788258400000,
   "snapshot_id": "gen:5c1d0bb9a2e74f30:1788258400000:start",

@@ -19,7 +19,7 @@ pub struct Config {
     pub activation: ActivationConfig,
     pub instructions: InstructionConfig,
     pub billing: BillingConfig,
-    // 0.8.7: opt-in monitoring integrations live in the one configuration loader.
+    // 0.8.602: opt-in monitoring integrations live in the one configuration loader.
     pub integrations: IntegrationsConfig,
 }
 
@@ -36,7 +36,7 @@ impl Default for Config {
             activation: ActivationConfig::default(),
             instructions: InstructionConfig::default(),
             billing: BillingConfig::default(),
-            integrations: IntegrationsConfig::default(), // 0.8.7
+            integrations: IntegrationsConfig::default(), // 0.8.602
         }
     }
 }
@@ -247,7 +247,7 @@ impl Config {
                 return Err(ConfigError::InvalidBilling);
             }
         }
-        self.integrations.agtx.validate()?; // 0.8.7
+        self.integrations.agtx.validate()?; // 0.8.602
         Ok(())
     }
 }
@@ -282,11 +282,8 @@ pub struct AgtxConfig {
     /// Publish the source's own task titles and branch names alongside the
     /// pseudonyms.
     ///
-    /// On by default because a board labelled only by opaque ids cannot be
-    /// used: nobody can tell which task is which, and every screenshot and
-    /// support question becomes a guessing game. Turning it off returns the
-    /// dashboard to pseudonyms only, which is the right choice for a machine
-    /// whose loopback surface other people can reach.
+    /// Requires explicit opt-in because dashboard reads are unauthenticated.
+    /// Enrolling a project does not authorize publishing its source text.
     pub publish_task_titles: bool,
     pub projects: Vec<AgtxProject>,
 }
@@ -298,7 +295,7 @@ impl Default for AgtxConfig {
             poll_interval_ms: 5_000,
             stale_after_ms: 30_000,
             history_retention_days: 30,
-            publish_task_titles: true,
+            publish_task_titles: false,
             projects: Vec::new(),
         }
     }
@@ -662,21 +659,13 @@ pub struct PrivacyConfig {
     /// Show each registered workspace by its directory name on the local
     /// dashboard.
     ///
-    /// On by default: the dashboard binds to loopback and shows the user their
-    /// own machine, and a list of a hundred `Project 6a1be071` rows cannot be
-    /// used for anything — nobody can tell which one is which. Turning it off
-    /// returns the registry to pseudonyms only, which is the right choice when
-    /// somebody else can reach that loopback port. Identity hashes are
-    /// published either way; this only adds the name beside them.
+    /// Explicit opt-in for the unauthenticated dashboard. Existing identity
+    /// hashes remain available when names are withheld.
     pub publish_workspace_names: bool,
     /// Show real ICM topic names and memory content on the local dashboard.
     ///
-    /// On by default, for the same reason as workspace names: a graph of
-    /// `Memory topic 14` nodes whose every leaf reads "content is redacted"
-    /// cannot be navigated to anything, so it answers no question at all. The
-    /// data is the user's own and the endpoint is loopback-only. Turning it off
-    /// restores the redacted projection, which is the right choice when
-    /// somebody else can reach that port.
+    /// Explicit opt-in: upgrading HZR must not expose previously private
+    /// memory content to unauthenticated dashboard readers.
     pub publish_memory_content: bool,
 }
 
@@ -686,8 +675,8 @@ impl Default for PrivacyConfig {
             telemetry: false,
             raw_retention_seconds: 0,
             redact_secrets: true,
-            publish_workspace_names: true,
-            publish_memory_content: true,
+            publish_workspace_names: false,
+            publish_memory_content: false,
         }
     }
 }
@@ -776,6 +765,20 @@ fn sync_directory(_path: &Path) -> Result<(), std::io::Error> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn legacy_config_does_not_enable_public_content_on_upgrade() {
+        let config: Config = toml::from_str("").expect("legacy default config");
+        assert!(!config.privacy.publish_workspace_names);
+        assert!(!config.privacy.publish_memory_content);
+        assert!(!config.integrations.agtx.publish_task_titles);
+        let explicit: Config = toml::from_str(
+        "[privacy]\npublish_workspace_names = true\npublish_memory_content = true\n[integrations.agtx]\npublish_task_titles = true"
+    ).expect("explicit opt-in");
+        assert!(explicit.privacy.publish_memory_content);
+        assert!(explicit.integrations.agtx.publish_task_titles);
+    }
+
     use std::fs;
     use std::net::SocketAddr;
     use std::path::Path;

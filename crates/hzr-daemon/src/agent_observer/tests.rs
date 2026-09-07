@@ -4,6 +4,81 @@ use hzr_core::{AgtxProject, Config};
 
 use super::*;
 
+#[tokio::test]
+async fn resuming_after_disable_allows_observation_again() {
+    let _spawn = SPAWN_GUARD.lock().await;
+    let harness = harness();
+    let body = snapshot_body(&harness, "snapshot-v1-ready.json", &request_id(&harness, 0));
+    stub_helper(&harness.engines, &body);
+    harness.observer.stop();
+    harness.observer.resume();
+    let outcome = harness.observer.observe_once(&harness.project).await;
+    assert!(outcome.complete, "{outcome:?}");
+}
+
+#[tokio::test]
+async fn helper_output_is_capped_before_waiting_for_exit() {
+    let _spawn = SPAWN_GUARD.lock().await;
+    let dir = tempfile::tempdir().expect("temp");
+    let path = stub_helper(dir.path(), "{}");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\nwhile :; do printf '0123456789abcdef'; done\n",
+    )
+    .expect("script");
+    let result = bounded_helper_output(&path, &[], &[], 128, Duration::from_secs(10)).await;
+    assert_eq!(
+        result.expect_err("helper must fail"),
+        "helper_response_too_large"
+    );
+}
+
+#[tokio::test]
+async fn a_nonzero_exit_cannot_supply_a_successful_snapshot() {
+    let _spawn = SPAWN_GUARD.lock().await;
+    let dir = tempfile::tempdir().expect("temp");
+    let path = stub_helper(dir.path(), "{}");
+    std::fs::write(&path, "#!/bin/sh\nprintf '{}'; exit 7\n").expect("script");
+    let result = bounded_helper_output(&path, &[], &[], 128, Duration::from_secs(10)).await;
+    assert_eq!(result.expect_err("helper must fail"), "helper_exit_failed");
+}
+
+#[tokio::test]
+async fn an_empty_worker_does_not_probe_an_installed_component() {
+    let _spawn = SPAWN_GUARD.lock().await;
+    let harness = harness();
+    let mut enrollment = harness.observer.enrollments().await;
+    enrollment.disable_project(&harness.project);
+    harness.observer.set_enrollments(enrollment).await;
+    let path = stub_helper(&harness.engines, "{}");
+    let marker = harness.engines.join("probe-marker");
+    std::fs::write(path, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).expect("script");
+    let worker = tokio::spawn(harness.observer.clone().run());
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    worker.abort();
+    let _ = worker.await;
+    assert!(!marker.exists());
+}
+
+#[tokio::test]
+async fn a_concurrent_sync_for_the_same_project_is_refused() {
+    let harness = harness();
+    let lock = Arc::new(Mutex::new(()));
+    harness
+        .observer
+        .inner
+        .project_locks
+        .lock()
+        .await
+        .insert(harness.project.clone(), lock.clone());
+    let _guard = lock.lock().await;
+    let result = harness.observer.observe_once(&harness.project).await;
+    assert_eq!(
+        result.error_code.as_deref(),
+        Some("observation_in_progress")
+    );
+}
+
 /// Serializes the tests that actually spawn the stub helper.
 ///
 /// The daemon's other suites probe the pinned fork-core with a five-second

@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 pub const AGENT_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 /// Patch identity this build will accept from the helper. Anything else is a
 /// different producer, and a different producer is refused rather than trusted.
-pub const AGENT_OBSERVER_PATCH_IDENTITY: &str = "hzr-agtx-readonly-observer-1";
+pub const AGENT_OBSERVER_PATCH_IDENTITY: &str = "hzr-agtx-readonly-observer-2";
 /// Public API payload version, independent of the helper protocol.
 pub const AGENT_API_SCHEMA_VERSION: u32 = 1;
 
@@ -679,8 +679,8 @@ pub struct AgentEconomics {
     /// Catalog-priced estimate of the reported usage. An alternative to
     /// `reported_cost` for the same request, never additive to it.
     pub estimated_api_cost: Vec<AgentMoneySubtotal>,
-    /// Catalog identity and entry versions behind `estimated_api_cost`, so an
-    /// estimate stays reproducible after the catalog moves.
+    /// Identity of the current catalog used for this response. Historical
+    /// estimates are recalculated; this is not a persisted pricing snapshot.
     pub price_table_identity: Option<String>,
     pub price_entry_versions: Vec<String>,
     /// Existing HZR operation accounting for the linked sessions.

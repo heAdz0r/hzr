@@ -590,6 +590,17 @@ pub async fn dashboard_agent_events(
             next_cursor: None,
         }));
     };
+    if let Some(task_id) = query.task_id.as_deref() {
+        let task = ledger
+            .agent_task(task_id)
+            .map_err(|_| ApiError::internal("agent task read failed"))?;
+        if task.is_none_or(|task| task.project_hash != project_hash) {
+            return Err(ApiError::not_found(
+                "unknown_task",
+                "no such observed task in this project",
+            ));
+        }
+    }
     let (rows, next) = ledger
         .agent_events_page(&project_hash, query.task_id.as_deref(), query.cursor, limit)
         .map_err(|error| ApiError::internal(format!("agent event read failed: {error}")))?;
@@ -622,11 +633,13 @@ pub async fn dashboard_agent_economics(
         ));
     };
     let to_ms = query.to_ms.unwrap_or_else(now_ms);
-    let from_ms = query.from_ms.unwrap_or(0);
+    let from_ms = query
+        .from_ms
+        .unwrap_or_else(|| to_ms.saturating_sub(MAX_WINDOW_MS).max(0));
     if from_ms < 0 || to_ms < from_ms {
         return Err(ApiError::bad_request("from_ms must not exceed to_ms"));
     }
-    if from_ms > 0 && to_ms.saturating_sub(from_ms) > MAX_WINDOW_MS {
+    if to_ms.saturating_sub(from_ms) > MAX_WINDOW_MS {
         return Err(ApiError::bad_request("window may not exceed 31 days"));
     }
     if query
@@ -644,6 +657,17 @@ pub async fn dashboard_agent_economics(
     };
     let catalog = load_pricing_catalog(state.config.billing.pricing_file.as_deref())
         .map_err(|error| ApiError::internal(format!("pricing catalog unavailable: {error}")))?;
+    if let Some(task_id) = query.task_id.as_deref() {
+        let task = ledger
+            .agent_task(task_id)
+            .map_err(|_| ApiError::internal("agent task read failed"))?;
+        if task.is_none_or(|task| task.project_hash != project_hash) {
+            return Err(ApiError::not_found(
+                "unknown_task",
+                "no such observed task in this project",
+            ));
+        }
+    }
     let economics = ledger
         .agent_economics(
             AgentEconomicsQuery {
@@ -720,15 +744,17 @@ pub async fn agents_status(
 
 /// `POST /v1/agents/reload`
 ///
-/// Re-reads the daemon's own configuration file and adopts the enrollment set.
-/// Takes no body and no path: the CLI writes the config atomically and this
-/// makes the running daemon honour it without a restart. Every in-flight
-/// observation from the previous generation is discarded.
+/// Adopts the authenticated CLI's validated enrollment set after its atomic
+/// config write. Passing typed settings preserves custom --config paths without
+/// allowing the daemon to read arbitrary files.
 pub async fn agents_reload(
     State(state): State<AppState>,
+    Json(enrollments): Json<hzr_core::AgtxConfig>,
 ) -> Result<Json<AgentsStatusResponse>, ApiError> {
-    let paths = hzr_core::ConfigPaths::discover();
-    let config = hzr_core::Config::load_or_default(&paths.config_file)
+    let mut config = (*state.config).clone();
+    config.integrations.agtx = enrollments;
+    config
+        .validate()
         .map_err(|error| ApiError::bad_request(format!("configuration is not usable: {error}")))?;
     state
         .agents
@@ -860,7 +886,7 @@ pub async fn agents_link(
             request.source_task_id.clone(),
             source_project_id,
             request.host.clone(),
-            session_hash.clone(),
+            request.session_id.clone(),
             now_ms(),
         )
         .await

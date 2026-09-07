@@ -1,5 +1,31 @@
 use std::collections::BTreeSet;
 
+#[test]
+fn repeated_session_identity_in_another_project_is_not_a_link_conflict() {
+    let (_dir, mut ledger) = ledger();
+    for project in ["project-a", "project-b"] {
+        let source = AgentSourceIdentity::new(project, "gen", project);
+        apply(
+            &mut ledger,
+            &source,
+            &envelope(vec![task("a", "running", "claude")], NOW_MS),
+        );
+        let (_, conflict) = ledger
+            .agent_link_session(&source, "a", "proj-1", "claude", "same-session", NOW_MS)
+            .expect("link");
+        assert!(!conflict);
+    }
+    let conflicts: i64 = ledger
+        .connection
+        .query_row(
+            "SELECT COUNT(*) FROM agent_session_links WHERE conflict != 0",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count");
+    assert_eq!(conflicts, 0);
+}
+
 use hzr_protocol::agents::{
     AgentSnapshotCapabilities, AgentSnapshotEdge, AgentSnapshotEnvelope, AgentSnapshotHook,
     AgentSnapshotNotification, AgentSnapshotProject, AgentSnapshotRuntime, AgentSnapshotTask,
@@ -7,6 +33,63 @@ use hzr_protocol::agents::{
 };
 
 use super::*;
+
+#[test]
+fn monetary_overflow_never_becomes_a_saturated_success() {
+    let (_dir, mut ledger) = ledger();
+    let identity = identity(&ledger, "gen-1");
+    link_task_sessions(&mut ledger, &identity, &["sess-a"]);
+    let receipts: Vec<_> = (0..3)
+        .map(|n| {
+            let mut value = receipt(&format!("R{n}"), "sess-a", 1000, 200, 0);
+            value.reported_cost_microunits = Some(i64::MAX as u64);
+            value
+        })
+        .collect();
+    assert!(
+        ledger
+            .agent_import_usage(&receipts, &project_hash, &pseudonym, NOW_MS as u64)
+            .expect("import")
+            .committed
+    );
+    let result = ledger.agent_economics(
+        AgentEconomicsQuery {
+            project_hash: &identity.project_hash,
+            task_key: None,
+            from_ms: 0,
+            to_ms: i64::MAX,
+        },
+        &fixture_catalog(),
+    );
+    assert!(
+        result.is_err(),
+        "overflow must not masquerade as a valid amount"
+    );
+}
+
+#[test]
+fn economics_rejects_a_task_from_another_project() {
+    let (_dir, mut ledger) = ledger();
+    let source = identity(&ledger, "gen");
+    apply(
+        &mut ledger,
+        &source,
+        &envelope(vec![task("a", "running", "claude")], NOW_MS),
+    );
+    let task_key = source.task_key("proj-1", "a");
+    let catalog = crate::billing::builtin_pricing_catalog().expect("catalog");
+    let result = ledger.agent_economics(
+        AgentEconomicsQuery {
+            project_hash: "foreign-project",
+            task_key: Some(&task_key),
+            from_ms: 0,
+            to_ms: i64::MAX,
+        },
+        &catalog,
+    );
+    assert!(result.is_err());
+}
+
 use crate::billing::{PricingCatalog, load_pricing_catalog};
 
 const PROJECT_PATH: &str = "/fixture/work/repo";
@@ -31,6 +114,7 @@ fn context() -> AgentApplyContext<'static> {
     AgentApplyContext {
         session_pseudonym: &pseudonym,
         max_observation_interval_ms: 10_000,
+        stale_after_ms: 30_000,
     }
 }
 
@@ -59,7 +143,7 @@ fn envelope(tasks: Vec<AgentSnapshotTask>, observed_at_ms: i64) -> AgentSnapshot
         request_id: "req".into(),
         upstream_version: "1.0.4".into(),
         upstream_commit: "d307c4c".into(),
-        patch_identity: "hzr-agtx-readonly-observer-1".into(),
+        patch_identity: "hzr-agtx-readonly-observer-2".into(),
         source_instance_id: "gen:aaaa".into(),
         observed_at_ms,
         snapshot_id: "snap".into(),
@@ -438,6 +522,36 @@ fn a_handoff_needs_both_a_new_agent_and_a_new_phase() {
         .agent_events_page(&identity.project_hash, None, None, 100)
         .expect("fixture step succeeds");
     assert!(events.iter().any(|event| event.kind == "handoff_observed"));
+}
+
+#[test]
+fn stale_working_evidence_never_accrues_working_time() {
+    let (_dir, mut ledger) = ledger();
+    let identity = identity(&ledger, "gen-1");
+    let mut value = task("stale", "running", "claude");
+    value.runtime = Some(AgentSnapshotRuntime {
+        phase_status: "working".into(),
+        unknown_phase_status: None,
+        updated_at_ms: Some(NOW_MS - 86_400_000),
+        pane_changed_at_ms: None,
+    });
+    apply(
+        &mut ledger,
+        &identity,
+        &envelope(vec![value.clone()], NOW_MS),
+    );
+    apply(
+        &mut ledger,
+        &identity,
+        &envelope(vec![value], NOW_MS + 5_000),
+    );
+    let row = ledger
+        .agent_task(&identity.task_key("proj-1", "stale"))
+        .expect("read")
+        .expect("task");
+    assert_eq!(row.working_ms, 0);
+    assert_eq!(row.observed_ms, 0);
+    assert_eq!(row.gap_ms, 5_000);
 }
 
 #[test]
@@ -869,13 +983,37 @@ fn no_receipt_means_unknown_and_no_acceptance_means_unavailable() {
 
 #[test]
 fn a_negative_reduction_is_retained() {
-    // baseline 1000, delivered 1200 => net -200 and -20 %, never clamped.
-    let baseline = 1_000_i64;
-    let delivered = 1_200_i64;
-    let net = baseline - delivered;
-    let pct = 100.0 * net as f64 / baseline as f64;
-    assert_eq!(net, -200);
-    assert!((pct + 20.0).abs() < f64::EPSILON);
+    let (_dir, mut ledger) = ledger();
+    let identity = identity(&ledger, "gen-1");
+    link_task_sessions(&mut ledger, &identity, &["sess-a"]);
+    ledger
+        .agent_import_usage(
+            &[receipt("R1", "sess-a", 1_000, 200, 50)],
+            &project_hash,
+            &pseudonym,
+            NOW_MS as u64,
+        )
+        .expect("import");
+    ledger
+        .connection
+        .execute(
+            "INSERT INTO commands (timestamp, original_cmd, rtk_cmd, input_tokens,
+        output_tokens, saved_tokens, savings_pct, session_hash, project_hash,
+        project_scope_hashes, accounting_policy_version, accounting_stage, measurement, route)
+        VALUES ('2026-09-01T00:00:00Z', '', 'read', 1000, 1200, -200, -20, ?1, ?2, ?2, ?3,
+        'internal_transport', 'estimated', 'managed')",
+            params![
+                pseudonym("sess-a"),
+                identity.project_hash,
+                crate::ledger::CURRENT_ACCOUNTING_POLICY_VERSION
+            ],
+        )
+        .expect("record real operation");
+    let result = economics(&ledger, &identity);
+    assert_eq!(result.hzr_baseline_tokens_estimated, 1000);
+    assert_eq!(result.hzr_delivered_tokens_estimated, 1200);
+    assert_eq!(result.net_avoided_tokens_estimated, -200);
+    assert_eq!(result.reduction_pct, Some(-20.0));
 }
 
 #[test]

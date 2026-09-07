@@ -72,6 +72,7 @@ enum WriteCommand {
         envelope: Box<AgentSnapshotEnvelope>,
         capabilities: Box<AgentSnapshotCapabilities>,
         max_observation_interval_ms: i64,
+        stale_after_ms: i64,
         reply: oneshot::Sender<Result<AgentSnapshotApplied, LedgerError>>,
     },
     AgentGapRecord {
@@ -91,7 +92,7 @@ enum WriteCommand {
         source_task_id: String,
         source_project_id: String,
         host: String,
-        session_hash: String,
+        session_id: String,
         now_ms: i64,
         reply: oneshot::Sender<Result<(bool, bool), LedgerError>>,
     },
@@ -643,6 +644,7 @@ impl LedgerWriter {
                             envelope,
                             capabilities,
                             max_observation_interval_ms,
+                            stale_after_ms,
                             reply,
                         } => {
                             let pseudonym = |value: &str| {
@@ -664,6 +666,7 @@ impl LedgerWriter {
                                         &AgentApplyContext {
                                             session_pseudonym: &pseudonym,
                                             max_observation_interval_ms,
+                            stale_after_ms,
                                         },
                                     )
                                 });
@@ -704,18 +707,20 @@ impl LedgerWriter {
                             source_task_id,
                             source_project_id,
                             host,
-                            session_hash,
+                            session_id,
                             now_ms,
                             reply,
                         } => {
-                            let _ = reply.send(ledger.agent_link_session(
-                                &identity,
-                                &source_task_id,
-                                &source_project_id,
-                                &host,
-                                &session_hash,
-                                now_ms,
+                            // This command receives the raw host session internally; the
+                            // dashboard gets only the host-namespaced pseudonym.
+                            let accounting_hash = actor_privacy.hash("session", &session_id);
+                            let namespaced = actor_privacy.hash("session", &format!("{host}\u{0}{session_id}"));
+                            let result = ledger.agent_link_accounting_session(
+                                &identity.project_hash, &namespaced, &accounting_hash,
+                            ).and_then(|_| ledger.agent_link_session(
+                                &identity, &source_task_id, &source_project_id, &host, &namespaced, now_ms,
                             ));
+                            let _ = reply.send(result);
                         }
                         WriteCommand::AgentPrune {
                             retention_days,
@@ -1183,6 +1188,7 @@ impl LedgerWriter {
         identity: AgentSourceIdentity,
         envelope: AgentSnapshotEnvelope,
         max_observation_interval_ms: i64,
+        stale_after_ms: i64,
     ) -> Result<AgentSnapshotApplied, LedgerWriterError> {
         let (reply, result) = oneshot::channel();
         let capabilities = envelope.capabilities.clone();
@@ -1192,6 +1198,7 @@ impl LedgerWriter {
                 envelope: Box::new(envelope),
                 capabilities: Box::new(capabilities),
                 max_observation_interval_ms,
+                stale_after_ms,
                 reply,
             })
             .await
@@ -1248,7 +1255,7 @@ impl LedgerWriter {
         source_task_id: String,
         source_project_id: String,
         host: String,
-        session_hash: String,
+        session_id: String,
         now_ms: i64,
     ) -> Result<(bool, bool), LedgerWriterError> {
         let (reply, result) = oneshot::channel();
@@ -1258,7 +1265,7 @@ impl LedgerWriter {
                 source_task_id,
                 source_project_id,
                 host,
-                session_hash,
+                session_id,
                 now_ms,
                 reply,
             })

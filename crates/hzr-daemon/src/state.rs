@@ -354,12 +354,14 @@ impl AppState {
         let mut slot = self.agents_task.lock().await;
         match (enabled, slot.is_some()) {
             (true, false) => {
+                self.agents.resume();
                 *slot = Some(tokio::spawn(self.agents.clone().run()));
             }
             (false, true) => {
                 self.agents.stop();
                 if let Some(handle) = slot.take() {
                     handle.abort();
+                    let _ = handle.await;
                 }
             }
             _ => {}

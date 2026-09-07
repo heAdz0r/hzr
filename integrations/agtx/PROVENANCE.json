@@ -23,8 +23,8 @@
   "patches": [
     {
       "path": "patches/agtx/1.0.4-readonly-observer.patch",
-      "sha256": "c7ad1c32074acc470edca6738ba3dd74e0845c7d62712337ded6052ad197a90d",
-      "identity": "hzr-agtx-readonly-observer-1",
+      "sha256": "13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8",
+      "identity": "hzr-agtx-readonly-observer-2",
       "summary": "Adds a read-only store reader, a bounded snapshot exporter and the `hzr-agtx-observer` binary. Makes `Database::hash_path` reachable as `observer_path_hash` and `dep_graph::parse_refs` reachable as `parse_referenced_task_ids`, so the observer shares the store layout and the dependency parse instead of copying them.",
       "modifies_upstream_behaviour": false,
       "adds_files": [
@@ -45,8 +45,8 @@
     "workspace": "outside the HZR cargo workspace; the component is built from a temporary checkout of the pinned commit",
     "verified_toolchain": "rustc 1.92.0 (ded5c06cf 2025-12-08); cargo 1.92.0",
     "verified_platform": "darwin-arm64",
-    "upstream_tests_run": "cargo test --locked --lib (531 passed, 0 failed) at the patched tree",
-    "observer_tests_run": "cargo test --locked --lib observer:: (21 passed, 0 failed)"
+    "upstream_tests_run": "Patched lib: 534 passed together with the unchanged tmux slow-drain timing test excluded; that test passed separately (1/1). Combined serial suite had 534 passed and 1 timing failure on darwin-arm64. See docs/review/20260908_160000_agtx_Code-Review.md.",
+    "observer_tests_run": "25 observer tests included in the 534-test passing run; isolated AGTX_DATA_DIR, AGTX_CONFIG_DIR and AGTX_AGENT_HOME"
   },
   "protocol": {
     "schema_version": 1,
@@ -61,6 +61,6 @@
     "writes_to_source": "none; SQLITE_OPEN_READ_ONLY plus PRAGMA query_only=ON, no directory creation, no migration, no chmod, no journal-mode change",
     "network": "none",
     "starts_processes": "none; no tmux, no coding agent, no MCP server, no web listener",
-    "exports_free_text": "none; titles, descriptions, branches, PR URLs, worktree paths, notification prose, hook message/tool text and transcript_path are all read past or never read"
+    "exports_free_text": "Titles and branch labels only when the explicit include_titles request is enabled; disabled by default. No descriptions, PR URLs, worktree paths, notification prose, hook message/tool text or transcript paths are exported."
   }
 }

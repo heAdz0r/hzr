@@ -1,4 +1,64 @@
 use axum::body::{Body, to_bytes};
+
+#[tokio::test]
+async fn reload_uses_submitted_enrollments_instead_of_global_config() {
+    let directory = TempDir::new().expect("temp");
+    let (router, project_id, state) = agents_router(&directory, false).await;
+    let mut enrollment = hzr_core::AgtxConfig::default();
+    enrollment.enroll(AgtxProject {
+        project_path: directory.path().join("work/repo"),
+        data_dir: directory.path().join("agtx"),
+        enabled: true,
+    });
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents/reload")
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&enrollment).expect("json")))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    state.ensure_agent_worker(false).await;
+    let (status, body) = get(&router, "/v1/dashboard/agents").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["projects"][0]["project_id"], project_id);
+}
+
+#[tokio::test]
+async fn zero_start_cannot_bypass_the_economics_window_limit() {
+    let directory = TempDir::new().expect("temp");
+    let (router, project_id, _state) = agents_router(&directory, true).await;
+    let (status, _) = get(
+        &router,
+        &format!(
+            "/v1/dashboard/agents/economics?project_id={project_id}&from_ms=0&to_ms=9999999999999"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn unknown_task_filters_are_not_empty_successful_results() {
+    let directory = TempDir::new().expect("temp");
+    let (router, project_id, _state) = agents_router(&directory, true).await;
+    let task_id = "f".repeat(64);
+    for route in ["economics", "events"] {
+        let (status, _) = get(
+            &router,
+            &format!("/v1/dashboard/agents/{route}?project_id={project_id}&task_id={task_id}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+}
+
 use axum::http::{Request, StatusCode};
 use hzr_core::{AgtxProject, Config, privacy_identity_hash};
 use serde_json::Value;

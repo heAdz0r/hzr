@@ -202,7 +202,13 @@ pub(super) fn init_agent_schema(connection: &Connection) -> Result<(), LedgerErr
              CREATE INDEX IF NOT EXISTS idx_agent_usage_scope
                 ON agent_usage_receipts(project_hash, observed_at_ms);
              CREATE INDEX IF NOT EXISTS idx_agent_usage_session
-                ON agent_usage_receipts(session_hash, observed_at_ms);",
+                ON agent_usage_receipts(session_hash, observed_at_ms);
+             CREATE TABLE IF NOT EXISTS agent_accounting_sessions (
+                project_hash TEXT NOT NULL,
+                session_hash TEXT NOT NULL,
+                accounting_session_hash TEXT NOT NULL,
+                PRIMARY KEY(project_hash, session_hash)
+             );",
         )
         .map_err(LedgerError::Database)
 }
@@ -373,6 +379,9 @@ struct StoredTask {
     last_observed_at_ms: i64,
     runtime_phase: String,
     hook_state: String,
+    runtime_observed_at_ms: Option<i64>,
+    hook_observed_at_ms: Option<i64>,
+    hook_working_stale: bool,
 }
 
 /// Everything an ingestion needs that is not in the snapshot itself.
@@ -383,6 +392,8 @@ pub struct AgentApplyContext<'a> {
     /// time. Anything longer is a hole, and is accumulated as one instead of
     /// being credited to whatever state happened to be showing.
     pub max_observation_interval_ms: i64,
+    /// Maximum evidence age for attributing a polling interval to a state.
+    pub stale_after_ms: i64,
 }
 
 /// Split the interval since the previous observation into a state bucket.
@@ -553,7 +564,8 @@ impl Ledger {
             let stored = transaction
                 .query_row(
                     "SELECT board_status, agent, revision, state_hash, first_observed_at_ms,
-                            last_observed_at_ms, runtime_phase, hook_state
+                            last_observed_at_ms, runtime_phase, hook_state,
+                            runtime_observed_at_ms, hook_observed_at_ms, hook_working_stale
                        FROM agent_tasks WHERE task_key = ?1",
                     [&task_key],
                     |row| {
@@ -566,6 +578,9 @@ impl Ledger {
                             last_observed_at_ms: row.get(5)?,
                             runtime_phase: row.get(6)?,
                             hook_state: row.get(7)?,
+                            runtime_observed_at_ms: row.get(8)?,
+                            hook_observed_at_ms: row.get(9)?,
+                            hook_working_stale: row.get::<_, i64>(10)? != 0,
                         })
                     },
                 )
@@ -598,11 +613,29 @@ impl Ledger {
                     if delta > context.max_observation_interval_ms {
                         gap_delta = delta;
                     } else {
-                        match interval_bucket(&previous.runtime_phase, &previous.hook_state) {
+                        let fresh = |at: Option<i64>| {
+                            at.is_some_and(|at| {
+                                at <= observed_at_ms
+                                    && observed_at_ms.saturating_sub(at) <= context.stale_after_ms
+                            })
+                        };
+                        let runtime = if fresh(previous.runtime_observed_at_ms) {
+                            previous.runtime_phase.as_str()
+                        } else {
+                            "unknown"
+                        };
+                        let hook = if !previous.hook_working_stale
+                            && fresh(previous.hook_observed_at_ms)
+                        {
+                            previous.hook_state.as_str()
+                        } else {
+                            "unknown"
+                        };
+                        match interval_bucket(runtime, hook) {
                             "working" => working_delta = delta,
                             "blocked" => blocked_delta = delta,
                             "idle" => idle_delta = delta,
-                            _ => {}
+                            _ => gap_delta = delta,
                         }
                     }
                 }
@@ -763,6 +796,16 @@ impl Ledger {
                     agent.clone()
                 };
                 let session_hash = (context.session_pseudonym)(&format!("{host}\u{0}{session_id}"));
+                transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO agent_accounting_sessions VALUES (?1, ?2, ?3)",
+                        params![
+                            identity.project_hash,
+                            session_hash,
+                            (context.session_pseudonym)(session_id)
+                        ],
+                    )
+                    .map_err(LedgerError::Database)?;
                 applied.links_created += upsert_link(
                     &transaction,
                     identity,
@@ -963,6 +1006,21 @@ impl Ledger {
     /// Explicit is the highest-priority evidence, but it still does not certify
     /// provider billing, and it cannot silently take a session away from
     /// another task: a second claim marks both sides in conflict instead.
+    pub fn agent_link_accounting_session(
+        &self,
+        project_hash: &str,
+        session_hash: &str,
+        accounting_session_hash: &str,
+    ) -> Result<(), LedgerError> {
+        self.connection
+            .execute(
+                "INSERT OR IGNORE INTO agent_accounting_sessions VALUES (?1, ?2, ?3)",
+                params![project_hash, session_hash, accounting_session_hash],
+            )
+            .map_err(LedgerError::Database)?;
+        Ok(())
+    }
+
     pub fn agent_link_session(
         &self,
         identity: &AgentSourceIdentity,
@@ -999,8 +1057,8 @@ impl Ledger {
             .connection
             .query_row(
                 "SELECT COUNT(DISTINCT task_key) > 1 FROM agent_session_links
-                  WHERE session_hash = ?1",
-                [session_hash],
+                  WHERE session_hash = ?1 AND project_hash = ?2",
+                params![session_hash, identity.project_hash],
                 |row| row.get::<_, i64>(0),
             )
             .map_err(LedgerError::Database)?
@@ -1071,10 +1129,10 @@ fn upsert_link(
     connection
         .execute(
             "UPDATE agent_session_links SET conflict = 1
-              WHERE session_hash = ?1
+              WHERE session_hash = ?1 AND project_hash = ?2
                 AND (SELECT COUNT(DISTINCT task_key) FROM agent_session_links
-                      WHERE session_hash = ?1) > 1",
-            [session_hash],
+                      WHERE session_hash = ?1 AND project_hash = ?2) > 1",
+            params![session_hash, identity.project_hash],
         )
         .map_err(LedgerError::Database)?;
     Ok(u64::from(changed > 0 && changed == 1))
@@ -1303,6 +1361,16 @@ impl Ledger {
             .transaction()
             .map_err(LedgerError::Database)?;
         for entry in &prepared {
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO agent_accounting_sessions VALUES (?1, ?2, ?3)",
+                    params![
+                        entry.project_hash,
+                        entry.session_hash,
+                        session_pseudonym(&entry.receipt.session_id)
+                    ],
+                )
+                .map_err(LedgerError::Database)?;
             let usage_json = serde_json::to_string(&entry.receipt.usage)
                 .map_err(|error| LedgerError::InvalidOperation(error.to_string()))?;
             transaction
@@ -2064,6 +2132,16 @@ impl Ledger {
     ) -> Result<hzr_protocol::agents::AgentEconomics, LedgerError> {
         use hzr_protocol::agents::{AgentEconomics, AgentMoneySubtotal, AgentUnavailable};
 
+        if let Some(task_key) = query.task_key {
+            if self
+                .agent_task(task_key)?
+                .is_none_or(|task| task.project_hash != query.project_hash)
+            {
+                return Err(LedgerError::InvalidOperation(
+                    "task outside project scope".into(),
+                ));
+            }
+        }
         let (exclusive, ambiguous) = match query.task_key {
             Some(task_key) => self.agent_task_sessions(task_key)?,
             None => self.agent_project_sessions(query.project_hash)?,
@@ -2071,7 +2149,7 @@ impl Ledger {
 
         let rows =
             self.agent_usage_rows(query.project_hash, &exclusive, query.from_ms, query.to_ms)?;
-        let aggregate = AgentUsageAggregate::from_rows(&rows);
+        let aggregate = AgentUsageAggregate::from_rows(&rows)?;
         let mut economics = AgentEconomics {
             schema_version: hzr_protocol::agents::AGENT_API_SCHEMA_VERSION,
             reported_tokens: aggregate.tokens,
@@ -2091,7 +2169,7 @@ impl Ledger {
             )
             .collect();
 
-        let (estimated, identity, versions, unavailable) = price_rows(catalog, &rows);
+        let (estimated, identity, versions, unavailable) = price_rows(catalog, &rows)?;
         economics.estimated_api_cost = estimated;
         economics.price_table_identity = identity;
         economics.price_entry_versions = versions;
@@ -2100,13 +2178,29 @@ impl Ledger {
         if !ambiguous.is_empty() {
             let shared =
                 self.agent_usage_rows(query.project_hash, &ambiguous, query.from_ms, query.to_ms)?;
-            let (shared_cost, _, _, mut shared_unavailable) = price_rows(catalog, &shared);
+            let (shared_cost, _, _, mut shared_unavailable) = price_rows(catalog, &shared)?;
             economics.shared_unallocated_cost = shared_cost;
             economics.unavailable.append(&mut shared_unavailable);
         }
 
+        let mut accounting_sessions = BTreeSet::new();
+        for session in &exclusive {
+            let mapped: Option<String> = self.connection.query_row(
+                "SELECT accounting_session_hash FROM agent_accounting_sessions WHERE project_hash = ?1 AND session_hash = ?2",
+                params![query.project_hash, session], |row| row.get(0),
+            ).optional().map_err(LedgerError::Database)?;
+            if let Some(mapped) = mapped {
+                accounting_sessions.insert(mapped);
+            } else {
+                economics.unavailable.push(AgentUnavailable {
+                    metric: "hzr_operation_reduction".into(),
+                    reason: "session predates accounting linkage; re-link or re-import its usage"
+                        .into(),
+                });
+            }
+        }
         let (baseline, delivered) =
-            self.agent_operation_reduction(query.project_hash, &exclusive)?;
+            self.agent_operation_reduction(query.project_hash, &accounting_sessions)?;
         economics.hzr_baseline_tokens_estimated = baseline;
         economics.hzr_delivered_tokens_estimated = delivered;
         economics.net_avoided_tokens_estimated = i64::try_from(baseline).unwrap_or(i64::MAX)
@@ -2116,7 +2210,7 @@ impl Ledger {
         economics.reduction_pct = (baseline > 0)
             .then(|| 100.0 * economics.net_avoided_tokens_estimated as f64 / baseline as f64);
         economics.unreconciled_existing_receipts =
-            self.agent_unreconciled_receipt_count(query.project_hash, &exclusive)?;
+            self.agent_unreconciled_receipt_count(query.project_hash, &accounting_sessions)?;
 
         if let Some(task_key) = query.task_key {
             if let Some(task) = self.agent_task(task_key)? {
@@ -2170,15 +2264,17 @@ impl Ledger {
 
 /// Price a set of receipts, keeping per-currency subtotals apart and turning
 /// every pricing failure into a named unavailability rather than a zero.
-fn price_rows(
-    catalog: &crate::billing::PricingCatalog,
-    rows: &[AgentUsageRow],
-) -> (
+type PricedAgentRows = (
     Vec<hzr_protocol::agents::AgentMoneySubtotal>,
     Option<String>,
     Vec<String>,
     Vec<hzr_protocol::agents::AgentUnavailable>,
-) {
+);
+
+fn price_rows(
+    catalog: &crate::billing::PricingCatalog,
+    rows: &[AgentUsageRow],
+) -> Result<PricedAgentRows, LedgerError> {
     use hzr_protocol::agents::{AgentMoneySubtotal, AgentUnavailable};
     let mut totals: BTreeMap<String, (u64, u64, u64)> = BTreeMap::new();
     let mut identity = None;
@@ -2209,7 +2305,9 @@ fn price_rows(
             },
         ) {
             Ok(price) => {
-                entry.0 = entry.0.saturating_add(price.microunits);
+                entry.0 = entry.0.checked_add(price.microunits).ok_or_else(|| {
+                    LedgerError::InvalidOperation("economic arithmetic overflow".into())
+                })?;
                 entry.1 += 1;
                 identity.get_or_insert(price.price_table_identity);
                 versions.insert(price.entry_version);
@@ -2236,12 +2334,12 @@ fn price_rows(
         .into_iter()
         .map(|(metric, reason)| AgentUnavailable { metric, reason })
         .collect();
-    (
+    Ok((
         subtotals,
         identity,
         versions.into_iter().collect(),
         unavailable,
-    )
+    ))
 }
 
 /// Group token totals and money by currency without ever crossing currencies.
@@ -2254,50 +2352,58 @@ pub struct AgentUsageAggregate {
 }
 
 impl AgentUsageAggregate {
-    #[must_use]
-    pub fn from_rows(rows: &[AgentUsageRow]) -> Self {
+    pub fn from_rows(rows: &[AgentUsageRow]) -> Result<Self, LedgerError> {
         let mut aggregate = Self::default();
         for row in rows {
             aggregate.receipt_count += 1;
             aggregate.tokens.input_tokens = aggregate
                 .tokens
                 .input_tokens
-                .saturating_add(row.usage.input_tokens);
+                .checked_add(row.usage.input_tokens)
+                .ok_or_else(|| LedgerError::InvalidOperation("token arithmetic overflow".into()))?;
             aggregate.tokens.output_tokens = aggregate
                 .tokens
                 .output_tokens
-                .saturating_add(row.usage.output_tokens);
+                .checked_add(row.usage.output_tokens)
+                .ok_or_else(|| LedgerError::InvalidOperation("token arithmetic overflow".into()))?;
             aggregate.tokens.reasoning_tokens = aggregate
                 .tokens
                 .reasoning_tokens
-                .saturating_add(row.usage.reasoning_tokens);
+                .checked_add(row.usage.reasoning_tokens)
+                .ok_or_else(|| LedgerError::InvalidOperation("token arithmetic overflow".into()))?;
             aggregate.tokens.cache_read_tokens = aggregate
                 .tokens
                 .cache_read_tokens
-                .saturating_add(row.usage.cache_read_tokens);
+                .checked_add(row.usage.cache_read_tokens)
+                .ok_or_else(|| LedgerError::InvalidOperation("token arithmetic overflow".into()))?;
             aggregate.tokens.cache_write_tokens = aggregate
                 .tokens
                 .cache_write_tokens
-                .saturating_add(row.usage.cache_write_tokens);
+                .checked_add(row.usage.cache_write_tokens)
+                .ok_or_else(|| LedgerError::InvalidOperation("token arithmetic overflow".into()))?;
             aggregate.tokens.cache_write_5m_tokens = aggregate
                 .tokens
                 .cache_write_5m_tokens
-                .saturating_add(row.usage.cache_write_5m_tokens);
+                .checked_add(row.usage.cache_write_5m_tokens)
+                .ok_or_else(|| LedgerError::InvalidOperation("token arithmetic overflow".into()))?;
             aggregate.tokens.cache_write_1h_tokens = aggregate
                 .tokens
                 .cache_write_1h_tokens
-                .saturating_add(row.usage.cache_write_1h_tokens);
+                .checked_add(row.usage.cache_write_1h_tokens)
+                .ok_or_else(|| LedgerError::InvalidOperation("token arithmetic overflow".into()))?;
             let entry = aggregate
                 .reported_cost
                 .entry(row.currency.clone())
                 .or_insert((0, 0, 0));
             entry.2 += 1;
             if let Some(cost) = row.reported_cost_microunits {
-                entry.0 = entry.0.saturating_add(cost);
+                entry.0 = entry.0.checked_add(cost).ok_or_else(|| {
+                    LedgerError::InvalidOperation("economic arithmetic overflow".into())
+                })?;
                 entry.1 += 1;
             }
         }
-        aggregate
+        Ok(aggregate)
     }
 }
 

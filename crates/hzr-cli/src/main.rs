@@ -1,6 +1,6 @@
 mod activation;
 mod adoption;
-mod agents; // 0.8.7
+mod agents; // 0.8.602
 mod build;
 mod cli;
 mod cli_help;

@@ -30,8 +30,8 @@ use hzr_protocol::agents::{
     AGENT_OBSERVER_PATCH_IDENTITY, AGENT_SNAPSHOT_SCHEMA_VERSION, AgentComponentStatus,
     AgentIntegrationState, AgentSnapshotEnvelope, AgentSnapshotFailure, AgentSnapshotRequest,
 };
-use tokio::io::AsyncWriteExt;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 
 use crate::ledger_writer::LedgerWriter;
 
@@ -120,7 +120,10 @@ pub fn component_path(config: &Config) -> PathBuf {
 /// observer: a matching file name proves nothing, and a build with a different
 /// patch identity is a different producer.
 pub async fn probe_component(config: &Config) -> ComponentInfo {
-    let path = component_path(config);
+    probe_agent_component(component_path(config)).await
+}
+
+pub async fn probe_agent_component(path: PathBuf) -> ComponentInfo {
     if !platform_supported() {
         return ComponentInfo {
             error_code: Some("unsupported_platform".into()),
@@ -133,18 +136,9 @@ pub async fn probe_component(config: &Config) -> ComponentInfo {
             ..Default::default()
         };
     }
-    let output = tokio::time::timeout(
-        COMPONENT_PROBE_TIMEOUT,
-        tokio::process::Command::new(&path)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await;
-    let Ok(Ok(output)) = output else {
+    let output =
+        bounded_helper_output(&path, &["--version"], &[], 4096, COMPONENT_PROBE_TIMEOUT).await;
+    let Ok(output) = output else {
         return ComponentInfo {
             path: Some(path),
             error_code: Some("component_probe_failed".into()),
@@ -152,7 +146,7 @@ pub async fn probe_component(config: &Config) -> ComponentInfo {
         };
     };
     // `hzr-agtx-observer <version> schema=<n> patch=<identity>`
-    let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let line = String::from_utf8_lossy(&output).trim().to_string();
     let mut info = ComponentInfo {
         path: Some(path),
         ..Default::default()
@@ -169,7 +163,9 @@ pub async fn probe_component(config: &Config) -> ComponentInfo {
             _ => {}
         }
     }
-    if info.patch_identity.as_deref() != Some(AGENT_OBSERVER_PATCH_IDENTITY)
+    if line.split_whitespace().next() != Some(OBSERVER_BINARY)
+        || info.version.as_deref() != Some("1.0.4")
+        || info.patch_identity.as_deref() != Some(AGENT_OBSERVER_PATCH_IDENTITY)
         || info.protocol_schema_version != Some(AGENT_SNAPSHOT_SCHEMA_VERSION)
     {
         info.error_code = Some("incompatible".into());
@@ -205,6 +201,7 @@ struct Inner {
     /// discarded rather than written.
     generation: AtomicU64,
     permits: Semaphore,
+    project_locks: Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>>,
     stop: AtomicBool,
 }
 
@@ -238,6 +235,7 @@ impl AgentObserver {
                 component: RwLock::new(ComponentInfo::default()),
                 generation: AtomicU64::new(1),
                 permits: Semaphore::new(MAX_CONCURRENT_HELPERS),
+                project_locks: Mutex::new(BTreeMap::new()),
                 stop: AtomicBool::new(false),
             }),
         }
@@ -281,6 +279,10 @@ impl AgentObserver {
         }
     }
 
+    pub fn resume(&self) {
+        self.inner.stop.store(false, Ordering::SeqCst);
+    }
+
     pub fn stop(&self) {
         self.inner.stop.store(true, Ordering::SeqCst);
     }
@@ -319,6 +321,21 @@ impl AgentObserver {
 
     /// Run one bounded observation cycle for one enrolled project.
     pub async fn observe_once(&self, project_path: &Path) -> ObservationOutcome {
+        let project_lock = self
+            .inner
+            .project_locks
+            .lock()
+            .await
+            .entry(project_path.to_path_buf())
+            .or_default()
+            .clone();
+        let Ok(_project_guard) = project_lock.try_lock() else {
+            return ObservationOutcome {
+                state: AgentIntegrationState::Connecting,
+                error_code: Some("observation_in_progress".into()),
+                ..Default::default()
+            };
+        };
         let enrollments = self.inner.enrollments.read().await.clone();
         let Some(project) = enrollments
             .find(project_path)
@@ -330,6 +347,7 @@ impl AgentObserver {
                 ..Default::default()
             };
         };
+        let generation = self.inner.generation.load(Ordering::SeqCst);
         // Re-probe once before declaring anything: a probe that failed under
         // load is a transient error, and reporting it as `incompatible` would
         // accuse the component of being the wrong build.
@@ -351,7 +369,6 @@ impl AgentObserver {
             };
             return self.finish(project_path, state, code).await;
         }
-        let generation = self.inner.generation.load(Ordering::SeqCst);
         let binary = component.path.clone().unwrap_or_default();
         let project_hash =
             privacy_identity_hash("project", &project.project_path.to_string_lossy());
@@ -373,6 +390,13 @@ impl AgentObserver {
         let mut cursor: Option<String> = None;
         let mut identity: Option<AgentSourceIdentity> = None;
         for page in 0..MAX_PAGES_PER_CYCLE {
+            if self.inner.generation.load(Ordering::SeqCst) != generation
+                || self.inner.stop.load(Ordering::SeqCst)
+            {
+                outcome.state = AgentIntegrationState::Disabled;
+                outcome.error_code = Some("enrollment_revoked".into());
+                return outcome;
+            }
             let request = AgentSnapshotRequest {
                 schema_version: AGENT_SNAPSHOT_SCHEMA_VERSION,
                 request_id: format!("{project_hash}:{generation}:{page}"),
@@ -442,6 +466,7 @@ impl AgentObserver {
                     envelope,
                     i64::try_from(enrollments.poll_interval_ms.saturating_mul(3))
                         .unwrap_or(i64::MAX),
+                    i64::try_from(enrollments.stale_after_ms).unwrap_or(i64::MAX),
                 )
                 .await
             {
@@ -516,7 +541,6 @@ impl AgentObserver {
     /// The background loop. Schedules the next poll *after* the previous one
     /// finishes, so a slow source cannot pile overlapping helpers on itself.
     pub async fn run(self) {
-        self.refresh_component().await;
         loop {
             if self.inner.stop.load(Ordering::SeqCst) {
                 return;
@@ -584,40 +608,80 @@ pub fn enrollment_id(project: &AgtxProject) -> String {
 
 /// Spawn the helper once, by argv, with no shell and no inherited environment
 /// that could redirect it.
-async fn run_helper(
+async fn bounded_helper_output(
     binary: &Path,
-    request: &AgentSnapshotRequest,
-) -> Result<AgentSnapshotEnvelope, String> {
-    let payload = serde_json::to_vec(request).map_err(|_| "request_encode_failed".to_string())?;
+    args: &[&str],
+    payload: &[u8],
+    max_bytes: usize,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
     let mut child = tokio::process::Command::new(binary)
-        .arg("snapshot")
-        .arg("--request-stdin")
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // The helper must not inherit an ambient store root: the enrolled one
-        // is in the request and is the only one it may read.
+        .stderr(Stdio::null())
         .env_remove("AGTX_DATA_DIR")
         .env_remove("AGTX_CONFIG_DIR")
         .env_remove("AGTX_AGENT_HOME")
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| "helper_spawn_failed".to_string())?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(&payload).await;
-        let _ = stdin.shutdown().await;
+    let result = tokio::time::timeout(timeout, async {
+        let mut stdin = child.stdin.take().ok_or("helper_io_failed")?;
+        let stdout = child.stdout.take().ok_or("helper_io_failed")?;
+        let write = async {
+            stdin
+                .write_all(payload)
+                .await
+                .map_err(|_| "helper_io_failed")?;
+            stdin.shutdown().await.map_err(|_| "helper_io_failed")?;
+            drop(stdin);
+            Ok::<(), &str>(())
+        };
+        let read = async {
+            let mut output = Vec::new();
+            stdout
+                .take(max_bytes as u64 + 1)
+                .read_to_end(&mut output)
+                .await
+                .map_err(|_| "helper_io_failed")?;
+            if output.len() > max_bytes {
+                return Err("helper_response_too_large");
+            }
+            Ok(output)
+        };
+        let (_, output) = tokio::try_join!(write, read)?;
+        let status = child.wait().await.map_err(|_| "helper_io_failed")?;
+        if !status.success() {
+            return Err("helper_exit_failed");
+        }
+        Ok(output)
+    })
+    .await;
+    let result = result
+        .unwrap_or(Err("helper_timeout"))
+        .map_err(str::to_string);
+    if result.is_err() {
+        let _ = child.start_kill();
+        let _ = tokio::time::timeout(REAP_TIMEOUT, child.wait()).await;
     }
+    result
+}
 
-    let output = match tokio::time::timeout(HELPER_TIMEOUT, child.wait_with_output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(_)) => return Err("helper_io_failed".into()),
-        Err(_) => return Err("helper_timeout".into()),
-    };
-    if output.stdout.len() > MAX_RESPONSE_BYTES {
-        return Err("helper_response_too_large".into());
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+async fn run_helper(
+    binary: &Path,
+    request: &AgentSnapshotRequest,
+) -> Result<AgentSnapshotEnvelope, String> {
+    let payload = serde_json::to_vec(request).map_err(|_| "request_encode_failed".to_string())?;
+    let output = bounded_helper_output(
+        binary,
+        &["snapshot", "--request-stdin"],
+        &payload,
+        MAX_RESPONSE_BYTES,
+        HELPER_TIMEOUT,
+    )
+    .await?;
+    let stdout = String::from_utf8_lossy(&output);
     let envelope: AgentSnapshotEnvelope = match serde_json::from_str(stdout.trim()) {
         Ok(envelope) => envelope,
         Err(_) => {
@@ -632,7 +696,10 @@ async fn run_helper(
     if envelope.schema_version != AGENT_SNAPSHOT_SCHEMA_VERSION {
         return Err("incompatible_schema_version".into());
     }
-    if envelope.patch_identity != AGENT_OBSERVER_PATCH_IDENTITY {
+    if envelope.patch_identity != AGENT_OBSERVER_PATCH_IDENTITY
+        || envelope.upstream_commit != "d307c4c182dff19a65370a50403185cb826f7f49"
+        || envelope.upstream_version != "1.0.4"
+    {
         return Err("unexpected_producer".into());
     }
     if envelope.request_id != request.request_id {

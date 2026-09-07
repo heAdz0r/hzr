@@ -550,7 +550,7 @@ onBeforeUnmount(() => {
           <h4>Linked sessions</h4>
           <ul class="agents-session-list">
             <li v-for="session in detail.sessions" :key="session.session_id">
-              <code>{{ session.session_id.slice(0, 12) }}</code>
+              <code>{{ session.session_id.slice(-12) }}</code>
               · {{ session.host }} · {{ session.provenance === "explicit_user" ? "explicit link" : "agtx hook" }}
               · {{ session.usage_receipt_count }} usage receipts
               <em v-if="session.conflict">
@@ -580,7 +580,7 @@ onBeforeUnmount(() => {
               </span>
               <span v-if="!detail.economics.reported_cost.length">{{ UNKNOWN }}</span>
             </dd>
-            <dt>Estimated API cost</dt>
+            <dt>Estimated API cost · current catalog</dt>
             <dd>
               <span v-for="subtotal in detail.economics.estimated_api_cost" :key="`e-${subtotal.currency}`">
                 {{ formatMicrounits(subtotal) }} ({{ coverageLabel(subtotal) }})
@@ -594,7 +594,7 @@ onBeforeUnmount(() => {
               </span>
               <span v-if="!detail.economics.shared_unallocated_cost.length">{{ UNKNOWN }}</span>
             </dd>
-            <dt>HZR operation reduction</dt>
+            <dt>HZR operation reduction · lifetime linked sessions</dt>
             <dd>
               baseline {{ detail.economics.hzr_baseline_tokens_estimated }} · delivered
               {{ detail.economics.hzr_delivered_tokens_estimated }} · net

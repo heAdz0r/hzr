@@ -445,6 +445,7 @@ exit 64
             data_dir: directory.path().join("data"),
             ..Config::default()
         };
+        config.privacy.publish_workspace_names = true;
         config.engines.auto_start_icm = false;
         config.engines.directory = Some(directory.path().join("missing-engines"));
         config.billing.pricing_file = Some(directory.path().join("missing-pricing.json"));
@@ -715,6 +716,7 @@ exit 64
             data_dir: directory.path().join("data"),
             ..Config::default()
         };
+        config.privacy.publish_workspace_names = true;
         config.engines.auto_start_icm = false;
         config.engines.directory = Some(directory.path().join("missing-engines"));
         let workspace_root = directory.path().join("workspace-with-secret-name");
@@ -1098,10 +1100,7 @@ exit 64
         };
         config.engines.auto_start_icm = false;
         config.engines.directory = Some(directory.path().join("missing-engines"));
-        assert!(
-            config.privacy.publish_memory_content,
-            "content is published by default"
-        );
+        config.privacy.publish_memory_content = true;
         let alpha_root = directory.path().join("alpha");
         let beta_root = directory.path().join("beta");
         let alpha_worktree = register_test_workspace(&config, &alpha_root).await;

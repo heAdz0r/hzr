@@ -1932,11 +1932,13 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 CheckStatus::Pass,
                 format!("{} pinned components", manifest.engine.len()),
             ));
-            for pin in manifest
-                .engine
-                .iter()
-                .filter(|pin| !pin.binary.is_empty() && pin.name != "caveman-code")
-            {
+            for pin in manifest.engine.iter().filter(|pin| {
+                // `runtime = false` marks a component the bundle deliberately
+                // does not ship — the agtx observer is opt-in and absent on
+                // every default install. Demanding it here would turn an
+                // integration nobody enabled into a failed health check.
+                !pin.binary.is_empty() && pin.name != "caveman-code" && pin.runtime != Some(false)
+            }) {
                 checks.push(
                     inspect_engine(
                         &pin.name,
@@ -1951,6 +1953,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         Err(error) => checks.push(check("engine_lock", CheckStatus::Error, error)),
     }
     checks.extend(attest_active_bundle(config));
+    checks.push(optional_agent_component(config));
 
     let integration = integration_layout(config);
     let node = std::env::var_os("HZR_NODE")
@@ -2606,6 +2609,113 @@ pub fn resolve_binary(candidate: &Path) -> Option<PathBuf> {
     std::env::split_paths(&path)
         .flat_map(|directory| binary_candidates(&directory, candidate))
         .find(|path| is_executable(path))
+}
+
+#[cfg(test)]
+mod agent_component_tests {
+    use super::{CheckStatus, optional_agent_component};
+    use hzr_core::{AgtxProject, Config};
+    use std::path::PathBuf;
+
+    fn config(directory: &std::path::Path) -> Config {
+        let mut config = Config {
+            data_dir: directory.join("data"),
+            ..Config::default()
+        };
+        config.engines.directory = Some(directory.join("engines"));
+        config
+    }
+
+    #[test]
+    fn an_absent_optional_component_is_not_a_health_failure() {
+        // The whole point of "optional" is that a default install, which has
+        // neither the component nor an enrollment, is completely healthy.
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let check = optional_agent_component(&config(directory.path()));
+        assert_eq!(check.status, CheckStatus::Pass);
+        assert!(check.detail.contains("not installed"));
+    }
+
+    #[test]
+    fn an_enrollment_without_its_component_warns_and_names_the_command() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut config = config(directory.path());
+        config.integrations.agtx.enabled = true;
+        config.integrations.agtx.projects = vec![AgtxProject {
+            project_path: PathBuf::from("/absolute/worktree"),
+            data_dir: PathBuf::from("/absolute/store"),
+            enabled: true,
+        }];
+        let check = optional_agent_component(&config);
+        assert_eq!(check.status, CheckStatus::Warning);
+        assert!(check.detail.contains("hzr agents component install"));
+    }
+
+    #[test]
+    fn the_optional_pin_is_excluded_from_the_mandatory_engine_sweep() {
+        // Doctor inspects every pinned binary; a component the bundle does not
+        // ship must be filtered out, or its absence fails an ordinary install.
+        let manifest = hzr_core::locked_engines().expect("engine lock parses");
+        let agtx = manifest
+            .engine
+            .iter()
+            .find(|pin| pin.name == "agtx")
+            .expect("agtx pin");
+        assert_eq!(agtx.runtime, Some(false));
+        assert!(
+            manifest
+                .engine
+                .iter()
+                .filter(|pin| !pin.binary.is_empty()
+                    && pin.name != "caveman-code"
+                    && pin.runtime != Some(false))
+                .all(|pin| pin.name != "agtx")
+        );
+    }
+}
+
+/// Report the optional agtx observer without ever failing HZR's health.
+///
+/// The component is off by default and absent on every ordinary install, so its
+/// absence is not a fault: monitoring is what degrades, and only when somebody
+/// asked for it. An enrollment without a component is a real half-state and
+/// earns a warning naming the command that completes it; everything else passes.
+fn optional_agent_component(config: &Config) -> DoctorCheck {
+    let path = config
+        .engines
+        .directory
+        .clone()
+        .unwrap_or_else(|| config.data_dir.join("components"))
+        .join("hzr-agtx-observer");
+    let installed = is_executable(&path);
+    let enrolled = config.integrations.agtx.active_projects().len();
+    match (enrolled, installed) {
+        (0, false) => check(
+            "agents_component",
+            CheckStatus::Pass,
+            "optional agtx observer is not installed and no project is enrolled",
+        ),
+        (0, true) => check(
+            "agents_component",
+            CheckStatus::Pass,
+            format!(
+                "optional agtx observer installed at {}; no project enrolled",
+                path.display()
+            ),
+        ),
+        (enrolled, true) => check(
+            "agents_component",
+            CheckStatus::Pass,
+            format!("optional agtx observer installed; {enrolled} enrolled project(s)"),
+        ),
+        (enrolled, false) => check(
+            "agents_component",
+            CheckStatus::Warning,
+            format!(
+                "{enrolled} agtx project(s) enrolled but the observer is missing; run `hzr agents component install`"
+            ),
+        ),
+    }
 }
 
 async fn inspect_engine(name: &str, expected: &str, candidate: &Path, strict: bool) -> DoctorCheck {

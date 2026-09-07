@@ -16,6 +16,7 @@ mod shutdown;
 mod state;
 mod visualizer;
 
+pub use agent_observer::{ComponentInfo, probe_agent_component};
 pub use auth::{AuthToken, load_or_create_token};
 pub use error::DaemonError;
 pub use ledger_writer::{FidelityDurabilityStatus, inspect_fidelity_pending};
