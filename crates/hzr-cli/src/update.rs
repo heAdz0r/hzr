@@ -9,8 +9,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, bail};
 use reqwest::{StatusCode, header};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
+mod download;
+mod progress;
+
+use progress::Progress;
 
 const RELEASES_API: &str = "https://api.github.com/repos/heAdz0r/hzr/releases?per_page=30";
 const RELEASE_DOWNLOAD_ROOT: &str = "https://github.com/heAdz0r/hzr/releases/download";
@@ -71,6 +73,8 @@ enum CacheStatus {
 pub async fn execute(json: bool, check_only: bool) -> Result<ExitCode> {
     let current = parse_release_version(env!("CARGO_PKG_VERSION"))?;
     let platform = current_platform()?;
+    let progress = Progress::new(!json && !check_only);
+    progress.step("Checking published releases");
     let release = fetch_latest_release(current, platform, UPDATE_TIMEOUT).await?;
     let data_dir = hzr_core::ConfigPaths::discover().data_dir;
     write_cache(
@@ -102,13 +106,25 @@ pub async fn execute(json: bool, check_only: bool) -> Result<ExitCode> {
     let temporary = tempfile::tempdir().context("failed to create update staging directory")?;
     let archive_path = temporary.path().join(&release.archive_name);
     let checksums_path = temporary.path().join("SHA256SUMS");
+    progress.step(format!(
+        "Preparing HZR {current} → {} · {platform}",
+        release.version
+    ));
     let checksums = download_small_file(&release.checksums_url, MAX_CHECKSUM_BYTES).await?;
     let checksums_text =
         std::str::from_utf8(&checksums).context("the release SHA256SUMS asset is not UTF-8")?;
     let expected =
         checksum_for_artifact(checksums_text, &release.archive_name)?.to_ascii_lowercase();
     write_private_file(&checksums_path, &checksums)?;
-    let actual = download_archive(&release.archive_url, &archive_path).await?;
+    progress.step("Downloading release");
+    let actual = download::archive(
+        &download::client()?,
+        &release.archive_url,
+        &archive_path,
+        &progress,
+    )
+    .await?;
+    progress.step("Verifying SHA-256");
     if actual != expected {
         bail!(
             "checksum mismatch for {}: expected {expected}, got {actual}",
@@ -117,6 +133,8 @@ pub async fn execute(json: bool, check_only: bool) -> Result<ExitCode> {
     }
 
     let installer = locate_installer()?;
+    progress.step("Installing the verified release");
+    drop(progress);
     invoke_installer(&installer, &release, &archive_path, &checksums_path, json)?;
     // 0.8.1: the freshly installed binary reconciles every registered workspace, prunes stale
     // registrations and stops orphaned engines right away, and records the reference state.
@@ -127,6 +145,9 @@ pub async fn execute(json: bool, check_only: bool) -> Result<ExitCode> {
         .unwrap_or(executable);
     let config = hzr_core::Config::load_or_default(&hzr_core::ConfigPaths::discover().config_file)
         .context("failed to load the HZR config after the update")?;
+    let progress = Progress::new(!json);
+    progress.step("Checking services and registered workspaces");
+    drop(progress);
     let reference_state_ok = match crate::post_upgrade::run_foreground(&config, &installed, json) {
         Ok(success) => success,
         Err(error) => {
@@ -306,44 +327,6 @@ async fn download_small_file(url: &str, limit: usize) -> Result<Vec<u8>> {
         .await
         .with_context(|| format!("failed to download {url}"))?;
     response_bytes(response, limit, "release checksum manifest").await
-}
-
-async fn download_archive(url: &str, path: &Path) -> Result<String> {
-    let mut response = github_client(UPDATE_TIMEOUT)?
-        .get(url)
-        .send()
-        .await
-        .with_context(|| format!("failed to download {url}"))?;
-    require_success(&response, "release archive")?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_ARCHIVE_BYTES)
-    {
-        bail!("release archive exceeds the {MAX_ARCHIVE_BYTES}-byte limit");
-    }
-    let mut file = tokio::fs::File::create(path)
-        .await
-        .with_context(|| format!("failed to create {}", path.display()))?;
-    let mut digest = Sha256::new();
-    let mut downloaded = 0_u64;
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .context("failed while downloading the release archive")?
-    {
-        downloaded = downloaded.saturating_add(chunk.len() as u64);
-        if downloaded > MAX_ARCHIVE_BYTES {
-            bail!("release archive exceeds the {MAX_ARCHIVE_BYTES}-byte limit");
-        }
-        digest.update(&chunk);
-        file.write_all(&chunk)
-            .await
-            .with_context(|| format!("failed to write {}", path.display()))?;
-    }
-    file.sync_all()
-        .await
-        .with_context(|| format!("failed to sync {}", path.display()))?;
-    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn require_success(response: &reqwest::Response, label: &str) -> Result<()> {

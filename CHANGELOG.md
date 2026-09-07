@@ -4,6 +4,17 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-09-07
+
+### Fixed
+
+- Release archives no longer share the updater's 120-second metadata deadline. Downloads time out on stalled reads, retry transient failures up to four attempts, validate resumed ranges and restart safely when Range is ignored. SHA-256 verification remains mandatory.
+- The shell installer retries interrupted transfers and preserves failure exit codes and subprocess diagnostics during animated stages.
+
+### Changed
+
+- Interactive updates display animated stages and a byte-based download bar with percentage, average speed and ETA. Installation checks, extraction and setup show live activity. Redirected and JSON output remain free of animation.
+
 ## [0.8.5] - 2026-09-07
 
 ### Fixed

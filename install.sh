@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-HZR_VERSION="${HZR_VERSION:-0.8.5}"
+HZR_VERSION="${HZR_VERSION:-0.8.6}"
 HZR_REPOSITORY="${HZR_REPOSITORY:-heAdz0r/hzr}"
 HZR_INSTALL_ROOT="${HZR_INSTALL_ROOT:-${HOME}/.local/share/hzr}"
 HZR_BIN_DIR="${HZR_BIN_DIR:-${HOME}/.local/bin}"
@@ -28,12 +28,14 @@ HZR_INSTALL_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-install.XXXXXX")"
 # installer looks indistinguishable from a hung one. Steps are numbered and the
 # closing summary states what exists on disk and what to run next. Colour is
 # emitted only for an interactive terminal so logs and CI stay plain.
-if [ -t 1 ]; then
+if [ -t 1 ] && [ -t 2 ] && [ "${TERM:-dumb}" != "dumb" ]; then
+  HZR_ANIMATED=1
   HZR_BOLD="$(printf '\033[1m')"
   HZR_DIM="$(printf '\033[2m')"
   HZR_GREEN="$(printf '\033[32m')"
   HZR_RESET="$(printf '\033[0m')"
 else
+  HZR_ANIMATED=0
   HZR_BOLD=""
   HZR_DIM=""
   HZR_GREEN=""
@@ -52,7 +54,53 @@ hzr_note() {
   printf '      %s%s%s\n' "${HZR_DIM}" "$1" "${HZR_RESET}"
 }
 
+
+# Keep subprocess output together while a live stage remains visible.
+hzr_run() {
+  HZR_ACTION="$1"
+  shift
+  if [ "${HZR_ANIMATED}" != "1" ]; then
+    hzr_note "${HZR_ACTION}"
+    "$@"
+    return
+  fi
+  HZR_ACTION_LOG="${HZR_INSTALL_TEMP}/action.log"
+  "$@" >"${HZR_ACTION_LOG}" 2>&1 &
+  HZR_ACTION_PID=$!
+  HZR_FRAME=0
+  while kill -0 "${HZR_ACTION_PID}" 2>/dev/null; do
+    case $((HZR_FRAME % 8)) in
+      0) HZR_SPINNER='⠋' ;;
+      1) HZR_SPINNER='⠙' ;;
+      2) HZR_SPINNER='⠹' ;;
+      3) HZR_SPINNER='⠸' ;;
+      4) HZR_SPINNER='⠼' ;;
+      5) HZR_SPINNER='⠴' ;;
+      6) HZR_SPINNER='⠦' ;;
+      7) HZR_SPINNER='⠧' ;;
+    esac
+    printf '\r\033[2K      %s %s' "${HZR_SPINNER}" "${HZR_ACTION}" >&2
+    HZR_FRAME=$((HZR_FRAME + 1))
+    sleep 0.1
+  done
+  HZR_ACTION_STATUS=0
+  wait "${HZR_ACTION_PID}" || HZR_ACTION_STATUS=$?
+  HZR_ACTION_PID=""
+  printf '\r\033[2K' >&2
+  if [ "${HZR_ACTION_STATUS}" = "0" ]; then
+    printf '      %s✓%s %s\n' "${HZR_GREEN}" "${HZR_RESET}" "${HZR_ACTION}"
+  else
+    printf '      Failed: %s\n' "${HZR_ACTION}" >&2
+  fi
+  cat "${HZR_ACTION_LOG}"
+  return "${HZR_ACTION_STATUS}"
+}
+
 cleanup_hzr_install() {
+  if [ -n "${HZR_ACTION_PID:-}" ]; then
+    kill "${HZR_ACTION_PID}" 2>/dev/null || :
+    wait "${HZR_ACTION_PID}" 2>/dev/null || :
+  fi
   if [ -n "${HZR_INSTALL_TEMP:-}" ] && [ -d "${HZR_INSTALL_TEMP}" ]; then
     rm -rf -- "${HZR_INSTALL_TEMP}"
   fi
@@ -63,7 +111,10 @@ cleanup_hzr_install() {
     rm -f -- "${HZR_CURRENT_TEMP}"
   fi
 }
-trap cleanup_hzr_install EXIT HUP INT TERM
+trap cleanup_hzr_install EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 printf '\n%sInstalling HZR v%s%s %s(%s)%s\n\n' \
   "${HZR_BOLD}" "${HZR_VERSION}" "${HZR_RESET}" \
@@ -141,26 +192,46 @@ download_hzr_file() {
   HZR_DOWNLOAD_URL="$1"
   HZR_DOWNLOAD_DESTINATION="$2"
   HZR_SHOW_PROGRESS="${3:-0}"
-  if command -v curl >/dev/null 2>&1; then
-    if [ "${HZR_SHOW_PROGRESS}" = "1" ]; then
-      curl --fail --progress-bar --show-error --location --max-time 1800 --proto '=https' --tlsv1.2 \
-        "${HZR_DOWNLOAD_URL}" --output "${HZR_DOWNLOAD_DESTINATION}"
+  HZR_DOWNLOAD_ATTEMPT=1
+  while :; do
+    HZR_DOWNLOAD_STATUS=0
+    if command -v curl >/dev/null 2>&1; then
+      HZR_CURL_DISPLAY="--silent"
+      if [ "${HZR_SHOW_PROGRESS}" = "1" ] && [ "${HZR_ANIMATED}" = "1" ]; then
+        HZR_CURL_DISPLAY="--progress-bar"
+      fi
+      curl --fail "${HZR_CURL_DISPLAY}" --show-error --location \
+        --connect-timeout 10 --speed-limit 1 --speed-time 30 \
+        --continue-at - --proto '=https' --proto-redir '=https' --tlsv1.2 \
+        "${HZR_DOWNLOAD_URL}" --output "${HZR_DOWNLOAD_DESTINATION}" || HZR_DOWNLOAD_STATUS=$?
+    elif command -v wget >/dev/null 2>&1; then
+      if [ "${HZR_SHOW_PROGRESS}" = "1" ] && [ "${HZR_ANIMATED}" = "1" ]; then
+        wget --https-only --quiet --show-progress --continue --tries=1 --timeout=30 \
+          --output-document="${HZR_DOWNLOAD_DESTINATION}" "${HZR_DOWNLOAD_URL}" || HZR_DOWNLOAD_STATUS=$?
+      else
+        wget --https-only --quiet --continue --tries=1 --timeout=30 \
+          --output-document="${HZR_DOWNLOAD_DESTINATION}" "${HZR_DOWNLOAD_URL}" || HZR_DOWNLOAD_STATUS=$?
+      fi
+      # wget uses 4 for transient network failures.
+      if [ "${HZR_DOWNLOAD_STATUS}" = "4" ]; then HZR_DOWNLOAD_STATUS=56; fi
     else
-      curl --fail --silent --show-error --location --max-time 1800 --proto '=https' --tlsv1.2 \
-        "${HZR_DOWNLOAD_URL}" --output "${HZR_DOWNLOAD_DESTINATION}"
+      echo "hzr: curl or wget is required to download the release bundle" >&2
+      return 1
     fi
-  elif command -v wget >/dev/null 2>&1; then
-    if [ "${HZR_SHOW_PROGRESS}" = "1" ]; then
-      wget --https-only --quiet --show-progress \
-        --output-document="${HZR_DOWNLOAD_DESTINATION}" "${HZR_DOWNLOAD_URL}"
-    else
-      wget --https-only --quiet --output-document="${HZR_DOWNLOAD_DESTINATION}" \
-        "${HZR_DOWNLOAD_URL}"
+    case "${HZR_DOWNLOAD_STATUS}" in
+      0) return 0 ;;
+      33) rm -f -- "${HZR_DOWNLOAD_DESTINATION}" ;;
+      5|6|7|18|28|35|52|55|56) ;;
+      *) return "${HZR_DOWNLOAD_STATUS}" ;;
+    esac
+    if [ "${HZR_DOWNLOAD_ATTEMPT}" -ge 4 ]; then
+      echo "hzr: download failed after 4 attempts; rerun the installer to retry" >&2
+      return "${HZR_DOWNLOAD_STATUS}"
     fi
-  else
-    echo "hzr: curl or wget is required to download the release bundle" >&2
-    exit 1
-  fi
+    hzr_note "Connection interrupted; retry ${HZR_DOWNLOAD_ATTEMPT}/3 in ${HZR_DOWNLOAD_ATTEMPT}s"
+    sleep "${HZR_DOWNLOAD_ATTEMPT}"
+    HZR_DOWNLOAD_ATTEMPT=$((HZR_DOWNLOAD_ATTEMPT + 1))
+  done
 }
 
 verify_hzr_sha256() {
@@ -238,7 +309,7 @@ HZR_CHECKSUMS="${HZR_INSTALL_TEMP}/SHA256SUMS"
 if [ -n "${HZR_ARCHIVE_PATH:-}" ]; then
   hzr_step "Using the local release archive"
   hzr_note "${HZR_ARCHIVE_PATH}"
-  cp -- "${HZR_ARCHIVE_PATH}" "${HZR_ARCHIVE}"
+  hzr_run "Copying the release archive" cp -- "${HZR_ARCHIVE_PATH}" "${HZR_ARCHIVE}"
   cp -- "${HZR_CHECKSUMS_PATH:?HZR_CHECKSUMS_PATH is required with HZR_ARCHIVE_PATH}" \
     "${HZR_CHECKSUMS}"
 else
@@ -254,14 +325,14 @@ if [ -z "${HZR_EXPECTED_SHA256}" ]; then
   echo "hzr: ${HZR_ARTIFACT} is absent from the release checksum manifest" >&2
   exit 1
 fi
-verify_hzr_sha256 "${HZR_EXPECTED_SHA256}" "${HZR_ARCHIVE}"
+hzr_run "Checking archive SHA-256" verify_hzr_sha256 "${HZR_EXPECTED_SHA256}" "${HZR_ARCHIVE}"
 hzr_note "checksum matches the published SHA256SUMS"
 
 hzr_step "Unpacking and checking the bundle contents"
 mkdir -p "${HZR_INSTALL_TEMP}/extract"
-tar -xzf "${HZR_ARCHIVE}" -C "${HZR_INSTALL_TEMP}/extract"
+hzr_run "Extracting the runtime" tar -xzf "${HZR_ARCHIVE}" -C "${HZR_INSTALL_TEMP}/extract"
 HZR_EXTRACTED="${HZR_INSTALL_TEMP}/extract/hzr"
-verify_hzr_bundle_root "${HZR_EXTRACTED}"
+hzr_run "Checking every bundled file" verify_hzr_bundle_root "${HZR_EXTRACTED}"
 hzr_note "every file matches the internal bundle manifest"
 
 HZR_VERSION_ROOT="${HZR_INSTALL_ROOT}/versions/v${HZR_VERSION}-${HZR_PLATFORM}"
@@ -277,10 +348,10 @@ if [ -e "${HZR_VERSION_ROOT}" ] || [ -L "${HZR_VERSION_ROOT}" ]; then
     echo "hzr: existing version root does not match the verified release manifest" >&2
     exit 1
   fi
-  verify_hzr_bundle_root "${HZR_VERSION_ROOT}"
+  hzr_run "Checking the installed bundle" verify_hzr_bundle_root "${HZR_VERSION_ROOT}"
 else
   mv -- "${HZR_EXTRACTED}" "${HZR_VERSION_ROOT}"
-  verify_hzr_bundle_root "${HZR_VERSION_ROOT}"
+  hzr_run "Checking the installed bundle" verify_hzr_bundle_root "${HZR_VERSION_ROOT}"
 fi
 
 HZR_CURRENT_TEMP="${HZR_INSTALL_ROOT}/.current-${$}"
@@ -309,20 +380,20 @@ hzr_note "hzr, hzrd, rtk -> ${HZR_BIN_DIR}"
 
 hzr_step "Registering this project and starting the background service"
 hzr_note "initializing the current workspace registry"
-"${HZR_INSTALL_ROOT}/current/bin/hzr" init --if-needed --quiet --skip-service
+hzr_run "Registering the workspace" "${HZR_INSTALL_ROOT}/current/bin/hzr" init --if-needed --quiet --skip-service
 if [ "${HZR_INSTALL_HOOKS}" = "1" ]; then
   hzr_note "installing agent hooks and instructions"
   if [ "${HZR_PROJECT_ONLY}" = "1" ]; then
     if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
-      "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --project-only
+      hzr_run "Configuring agent integration" "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --project-only
     else
-      "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --project-only --skip-service
+      hzr_run "Configuring agent integration" "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --project-only --skip-service
     fi
   else
     if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
-      "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force
+      hzr_run "Configuring agent integration" "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force
     else
-      "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --skip-service
+      hzr_run "Configuring agent integration" "${HZR_INSTALL_ROOT}/current/bin/hzr" install --force --skip-service
     fi
   fi
 fi
@@ -331,7 +402,7 @@ if [ "${HZR_INSTALL_SERVICE}" = "1" ]; then
   # changes, while also starting it on a first install. This keeps the live UI and
   # API on the exact bundle that was just verified above.
   hzr_note "installing or restarting the background daemon service"
-  "${HZR_INSTALL_ROOT}/current/bin/hzr" daemon service install
+  hzr_run "Starting the background service" "${HZR_INSTALL_ROOT}/current/bin/hzr" daemon service install
 fi
 
 prune_hzr_versions "${HZR_INSTALL_ROOT}/versions" "${HZR_VERSION_ROOT}"
