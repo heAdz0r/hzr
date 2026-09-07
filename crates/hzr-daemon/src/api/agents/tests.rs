@@ -14,7 +14,7 @@ const TOKEN: &str = "00000000000000000000000000000000000000000000000000000000000
 ///
 /// Deliberately no component: these tests are about what the *public* surface
 /// does, and it must behave identically whether or not a helper exists.
-async fn agents_router(directory: &TempDir, enrolled: bool) -> (axum::Router, String) {
+async fn agents_router(directory: &TempDir, enrolled: bool) -> (axum::Router, String, AppState) {
     let project = directory.path().join("work/repo");
     let data_root = directory.path().join("agtx");
     std::fs::create_dir_all(&project).expect("project directory");
@@ -37,9 +37,14 @@ async fn agents_router(directory: &TempDir, enrolled: bool) -> (axum::Router, St
     let state = AppState::initialize(config)
         .await
         .expect("test state initializes");
+    // Every test in this file is about the HTTP surface, never about the
+    // background observer — and an enrolled project starts one. Left running it
+    // would poll and ingest underneath the assertions, so whether a test passed
+    // would depend on how fast the machine was. The worker has its own suite.
+    state.ensure_agent_worker(false).await;
     let token = AuthToken::new(TOKEN.to_owned()).expect("test token is valid");
     let project_id = privacy_identity_hash("project", &project.to_string_lossy());
-    (router(state, token), project_id)
+    (router(state.clone(), token), project_id, state)
 }
 
 async fn get(router: &axum::Router, uri: &str) -> (StatusCode, Value) {
@@ -64,7 +69,7 @@ async fn get(router: &axum::Router, uri: &str) -> (StatusCode, Value) {
 #[tokio::test]
 async fn the_board_is_public_and_reports_disabled_without_an_enrollment() {
     let directory = TempDir::new().expect("temp dir");
-    let (router, _) = agents_router(&directory, false).await;
+    let (router, _, _state) = agents_router(&directory, false).await;
     let (status, body) = get(&router, "/v1/dashboard/agents").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["state"], "disabled");
@@ -75,7 +80,7 @@ async fn the_board_is_public_and_reports_disabled_without_an_enrollment() {
 #[tokio::test]
 async fn an_enrolled_project_is_offered_by_pseudonym_only() {
     let directory = TempDir::new().expect("temp dir");
-    let (router, project_id) = agents_router(&directory, true).await;
+    let (router, project_id, _state) = agents_router(&directory, true).await;
     let (status, body) = get(&router, "/v1/dashboard/agents").await;
     assert_eq!(status, StatusCode::OK);
     let projects = body["projects"].as_array().expect("projects");
@@ -98,7 +103,7 @@ async fn an_enrolled_project_is_offered_by_pseudonym_only() {
 #[tokio::test]
 async fn an_unknown_scope_is_a_404_and_a_path_is_not_a_scope() {
     let directory = TempDir::new().expect("temp dir");
-    let (router, _) = agents_router(&directory, true).await;
+    let (router, _, _state) = agents_router(&directory, true).await;
     let unknown = "a".repeat(64);
     let (status, _) = get(
         &router,
@@ -118,7 +123,7 @@ async fn an_unknown_scope_is_a_404_and_a_path_is_not_a_scope() {
 #[tokio::test]
 async fn limits_are_bounded() {
     let directory = TempDir::new().expect("temp dir");
-    let (router, project_id) = agents_router(&directory, true).await;
+    let (router, project_id, _state) = agents_router(&directory, true).await;
     for uri in [
         format!("/v1/dashboard/agents?project_id={project_id}&limit=0"),
         format!("/v1/dashboard/agents?project_id={project_id}&limit=201"),
@@ -132,7 +137,7 @@ async fn limits_are_bounded() {
 #[tokio::test]
 async fn a_malformed_task_id_never_reaches_the_projection() {
     let directory = TempDir::new().expect("temp dir");
-    let (router, _) = agents_router(&directory, true).await;
+    let (router, _, _state) = agents_router(&directory, true).await;
     for task in [
         "..%2F..%2Fetc%2Fpasswd",
         "%3Cscript%3Ealert(1)%3C%2Fscript%3E",
@@ -146,7 +151,7 @@ async fn a_malformed_task_id_never_reaches_the_projection() {
 #[tokio::test]
 async fn an_economics_window_wider_than_a_month_is_refused() {
     let directory = TempDir::new().expect("temp dir");
-    let (router, project_id) = agents_router(&directory, true).await;
+    let (router, project_id, _state) = agents_router(&directory, true).await;
     let (status, _) = get(
         &router,
         &format!(
@@ -160,8 +165,11 @@ async fn an_economics_window_wider_than_a_month_is_refused() {
 #[tokio::test]
 async fn repeated_public_reads_never_spawn_a_helper_or_write_a_ledger_row() {
     let directory = TempDir::new().expect("temp dir");
-    let (router, project_id) = agents_router(&directory, true).await;
-    // A component that would fail loudly if the public path ever ran it.
+    let (router, project_id, _state) = agents_router(&directory, true).await;
+    // A component that would fail loudly if the public path ever ran it. The
+    // harness has already stopped the background observer, which is the thing
+    // that legitimately spawns it; without that, this test only proved the
+    // machine was fast enough to finish before the first poll.
     let engines = directory.path().join("missing-engines");
     std::fs::create_dir_all(&engines).expect("engines directory");
     let marker = directory.path().join("helper-was-run");
@@ -177,6 +185,8 @@ async fn repeated_public_reads_never_spawn_a_helper_or_write_a_ledger_row() {
         std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))
             .expect("permissions");
     }
+    // A poll already in flight when the worker stopped could still land here.
+    let _ = std::fs::remove_file(&marker);
 
     for _ in 0..25 {
         let (status, _) = get(
@@ -190,12 +200,22 @@ async fn repeated_public_reads_never_spawn_a_helper_or_write_a_ledger_row() {
         !marker.exists(),
         "a dashboard GET must never spawn the observer"
     );
+
+    // Prove the assertion above is not vacuous: the stub really does leave the
+    // marker when something runs it, so its absence means nothing ran it.
+    #[cfg(unix)]
+    {
+        std::process::Command::new(&helper)
+            .status()
+            .expect("the stub helper is runnable");
+        assert!(marker.exists(), "the marker proves the stub was invocable");
+    }
 }
 
 #[tokio::test]
 async fn control_routes_require_the_bearer_token() {
     let directory = TempDir::new().expect("temp dir");
-    let (router, _) = agents_router(&directory, true).await;
+    let (router, _, _state) = agents_router(&directory, true).await;
     for (method, uri) in [
         ("GET", "/v1/agents/status"),
         ("POST", "/v1/agents/reload"),
@@ -226,7 +246,7 @@ async fn control_routes_require_the_bearer_token() {
 #[tokio::test]
 async fn an_empty_projection_answers_with_unavailable_rather_than_fabricated_zeros() {
     let directory = TempDir::new().expect("temp dir");
-    let (router, project_id) = agents_router(&directory, true).await;
+    let (router, project_id, _state) = agents_router(&directory, true).await;
     let (status, body) = get(
         &router,
         &format!("/v1/dashboard/agents?project_id={project_id}"),
