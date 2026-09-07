@@ -1,0 +1,27 @@
+{
+  "schema_version": 2,
+  "request_id": "fixture-0004",
+  "upstream_version": "9.9.9",
+  "upstream_commit": "0000000000000000000000000000000000000000",
+  "patch_identity": "some-other-observer",
+  "source_instance_id": "gen:09ae2216cccfa901",
+  "observed_at_ms": 1788258300000,
+  "snapshot_id": "x",
+  "snapshot_consistency": "per_project_transaction",
+  "project": {
+    "project_path_hash": "05301663536fda46"
+  },
+  "capabilities": {
+    "tasks": true,
+    "task_runtime": false,
+    "notifications": false,
+    "running_agents": false,
+    "hook_status": false
+  },
+  "tasks": [],
+  "edges": [],
+  "notifications": [],
+  "running_agents": [],
+  "complete": true,
+  "warnings": []
+}

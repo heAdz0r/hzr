@@ -129,3 +129,21 @@ jobs:
       - run: git -C /tmp/hzr-grepai apply "$GITHUB_WORKSPACE/patches/grepai/0.35.0-disable-worktree-discovery.patch"
       - run: go test ./cli
         working-directory: /tmp/hzr-grepai
+
+  agtx-observer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      # The observer is built outside HZR's workspace at the verified toolchain.
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - run: git clone --filter=blob:none https://github.com/fynnfluegge/agtx /tmp/hzr-agtx
+      - run: git -C /tmp/hzr-agtx checkout --detach d307c4c182dff19a65370a50403185cb826f7f49
+      - run: git -C /tmp/hzr-agtx apply --check "$GITHUB_WORKSPACE/patches/agtx/1.0.4-readonly-observer.patch"
+      - run: git -C /tmp/hzr-agtx apply "$GITHUB_WORKSPACE/patches/agtx/1.0.4-readonly-observer.patch"
+      - run: cargo build --locked --release --bin hzr-agtx-observer
+        working-directory: /tmp/hzr-agtx
+      - run: cargo test --locked --lib 'observer::'
+        working-directory: /tmp/hzr-agtx
+      - run: cargo test --locked --lib
+        working-directory: /tmp/hzr-agtx

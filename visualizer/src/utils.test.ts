@@ -38,6 +38,24 @@ const project = (
   command: "hzr index status",
 });
 
+describe("project search", () => {
+  test("matches the path a user would type, not only the digest", () => {
+    const workspace = {
+      ...project("hzr", "hmac-sha256:6a1be071", "ready"),
+      display_path: "~/Programming/hzr",
+    };
+    expect(filterProjects([workspace], "Programming", "all")).toHaveLength(1);
+    expect(filterProjects([workspace], "hzr", "all")).toHaveLength(1);
+    expect(filterProjects([workspace], "6a1be071", "all")).toHaveLength(1);
+    expect(filterProjects([workspace], "nothing-like-this", "all")).toHaveLength(0);
+  });
+
+  test("a workspace with no published path still filters on its identity", () => {
+    const anonymous = project("Project 6a1be071", "hmac-sha256:6a1be071", "ready");
+    expect(filterProjects([anonymous], "6a1be071", "all")).toHaveLength(1);
+  });
+});
+
 describe("dashboard formatters", () => {
   test("keeps missing provider cost distinct from a derived estimate", () => {
     expect(formatCost(0)).toBe("Not reported");

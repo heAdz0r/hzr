@@ -1043,7 +1043,15 @@ pub struct DashboardProjectArtifacts {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DashboardProject {
+    /// What to call this workspace: its directory name when the install
+    /// publishes names, otherwise `Project <short identity>`.
     pub name: String,
+    /// Home-relative path, e.g. `~/Programming/hzr`. `None` when names are not
+    /// published. It disambiguates two workspaces that share a basename, which
+    /// the name alone cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_path: Option<String>,
+    /// Pseudonymous identity. Unchanged, and present whether or not a name is.
     pub root: String,
     pub repository_id: String,
     pub worktree_id: String,
@@ -1116,6 +1124,11 @@ pub struct DashboardMemoryEdge {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DashboardMemoryObservatory {
+    /// True when this install publishes real topic names and memory content on
+    /// the local dashboard. The UI must not guess this: a caption promising
+    /// redaction over readable content is worse than no caption.
+    #[serde(default)]
+    pub content_published: bool,
     pub state: DashboardState,
     pub project: Option<String>,
     pub retrieval: DashboardMemoryRetrieval,

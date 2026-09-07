@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "request_id": "fixture-0002",
+  "upstream_version": "1.0.4",
+  "upstream_commit": "d307c4c182dff19a65370a50403185cb826f7f49",
+  "patch_identity": "hzr-agtx-readonly-observer-1",
+  "source_instance_id": "gen:09ae2216cccfa901",
+  "observed_at_ms": 1788258260000,
+  "snapshot_id": "gen:09ae2216cccfa901:1788258260000:start",
+  "snapshot_consistency": "per_project_transaction",
+  "project": {
+    "source_project_id": "11111111-2222-3333-4444-555555555555",
+    "project_path_hash": "05301663536fda46"
+  },
+  "capabilities": {
+    "tasks": true,
+    "task_runtime": true,
+    "notifications": true,
+    "running_agents": true,
+    "hook_status": true
+  },
+  "tasks": [
+    {
+      "source_task_id": "7ac30001",
+      "source_project_id": "11111111-2222-3333-4444-555555555555",
+      "board_status": "review",
+      "agent": "codex",
+      "cycle": 1,
+      "referenced_task_ids": [],
+      "has_worktree": true,
+      "source_created_at_ms": 1788253200000,
+      "source_updated_at_ms": 1788258250000,
+      "runtime": {
+        "phase_status": "working",
+        "updated_at_ms": 1788256980000,
+        "pane_changed_at_ms": 1788256920000
+      },
+      "hook": {
+        "state": "working",
+        "recorded_at_ms": 1788258120000,
+        "agent": "claude",
+        "session_id": "01J0SESSIONAAAAAAAAAAAAAA1",
+        "working_stale": true
+      }
+    },
+    {
+      "source_task_id": "7ac30002",
+      "source_project_id": "11111111-2222-3333-4444-555555555555",
+      "board_status": "review",
+      "agent": "codex",
+      "cycle": 1,
+      "referenced_task_ids": [
+        "7ac30001"
+      ],
+      "has_worktree": true,
+      "source_created_at_ms": 1788253200000,
+      "source_updated_at_ms": 1788256800000,
+      "runtime": {
+        "phase_status": "ready",
+        "updated_at_ms": 1788256860000,
+        "pane_changed_at_ms": null
+      },
+      "hook": {
+        "state": "blocked",
+        "recorded_at_ms": 1788258100000,
+        "agent": "codex",
+        "session_id": "01J0SESSIONBBBBBBBBBBBBBB2",
+        "working_stale": false
+      }
+    },
+    {
+      "source_task_id": "7ac30003",
+      "source_project_id": "11111111-2222-3333-4444-555555555555",
+      "board_status": "backlog",
+      "agent": "gemini",
+      "cycle": 2,
+      "referenced_task_ids": [
+        "7ac30001",
+        "7ac3ffff"
+      ],
+      "has_worktree": true,
+      "source_created_at_ms": 1788253200000,
+      "source_updated_at_ms": 1788256800000
+    }
+  ],
+  "edges": [
+    {
+      "from_source_task_id": "7ac30001",
+      "to_source_task_id": "7ac30002",
+      "kind": "depends_on",
+      "resolved": true
+    },
+    {
+      "from_source_task_id": "7ac30001",
+      "to_source_task_id": "7ac30003",
+      "kind": "depends_on",
+      "resolved": true
+    },
+    {
+      "from_source_task_id": "7ac3ffff",
+      "to_source_task_id": "7ac30003",
+      "kind": "depends_on",
+      "resolved": false
+    }
+  ],
+  "notifications": [
+    {
+      "source_notification_id": "n-0001",
+      "source_task_id": "7ac30002",
+      "kind": "phase_completed",
+      "created_at_ms": 1788256950000
+    }
+  ],
+  "running_agents": [
+    {
+      "source_task_id": "7ac30001",
+      "agent_name": "claude",
+      "status": "running",
+      "started_at_ms": 1788255000000
+    }
+  ],
+  "complete": true,
+  "warnings": [
+    {
+      "code": "hook_status_refused",
+      "count": 1
+    }
+  ]
+}

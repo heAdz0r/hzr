@@ -1,5 +1,6 @@
 mod activation;
 mod adoption;
+mod agents; // 0.8.7
 mod build;
 mod cli;
 mod cli_help;
@@ -597,6 +598,9 @@ async fn run(cli: Cli) -> Result<ExitCode> {
         Command::Memory { command } => execute_memory(&config, command, cli.json).await,
         Command::Exec { command } => execute_command(&config, command, cli.json).await,
         Command::Codec { command } => execute_codec(&config, command, cli.json).await,
+        Command::Agents { command } => {
+            agents::execute(&config, &config_path, command, cli.json).await
+        }
         Command::Billing { command } => execute_billing(&config, command, cli.json).await,
         Command::Agent { command } => execute_agent(&config, command, cli.json).await,
         Command::Mcp { command } => match command {

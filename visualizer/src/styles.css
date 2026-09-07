@@ -3576,3 +3576,335 @@ main {
     gap: 7px;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Agents workspace (0.8.7)
+ *
+ * Read-only by construction: no drag handles, no drop zones, no hover state
+ * that implies a card can be moved. Every status colour is accompanied by
+ * words, and an unobserved value renders as an em dash rather than a zero.
+ * ------------------------------------------------------------------------- */
+.agents-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+
+.agents-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  gap: var(--space-16);
+  align-items: start;
+}
+
+.agents-statline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8) var(--space-16);
+  align-content: flex-start;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.agents-statline strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.agents-views {
+  display: flex;
+  gap: var(--space-4);
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.agents-views button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: var(--space-8) var(--space-16);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.agents-views button.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--ember-500);
+}
+
+.agents-views button:focus-visible,
+.agents-card:focus-visible,
+.agents-onboarding button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.agents-board {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--space-12);
+  align-items: start;
+}
+
+.agents-column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+.agents-column h3 {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-8);
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+}
+
+.agents-column-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+}
+
+/* A button, not a draggable card: the affordance must match what HZR can do. */
+.agents-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  text-align: left;
+  padding: var(--space-12);
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-10);
+  background: rgba(10, 11, 13, 0.66);
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.agents-card strong {
+  color: var(--text-primary);
+}
+
+.agents-card.selected {
+  border-color: var(--ember-500);
+}
+
+.agents-card.tombstoned {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.agents-card-line {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agents-graph-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.agents-card-handle {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+
+.agents-graph {
+  /* Cytoscape needs a positioned container for its own absolute canvases. */
+  position: relative;
+  height: 420px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-16);
+  background: rgba(10, 11, 13, 0.66);
+}
+
+.agents-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-16);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.agents-graph-legend i {
+  display: inline-block;
+  width: 18px;
+  height: 0;
+  margin-right: var(--space-8);
+  vertical-align: middle;
+  border-top: 2px solid var(--text-tertiary);
+}
+
+.agents-graph-legend .legend-unresolved {
+  border-top-style: dashed;
+  border-top-color: var(--warning);
+}
+
+.agents-graph-legend .legend-tombstoned {
+  border-top-style: dotted;
+}
+
+.agents-graph-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.agents-graph-table caption {
+  text-align: left;
+  color: var(--text-tertiary);
+  padding-bottom: var(--space-8);
+}
+
+.agents-graph-table th,
+.agents-graph-table td {
+  text-align: left;
+  padding: var(--space-8);
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.agents-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.agents-timeline li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8) var(--space-12);
+  align-items: baseline;
+  padding: var(--space-8) var(--space-12);
+  border-left: 2px solid var(--surface-border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* A gap is a hole in the record, not an event that happened. */
+.agents-timeline li.snapshot_gap {
+  border-left-color: var(--warning);
+}
+
+.agents-timeline-note {
+  color: var(--text-tertiary);
+}
+
+.agents-event-kind {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.agents-detail {
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-16);
+  padding: var(--space-16);
+  background: rgba(10, 11, 13, 0.66);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+}
+
+.agents-detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-12);
+}
+
+.agents-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) minmax(0, 1fr);
+  gap: var(--space-8) var(--space-16);
+  margin: 0;
+  font-size: 12px;
+}
+
+.agents-detail-grid dt {
+  color: var(--text-tertiary);
+}
+
+.agents-detail-grid dd {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.agents-detail-grid dd span + span {
+  margin-left: var(--space-12);
+}
+
+.agents-session-list,
+.agents-unavailable {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.agents-onboarding {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  margin: var(--space-12) 0;
+  padding-left: var(--space-20);
+  text-align: left;
+}
+
+.agents-onboarding li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.agents-onboarding code {
+  overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agents-card,
+  .agents-views button {
+    transition: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .agents-toolbar {
+    grid-template-columns: 1fr;
+  }
+  .agents-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* At 390px the board becomes a single-column list and the detail panel takes
+ * the full width; nothing is hidden and nothing overflows the page. */
+@media (max-width: 640px) {
+  .agents-board {
+    grid-template-columns: 1fr;
+  }
+  .agents-detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .agents-graph {
+    height: 320px;
+  }
+  .agents-graph-table {
+    display: block;
+    overflow-x: auto;
+  }
+}

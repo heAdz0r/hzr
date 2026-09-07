@@ -34,6 +34,10 @@ pub struct AppState {
     pub rtk: Arc<PinnedRtkAdapter>,
     pub executor: ExecutionPipeline,
     pub ledger: LedgerWriter,
+    /// 0.8.7: the opt-in agtx Agent Observatory. Present in every daemon,
+    /// dormant unless a project is enrolled and the component is installed.
+    pub agents: crate::agent_observer::AgentObserver,
+    pub(crate) agents_task: Arc<Mutex<Option<JoinHandle<()>>>>,
     pub(crate) exec_jobs: crate::exec_jobs::ExecJobs,
     pub(crate) read_costs: crate::read_cost::ReadCosts,
 }
@@ -150,10 +154,22 @@ impl AppState {
         );
         let exec_jobs =
             crate::exec_jobs::ExecJobs::new(&config.data_dir).map_err(DaemonError::Io)?;
+        // The observer exists either way so the API can answer honestly; the
+        // background loop starts only for an integration a user turned on.
+        let shared_config = Arc::new(config);
+        let agents =
+            crate::agent_observer::AgentObserver::new(Arc::clone(&shared_config), ledger.clone());
+        let agents_task = if shared_config.integrations.agtx.enabled {
+            Some(tokio::spawn(agents.clone().run()))
+        } else {
+            None
+        };
         Ok(Self {
+            agents,
+            agents_task: Arc::new(Mutex::new(agents_task)),
             exec_jobs,
             read_costs: crate::read_cost::ReadCosts::default(),
-            config: Arc::new(config),
+            config: shared_config,
             started_at,
             approvals: ApprovalStore::default(),
             context,
@@ -325,6 +341,42 @@ async fn supervise_memory(
                 );
                 tokio::time::sleep(delay).await;
             }
+        }
+    }
+}
+
+impl AppState {
+    /// Start or stop the agent observer's background loop to match the config.
+    ///
+    /// Idempotent: enabling twice does not produce two workers, and disabling
+    /// stops observation without discarding anything already recorded.
+    pub(crate) async fn ensure_agent_worker(&self, enabled: bool) {
+        let mut slot = self.agents_task.lock().await;
+        match (enabled, slot.is_some()) {
+            (true, false) => {
+                *slot = Some(tokio::spawn(self.agents.clone().run()));
+            }
+            (false, true) => {
+                self.agents.stop();
+                if let Some(handle) = slot.take() {
+                    handle.abort();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Stop the agent observer and reap its worker within the disable budget.
+pub(crate) async fn stop_agent_observation(state: &AppState) {
+    state.agents.stop();
+    let handle = state.agents_task.lock().await.take();
+    if let Some(handle) = handle {
+        if tokio::time::timeout(crate::agent_observer::REAP_TIMEOUT, handle)
+            .await
+            .is_err()
+        {
+            tracing::warn!("agent observer did not stop within the reap budget");
         }
     }
 }

@@ -15,7 +15,7 @@ use tower_http::timeout::TimeoutLayer;
 use crate::api;
 use crate::auth::{AuthToken, authorize, load_or_create_token};
 use crate::lock::DaemonLock;
-use crate::state::{stop_index_maintenance, stop_memory_supervision};
+use crate::state::{stop_agent_observation, stop_index_maintenance, stop_memory_supervision};
 use crate::visualizer;
 use crate::{AppState, DaemonError};
 
@@ -54,6 +54,16 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         .route("/v1/billing/receipts", post(api::provider_receipt))
         .route("/v1/operations", post(api::operation))
         .route("/v1/policy/events", post(api::policy_event))
+        // 0.8.7: agtx Agent Observatory control. Every state change is here,
+        // behind the daemon's bearer token; the public routes below only read.
+        .route("/v1/agents/status", get(api::agents::agents_status))
+        .route("/v1/agents/reload", post(api::agents::agents_reload))
+        .route("/v1/agents/sync", post(api::agents::agents_sync))
+        .route("/v1/agents/links", post(api::agents::agents_link))
+        .route(
+            "/v1/agents/usage/import",
+            post(api::agents::agents_usage_import),
+        )
         .route_layer(middleware::from_fn_with_state(token, authorize));
     let public = Router::new()
         .route("/v1/dashboard", get(api::dashboard))
@@ -65,6 +75,19 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
         .route(
             "/v1/dashboard/memory/topics/{topic_id}",
             get(api::dashboard_memory_topic),
+        )
+        .route("/v1/dashboard/agents", get(api::agents::dashboard_agents))
+        .route(
+            "/v1/dashboard/agents/tasks/{task_id}",
+            get(api::agents::dashboard_agent_task),
+        )
+        .route(
+            "/v1/dashboard/agents/events",
+            get(api::agents::dashboard_agent_events),
+        )
+        .route(
+            "/v1/dashboard/agents/economics",
+            get(api::agents::dashboard_agent_economics),
         );
     let router = public.merge(authenticated);
     let router = if let Some(directory) = visualizer::assets_directory() {
@@ -139,6 +162,7 @@ where
         .await
         .map_err(DaemonError::Io);
     shutdown_state.exec_jobs.shutdown().await;
+    stop_agent_observation(&shutdown_state).await; // 0.8.7
     let (memory_stop, context_stop) = tokio::join!(
         stop_memory_supervision(&shutdown_state),
         stop_index_maintenance(&shutdown_state)
@@ -561,7 +585,14 @@ exit 64
             .map(|project| project["name"].as_str().expect("safe project label"))
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(names.len(), 2);
-        assert!(names.iter().all(|name| name.starts_with("Project ")));
+        // The registry names workspaces so a list of them can be used at all;
+        // what must never change is that the *identity* stays pseudonymous.
+        assert_eq!(
+            names,
+            ["first-workspace", "second-workspace"]
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+        );
         assert!(projects.iter().all(|project| {
             project["root"]
                 .as_str()
@@ -578,6 +609,9 @@ exit 64
         };
         config.engines.auto_start_icm = false;
         config.engines.directory = Some(directory.path().join("missing-engines"));
+        // Names are a registry feature, and this test is about the trace and
+        // lifecycle surfaces, which must stay free of them either way.
+        config.privacy.publish_workspace_names = false;
         let workspace_root = directory.path().join("workspace-with-secret-name");
         let worktree_id = register_test_workspace(&config, &workspace_root).await;
         let state = AppState::initialize(config)
@@ -667,6 +701,95 @@ exit 64
         let body = String::from_utf8(bytes.to_vec()).expect("UTF-8 dashboard JSON");
         assert!(!body.contains("workspace-with-secret-name"));
         assert!(!body.contains("secret-provider-session"));
+    }
+
+    /// A published workspace name reaches the registry and nothing else.
+    ///
+    /// Naming a workspace is what makes a hundred-project list usable, but it
+    /// must not turn into a second channel: traces, lifecycle events and
+    /// session identities carry no name in either mode.
+    #[tokio::test]
+    async fn a_published_workspace_name_stays_inside_the_project_registry() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut config = Config {
+            data_dir: directory.path().join("data"),
+            ..Config::default()
+        };
+        config.engines.auto_start_icm = false;
+        config.engines.directory = Some(directory.path().join("missing-engines"));
+        let workspace_root = directory.path().join("workspace-with-secret-name");
+        let worktree_id = register_test_workspace(&config, &workspace_root).await;
+        let state = AppState::initialize(config)
+            .await
+            .expect("test state initializes");
+        let trace = state.observability.begin_trace(
+            workspace_root
+                .canonicalize()
+                .expect("canonical workspace")
+                .to_str()
+                .expect("UTF-8 workspace"),
+            Some("secret-provider-session"),
+        );
+        state.observability.record_span(
+            &trace,
+            TraceSpanInput {
+                stage: DashboardTraceStage::Engine,
+                state: DashboardTraceState::Completed,
+                engine: "grepai",
+                duration_ms: 3,
+                route: Some("search"),
+                error_code: None,
+                generation: Some("generation-1"),
+            },
+        );
+        let token = AuthToken::new(TOKEN.to_owned()).expect("test token is valid");
+        let application = router(state, token);
+
+        let body = |uri: String| {
+            let application = application.clone();
+            async move {
+                let response = application
+                    .oneshot(
+                        Request::builder()
+                            .uri(uri)
+                            .body(Body::empty())
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("response");
+                assert_eq!(response.status(), StatusCode::OK);
+                let bytes = to_bytes(response.into_body(), 1_048_576)
+                    .await
+                    .expect("body");
+                String::from_utf8(bytes.to_vec()).expect("UTF-8 JSON")
+            }
+        };
+
+        let registry = body("/v1/dashboard/projects?limit=10".to_string()).await;
+        let payload: Value = serde_json::from_str(&registry).expect("valid JSON");
+        assert_eq!(payload["projects"][0]["name"], "workspace-with-secret-name");
+        assert!(
+            payload["projects"][0]["display_path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("workspace-with-secret-name")),
+            "the path is what separates two workspaces sharing a name"
+        );
+        assert!(
+            payload["projects"][0]["root"]
+                .as_str()
+                .is_some_and(|root| root.starts_with("hmac-sha256:")),
+            "the pseudonymous identity is published beside the name, not instead of it"
+        );
+
+        let observability = body(format!(
+            "/v1/dashboard/observability?project={worktree_id}&limit=10"
+        ))
+        .await;
+        assert!(
+            !observability.contains("workspace-with-secret-name"),
+            "traces and lifecycle events carry no workspace name"
+        );
+        assert!(!observability.contains("secret-provider-session"));
     }
 
     #[tokio::test]
@@ -767,6 +890,11 @@ exit 64
         };
         config.engines.auto_start_icm = false;
         config.engines.directory = Some(directory.path().join("missing-engines"));
+        // This case is the fully redacting install: no workspace names, no
+        // memory content on the public route. Cross-project isolation is a
+        // separate property and is asserted for the publishing mode too.
+        config.privacy.publish_memory_content = false;
+        config.privacy.publish_workspace_names = false;
         let alpha_root = directory.path().join("alpha");
         let beta_root = directory.path().join("beta");
         let alpha_worktree = register_test_workspace(&config, &alpha_root).await;
@@ -955,6 +1083,122 @@ exit 64
                 "dashboard leaked {secret}"
             );
         }
+    }
+
+    /// Publishing content does not publish it to the wrong project.
+    ///
+    /// Readable topics are what make the memory graph navigable; they must not
+    /// become a way for one project's dashboard to read another's store.
+    #[tokio::test]
+    async fn a_publishing_install_still_cannot_read_another_projects_topic() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut config = Config {
+            data_dir: directory.path().join("data"),
+            ..Config::default()
+        };
+        config.engines.auto_start_icm = false;
+        config.engines.directory = Some(directory.path().join("missing-engines"));
+        assert!(
+            config.privacy.publish_memory_content,
+            "content is published by default"
+        );
+        let alpha_root = directory.path().join("alpha");
+        let beta_root = directory.path().join("beta");
+        let alpha_worktree = register_test_workspace(&config, &alpha_root).await;
+        let beta_worktree = register_test_workspace(&config, &beta_root).await;
+        let registrations = hzr_index::registered_workspaces(&config.data_dir).registrations;
+        let alpha_repository = registrations
+            .iter()
+            .find(|registration| registration.worktree_id == alpha_worktree)
+            .expect("alpha registration")
+            .repository_id
+            .clone();
+        let state = AppState::initialize(config)
+            .await
+            .expect("test state initializes");
+        let database = state.memory.layout().database.clone();
+        std::fs::create_dir_all(database.parent().expect("memory directory"))
+            .expect("memory directory");
+        let connection = rusqlite::Connection::open(&database).expect("memory fixture");
+        connection
+            .execute_batch(
+                "CREATE TABLE memories (
+                    id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    last_accessed TEXT, access_count INTEGER NOT NULL, weight REAL NOT NULL,
+                    topic TEXT NOT NULL, summary TEXT NOT NULL, raw_excerpt TEXT,
+                    keywords TEXT NOT NULL, importance TEXT NOT NULL, source_type TEXT,
+                    source_data TEXT, related_ids TEXT NOT NULL, summary_hash TEXT,
+                    embedding BLOB
+                 );",
+            )
+            .expect("memory fixture schema");
+        connection
+            .execute(
+                "INSERT INTO memories (
+                    id, created_at, updated_at, last_accessed, access_count, weight, topic,
+                    summary, raw_excerpt, keywords, importance, source_type, source_data,
+                    related_ids, summary_hash, embedding
+                 ) VALUES ('alpha-memory', '2026-08-25T00:00:00Z', '2026-08-25T00:00:00Z',
+                           NULL, 1, 0.8, ?1, 'private alpha data', NULL, '[]', 'medium',
+                           NULL, NULL, '[]', NULL, NULL)",
+                params![format!("decisions-{alpha_repository}")],
+            )
+            .expect("alpha memory fixture");
+        drop(connection);
+        let snapshot = hzr_memory::read_project_snapshot(&database, &alpha_repository)
+            .expect("alpha snapshot");
+        let raw_topic_id = snapshot.topics.first().expect("alpha topic").id.clone();
+        let public_topic_id = state.observability.topic_hash(&raw_topic_id);
+        let token = AuthToken::new(TOKEN.to_owned()).expect("test token is valid");
+        let application = router(state, token);
+
+        let alpha = application
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/dashboard/memory/topics/{public_topic_id}?project={alpha_worktree}"
+                    ))
+                    .body(Body::empty())
+                    .expect("alpha request"),
+            )
+            .await
+            .expect("alpha response");
+        assert_eq!(alpha.status(), StatusCode::OK);
+        let alpha_body = to_bytes(alpha.into_body(), 1_048_576)
+            .await
+            .expect("alpha body");
+        let alpha_body = String::from_utf8(alpha_body.to_vec()).expect("UTF-8 alpha body");
+        assert!(
+            alpha_body.contains("private alpha data"),
+            "its own project reads its own memory"
+        );
+        assert!(alpha_body.contains("decisions"), "the topic keeps its name");
+        assert!(
+            !alpha_body.contains(alpha_repository.as_str()),
+            "the repository identity is still stripped from the label"
+        );
+        assert!(
+            !alpha_body.contains("alpha-memory"),
+            "memory identities stay pseudonymous on the public route"
+        );
+
+        let beta = application
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/dashboard/memory/topics/{public_topic_id}?project={beta_worktree}"
+                    ))
+                    .body(Body::empty())
+                    .expect("beta request"),
+            )
+            .await
+            .expect("beta response");
+        assert_eq!(
+            beta.status(),
+            StatusCode::NOT_FOUND,
+            "one project may never address another project's topic"
+        );
     }
 
     #[tokio::test]

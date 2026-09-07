@@ -15,6 +15,8 @@ pub use hzr_engine_contract::{
     RewritePlanReason, SearchFallbackCode,
 };
 
+// 0.8.7: typed DTOs for the opt-in agtx Agent Observatory.
+pub mod agents;
 mod api;
 
 pub use api::{

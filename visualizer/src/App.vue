@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { version as uiVersion } from "../package.json";
+import AgentsWorkspace from "./components/AgentsWorkspace.vue";
 import CommandCard from "./components/CommandCard.vue";
 import AppIcon from "./components/AppIcon.vue";
 import MetricCard from "./components/MetricCard.vue";
@@ -43,11 +44,12 @@ const manualRefreshing = ref(false);
 const loadingProjects = ref(false);
 const query = ref("");
 const projectPageError = ref<string | null>(null);
-const section = ref<"overview" | "projects" | "knowledge" | "system">("overview");
+const section = ref<"overview" | "projects" | "knowledge" | "agents" | "system">("overview");
 const navigation = [
   { id: "overview", label: "Overview" },
   { id: "projects", label: "Projects" },
   { id: "knowledge", label: "Memory & index" },
+  { id: "agents", label: "Agents" },
   { id: "system", label: "System" },
 ] as const;
 const selectedProjectLabel = computed(() =>
@@ -383,7 +385,7 @@ onBeforeUnmount(() => {
           <span>Project scope</span>
           <select :value="selectedProjectId ?? ''" @change="selectProject(($event.target as HTMLSelectElement).value || null)">
             <option value="">Select a workspace</option>
-            <option v-for="project in snapshot.projects" :key="project.worktree_id" :value="project.worktree_id">{{ project.name }} · {{ projectStateLabel[project.state] }}</option>
+            <option v-for="project in snapshot.projects" :key="project.worktree_id" :value="project.worktree_id" :title="project.display_path ?? project.root">{{ project.name }} · {{ projectStateLabel[project.state] }}</option>
           </select>
           <small>{{ snapshot.projects.length }} of {{ snapshot.projects_total }} loaded · private identities</small>
         </label>
@@ -425,6 +427,8 @@ onBeforeUnmount(() => {
       </section>
 
       <template v-else-if="snapshot">
+        <AgentsWorkspace v-if="section === 'agents'" />
+
         <section v-if="projectSnapshotCurrent && section === 'system'" class="section-block system-section" aria-labelledby="system-title">
           <div class="section-heading">
             <div>
@@ -473,7 +477,10 @@ onBeforeUnmount(() => {
             <div class="evidence-strip">
               <span><AppIcon name="check" :size="15" /> Positive repository filter</span>
               <span><AppIcon name="check" :size="15" /> Read-only snapshot</span>
-              <span><AppIcon name="check" :size="15" /> Public details stay content-redacted</span>
+              <span v-if="snapshot.memory_observatory.content_published">
+                <AppIcon name="check" :size="15" /> Topic names and memory content published to this loopback dashboard
+              </span>
+              <span v-else><AppIcon name="check" :size="15" /> Public details stay content-redacted</span>
               <span><AppIcon name="check" :size="15" /> Authenticated project tools expose bounded content</span>
               <span><AppIcon name="clock" :size="15" /> {{ snapshot.memory_observatory.latency_ms }}ms · {{ relativeTime(snapshot.memory_observatory.observed_at_ms) }}</span>
             </div>

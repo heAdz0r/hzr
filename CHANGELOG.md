@@ -4,6 +4,24 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-09-07
+
+### Added
+
+- **Agent Observatory (opt-in).** HZR can observe an enrolled [agtx](https://github.com/fynnfluegge/agtx) board: its tasks, dependencies, observed transitions, session attribution and spending. It is read-only by construction — HZR never creates a task, starts an agent, advances a phase, sends terminal input, creates a worktree, merges a branch, or answers a permission prompt. Off by default: a fresh install downloads nothing, runs no agtx process, reads no agtx store and opens no listener.
+- `hzr agents component install|status`, `hzr agents enable|disable|status|sync`, `hzr agents usage import`, `hzr agents link`. Installing the component enrolls nothing and enrolling a project installs nothing; both steps are explicit, and `hzr agents status` reports the half-states honestly.
+- `hzr-agtx-observer`, built from the pinned agtx commit `d307c4c1` plus one audited patch, outside the HZR Cargo workspace. It reads with `SQLITE_OPEN_READ_ONLY` and `PRAGMA query_only=ON`, never creates, migrates, renames or chmods a store, and never uses `immutable=1` against a live WAL. Upstream's own library test suite passes unchanged against the patched tree. Provenance, digests and the unresolved upstream license discrepancy are recorded in `integrations/agtx/PROVENANCE.json`.
+- New public dashboard reads `GET /v1/dashboard/agents`, `/agents/tasks/{id}`, `/agents/events`, `/agents/economics`. None of them accepts a filesystem path, spawns the helper, touches the agtx store or writes to the ledger. Enrollment reload, forced sync, session links and usage import sit behind the existing bearer authentication.
+- `AgentUsageReceiptV1`: normalized one-sided per-request usage import, priced through the existing catalog and never differenced against an invented baseline. Cumulative session snapshots are refused, because summing them counts every earlier request in the session again. Batches validate whole and commit atomically.
+- An **Agents** workspace in the visualizer: board, dependency graph, observed timeline and per-task economics. Reported and estimated amounts are shown as alternatives for the same request, never as a sum; unobserved values render as an em dash with a reason, never as zero.
+- Distribution: the observer is pinned as an `[[engine]]` in `engines.lock.toml`, built from source behind a flag in `scripts/build-bundle.sh` (`HZR_BUILD_AGTX_OBSERVER=1`, off in the default bundle so no prebuilt adapted artifact ships while the upstream license is unresolved) and covered by an `agtx-observer` CI job; the patch and provenance ship in the bundle and the attribution is recorded in `THIRD_PARTY_NOTICES.md`.
+
+### Changed
+
+- Registered workspaces are named by their own directory on the local dashboard — `hzr`, with `~/Programming/hzr` beside it — instead of `Project 6a1be071`. A hundred rows of interchangeable digests could not be used to find anything. Identity hashes are still published beside the name, project search matches the path, and `[privacy] publish_workspace_names = false` returns the registry to pseudonyms only.
+- Observed agtx tasks show the source's own title and branch, bounded and stripped of control characters, with the pseudonym kept as the stable handle. `[integrations.agtx] publish_task_titles = false` withholds them.
+- The ICM memory inspector leads with what a memory says rather than its opaque id, and the live-activity session filter names sessions by agent, operation count and last activity instead of a truncated digest. Both endpoints' privacy boundaries are unchanged.
+
 ## [0.8.601] - 2026-09-07
 
 ### Fixed

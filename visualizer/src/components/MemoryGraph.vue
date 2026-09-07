@@ -462,10 +462,6 @@ function topicAge(topic: MemoryTopic): string {
   return days === 0 ? "Updated today" : `${days}d ago`;
 }
 
-function shortId(id: string): string {
-  return id.slice(0, 10);
-}
-
 function sourceLabel(memory: DashboardMemoryDetail): string {
   return memory.source_type ?? "not recorded";
 }
@@ -514,7 +510,7 @@ onBeforeUnmount(() => {
       <label class="memory-search">
         <AppIcon name="search" :size="16" />
         <span class="sr-only">Filter anonymous memory topics by ordinal label</span>
-        <input v-model="query" type="search" placeholder="Filter topic number" />
+        <input v-model="query" type="search" placeholder="Filter topics by name" />
       </label>
       <div class="graph-actions" aria-label="Memory graph view controls">
         <button type="button" aria-label="Zoom out" title="Zoom out" @click="zoomBy(0.82)">−</button>
@@ -579,7 +575,10 @@ onBeforeUnmount(() => {
         <template v-else-if="selectedMemory">
           <button class="inspector-back" type="button" @click="selectedMemoryId = null">← {{ expandedDetails?.label }}</button>
           <button class="inspector-close" type="button" aria-label="Close memory inspector" @click="closeInspector">×</button>
-          <span class="inspector-kicker">Memory {{ shortId(selectedMemory.id) }}</span>
+          <!-- The heading is what the memory says; the topic places it. The
+               opaque id stays in the facts below, where a support conversation
+               can copy it without it being the only thing on screen. -->
+          <span class="inspector-kicker">Memory in {{ expandedDetails?.label ?? "this topic" }}</span>
           <h3>{{ selectedMemory.summary }}</h3>
           <dl class="memory-facts">
             <div><dt>Importance</dt><dd>{{ selectedMemory.importance }}</dd></div>

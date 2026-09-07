@@ -55,6 +55,9 @@ use crate::error::ApiError;
 use crate::observability::TraceSpanInput;
 use crate::state::{AppState, MemoryStartState};
 
+// 0.8.7: the opt-in agtx Agent Observatory HTTP surface.
+pub mod agents;
+
 #[cfg(test)]
 #[path = "../../../fork-core/rtk/tests/fixtures/anti_evasion_fixture.rs"]
 mod anti_evasion_fixture;
@@ -252,7 +255,13 @@ pub async fn dashboard_projects(
         .iter()
         .skip(offset)
         .take(limit)
-        .map(|registration| dashboard_project(registration, &state.observability))
+        .map(|registration| {
+            dashboard_project(
+                registration,
+                &state.observability,
+                state.config.privacy.publish_workspace_names,
+            )
+        })
         .collect::<Result<Vec<_>, ApiError>>()?;
     let consumed = offset.saturating_add(projects.len());
     Ok(Json(DashboardProjectPage {
@@ -318,7 +327,13 @@ pub async fn dashboard(
     let all_projects = registry
         .registrations
         .iter()
-        .map(|registration| dashboard_project(registration, &state.observability))
+        .map(|registration| {
+            dashboard_project(
+                registration,
+                &state.observability,
+                state.config.privacy.publish_workspace_names,
+            )
+        })
         .collect::<Result<Vec<_>, ApiError>>()?;
     let projects_total = all_projects.len();
     let projects = all_projects
@@ -741,15 +756,21 @@ pub async fn memory_topic_details(
 async fn memory_topic_response(
     state: &AppState,
     topic_id: String,
-    redact_content: bool,
+    public_route: bool,
     worktree_id: Option<&str>,
 ) -> Result<DashboardMemoryTopicDetails, ApiError> {
+    // Two separate decisions that used to be one flag. The *identity scheme* is
+    // fixed by the route: the public one addresses topics by pseudonym and the
+    // authenticated one by source id. Whether the *content* is readable is an
+    // install policy, because a graph whose every leaf says "redacted" cannot
+    // be navigated to anything.
+    let redact_content = public_route && !state.config.privacy.publish_memory_content;
     let public_topic_id = topic_id.strip_prefix("hmac-sha256:").is_some_and(|digest| {
         digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
     });
     let internal_topic_id =
         topic_id.len() == 64 && topic_id.bytes().all(|byte| byte.is_ascii_hexdigit());
-    if (redact_content && !public_topic_id) || (!redact_content && !internal_topic_id) {
+    if (public_route && !public_topic_id) || (!public_route && !internal_topic_id) {
         return Err(ApiError::bad_request(
             "memory topic identifier does not match the endpoint identity scheme",
         ));
@@ -769,7 +790,7 @@ async fn memory_topic_response(
     let requested_id = topic_id.clone();
     let privacy = state.ledger.privacy_pseudonymizer();
     let details = tokio::task::spawn_blocking(move || {
-        let source_id = if redact_content {
+        let source_id = if public_route {
             read_project_snapshot(&database, &repository_id)?
                 .topics
                 .into_iter()
@@ -801,15 +822,18 @@ async fn memory_topic_response(
 
     let public_privacy = state.ledger.privacy_pseudonymizer();
     Ok(DashboardMemoryTopicDetails {
-        id: if redact_content {
+        id: if public_route {
             public_privacy.hash("topic", &details.id)
         } else {
             details.id
         },
+        // The label is the topic's own name — `context-hzr`, `preferences` —
+        // which is what a reader is looking for. Only a redacting install
+        // replaces it.
         label: if redact_content {
             "Memory topic".into()
         } else {
-            details.label
+            bounded_display_text(&details.label, 96).unwrap_or_else(|| "Memory topic".into())
         },
         memory_count: details.memory_count,
         visible_memory_count: details.visible_memory_count,
@@ -818,18 +842,36 @@ async fn memory_topic_response(
         memories: details
             .memories
             .into_iter()
-            .map(|memory| dashboard_memory_detail(memory, redact_content, &public_privacy))
+            .map(|memory| {
+                dashboard_memory_detail(memory, public_route, redact_content, &public_privacy)
+            })
             .collect(),
     })
 }
 
+/// Bound one piece of stored human text for display.
+///
+/// Control characters — ANSI escapes included — are removed rather than the
+/// value being refused, because this is prose, and it is rendered as text
+/// everywhere it appears.
+fn bounded_display_text(value: &str, limit: usize) -> Option<String> {
+    let cleaned: String = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(limit)
+        .collect();
+    let trimmed = cleaned.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 fn dashboard_memory_detail(
     memory: ProjectMemoryDetail,
+    hash_identities: bool,
     redact_content: bool,
     privacy: &hzr_core::PrivacyPseudonymizer,
 ) -> DashboardMemoryDetail {
     DashboardMemoryDetail {
-        id: if redact_content {
+        id: if hash_identities {
             privacy.hash("memory", &memory.id)
         } else {
             memory.id
@@ -861,7 +903,7 @@ fn dashboard_memory_detail(
         } else {
             memory.source_data
         },
-        related_ids: if redact_content {
+        related_ids: if hash_identities {
             memory
                 .related_ids
                 .into_iter()
@@ -894,6 +936,7 @@ async fn dashboard_memory_observatory(
         .unwrap_or_else(|| "ICM returned no readiness detail".into());
     let Some(registration) = selected else {
         return DashboardMemoryObservatory {
+            content_published: state.config.privacy.publish_memory_content,
             state: runtime_state,
             project: None,
             retrieval,
@@ -919,6 +962,7 @@ async fn dashboard_memory_observatory(
             observed_at_ms,
             0,
             runtime_detail,
+            state.config.privacy.publish_memory_content,
         );
     }
     let database = state.memory.layout().database.clone();
@@ -942,6 +986,7 @@ async fn dashboard_memory_observatory(
             observed_at_ms,
             elapsed_ms(started_at),
             format!("ICM is ready, but its read-only project snapshot failed: {error}"),
+            state.config.privacy.publish_memory_content,
         ),
         Err(error) => empty_memory_observatory(
             project_identity,
@@ -950,6 +995,7 @@ async fn dashboard_memory_observatory(
             observed_at_ms,
             elapsed_ms(started_at),
             format!("ICM snapshot task failed: {error}"),
+            state.config.privacy.publish_memory_content,
         ),
     }
 }
@@ -964,6 +1010,7 @@ fn memory_snapshot_observatory(
     snapshot: ProjectMemorySnapshot,
 ) -> DashboardMemoryObservatory {
     DashboardMemoryObservatory {
+        content_published: state.config.privacy.publish_memory_content,
         state: DashboardState::Ready,
         project: project_identity.map(str::to_owned),
         retrieval,
@@ -980,7 +1027,16 @@ fn memory_snapshot_observatory(
             .enumerate()
             .map(|(index, topic)| DashboardMemoryTopic {
                 id: state.observability.topic_hash(&topic.id),
-                label: format!("Memory topic {}", index + 1),
+                // ICM topics are named by the agent that stored them —
+                // `context-hzr`, `preferences`, `errors-resolved`. Numbering
+                // them instead threw away the only thing that says what a node
+                // holds, and left a graph nobody could navigate.
+                label: if state.config.privacy.publish_memory_content {
+                    bounded_display_text(&topic.label, 96)
+                        .unwrap_or_else(|| format!("Memory topic {}", index + 1))
+                } else {
+                    format!("Memory topic {}", index + 1)
+                },
                 memory_count: topic.memory_count,
                 average_weight: topic.average_weight,
                 newest_at: topic.newest_at,
@@ -1010,8 +1066,10 @@ fn empty_memory_observatory(
     observed_at_ms: u64,
     latency_ms: u64,
     detail: String,
+    content_published: bool,
 ) -> DashboardMemoryObservatory {
     DashboardMemoryObservatory {
+        content_published,
         state,
         project: project_identity.map(str::to_owned),
         retrieval,
@@ -1305,9 +1363,51 @@ fn dashboard_overall_state(
     }
 }
 
+/// A workspace's own directory name, bounded for display.
+///
+/// The registry already holds the absolute root; throwing it away and showing
+/// `Project 6a1be071` made every row in a hundred-project list interchangeable.
+/// The basename is what the user called the directory, so it is what they will
+/// recognise.
+fn workspace_display_name(root: &Path) -> Option<String> {
+    let name = root.file_name()?.to_str()?;
+    let cleaned: String = name
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(64)
+        .collect();
+    (!cleaned.trim().is_empty()).then(|| cleaned.trim().to_string())
+}
+
+/// The root written the way the user types it: `~/Programming/hzr`.
+///
+/// Two workspaces can share a basename, and the name alone cannot tell them
+/// apart. The home prefix is collapsed because the absolute prefix is noise on
+/// the machine that owns it.
+fn workspace_display_path(root: &Path) -> Option<String> {
+    let rendered = root.to_str()?;
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let display = match home
+        .as_deref()
+        .and_then(Path::to_str)
+        .filter(|home| !home.is_empty())
+        .and_then(|home| rendered.strip_prefix(home))
+    {
+        Some(relative) => format!("~{relative}"),
+        None => rendered.to_string(),
+    };
+    let cleaned: String = display
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(256)
+        .collect();
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
 fn dashboard_project(
     registration: &WorkspaceRegistration,
     observability: &crate::observability::ObservabilityStore,
+    publish_names: bool,
 ) -> Result<DashboardProject, ApiError> {
     let root = registration.root.to_str().ok_or_else(|| {
         ApiError::internal("registered workspace path is not valid UTF-8".to_owned())
@@ -1337,8 +1437,17 @@ fn dashboard_project(
         .chars()
         .take(8)
         .collect::<String>();
+    let named = publish_names
+        .then(|| workspace_display_name(&registration.root))
+        .flatten();
     Ok(DashboardProject {
-        name: format!("Project {short_identity}"),
+        name: named
+            .clone()
+            .unwrap_or_else(|| format!("Project {short_identity}")),
+        display_path: named
+            .is_some()
+            .then(|| workspace_display_path(&registration.root))
+            .flatten(),
         root: identity,
         repository_id: observability.repository_hash(&registration.repository_id),
         worktree_id: registration.worktree_id.clone(),
@@ -5098,13 +5207,13 @@ exit 64
 
         let privacy = hzr_core::PrivacyPseudonymizer::from_key("11".repeat(32))
             .expect("valid test privacy key");
-        let public = dashboard_memory_detail(detail.clone(), true, &privacy);
+        let public = dashboard_memory_detail(detail.clone(), true, true, &privacy);
         assert!(!public.summary.contains("secret"));
         assert!(public.raw_excerpt.is_none());
         assert!(public.keywords.is_empty());
         assert!(public.source_data.is_none());
 
-        let authenticated = dashboard_memory_detail(detail, false, &privacy);
+        let authenticated = dashboard_memory_detail(detail, false, false, &privacy);
         assert_eq!(authenticated.summary, "secret summary");
         assert_eq!(authenticated.raw_excerpt.as_deref(), Some("secret raw"));
         assert_eq!(authenticated.keywords, ["secret-keyword"]);
@@ -5197,9 +5306,128 @@ exit 64
     }
 
     #[test]
+    fn public_memory_detail_separates_identity_hashing_from_content_redaction() {
+        let privacy = hzr_core::PrivacyPseudonymizer::from_key("11".repeat(32)).expect("key");
+        let detail = ProjectMemoryDetail {
+            id: "memory-1".into(),
+            created_at: "2026-09-01".into(),
+            updated_at: "2026-09-02".into(),
+            last_accessed: None,
+            access_count: 3,
+            weight: 0.5,
+            summary: "Prefer bun over npm for this repository".into(),
+            raw_excerpt: Some("raw".into()),
+            keywords: vec!["bun".into()],
+            importance: "high".into(),
+            source_type: Some("manual".into()),
+            source_data: None,
+            related_ids: vec!["memory-2".into()],
+        };
+
+        // The public route always pseudonymises identities. Publishing content
+        // is what makes the graph navigable, and is a separate decision.
+        let readable = super::dashboard_memory_detail(detail.clone(), true, false, &privacy);
+        assert!(readable.id.starts_with("hmac-sha256:"));
+        assert!(readable.related_ids[0].starts_with("hmac-sha256:"));
+        assert_eq!(readable.summary, "Prefer bun over npm for this repository");
+        assert_eq!(readable.keywords, ["bun"]);
+
+        let redacted = super::dashboard_memory_detail(detail, true, true, &privacy);
+        assert!(redacted.id.starts_with("hmac-sha256:"));
+        assert!(redacted.summary.contains("redacted"));
+        assert!(redacted.keywords.is_empty());
+        assert_eq!(redacted.raw_excerpt, None);
+    }
+
+    #[test]
+    fn a_topic_label_is_bounded_and_stripped_of_escapes() {
+        assert_eq!(
+            super::bounded_display_text("context-hzr", 96).as_deref(),
+            Some("context-hzr")
+        );
+        let hostile = super::bounded_display_text("pref\u{1b}[31merences\n", 96).expect("label");
+        assert!(!hostile.contains('\u{1b}'));
+        assert!(!hostile.contains('\n'));
+        assert_eq!(super::bounded_display_text("   ", 96), None);
+        assert_eq!(
+            super::bounded_display_text(&"x".repeat(500), 96)
+                .expect("bounded")
+                .chars()
+                .count(),
+            96
+        );
+    }
+
+    #[test]
+    fn a_workspace_is_named_by_its_directory_and_placed_by_its_path() {
+        // A hundred rows reading `Project 6a1be071` are interchangeable; the
+        // directory name is what the user recognises, and the home-relative
+        // path is what separates two workspaces that share one.
+        assert_eq!(
+            super::workspace_display_name(std::path::Path::new("/Users/a/Programming/hzr"))
+                .as_deref(),
+            Some("hzr")
+        );
+        assert_eq!(
+            super::workspace_display_name(std::path::Path::new("/")),
+            None
+        );
+
+        let home = std::env::var("HOME").unwrap_or_default();
+        if !home.is_empty() {
+            assert_eq!(
+                super::workspace_display_path(
+                    &std::path::PathBuf::from(&home).join("Programming/hzr")
+                )
+                .as_deref(),
+                Some("~/Programming/hzr")
+            );
+        }
+        assert_eq!(
+            super::workspace_display_path(std::path::Path::new("/opt/work/repo")).as_deref(),
+            Some("/opt/work/repo")
+        );
+    }
+
+    #[test]
+    fn withholding_names_falls_back_to_the_pseudonym_and_keeps_identities() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path().join("hzr");
+        std::fs::create_dir_all(&root).expect("workspace root");
+        let registration = WorkspaceRegistration {
+            schema_version: hzr_index::WORKSPACE_REGISTRATION_SCHEMA_VERSION,
+            root: root.clone(),
+            repository_id: "a".repeat(64),
+            worktree_id: "b".repeat(64),
+            git_backed: true,
+            linked_worktree: false,
+            index_directory: directory.path().join("index"),
+            registered_at_ms: 1,
+            last_seen_at_ms: 2,
+        };
+        let observability = crate::observability::ObservabilityStore::new(
+            hzr_core::PrivacyPseudonymizer::from_key("11".repeat(32)).expect("key"),
+        );
+
+        let named = super::dashboard_project(&registration, &observability, true).expect("named");
+        assert_eq!(named.name, "hzr");
+        assert!(named.display_path.is_some());
+
+        let anonymous =
+            super::dashboard_project(&registration, &observability, false).expect("anonymous");
+        assert!(anonymous.name.starts_with("Project "));
+        assert_eq!(anonymous.display_path, None);
+        assert_eq!(
+            anonymous.root, named.root,
+            "the pseudonymous identity is published either way"
+        );
+    }
+
+    #[test]
     fn a_warming_selected_project_prevents_global_ready_state() {
         let project = DashboardProject {
             name: "project".into(),
+            display_path: None,
             root: "project".into(),
             repository_id: "repository".into(),
             worktree_id: "worktree".into(),

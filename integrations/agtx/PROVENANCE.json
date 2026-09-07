@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "component": "hzr-agtx-observer",
+  "optional": true,
+  "upstream": {
+    "project": "agtx",
+    "repository": "https://github.com/fynnfluegge/agtx",
+    "commit": "d307c4c182dff19a65370a50403185cb826f7f49",
+    "tree_sha1": "cf1ec779c06f1cfababd00fc3ad755a3e6fc7c8e",
+    "package_version": "1.0.4",
+    "source_tree_sha256": "bcbf5180014713df6071f9ebe90a999b69ee35272bb01980dd8a706253dac00e",
+    "source_tree_digest_method": "sha256 over the sha256 listing of `find src -type f -name '*.rs' | LC_ALL=C sort`",
+    "cargo_toml_sha256": "f4d7b9a69627855400f9cbe2d9d968b41db3454e044184a10e72a60d3c82796f",
+    "license_file_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  "license_evidence": {
+    "resolved": false,
+    "package_manifest_declares": "MIT",
+    "license_file_contains": "Apache-2.0",
+    "note": "Both labels are recorded as observed source evidence at the pinned commit. They disagree, and this repository does not resolve the disagreement. No dual license is claimed from the mismatch.",
+    "distribution_gate": "Publishing an adapted binary requires establishing the applicable upstream licensing provenance at this exact commit, retaining the applicable license text and notices, marking modifications, and correcting derivative manifest and SBOM metadata. Until that is recorded here as resolved, HZR builds the component locally on request and ships no prebuilt adapted artifact."
+  },
+  "patches": [
+    {
+      "path": "patches/agtx/1.0.4-readonly-observer.patch",
+      "sha256": "c7ad1c32074acc470edca6738ba3dd74e0845c7d62712337ded6052ad197a90d",
+      "identity": "hzr-agtx-readonly-observer-1",
+      "summary": "Adds a read-only store reader, a bounded snapshot exporter and the `hzr-agtx-observer` binary. Makes `Database::hash_path` reachable as `observer_path_hash` and `dep_graph::parse_refs` reachable as `parse_referenced_task_ids`, so the observer shares the store layout and the dependency parse instead of copying them.",
+      "modifies_upstream_behaviour": false,
+      "adds_files": [
+        "src/observer/mod.rs",
+        "src/observer/readonly.rs",
+        "src/observer/tests.rs",
+        "src/bin/hzr-agtx-observer.rs"
+      ],
+      "edits_files": [
+        "src/lib.rs",
+        "src/db/schema.rs",
+        "src/tui/dep_graph.rs"
+      ]
+    }
+  ],
+  "build": {
+    "command": "cargo build --locked --release --bin hzr-agtx-observer",
+    "workspace": "outside the HZR cargo workspace; the component is built from a temporary checkout of the pinned commit",
+    "verified_toolchain": "rustc 1.92.0 (ded5c06cf 2025-12-08); cargo 1.92.0",
+    "verified_platform": "darwin-arm64",
+    "upstream_tests_run": "cargo test --locked --lib (531 passed, 0 failed) at the patched tree",
+    "observer_tests_run": "cargo test --locked --lib observer:: (21 passed, 0 failed)"
+  },
+  "protocol": {
+    "schema_version": 1,
+    "invocation": "hzr-agtx-observer snapshot --request-stdin",
+    "request_max_bytes": 65536,
+    "response_max_bytes": 2097152,
+    "tasks_per_page": 200,
+    "edges_per_page": 1000,
+    "snapshot_consistency": "per_project_transaction"
+  },
+  "safety": {
+    "writes_to_source": "none; SQLITE_OPEN_READ_ONLY plus PRAGMA query_only=ON, no directory creation, no migration, no chmod, no journal-mode change",
+    "network": "none",
+    "starts_processes": "none; no tmux, no coding agent, no MCP server, no web listener",
+    "exports_free_text": "none; titles, descriptions, branches, PR URLs, worktree paths, notification prose, hook message/tool text and transcript_path are all read past or never read"
+  }
+}

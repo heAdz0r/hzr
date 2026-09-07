@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "identity": "hzr-agtx-fixture-pricing-v1",
+  "retrieved_at": "2026-09-01",
+  "entries": [
+    {
+      "version": "fixture-observatory-model-standard-v1",
+      "harness": "fixture",
+      "provider": "fixture-provider",
+      "model": "fixture-model",
+      "method": "standard",
+      "currency": "USD",
+      "effective_at": "2026-01-01",
+      "source_url": "https://example.invalid/hzr/agtx-observatory-fixture",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 2000000,
+        "output_microunits_per_million": 8000000,
+        "cache_read_microunits_per_million": 200000,
+        "cache_write_microunits_per_million": 2500000,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "Synthetic arithmetic fixture from PRD section 9.4. Explicitly not market pricing: it exists so the agent economics tests have exact, stable expected values."
+    },
+    {
+      "version": "fixture-observatory-model-no-output-rate-v1",
+      "harness": "fixture",
+      "provider": "fixture-provider",
+      "model": "fixture-model-no-output-rate",
+      "method": "standard",
+      "currency": "USD",
+      "effective_at": "2026-01-01",
+      "source_url": "https://example.invalid/hzr/agtx-observatory-fixture",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 2000000,
+        "output_microunits_per_million": null,
+        "cache_read_microunits_per_million": null,
+        "cache_write_microunits_per_million": null,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "Missing output rate. A nonzero output count against this entry must produce an unavailable estimate with a reason, never a zero."
+    },
+    {
+      "version": "fixture-observatory-model-eur-v1",
+      "harness": "fixture",
+      "provider": "fixture-provider",
+      "model": "fixture-model-eur",
+      "method": "standard",
+      "currency": "EUR",
+      "effective_at": "2026-01-01",
+      "source_url": "https://example.invalid/hzr/agtx-observatory-fixture",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 2000000,
+        "output_microunits_per_million": 8000000,
+        "cache_read_microunits_per_million": null,
+        "cache_write_microunits_per_million": null,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "Second currency. Subtotals in EUR are reported beside USD and never converted or summed into it."
+    },
+    {
+      "version": "fixture-observatory-model-subscription-v1",
+      "harness": "fixture",
+      "provider": "fixture-provider",
+      "model": "fixture-model",
+      "method": "subscription",
+      "currency": "USD",
+      "effective_at": "2026-01-01",
+      "source_url": "https://example.invalid/hzr/agtx-observatory-fixture",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": null,
+        "output_microunits_per_million": null,
+        "cache_read_microunits_per_million": null,
+        "cache_write_microunits_per_million": null,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "A request-based subscription plan carries no per-token rate. Reported amounts may show; a per-token API estimate must stay unavailable."
+    }
+  ]
+}

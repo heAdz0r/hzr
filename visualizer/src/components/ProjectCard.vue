@@ -26,7 +26,10 @@ function shortIdentity(value: string): string {
       <span class="project-mark"><AppIcon name="folder" :size="20" /></span>
       <span class="project-identity">
         <strong>{{ project.name }}</strong>
-        <span>Identity {{ shortIdentity(project.root) }}</span>
+        <!-- The path is what separates two workspaces with the same basename;
+             the identity digest stays because it is what a support conversation
+             can quote. -->
+        <span>{{ project.display_path ?? `Identity ${shortIdentity(project.root)}` }}</span>
       </span>
       <span class="project-meta">
         <span>{{ project.git_backed ? "Git" : "Path identity" }}</span>

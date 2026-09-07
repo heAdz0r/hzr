@@ -20,7 +20,35 @@ const sessionFilter = ref("");
 const visibleOperations = computed(() =>
   filterActivity(props.operations, routeFilter.value, agentFilter.value, sessionFilter.value),
 );
-const sessions = computed(() => [...new Set(props.operations.map((operation) => operation.session_hash ?? "Unattributed"))]);
+/**
+ * Sessions, described by what they did rather than by their digest.
+ *
+ * The digest is the only stable identity this endpoint publishes — commands and
+ * paths deliberately never leave it — but a truncated hash tells a reader
+ * nothing about which session they are filtering to. The agent that ran it, how
+ * many operations it covers and when it was last seen are all already in this
+ * snapshot, and together they identify a session to a human.
+ */
+const sessions = computed(() => {
+  const groups = new Map<string, { agents: Set<string>; count: number; last: string }>();
+  for (const operation of props.operations) {
+    const key = operation.session_hash ?? "Unattributed";
+    const current = groups.get(key) ?? { agents: new Set<string>(), count: 0, last: operation.timestamp };
+    current.agents.add(operation.agent ?? "Unattributed");
+    current.count += 1;
+    if (Date.parse(operation.timestamp) > Date.parse(current.last)) current.last = operation.timestamp;
+    groups.set(key, current);
+  }
+  return [...groups.entries()]
+    .sort((left, right) => Date.parse(right[1].last) - Date.parse(left[1].last))
+    .map(([id, value], index) => ({
+      id,
+      label:
+        id === "Unattributed"
+          ? "Unattributed operations"
+          : `Session ${index + 1} · ${[...value.agents].join(", ")} · ${value.count} ops · ${operationTime(value.last)}`,
+    }));
+});
 function resetFilters(): void {
   routeFilter.value = "all";
   agentFilter.value = "";
@@ -134,7 +162,7 @@ function routeDetail(operation: DashboardLocalOperation): string {
     <div class="activity-filters">
       <label>Route<select v-model="routeFilter"><option value="all">All routes</option><option value="optimized">Managed</option><option value="raw">Raw</option><option value="native_unaccounted">Native outside ratio</option><option value="regressions">Output growth</option></select></label>
       <label>Agent<select v-model="agentFilter"><option value="">All agents</option><option v-for="agent in recentAgents" :key="agent.agent" :value="agent.agent">{{ agent.agent }}</option></select></label>
-      <label>Session<select v-model="sessionFilter"><option value="">All recent sessions</option><option v-for="session in sessions" :key="session" :value="session">{{ session === 'Unattributed' ? session : session.slice(0, 16) + '…' }}</option></select></label>
+      <label>Session<select v-model="sessionFilter"><option value="">All recent sessions</option><option v-for="session in sessions" :key="session.id" :value="session.id" :title="session.id">{{ session.label }}</option></select></label>
       <button class="ghost-action" type="button" :disabled="routeFilter === 'all' && !agentFilter && !sessionFilter" @click="resetFilters">Reset</button>
     </div>
     <p class="activity-filter-count" role="status">{{ visibleOperations.length }} of {{ operations.length }} recent operations · filters apply to this bounded snapshot</p>

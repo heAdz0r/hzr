@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "source": "fixture-export",
+  "receipts": [
+    {
+      "schema_version": 1,
+      "receipt_id": "rcpt-R1",
+      "source": "fixture-export",
+      "source_record_id": "R1",
+      "observed_at_ms": 1788258120000,
+      "project_path": "{{PROJECT_PATH}}",
+      "host": "claude",
+      "session_id": "01J0SESSIONAAAAAAAAAAAAAA1",
+      "task_id": "7ac30001",
+      "request_id": "req-R1",
+      "provider": "fixture-provider",
+      "harness": "fixture",
+      "model": "fixture-model",
+      "billing_method": "standard",
+      "currency": "USD",
+      "request_input_tokens": 1000,
+      "usage_kind": "request_delta",
+      "usage": {
+        "input_tokens": 1000,
+        "output_tokens": 200,
+        "reasoning_tokens": 50,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cache_write_5m_tokens": 0,
+        "cache_write_1h_tokens": 0
+      },
+      "reported_cost_microunits": 4000
+    },
+    {
+      "schema_version": 1,
+      "receipt_id": "rcpt-R2",
+      "source": "fixture-export",
+      "source_record_id": "R2",
+      "observed_at_ms": 1788258130000,
+      "project_path": "{{PROJECT_PATH}}",
+      "host": "codex",
+      "session_id": "01J0SESSIONBBBBBBBBBBBBBB2",
+      "task_id": "7ac30001",
+      "request_id": "req-R2",
+      "provider": "fixture-provider",
+      "harness": "fixture",
+      "model": "fixture-model",
+      "billing_method": "standard",
+      "currency": "USD",
+      "request_input_tokens": 500,
+      "usage_kind": "request_delta",
+      "usage": {
+        "input_tokens": 500,
+        "output_tokens": 100,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "cache_write_5m_tokens": 0,
+        "cache_write_1h_tokens": 0
+      }
+    }
+  ]
+}

@@ -142,5 +142,30 @@ mod tests {
             fork.snapshot_sha256.as_deref(),
             Some("f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16")
         );
+
+        // 0.8.7: the optional agtx observer is pinned like every other
+        // component, and is explicitly not a runtime the bundle ships.
+        let agtx = manifest
+            .engine
+            .iter()
+            .find(|engine| engine.name == "agtx")
+            .expect("agtx pin");
+        assert_eq!(agtx.version, "1.0.4");
+        assert_eq!(agtx.commit, "d307c4c182dff19a65370a50403185cb826f7f49");
+        assert_eq!(agtx.repository, "https://github.com/fynnfluegge/agtx");
+        assert_eq!(agtx.binary, "hzr-agtx-observer");
+        assert_eq!(agtx.runtime, Some(false));
+        assert_eq!(
+            agtx.source_kind.as_deref(),
+            Some("optional-adapted-source-build")
+        );
+        // The upstream license discrepancy is carried in the pin itself, so a
+        // re-pin cannot quietly resolve it to whichever label is convenient.
+        assert!(agtx.license.contains("unresolved"));
+        assert_eq!(agtx.patches, ["patches/agtx/1.0.4-readonly-observer.patch"]);
+        assert_eq!(
+            agtx.patch_sha256,
+            ["c7ad1c32074acc470edca6738ba3dd74e0845c7d62712337ded6052ad197a90d"]
+        );
     }
 }

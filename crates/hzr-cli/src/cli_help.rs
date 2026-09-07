@@ -54,6 +54,7 @@ Agent tools:
   exec       Rewrite or run a command through policy
   codec      Compile protected response-density transforms
   agent      Run the managed caveman-code agent
+  agents     Observe an enrolled agtx agent board (opt-in)
   mcp        Serve HZR tools over stdio MCP
   tdd        Print the optional HZR Red-Green-Refactor contract
 

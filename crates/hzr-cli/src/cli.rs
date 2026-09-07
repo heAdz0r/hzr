@@ -157,6 +157,14 @@ pub enum Command {
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
     },
+    #[command(
+        about = "Observe an enrolled agtx agent board (opt-in)",
+        long_about = "Install the optional agtx observer component and enroll projects for read-only monitoring. Nothing is downloaded, read or observed until both steps run."
+    )]
+    Agents {
+        #[command(subcommand)]
+        command: AgentsCommand,
+    },
     #[command(about = "Inspect project-only activation mode and enabled workspaces")]
     Activation {
         #[command(subcommand)]
@@ -465,6 +473,103 @@ pub enum McpCommand {
         after_help = MCP_STATUS_AFTER_HELP
     )]
     Status,
+}
+
+#[derive(Debug, Subcommand)]
+
+/// 0.8.7: `hzr agents` — the opt-in agtx Agent Observatory.
+pub enum AgentsCommand {
+    #[command(
+        about = "Manage the optional pinned agtx observer component",
+        long_about = "Install or inspect the optional read-only agtx observer. Installing it enrolls no project; monitoring starts only after `hzr agents enable`."
+    )]
+    Component {
+        #[command(subcommand)]
+        command: AgentsComponentCommand,
+    },
+    #[command(
+        about = "Enroll one existing agtx project for read-only monitoring",
+        long_about = "Enroll one agtx project. HZR observes its board, dependencies and sessions; it never creates a task, starts an agent, advances a phase or answers a permission prompt."
+    )]
+    Enable {
+        /// Canonical worktree of the agtx project to observe
+        #[arg(long, value_name = "DIR")]
+        project: PathBuf,
+        /// The agtx store root holding `index.db` and `projects/`
+        #[arg(long, value_name = "DIR")]
+        agtx_data_dir: PathBuf,
+    },
+    #[command(
+        about = "Stop observing one enrolled project; keep its recorded history",
+        long_about = "Stop reading one enrolled agtx project. HZR reaps its own helper; agtx, tmux and coding agents are untouched, and the history HZR already recorded is retained."
+    )]
+    Disable {
+        #[arg(long, value_name = "DIR")]
+        project: PathBuf,
+    },
+    #[command(about = "Show component identity, enrollments, state and source lag")]
+    Status,
+    #[command(about = "Run one bounded observation through the daemon")]
+    Sync {
+        #[arg(long, value_name = "DIR")]
+        project: PathBuf,
+    },
+    #[command(about = "Import normalized one-sided provider usage records")]
+    Usage {
+        #[command(subcommand)]
+        command: AgentsUsageCommand,
+    },
+    #[command(
+        about = "Link one observed task to one host session explicitly",
+        long_about = "Record an explicit task/session link when automatic hook evidence is absent. An explicit link is the strongest evidence HZR has; it still does not certify provider billing."
+    )]
+    Link {
+        #[arg(long, value_name = "DIR")]
+        project: PathBuf,
+        /// The agtx task id as the source records it
+        #[arg(long, value_name = "ID")]
+        task: String,
+        /// Host session identity, e.g. the coding agent's own session id
+        #[arg(long, value_name = "ID")]
+        session: String,
+        /// Host that owns the session, e.g. `claude-code`
+        #[arg(long, value_name = "HOST")]
+        host: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AgentsComponentCommand {
+    #[command(
+        about = "Build and install the pinned read-only observer",
+        long_about = "Build `hzr-agtx-observer` from the pinned agtx commit plus HZR's audited patch, then install it into HZR's private component directory and verify its reported identity."
+    )]
+    Install {
+        /// Install an already-built observer instead of building one; its identity is still verified
+        #[arg(long, value_name = "PATH")]
+        from_binary: Option<PathBuf>,
+        /// Build from an existing checkout of the pinned commit instead of fetching one
+        #[arg(long, value_name = "DIR")]
+        source_dir: Option<PathBuf>,
+        /// Reinstall even when a compatible component is already present
+        #[arg(long)]
+        force: bool,
+    },
+    #[command(about = "Report the installed component's identity and compatibility")]
+    Status,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AgentsUsageCommand {
+    #[command(
+        about = "Import a bounded batch of normalized per-request usage records",
+        long_about = "Import provider usage as one-sided per-request deltas. Cumulative session snapshots are refused: summing them counts every earlier request in the session again."
+    )]
+    Import {
+        /// Absolute path to a JSON file of at most 1 MiB and 1000 receipts
+        #[arg(long, value_name = "FILE")]
+        file: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]

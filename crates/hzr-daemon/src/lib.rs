@@ -1,4 +1,6 @@
 mod accounting_sweeper;
+// 0.8.7: optional agtx Agent Observatory component lifecycle.
+mod agent_observer;
 mod api;
 mod approval;
 mod auth;

@@ -98,3 +98,20 @@ package = "@juliusbrussee/caveman-code"
 integrity = "sha512-rs7sOI7WCycpBq8qNQ3MQagxfiXAgymfyj2BjPnoaVNNPsgtFK08calhYGEhMkrH0N6prHt0KHJm4AOuuMNEpw=="
 patches = ["integrations/caveman-code/vendor/SHA256SUMS"]
 patch_sha256 = ["dc8d9f6d6b26bee37d6e0ccf563789e4325cfffae3f9910feef8333c52968e46"]
+
+[[engine]]
+name = "agtx"
+version = "1.0.4"
+tag = "source-snapshot"
+commit = "d307c4c182dff19a65370a50403185cb826f7f49"
+repository = "https://github.com/fynnfluegge/agtx"
+# The pinned tree's LICENSE says Apache-2.0 and its Cargo.toml says MIT. Both
+# are recorded as observed evidence in integrations/agtx/PROVENANCE.json; the
+# discrepancy is a gate on publishing an adapted binary, which is why this
+# component is optional and built on request rather than shipped in the bundle.
+license = "MIT (manifest) / Apache-2.0 (LICENSE); unresolved"
+binary = "hzr-agtx-observer"
+runtime = false
+source_kind = "optional-adapted-source-build"
+patches = ["patches/agtx/1.0.4-readonly-observer.patch"]
+patch_sha256 = ["c7ad1c32074acc470edca6738ba3dd74e0845c7d62712337ded6052ad197a90d"]

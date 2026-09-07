@@ -1,0 +1,1711 @@
+diff --git a/src/bin/hzr-agtx-observer.rs b/src/bin/hzr-agtx-observer.rs
+new file mode 100644
+index 0000000..17d46d1
+--- /dev/null
++++ b/src/bin/hzr-agtx-observer.rs
+@@ -0,0 +1,77 @@
++//! `hzr-agtx-observer` — one bounded read-only snapshot of an agtx store.
++//!
++//! Deliberately not `agtx`: this binary has no TUI, no tmux, no MCP server, no
++//! web routes and no update check. It reads one request from stdin, opens the
++//! two SQLite files read-only, prints one JSON object to stdout and exits.
++//! stderr carries stable codes only.
++//!
++//! It never starts an agent, never writes to the store and never contacts the
++//! network.
++
++use agtx::observer;
++use std::io::Write;
++
++fn main() -> std::process::ExitCode {
++    let args: Vec<String> = std::env::args().skip(1).collect();
++    match args.first().map(String::as_str) {
++        Some("--version" | "-V") => {
++            println!(
++                "hzr-agtx-observer {} schema={} patch={}",
++                env!("CARGO_PKG_VERSION"),
++                observer::PROTOCOL_SCHEMA_VERSION,
++                observer::PATCH_IDENTITY
++            );
++            std::process::ExitCode::SUCCESS
++        }
++        Some("snapshot") if args.iter().any(|arg| arg == "--request-stdin") => run_snapshot(),
++        _ => {
++            eprintln!("usage_error");
++            eprintln!("usage: hzr-agtx-observer snapshot --request-stdin");
++            std::process::ExitCode::from(2)
++        }
++    }
++}
++
++fn run_snapshot() -> std::process::ExitCode {
++    let mut stdin = std::io::stdin().lock();
++    let request = match observer::read_request(&mut stdin) {
++        Ok(request) => request,
++        Err(error) => return fail("invalid_request", "unknown", &error),
++    };
++    let now_ms = std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
++        .unwrap_or_default();
++    let response = match observer::snapshot(&request, now_ms) {
++        Ok(response) => response,
++        Err(error) => return fail("snapshot_failed", &request.request_id, &error),
++    };
++    match observer::encode_response(&response) {
++        Ok(encoded) => {
++            let mut stdout = std::io::stdout().lock();
++            if stdout.write_all(encoded.as_bytes()).is_err() || stdout.write_all(b"\n").is_err() {
++                return std::process::ExitCode::from(5);
++            }
++            std::process::ExitCode::SUCCESS
++        }
++        Err(error) => fail("response_too_large", &request.request_id, &error),
++    }
++}
++
++/// Emit a typed refusal on stdout and a bare code on stderr.
++///
++/// The detail line is the error's own message, which is composed here from
++/// path and schema facts only — never from database contents.
++fn fail(code: &str, request_id: &str, error: &anyhow::Error) -> std::process::ExitCode {
++    let payload = observer::SnapshotError {
++        schema_version: observer::PROTOCOL_SCHEMA_VERSION,
++        request_id: request_id.to_string(),
++        error: code.to_string(),
++        detail: error.to_string(),
++    };
++    if let Ok(encoded) = serde_json::to_string(&payload) {
++        println!("{encoded}");
++    }
++    eprintln!("{code}");
++    std::process::ExitCode::from(1)
++}
+diff --git a/src/db/schema.rs b/src/db/schema.rs
+index b32769d..714d2e5 100644
+--- a/src/db/schema.rs
++++ b/src/db/schema.rs
+@@ -88,6 +88,16 @@ impl Database {
+         )
+     }
+ 
++    /// The same hash, for a read-only observer that must locate a project
++    /// database without opening (and therefore creating) one.
++    ///
++    /// Public because the alternative is a second copy of this function in the
++    /// observer, which would drift the first time the scheme changes and send a
++    /// monitor to a file that does not exist.
++    pub fn observer_path_hash(path: &str) -> String {
++        Self::hash_path(path)
++    }
++
+     /// Legacy hash function (DefaultHasher). Used only for migration from pre-SHA256 databases.
+     fn hash_path_legacy(path: &str) -> String {
+         use std::collections::hash_map::DefaultHasher;
+diff --git a/src/lib.rs b/src/lib.rs
+index 53d0aae..432d82e 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -4,6 +4,8 @@ pub mod core;
+ pub mod db;
+ pub mod git;
+ pub mod mcp;
++/// Read-only snapshot export for an external monitor (HZR).
++pub mod observer;
+ pub mod skills;
+ pub mod tmux;
+ pub mod tui;
+diff --git a/src/observer/mod.rs b/src/observer/mod.rs
+new file mode 100644
+index 0000000..5c25a82
+--- /dev/null
++++ b/src/observer/mod.rs
+@@ -0,0 +1,862 @@
++//! Bounded, read-only snapshot export for an external monitor.
++//!
++//! This is the whole of the observer surface: one request in, one snapshot out,
++//! nothing written, nothing started. It exists because a monitor that wants to
++//! *look* at an agtx board should not have to link the TUI, the MCP server or
++//! the web routes — all of which can move a task, start an agent or answer a
++//! permission prompt — and should not have to reimplement the store layout,
++//! the status vocabulary or the `referenced_tasks` parse, all of which would
++//! then silently drift from this repository.
++//!
++//! What is deliberately *not* exported: task descriptions, worktree paths, PR
++//! URLs, notification prose, hook `message`/`tool` text and `transcript_path`.
++//! A monitor gets state, identity and timing, and every path that would let a
++//! reader go looking for more of it stays in the store.
++//!
++//! The one piece of human text that *can* cross, and only when the caller asks
++//! for it, is the task title — with its branch name — because a board labelled
++//! only by opaque ids is unusable: nobody can tell which task is which. It is
++//! bounded, stripped of control characters, and off unless
++//! `include_titles` is set.
++
++pub mod readonly;
++
++use anyhow::{Context, Result};
++use chrono::{DateTime, Utc};
++use rusqlite::OptionalExtension;
++use serde::{Deserialize, Serialize};
++use std::io::Read;
++use std::path::{Path, PathBuf};
++
++use crate::agent::hook_status::{AgentHookStatus, HookState, STATUS_DIR};
++use crate::db::TaskStatus;
++use readonly::{ReadOnlyDb, StoreLayout};
++
++/// Wire protocol major version. A consumer that does not recognise it must
++/// refuse the payload rather than guess at the fields.
++pub const PROTOCOL_SCHEMA_VERSION: u32 = 1;
++
++/// Identity of this patch series, so a consumer can tell an adapted binary from
++/// an upstream one that happens to share a version string.
++pub const PATCH_IDENTITY: &str = "hzr-agtx-readonly-observer-1";
++
++pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
++pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
++pub const MAX_TASKS_PER_PAGE: usize = 200;
++pub const MAX_EDGES_PER_PAGE: usize = 1_000;
++pub const MAX_TASKS_PER_CYCLE: usize = 1_000;
++
++/// Longest identifier or label echoed back. Anything longer is a corrupt or
++/// hostile row, not a task id.
++const MAX_ID_CHARS: usize = 256;
++/// Longest agent/model label echoed back.
++const MAX_LABEL_CHARS: usize = 128;
++/// Longest task title echoed back when the caller asked for titles. Long enough
++/// to recognise a task, short enough that a hostile row cannot flood a reader.
++const MAX_TITLE_CHARS: usize = 160;
++
++/// One bounded request for one enrolled project.
++#[derive(Debug, Clone, Deserialize, Serialize)]
++pub struct SnapshotRequest {
++    pub schema_version: u32,
++    pub request_id: String,
++    /// Explicit store root. Never defaulted from the environment: the caller
++    /// enrolled a path and that is the only one this reads.
++    pub data_root: PathBuf,
++    /// Canonical worktree of the enrolled project.
++    pub project_path: PathBuf,
++    #[serde(default)]
++    pub cursor: Option<String>,
++    #[serde(default)]
++    pub task_limit: Option<usize>,
++    #[serde(default)]
++    pub edge_limit: Option<usize>,
++    /// Read `.agtx/status/<task>.json` under the enrolled worktree. Off means
++    /// board and runtime state only.
++    #[serde(default = "default_true")]
++    pub include_titles: bool,
++    #[serde(default = "default_true")]
++    pub include_hook_status: bool,
++}
++
++fn default_true() -> bool {
++    true
++}
++
++/// What the store could and could not answer.
++#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
++pub struct SnapshotCapabilities {
++    pub tasks: bool,
++    pub task_runtime: bool,
++    pub notifications: bool,
++    pub running_agents: bool,
++    pub hook_status: bool,
++}
++
++/// Board status as stored, normalised through [`TaskStatus`] so an unrecognised
++/// string is reported as unknown instead of being mapped onto a neighbour.
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
++pub struct ObservedTask {
++    pub source_task_id: String,
++    pub source_project_id: String,
++    /// The task's own title, present only when the request asked for titles.
++    /// Bounded and stripped of control characters; still untrusted text, and
++    /// still never HTML.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub title: Option<String>,
++    /// Branch name, on the same terms as the title.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub branch: Option<String>,
++    /// One of the five board columns, or `unknown`.
++    pub board_status: String,
++    /// The raw stored string when it did not resolve to a board column.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub unknown_board_status: Option<String>,
++    pub agent: String,
++    pub cycle: i64,
++    pub referenced_task_ids: Vec<String>,
++    pub has_worktree: bool,
++    pub source_created_at_ms: Option<i64>,
++    pub source_updated_at_ms: Option<i64>,
++    /// Runtime phase published by a live TUI, when present.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub runtime: Option<ObservedRuntime>,
++    /// Agent-reported lifecycle record from the worktree, when present.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub hook: Option<ObservedHook>,
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
++pub struct ObservedRuntime {
++    /// `working | blocked | idle | ready | exited | unknown`.
++    pub phase_status: String,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub unknown_phase_status: Option<String>,
++    /// When the publishing TUI last rewrote the row. A reader must judge
++    /// freshness by this, not by when the snapshot was taken.
++    pub updated_at_ms: Option<i64>,
++    pub pane_changed_at_ms: Option<i64>,
++}
++
++/// Hook evidence, stripped to what correlation needs.
++///
++/// `message`, `tool` and `transcript_path` are read from the record and thrown
++/// away here: the first two are free text an agent wrote, and the third is a
++/// path to a full conversation transcript that nothing downstream is allowed to
++/// open.
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
++pub struct ObservedHook {
++    /// `working | blocked | waiting | ended`.
++    pub state: String,
++    pub recorded_at_ms: i64,
++    pub agent: String,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub session_id: Option<String>,
++    /// True when the record is a `Working` one past the upstream stale
++    /// threshold. Reported, not hidden: only `Working` decays, and a `Blocked`
++    /// record stays authoritative however old it is.
++    pub working_stale: bool,
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
++pub struct ObservedEdge {
++    pub from_source_task_id: String,
++    pub to_source_task_id: String,
++    pub kind: String,
++    /// False when `from` names a task that is not in the store.
++    pub resolved: bool,
++}
++
++/// A structured upstream notification, without its prose.
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
++pub struct ObservedNotification {
++    pub source_notification_id: String,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub source_task_id: Option<String>,
++    /// `phase_completed | task_stuck | unknown`.
++    pub kind: String,
++    pub created_at_ms: Option<i64>,
++}
++
++/// A row from the global `running_agents` table for this project.
++///
++/// `session_name` is not exported. It is a tmux display name built from a
++/// truncated id and a slug of the task title, so it leaks the title and is not
++/// a safe join key.
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
++pub struct ObservedRunningAgent {
++    pub source_task_id: String,
++    pub agent_name: String,
++    pub status: String,
++    pub started_at_ms: Option<i64>,
++}
++
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
++pub struct SnapshotProject {
++    /// Upstream project row id, when the project is registered in `index.db`.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub source_project_id: Option<String>,
++    /// The 16-hex path hash that names the project database file.
++    pub project_path_hash: String,
++}
++
++/// One snapshot page.
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct SnapshotResponse {
++    pub schema_version: u32,
++    pub request_id: String,
++    pub upstream_version: String,
++    pub upstream_commit: String,
++    pub patch_identity: String,
++    /// Fingerprint of the *store generation*. A deleted and recreated store
++    /// produces a different value, which is how a consumer avoids stitching two
++    /// unrelated histories together.
++    pub source_instance_id: String,
++    pub observed_at_ms: i64,
++    pub snapshot_id: String,
++    /// Always `per_project_transaction`: the project database is read in one
++    /// transaction, but `index.db` is a separate file and separate read.
++    pub snapshot_consistency: String,
++    pub project: SnapshotProject,
++    pub capabilities: SnapshotCapabilities,
++    pub tasks: Vec<ObservedTask>,
++    pub edges: Vec<ObservedEdge>,
++    pub notifications: Vec<ObservedNotification>,
++    pub running_agents: Vec<ObservedRunningAgent>,
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub next_cursor: Option<String>,
++    /// True only when this page ended the traversal.
++    pub complete: bool,
++    pub warnings: Vec<SnapshotWarning>,
++}
++
++/// A stable machine code plus a bounded count. Never the offending content.
++#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
++pub struct SnapshotWarning {
++    pub code: String,
++    pub count: u32,
++}
++
++impl SnapshotWarning {
++    fn new(code: &str, count: u32) -> Self {
++        Self {
++            code: code.to_string(),
++            count,
++        }
++    }
++}
++
++/// A refusal, emitted as JSON on stdout with a stable code.
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct SnapshotError {
++    pub schema_version: u32,
++    pub request_id: String,
++    pub error: String,
++    pub detail: String,
++}
++
++fn bounded(value: &str, limit: usize) -> Option<String> {
++    if value.is_empty() || value.chars().count() > limit {
++        return None;
++    }
++    if value.chars().any(|c| c.is_control()) {
++        return None;
++    }
++    Some(value.to_string())
++}
++
++/// Bound one piece of human text without rejecting it outright.
++///
++/// Unlike [`bounded`], a title is prose: it may contain spaces, punctuation and
++/// non-ASCII, so it is *sanitised* rather than refused. Control characters —
++/// including the ANSI escapes a hostile row would use — are removed, and the
++/// result is truncated.
++fn bounded_text(value: &str, limit: usize) -> Option<String> {
++    let cleaned: String = value
++        .chars()
++        .filter(|character| !character.is_control())
++        .take(limit)
++        .collect();
++    let trimmed = cleaned.trim();
++    (!trimmed.is_empty()).then(|| trimmed.to_string())
++}
++
++fn parse_ms(raw: Option<String>) -> Option<i64> {
++    let raw = raw?;
++    DateTime::parse_from_rfc3339(&raw)
++        .ok()
++        .map(|value| value.with_timezone(&Utc).timestamp_millis())
++}
++
++/// Parse the comma-separated `referenced_tasks` field.
++///
++/// Shares [`crate::tui::dep_graph::parse_referenced_task_ids`] with the board so
++/// a monitor and the TUI cannot disagree about what a dependency is. Unlike the
++/// board's graph builder, unknown ids are *kept*: a reference to a task that is
++/// not in the store is evidence of a gap, and dropping it silently is what the
++/// board can afford and a monitor cannot.
++fn referenced_ids(raw: &Option<String>) -> Vec<String> {
++    crate::tui::dep_graph::parse_referenced_task_ids(raw)
++        .into_iter()
++        .filter_map(|id| bounded(&id, MAX_ID_CHARS))
++        .collect()
++}
++
++struct Quarantine {
++    oversize_rows: u32,
++    unparsable_rows: u32,
++}
++
++/// Build one snapshot page. Reads only; never creates, migrates or writes.
++pub fn snapshot(request: &SnapshotRequest, now_ms: i64) -> Result<SnapshotResponse> {
++    if request.schema_version != PROTOCOL_SCHEMA_VERSION {
++        anyhow::bail!(
++            "unsupported request schema_version {} (expected {})",
++            request.schema_version,
++            PROTOCOL_SCHEMA_VERSION
++        );
++    }
++    if !request.data_root.is_absolute() || !request.project_path.is_absolute() {
++        anyhow::bail!("data_root and project_path must be absolute");
++    }
++    let task_limit = request
++        .task_limit
++        .unwrap_or(MAX_TASKS_PER_PAGE)
++        .clamp(1, MAX_TASKS_PER_PAGE);
++    let edge_limit = request
++        .edge_limit
++        .unwrap_or(MAX_EDGES_PER_PAGE)
++        .clamp(1, MAX_EDGES_PER_PAGE);
++
++    let layout = StoreLayout::new(&request.data_root);
++    let project_db_path = layout.project_db(&request.project_path);
++    let project_path_hash = layout.project_path_hash(&request.project_path);
++
++    let mut warnings = Vec::new();
++    let mut capabilities = SnapshotCapabilities::default();
++    let mut quarantine = Quarantine {
++        oversize_rows: 0,
++        unparsable_rows: 0,
++    };
++
++    let db = ReadOnlyDb::open(&project_db_path)
++        .with_context(|| format!("project store {:?} is not readable", project_db_path))?;
++    db.require_columns(
++        "tasks",
++        &[
++            "id",
++            "title",
++            "branch_name",
++            "status",
++            "agent",
++            "project_id",
++            "cycle",
++            "referenced_tasks",
++            "worktree_path",
++            "created_at",
++            "updated_at",
++        ],
++    )?;
++    capabilities.tasks = true;
++    capabilities.task_runtime = db.has_table("task_runtime")?;
++    capabilities.notifications = db.has_table("notifications")?;
++
++    let (tasks, next_cursor, complete) = read_tasks(
++        &db,
++        request.cursor.as_deref(),
++        task_limit,
++        request.include_titles,
++        &mut quarantine,
++    )?;
++
++    let edges = build_edges(&tasks, edge_limit, &mut warnings);
++    let runtime = if capabilities.task_runtime {
++        read_runtime(&db, &tasks)?
++    } else {
++        Vec::new()
++    };
++    let notifications = if capabilities.notifications {
++        read_notifications(&db, task_limit)?
++    } else {
++        Vec::new()
++    };
++
++    let mut tasks = tasks;
++    for (index, entry) in runtime {
++        tasks[index].runtime = Some(entry);
++    }
++
++    if request.include_hook_status {
++        let read = attach_hook_status(&request.project_path, &mut tasks, now_ms, &mut warnings);
++        capabilities.hook_status = read;
++    }
++
++    // `index.db` is a second file and a second read; the pair is not one atomic
++    // snapshot, which is exactly what `snapshot_consistency` says.
++    let (source_project_id, running_agents) = match ReadOnlyDb::open(&layout.index_db()) {
++        Ok(index) => {
++            capabilities.running_agents = index.has_table("running_agents")?;
++            let id = read_project_id(&index, &request.project_path)?;
++            let agents = if capabilities.running_agents {
++                read_running_agents(&index, id.as_deref(), task_limit)?
++            } else {
++                Vec::new()
++            };
++            (id, agents)
++        }
++        Err(_) => {
++            warnings.push(SnapshotWarning::new("index_db_unavailable", 1));
++            (None, Vec::new())
++        }
++    };
++
++    if quarantine.oversize_rows > 0 {
++        warnings.push(SnapshotWarning::new(
++            "quarantined_oversize_row",
++            quarantine.oversize_rows,
++        ));
++    }
++    if quarantine.unparsable_rows > 0 {
++        warnings.push(SnapshotWarning::new(
++            "quarantined_unparsable_row",
++            quarantine.unparsable_rows,
++        ));
++    }
++
++    let source_instance_id = source_generation(&project_path_hash, source_project_id.as_deref());
++    let snapshot_id = format!(
++        "{}:{}:{}",
++        source_instance_id,
++        now_ms,
++        request.cursor.as_deref().unwrap_or("start")
++    );
++
++    Ok(SnapshotResponse {
++        schema_version: PROTOCOL_SCHEMA_VERSION,
++        request_id: request.request_id.clone(),
++        upstream_version: env!("CARGO_PKG_VERSION").to_string(),
++        upstream_commit: option_env!("AGTX_OBSERVER_UPSTREAM_COMMIT")
++            .unwrap_or("unknown")
++            .to_string(),
++        patch_identity: PATCH_IDENTITY.to_string(),
++        source_instance_id,
++        observed_at_ms: now_ms,
++        snapshot_id,
++        snapshot_consistency: "per_project_transaction".to_string(),
++        project: SnapshotProject {
++            source_project_id,
++            project_path_hash,
++        },
++        capabilities,
++        tasks,
++        edges,
++        notifications,
++        running_agents,
++        next_cursor,
++        complete,
++        warnings,
++    })
++}
++
++/// Fingerprint the store generation.
++///
++/// The project row id is a UUID minted when the project was first registered,
++/// so a store that was deleted and rebuilt gets a new one. With no `index.db`
++/// row the fingerprint degrades to the path hash alone and is marked
++/// `nogen`, which a consumer must treat as "cannot prove this is the same
++/// store" rather than as continuity.
++fn source_generation(project_path_hash: &str, source_project_id: Option<&str>) -> String {
++    use sha2::{Digest, Sha256};
++    match source_project_id {
++        Some(id) => {
++            let mut hasher = Sha256::new();
++            hasher.update(project_path_hash.as_bytes());
++            hasher.update([0u8]);
++            hasher.update(id.as_bytes());
++            format!("gen:{}", hex_16(&hasher.finalize()))
++        }
++        None => format!("nogen:{project_path_hash}"),
++    }
++}
++
++fn hex_16(bytes: &[u8]) -> String {
++    bytes
++        .iter()
++        .take(8)
++        .map(|byte| format!("{byte:02x}"))
++        .collect()
++}
++
++#[allow(clippy::type_complexity)]
++fn read_tasks(
++    db: &ReadOnlyDb,
++    cursor: Option<&str>,
++    limit: usize,
++    include_titles: bool,
++    quarantine: &mut Quarantine,
++) -> Result<(Vec<ObservedTask>, Option<String>, bool)> {
++    let after = cursor.unwrap_or("");
++    // `limit + 1` so the page knows whether another one follows without a
++    // second COUNT over the table.
++    let mut statement = db.conn().prepare(
++        "SELECT id, status, agent, project_id, cycle, referenced_tasks, worktree_path,
++                created_at, updated_at, title, branch_name
++           FROM tasks
++          WHERE id > ?1
++          ORDER BY id ASC
++          LIMIT ?2",
++    )?;
++    let rows = statement.query_map(
++        rusqlite::params![after, i64::try_from(limit + 1).unwrap_or(i64::MAX)],
++        |row| {
++            Ok((
++                row.get::<_, String>(0)?,
++                row.get::<_, String>(1)?,
++                row.get::<_, Option<String>>(2)?,
++                row.get::<_, Option<String>>(3)?,
++                row.get::<_, Option<i64>>(4)?,
++                row.get::<_, Option<String>>(5)?,
++                row.get::<_, Option<String>>(6)?,
++                row.get::<_, Option<String>>(7)?,
++                row.get::<_, Option<String>>(8)?,
++                row.get::<_, Option<String>>(9)?,
++                row.get::<_, Option<String>>(10)?,
++            ))
++        },
++    )?;
++
++    let mut tasks = Vec::new();
++    let mut overflow = false;
++    let mut last_id = None;
++    for row in rows {
++        let (id, status, agent, project_id, cycle, refs, worktree, created, updated, title, branch) =
++            match row {
++            Ok(row) => row,
++            Err(_) => {
++                quarantine.unparsable_rows = quarantine.unparsable_rows.saturating_add(1);
++                continue;
++            }
++        };
++        if tasks.len() == limit {
++            overflow = true;
++            break;
++        }
++        let Some(id) = bounded(&id, MAX_ID_CHARS) else {
++            quarantine.oversize_rows = quarantine.oversize_rows.saturating_add(1);
++            continue;
++        };
++        last_id = Some(id.clone());
++        let (board_status, unknown_board_status) = match TaskStatus::from_str(&status) {
++            Some(known) => (known.as_str().to_string(), None),
++            None => (
++                "unknown".to_string(),
++                Some(bounded(&status, MAX_LABEL_CHARS).unwrap_or_else(|| "invalid".into())),
++            ),
++        };
++        tasks.push(ObservedTask {
++            source_task_id: id,
++            title: include_titles
++                .then(|| title.as_deref().and_then(|value| bounded_text(value, MAX_TITLE_CHARS)))
++                .flatten(),
++            branch: include_titles
++                .then(|| branch.as_deref().and_then(|value| bounded_text(value, MAX_LABEL_CHARS)))
++                .flatten(),
++            source_project_id: project_id
++                .as_deref()
++                .and_then(|value| bounded(value, MAX_ID_CHARS))
++                .unwrap_or_default(),
++            board_status,
++            unknown_board_status,
++            agent: agent
++                .as_deref()
++                .and_then(|value| bounded(value, MAX_LABEL_CHARS))
++                .unwrap_or_default(),
++            cycle: cycle.unwrap_or(1),
++            referenced_task_ids: referenced_ids(&refs),
++            has_worktree: worktree.is_some_and(|path| !path.is_empty()),
++            source_created_at_ms: parse_ms(created),
++            source_updated_at_ms: parse_ms(updated),
++            runtime: None,
++            hook: None,
++        });
++    }
++
++    let next_cursor = if overflow { last_id } else { None };
++    Ok((tasks, next_cursor.clone(), next_cursor.is_none()))
++}
++
++fn build_edges(
++    tasks: &[ObservedTask],
++    limit: usize,
++    warnings: &mut Vec<SnapshotWarning>,
++) -> Vec<ObservedEdge> {
++    let known: std::collections::HashSet<&str> = tasks
++        .iter()
++        .map(|task| task.source_task_id.as_str())
++        .collect();
++    let mut edges = Vec::new();
++    let mut dropped = 0u32;
++    for task in tasks {
++        for dependency in &task.referenced_task_ids {
++            if edges.len() >= limit {
++                dropped = dropped.saturating_add(1);
++                continue;
++            }
++            edges.push(ObservedEdge {
++                from_source_task_id: dependency.clone(),
++                to_source_task_id: task.source_task_id.clone(),
++                kind: "depends_on".to_string(),
++                resolved: known.contains(dependency.as_str()),
++            });
++        }
++    }
++    if dropped > 0 {
++        warnings.push(SnapshotWarning::new("edge_limit_reached", dropped));
++    }
++    edges
++}
++
++fn read_runtime(db: &ReadOnlyDb, tasks: &[ObservedTask]) -> Result<Vec<(usize, ObservedRuntime)>> {
++    let mut statement = db.conn().prepare(
++        "SELECT phase_status, pane_changed_at, updated_at FROM task_runtime WHERE task_id = ?1",
++    )?;
++    let mut found = Vec::new();
++    for (index, task) in tasks.iter().enumerate() {
++        let row = statement
++            .query_row([&task.source_task_id], |row| {
++                Ok((
++                    row.get::<_, String>(0)?,
++                    row.get::<_, Option<String>>(1)?,
++                    row.get::<_, Option<String>>(2)?,
++                ))
++            })
++            .optional()?;
++        let Some((phase, pane_changed, updated)) = row else {
++            continue;
++        };
++        let (phase_status, unknown_phase_status) =
++            match crate::db::PhaseStatus::from_str(&phase) {
++                Some(known) => (known.as_str().to_string(), None),
++                None => (
++                    "unknown".to_string(),
++                    Some(bounded(&phase, MAX_LABEL_CHARS).unwrap_or_else(|| "invalid".into())),
++                ),
++            };
++        found.push((
++            index,
++            ObservedRuntime {
++                phase_status,
++                unknown_phase_status,
++                updated_at_ms: parse_ms(updated),
++                pane_changed_at_ms: parse_ms(pane_changed),
++            },
++        ));
++    }
++    Ok(found)
++}
++
++fn read_notifications(db: &ReadOnlyDb, limit: usize) -> Result<Vec<ObservedNotification>> {
++    // Read-only by construction: upstream's own consumer deletes rows as it
++    // drains them, and doing that here would steal events from the orchestrator.
++    let columns = db.columns("notifications")?;
++    if !columns.iter().any(|column| column == "kind") {
++        return Ok(Vec::new());
++    }
++    let mut statement = db.conn().prepare(
++        "SELECT id, task_id, kind, created_at
++           FROM notifications
++          WHERE kind IS NOT NULL
++          ORDER BY created_at DESC
++          LIMIT ?1",
++    )?;
++    let rows = statement.query_map(
++        [i64::try_from(limit).unwrap_or(i64::from(u16::MAX))],
++        |row| {
++            Ok((
++                row.get::<_, String>(0)?,
++                row.get::<_, Option<String>>(1)?,
++                row.get::<_, Option<String>>(2)?,
++                row.get::<_, Option<String>>(3)?,
++            ))
++        },
++    )?;
++    let mut notifications = Vec::new();
++    for row in rows.flatten() {
++        let (id, task_id, kind, created) = row;
++        let Some(id) = bounded(&id, MAX_ID_CHARS) else {
++            continue;
++        };
++        let kind = kind
++            .as_deref()
++            .and_then(crate::db::NotificationKind::from_str)
++            .map(|kind| kind.as_str().to_string())
++            .unwrap_or_else(|| "unknown".to_string());
++        notifications.push(ObservedNotification {
++            source_notification_id: id,
++            source_task_id: task_id.as_deref().and_then(|id| bounded(id, MAX_ID_CHARS)),
++            kind,
++            created_at_ms: parse_ms(created),
++        });
++    }
++    Ok(notifications)
++}
++
++fn read_project_id(index: &ReadOnlyDb, project_path: &Path) -> Result<Option<String>> {
++    if !index.has_table("projects")? {
++        return Ok(None);
++    }
++    let id = index
++        .conn()
++        .query_row(
++            "SELECT id FROM projects WHERE path = ?1",
++            [project_path.to_string_lossy().as_ref()],
++            |row| row.get::<_, String>(0),
++        )
++        .optional()?;
++    Ok(id.as_deref().and_then(|id| bounded(id, MAX_ID_CHARS)))
++}
++
++fn read_running_agents(
++    index: &ReadOnlyDb,
++    project_id: Option<&str>,
++    limit: usize,
++) -> Result<Vec<ObservedRunningAgent>> {
++    let Some(project_id) = project_id else {
++        return Ok(Vec::new());
++    };
++    let mut statement = index.conn().prepare(
++        "SELECT task_id, agent_name, status, started_at
++           FROM running_agents
++          WHERE project_id = ?1
++          ORDER BY started_at DESC
++          LIMIT ?2",
++    )?;
++    let rows = statement.query_map(
++        rusqlite::params![project_id, i64::try_from(limit).unwrap_or(i64::from(u16::MAX))],
++        |row| {
++            Ok((
++                row.get::<_, String>(0)?,
++                row.get::<_, String>(1)?,
++                row.get::<_, String>(2)?,
++                row.get::<_, Option<String>>(3)?,
++            ))
++        },
++    )?;
++    let mut agents = Vec::new();
++    for (task_id, agent_name, status, started) in rows.flatten() {
++        let Some(task_id) = bounded(&task_id, MAX_ID_CHARS) else {
++            continue;
++        };
++        agents.push(ObservedRunningAgent {
++            source_task_id: task_id,
++            agent_name: bounded(&agent_name, MAX_LABEL_CHARS).unwrap_or_default(),
++            status: bounded(&status, MAX_LABEL_CHARS).unwrap_or_else(|| "unknown".into()),
++            started_at_ms: parse_ms(started),
++        });
++    }
++    Ok(agents)
++}
++
++/// Read `.agtx/status/<task>.json` for each task, under the enrolled worktree only.
++///
++/// The path is composed here from the enrolled root and the task id — never
++/// taken from a database column — and the file must be a regular file, not a
++/// symlink, within the fixed status directory. A task id that is not a plain
++/// file-name component is refused outright.
++fn attach_hook_status(
++    worktree: &Path,
++    tasks: &mut [ObservedTask],
++    now_ms: i64,
++    warnings: &mut Vec<SnapshotWarning>,
++) -> bool {
++    let status_dir = worktree.join(STATUS_DIR);
++    if !status_dir.is_dir() {
++        return false;
++    }
++    let now_secs = now_ms / 1_000;
++    let mut refused = 0u32;
++    for task in tasks.iter_mut() {
++        if !is_safe_component(&task.source_task_id) {
++            refused = refused.saturating_add(1);
++            continue;
++        }
++        let path = status_dir.join(format!("{}.json", task.source_task_id));
++        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
++            continue;
++        };
++        if !metadata.is_file() {
++            refused = refused.saturating_add(1);
++            continue;
++        }
++        if metadata.len() > crate::agent::hook_status::MAX_PAYLOAD_BYTES as u64 {
++            refused = refused.saturating_add(1);
++            continue;
++        }
++        let Ok(raw) = std::fs::read_to_string(&path) else {
++            continue;
++        };
++        let Ok(status) = serde_json::from_str::<AgentHookStatus>(&raw) else {
++            refused = refused.saturating_add(1);
++            continue;
++        };
++        task.hook = Some(observed_hook(&status, now_secs));
++    }
++    if refused > 0 {
++        warnings.push(SnapshotWarning::new("hook_status_refused", refused));
++    }
++    true
++}
++
++fn observed_hook(status: &AgentHookStatus, now_secs: i64) -> ObservedHook {
++    let state = match status.state {
++        HookState::Working => "working",
++        HookState::Blocked => "blocked",
++        HookState::Waiting => "waiting",
++        HookState::Ended => "ended",
++    };
++    ObservedHook {
++        state: state.to_string(),
++        recorded_at_ms: status.ts.saturating_mul(1_000),
++        agent: bounded(&status.agent, MAX_LABEL_CHARS).unwrap_or_default(),
++        session_id: status
++            .session_id
++            .as_deref()
++            .and_then(|id| bounded(id, MAX_ID_CHARS)),
++        working_stale: status.state == HookState::Working
++            && now_secs.saturating_sub(status.ts) > crate::agent::hook_status::HOOK_STALE_SECS,
++    }
++}
++
++fn is_safe_component(value: &str) -> bool {
++    !value.is_empty()
++        && value.len() <= MAX_ID_CHARS
++        && value
++            .chars()
++            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
++        && value != "."
++        && value != ".."
++}
++
++/// Read one bounded JSON request from stdin.
++pub fn read_request(reader: &mut impl Read) -> Result<SnapshotRequest> {
++    let mut buffer = Vec::new();
++    let read = reader
++        .take((MAX_REQUEST_BYTES + 1) as u64)
++        .read_to_end(&mut buffer)?;
++    if read > MAX_REQUEST_BYTES {
++        anyhow::bail!("request exceeds {MAX_REQUEST_BYTES} bytes");
++    }
++    serde_json::from_slice(&buffer).context("request is not valid JSON")
++}
++
++/// Serialise a response, refusing to emit one over the wire cap.
++pub fn encode_response(response: &SnapshotResponse) -> Result<String> {
++    let encoded = serde_json::to_string(response)?;
++    if encoded.len() > MAX_RESPONSE_BYTES {
++        anyhow::bail!("response exceeds {MAX_RESPONSE_BYTES} bytes");
++    }
++    Ok(encoded)
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/src/observer/readonly.rs b/src/observer/readonly.rs
+new file mode 100644
+index 0000000..2cb11df
+--- /dev/null
++++ b/src/observer/readonly.rs
+@@ -0,0 +1,193 @@
++//! Read-only access to an agtx store.
++//!
++//! [`Database::open_project`] and [`Database::open_global`] are constructors for
++//! the *owner* of a store: they create directories, rename a legacy database,
++//! set `journal_mode=WAL`, chmod the file and run `init_*_schema`, which issues
++//! `CREATE TABLE`/`ALTER TABLE`. None of that is acceptable for an outside
++//! observer, which must be able to look at a live store without changing a byte
++//! of it.
++//!
++//! This module is the read-only counterpart. It opens exactly the files that
++//! already exist, with `SQLITE_OPEN_READ_ONLY`, `PRAGMA query_only=ON` and
++//! extension loading left disabled, and it introspects the schema instead of
++//! migrating it. `immutable=1` is deliberately *not* used: the store may have a
++//! live WAL writer, and an immutable open would read a stale or torn database.
++
++use anyhow::{Context, Result};
++use rusqlite::{Connection, OpenFlags};
++use std::path::{Path, PathBuf};
++
++/// SQLite busy timeout for observer reads. Short on purpose: a monitor must
++/// never hold the writer up, and a contended read is better retried on the next
++/// poll than blocked on here.
++pub const READ_BUSY_TIMEOUT_MS: u32 = 250;
++
++/// A read-only handle on one agtx SQLite file.
++pub struct ReadOnlyDb {
++    conn: Connection,
++    path: PathBuf,
++}
++
++impl ReadOnlyDb {
++    /// Open an existing database file read-only.
++    ///
++    /// Fails when the file does not exist — `SQLITE_OPEN_READ_ONLY` without
++    /// `SQLITE_OPEN_CREATE` cannot bring one into being, which is the point.
++    pub fn open(path: &Path) -> Result<Self> {
++        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
++        let conn = Connection::open_with_flags(path, flags)
++            .with_context(|| format!("Failed to open {:?} read-only", path))?;
++        conn.busy_timeout(std::time::Duration::from_millis(u64::from(
++            READ_BUSY_TIMEOUT_MS,
++        )))?;
++        // `query_only` makes any accidental write a runtime error rather than a
++        // silent mutation of somebody else's board.
++        conn.pragma_update(None, "query_only", "ON")?;
++        Ok(Self {
++            conn,
++            path: path.to_path_buf(),
++        })
++    }
++
++    pub fn conn(&self) -> &Connection {
++        &self.conn
++    }
++
++    pub fn path(&self) -> &Path {
++        &self.path
++    }
++
++    /// True when `table` exists in this database.
++    pub fn has_table(&self, table: &str) -> Result<bool> {
++        let count: i64 = self.conn.query_row(
++            "SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table','view') AND name = ?1",
++            [table],
++            |row| row.get(0),
++        )?;
++        Ok(count > 0)
++    }
++
++    /// Column names of `table`, empty when the table is absent.
++    pub fn columns(&self, table: &str) -> Result<Vec<String>> {
++        if !self.has_table(table)? {
++            return Ok(Vec::new());
++        }
++        let mut statement = self
++            .conn
++            .prepare(&format!("PRAGMA table_info(\"{}\")", table.replace('"', "")))?;
++        let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
++        let mut columns = Vec::new();
++        for column in rows {
++            columns.push(column?);
++        }
++        Ok(columns)
++    }
++
++    /// Verify that `table` exists and carries every column in `required`.
++    pub fn require_columns(&self, table: &str, required: &[&str]) -> Result<()> {
++        let columns = self.columns(table)?;
++        if columns.is_empty() {
++            anyhow::bail!("required table `{table}` is missing");
++        }
++        for column in required {
++            if !columns.iter().any(|found| found == column) {
++                anyhow::bail!("required column `{table}.{column}` is missing");
++            }
++        }
++        Ok(())
++    }
++}
++
++/// Resolve the two store files without creating anything.
++///
++/// Mirrors [`crate::db::Database`]'s layout exactly — `index.db` beside a
++/// `projects/<sha256-path-hash>.db` — by calling the same hash function, so a
++/// reader and the owner can never disagree about which file a project is in.
++pub struct StoreLayout {
++    pub data_root: PathBuf,
++}
++
++impl StoreLayout {
++    pub fn new(data_root: impl Into<PathBuf>) -> Self {
++        Self {
++            data_root: data_root.into(),
++        }
++    }
++
++    pub fn index_db(&self) -> PathBuf {
++        self.data_root.join("index.db")
++    }
++
++    pub fn project_db(&self, project_path: &Path) -> PathBuf {
++        let hash = crate::db::Database::observer_path_hash(&project_path.to_string_lossy());
++        self.data_root.join("projects").join(format!("{hash}.db"))
++    }
++
++    pub fn project_path_hash(&self, project_path: &Path) -> String {
++        crate::db::Database::observer_path_hash(&project_path.to_string_lossy())
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use rusqlite::params;
++
++    fn seed(path: &Path) {
++        let conn = Connection::open(path).unwrap();
++        conn.execute_batch(
++            "CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL);
++             CREATE TABLE task_runtime (task_id TEXT PRIMARY KEY);",
++        )
++        .unwrap();
++        conn.execute("INSERT INTO tasks VALUES (?1, ?2)", params!["a", "backlog"])
++            .unwrap();
++    }
++
++    #[test]
++    fn open_rejects_a_missing_file() {
++        let dir = tempfile::tempdir().unwrap();
++        let missing = dir.path().join("absent.db");
++        assert!(ReadOnlyDb::open(&missing).is_err());
++        assert!(!missing.exists(), "a read-only open must not create the file");
++    }
++
++    #[test]
++    fn writes_are_refused() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("p.db");
++        seed(&path);
++        let db = ReadOnlyDb::open(&path).unwrap();
++        assert!(db.conn().execute("DELETE FROM tasks", []).is_err());
++        assert!(
++            db.conn()
++                .execute_batch("CREATE TABLE x (a TEXT)")
++                .is_err()
++        );
++    }
++
++    #[test]
++    fn introspection_reports_missing_tables_and_columns() {
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("p.db");
++        seed(&path);
++        let db = ReadOnlyDb::open(&path).unwrap();
++        assert!(db.has_table("tasks").unwrap());
++        assert!(!db.has_table("notifications").unwrap());
++        assert!(db.require_columns("tasks", &["id", "status"]).is_ok());
++        assert!(db.require_columns("tasks", &["id", "cycle"]).is_err());
++        assert!(db.require_columns("notifications", &["id"]).is_err());
++    }
++
++    #[test]
++    fn layout_matches_the_owner_hash() {
++        let layout = StoreLayout::new("/tmp/root");
++        let project = Path::new("/tmp/work/repo");
++        let expected = crate::db::Database::observer_path_hash("/tmp/work/repo");
++        assert_eq!(
++            layout.project_db(project),
++            Path::new("/tmp/root/projects").join(format!("{expected}.db"))
++        );
++        assert_eq!(layout.index_db(), Path::new("/tmp/root/index.db"));
++    }
++}
+diff --git a/src/observer/tests.rs b/src/observer/tests.rs
+new file mode 100644
+index 0000000..650204b
+--- /dev/null
++++ b/src/observer/tests.rs
+@@ -0,0 +1,487 @@
++use super::*;
++use rusqlite::{params, Connection};
++use std::path::PathBuf;
++
++struct Store {
++    _dir: tempfile::TempDir,
++    root: PathBuf,
++    project: PathBuf,
++}
++
++fn store() -> Store {
++    let dir = tempfile::tempdir().unwrap();
++    let root = dir.path().join("data");
++    let project = dir.path().join("work/repo");
++    std::fs::create_dir_all(root.join("projects")).unwrap();
++    std::fs::create_dir_all(&project).unwrap();
++    Store {
++        _dir: dir,
++        root,
++        project,
++    }
++}
++
++/// Build a store the way the owner would, then hand the observer nothing but
++/// the paths. The schema statements are copied from `init_*_schema` rather than
++/// called through it, because calling it would need a writable `Database`, and
++/// the whole point of these tests is that nothing here holds one.
++fn seed(store: &Store) -> Connection {
++    let layout = readonly::StoreLayout::new(&store.root);
++    let conn = Connection::open(layout.project_db(&store.project)).unwrap();
++    conn.execute_batch(
++        r#"
++        CREATE TABLE tasks (
++            id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
++            status TEXT NOT NULL DEFAULT 'backlog', agent TEXT NOT NULL,
++            project_id TEXT NOT NULL, session_name TEXT, worktree_path TEXT,
++            branch_name TEXT, pr_number INTEGER, pr_url TEXT, plugin TEXT,
++            cycle INTEGER NOT NULL DEFAULT 1, referenced_tasks TEXT,
++            escalation_note TEXT, base_branch TEXT,
++            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
++        );
++        CREATE TABLE task_runtime (
++            task_id TEXT PRIMARY KEY, phase_status TEXT NOT NULL,
++            pane_hash TEXT, pane_changed_at TEXT, updated_at TEXT NOT NULL
++        );
++        CREATE TABLE notifications (
++            id TEXT PRIMARY KEY, message TEXT NOT NULL, created_at TEXT NOT NULL,
++            task_id TEXT, kind TEXT
++        );
++        "#,
++    )
++    .unwrap();
++    conn
++}
++
++fn insert_task(conn: &Connection, id: &str, status: &str, refs: Option<&str>) {
++    conn.execute(
++        "INSERT INTO tasks (id, title, status, agent, project_id, worktree_path, cycle,
++                            referenced_tasks, created_at, updated_at)
++         VALUES (?1, ?2, ?3, 'claude', 'proj-1', '/work/repo', 2, ?4,
++                 '2026-09-01T10:00:00+00:00', '2026-09-01T11:00:00+00:00')",
++        params![id, format!("secret title for {id}"), status, refs],
++    )
++    .unwrap();
++}
++
++fn seed_index(store: &Store) -> Connection {
++    let layout = readonly::StoreLayout::new(&store.root);
++    let conn = Connection::open(layout.index_db()).unwrap();
++    conn.execute_batch(
++        r#"
++        CREATE TABLE projects (
++            id TEXT PRIMARY KEY, name TEXT NOT NULL, path TEXT NOT NULL UNIQUE,
++            github_url TEXT, default_agent TEXT, last_opened TEXT NOT NULL
++        );
++        CREATE TABLE running_agents (
++            session_name TEXT PRIMARY KEY, project_id TEXT NOT NULL, task_id TEXT NOT NULL,
++            agent_name TEXT NOT NULL, started_at TEXT NOT NULL, status TEXT NOT NULL
++        );
++        "#,
++    )
++    .unwrap();
++    conn.execute(
++        "INSERT INTO projects VALUES ('proj-1','repo',?1,NULL,NULL,'2026-09-01T09:00:00+00:00')",
++        params![store.project.to_string_lossy()],
++    )
++    .unwrap();
++    conn
++}
++
++fn request(store: &Store) -> SnapshotRequest {
++    SnapshotRequest {
++        schema_version: PROTOCOL_SCHEMA_VERSION,
++        request_id: "req-1".into(),
++        data_root: store.root.clone(),
++        project_path: store.project.clone(),
++        cursor: None,
++        task_limit: None,
++        edge_limit: None,
++        include_titles: false,
++        include_hook_status: true,
++    }
++}
++
++const NOW_MS: i64 = 1_788_000_000_000;
++
++#[test]
++fn titles_are_withheld_unless_asked_for_and_sanitised_when_they_are() {
++    let store = store();
++    let conn = seed(&store);
++    conn.execute(
++        "INSERT INTO tasks (id, title, status, agent, project_id, worktree_path, cycle,
++                            branch_name, created_at, updated_at)
++         VALUES ('task-a', ?1, 'running', 'claude', 'proj-1', '/work/repo', 1, 'feat/x',
++                 '2026-09-01T10:00:00+00:00', '2026-09-01T11:00:00+00:00')",
++        params![format!("Wire the retry budget\u{1b}[31m\n{}", "x".repeat(400))],
++    )
++    .unwrap();
++    seed_index(&store);
++    drop(conn);
++
++    let withheld = snapshot(&request(&store), NOW_MS).unwrap();
++    assert_eq!(withheld.tasks[0].title, None);
++    assert_eq!(withheld.tasks[0].branch, None);
++
++    let mut with_titles = request(&store);
++    with_titles.include_titles = true;
++    let shown = snapshot(&with_titles, NOW_MS).unwrap();
++    let title = shown.tasks[0].title.clone().expect("title");
++    assert!(title.starts_with("Wire the retry budget"));
++    assert!(!title.contains('\u{1b}'), "escapes are stripped, not echoed");
++    assert!(!title.contains('\n'));
++    assert!(title.chars().count() <= 160, "titles are bounded");
++    assert_eq!(shown.tasks[0].branch.as_deref(), Some("feat/x"));
++}
++
++#[test]
++fn snapshot_exports_state_without_any_prose() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "running", None);
++    insert_task(&conn, "task-b", "review", Some("task-a, task-missing"));
++    seed_index(&store);
++    drop(conn);
++
++    let snapshot = snapshot(&request(&store), NOW_MS).unwrap();
++    let encoded = encode_response(&snapshot).unwrap();
++    assert!(
++        !encoded.contains("secret title"),
++        "titles must never leave the store"
++    );
++    assert!(!encoded.contains("/work/repo"), "no worktree paths on the wire");
++    assert_eq!(snapshot.tasks.len(), 2);
++    assert_eq!(snapshot.tasks[0].board_status, "running");
++    assert_eq!(snapshot.tasks[0].cycle, 2);
++    assert!(snapshot.tasks[0].has_worktree);
++    assert_eq!(snapshot.snapshot_consistency, "per_project_transaction");
++    assert!(snapshot.complete);
++    assert_eq!(snapshot.project.source_project_id.as_deref(), Some("proj-1"));
++    assert!(snapshot.source_instance_id.starts_with("gen:"));
++
++    let mut edges = snapshot.edges.clone();
++    edges.sort_by(|a, b| a.from_source_task_id.cmp(&b.from_source_task_id));
++    assert_eq!(edges.len(), 2);
++    assert_eq!(edges[0].from_source_task_id, "task-a");
++    assert!(edges[0].resolved);
++    assert_eq!(edges[1].from_source_task_id, "task-missing");
++    assert!(!edges[1].resolved, "an unknown reference stays visible");
++}
++
++#[test]
++fn repeated_snapshots_leave_the_store_byte_identical() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "running", None);
++    seed_index(&store);
++    drop(conn);
++
++    let layout = readonly::StoreLayout::new(&store.root);
++    let db_path = layout.project_db(&store.project);
++    let before = std::fs::read(&db_path).unwrap();
++    let schema_before = schema_of(&db_path);
++
++    for _ in 0..5 {
++        snapshot(&request(&store), NOW_MS).unwrap();
++    }
++
++    assert_eq!(before, std::fs::read(&db_path).unwrap());
++    assert_eq!(schema_before, schema_of(&db_path));
++    assert!(
++        !db_path.with_extension("db-wal").exists(),
++        "an observer read must not create a WAL for a rollback-journal store"
++    );
++}
++
++fn schema_of(path: &std::path::Path) -> Vec<String> {
++    let conn = Connection::open(path).unwrap();
++    let mut statement = conn
++        .prepare("SELECT sql FROM sqlite_master ORDER BY name")
++        .unwrap();
++    let rows = statement
++        .query_map([], |row| row.get::<_, Option<String>>(0))
++        .unwrap();
++    rows.flatten().flatten().collect()
++}
++
++#[test]
++fn a_missing_store_is_an_error_and_creates_nothing() {
++    let store = store();
++    let layout = readonly::StoreLayout::new(&store.root);
++    assert!(snapshot(&request(&store), NOW_MS).is_err());
++    assert!(!layout.project_db(&store.project).exists());
++    assert!(!layout.index_db().exists());
++}
++
++#[test]
++fn an_unsupported_schema_is_refused_rather_than_migrated() {
++    let store = store();
++    let layout = readonly::StoreLayout::new(&store.root);
++    let conn = Connection::open(layout.project_db(&store.project)).unwrap();
++    conn.execute_batch("CREATE TABLE tasks (id TEXT PRIMARY KEY, status TEXT NOT NULL)")
++        .unwrap();
++    drop(conn);
++
++    let error = snapshot(&request(&store), NOW_MS).unwrap_err().to_string();
++    assert!(error.contains("required column"), "{error}");
++    assert_eq!(
++        schema_of(&layout.project_db(&store.project)).len(),
++        1,
++        "a refusal must not add tables"
++    );
++}
++
++#[test]
++fn a_live_wal_writer_is_readable() {
++    let store = store();
++    let writer = seed(&store);
++    writer.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
++    insert_task(&writer, "task-a", "planning", None);
++    seed_index(&store);
++    // Keep the writer connection open: this is the "agtx is running" case.
++    let snapshot = snapshot(&request(&store), NOW_MS).unwrap();
++    assert_eq!(snapshot.tasks.len(), 1);
++    writer.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").ok();
++}
++
++#[test]
++fn pagination_is_bounded_and_continues_from_the_cursor() {
++    let store = store();
++    let conn = seed(&store);
++    for index in 0..5 {
++        insert_task(&conn, &format!("task-{index:02}"), "backlog", None);
++    }
++    seed_index(&store);
++    drop(conn);
++
++    let mut request = request(&store);
++    request.task_limit = Some(2);
++    let first = snapshot(&request, NOW_MS).unwrap();
++    assert_eq!(first.tasks.len(), 2);
++    assert!(!first.complete);
++    assert_eq!(first.next_cursor.as_deref(), Some("task-01"));
++
++    request.cursor = first.next_cursor.clone();
++    let second = snapshot(&request, NOW_MS).unwrap();
++    assert_eq!(second.tasks[0].source_task_id, "task-02");
++    assert!(!second.complete);
++
++    request.cursor = Some("task-03".into());
++    let last = snapshot(&request, NOW_MS).unwrap();
++    assert_eq!(last.tasks.len(), 1);
++    assert!(last.complete);
++}
++
++#[test]
++fn an_unknown_status_stays_unknown() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "shipping", None);
++    seed_index(&store);
++    drop(conn);
++
++    let snapshot = snapshot(&request(&store), NOW_MS).unwrap();
++    assert_eq!(snapshot.tasks[0].board_status, "unknown");
++    assert_eq!(
++        snapshot.tasks[0].unknown_board_status.as_deref(),
++        Some("shipping")
++    );
++}
++
++#[test]
++fn runtime_rows_carry_their_own_age() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "running", None);
++    conn.execute(
++        "INSERT INTO task_runtime VALUES ('task-a','working','abc',
++            '2026-09-01T10:30:00+00:00','2026-09-01T10:31:00+00:00')",
++        [],
++    )
++    .unwrap();
++    seed_index(&store);
++    drop(conn);
++
++    let snapshot = snapshot(&request(&store), NOW_MS).unwrap();
++    let runtime = snapshot.tasks[0].runtime.clone().unwrap();
++    assert_eq!(runtime.phase_status, "working");
++    assert_eq!(runtime.updated_at_ms, Some(1_788_258_660_000));
++    assert_ne!(
++        runtime.updated_at_ms,
++        Some(snapshot.observed_at_ms),
++        "a fresh read must not refresh a stale row"
++    );
++}
++
++#[test]
++fn hook_records_drop_prose_and_transcripts_and_flag_stale_working() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "running", None);
++    insert_task(&conn, "task-b", "running", None);
++    seed_index(&store);
++    drop(conn);
++
++    let dir = store.project.join(STATUS_DIR);
++    std::fs::create_dir_all(&dir).unwrap();
++    std::fs::write(
++        dir.join("task-a.json"),
++        serde_json::json!({
++            "ts": NOW_MS / 1000 - 10,
++            "state": "blocked",
++            "session_id": "sess-777",
++            "transcript_path": "/home/user/.claude/transcripts/secret.jsonl",
++            "message": "May I delete everything?",
++            "tool": "Bash",
++            "agent": "claude"
++        })
++        .to_string(),
++    )
++    .unwrap();
++    std::fs::write(
++        dir.join("task-b.json"),
++        serde_json::json!({
++            "ts": NOW_MS / 1000 - 4_000,
++            "state": "working",
++            "agent": "claude"
++        })
++        .to_string(),
++    )
++    .unwrap();
++
++    let snapshot = snapshot(&request(&store), NOW_MS).unwrap();
++    let encoded = encode_response(&snapshot).unwrap();
++    assert!(!encoded.contains("transcripts"));
++    assert!(!encoded.contains("May I delete"));
++    assert!(!encoded.contains("Bash"));
++
++    let a = snapshot.tasks[0].hook.clone().unwrap();
++    assert_eq!(a.state, "blocked");
++    assert_eq!(a.session_id.as_deref(), Some("sess-777"));
++    assert!(!a.working_stale, "Blocked never decays");
++
++    let b = snapshot.tasks[1].hook.clone().unwrap();
++    assert_eq!(b.state, "working");
++    assert!(b.working_stale, "Working past the guard is flagged, not dropped");
++}
++
++#[test]
++fn a_hostile_task_id_never_escapes_the_status_directory() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "../../../../etc/passwd", "running", None);
++    seed_index(&store);
++    drop(conn);
++
++    std::fs::create_dir_all(store.project.join(STATUS_DIR)).unwrap();
++    let snapshot = snapshot(&request(&store), NOW_MS).unwrap();
++    assert!(snapshot.tasks[0].hook.is_none());
++    assert!(
++        snapshot
++            .warnings
++            .iter()
++            .any(|warning| warning.code == "hook_status_refused")
++    );
++}
++
++#[test]
++fn a_symlinked_status_file_is_refused() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "running", None);
++    seed_index(&store);
++    drop(conn);
++
++    let dir = store.project.join(STATUS_DIR);
++    std::fs::create_dir_all(&dir).unwrap();
++    let outside = store.project.join("outside.json");
++    std::fs::write(&outside, "{\"ts\":1,\"state\":\"working\",\"agent\":\"x\"}").unwrap();
++    #[cfg(unix)]
++    std::os::unix::fs::symlink(&outside, dir.join("task-a.json")).unwrap();
++    #[cfg(not(unix))]
++    return;
++
++    let snapshot = snapshot(&request(&store), NOW_MS).unwrap();
++    assert!(snapshot.tasks[0].hook.is_none());
++}
++
++#[test]
++fn notifications_are_read_without_being_drained() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "review", None);
++    conn.execute(
++        "INSERT INTO notifications VALUES ('n1','phase artifact appeared',
++            '2026-09-01T10:45:00+00:00','task-a','phase_completed')",
++        [],
++    )
++    .unwrap();
++    seed_index(&store);
++
++    let snapshot = snapshot(&request(&store), NOW_MS).unwrap();
++    assert_eq!(snapshot.notifications.len(), 1);
++    assert_eq!(snapshot.notifications[0].kind, "phase_completed");
++    let remaining: i64 = conn
++        .query_row("SELECT COUNT(*) FROM notifications", [], |row| row.get(0))
++        .unwrap();
++    assert_eq!(remaining, 1, "reading must not consume upstream events");
++    let encoded = encode_response(&snapshot).unwrap();
++    assert!(!encoded.contains("phase artifact appeared"));
++}
++
++#[test]
++fn a_recreated_store_reports_a_new_generation() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "backlog", None);
++    let index = seed_index(&store);
++    drop(conn);
++    let first = snapshot(&request(&store), NOW_MS).unwrap().source_instance_id;
++
++    index
++        .execute("UPDATE projects SET id = 'proj-2' WHERE id = 'proj-1'", [])
++        .unwrap();
++    let second = snapshot(&request(&store), NOW_MS).unwrap().source_instance_id;
++    assert_ne!(first, second);
++}
++
++#[test]
++fn a_missing_index_degrades_instead_of_failing() {
++    let store = store();
++    let conn = seed(&store);
++    insert_task(&conn, "task-a", "backlog", None);
++    drop(conn);
++
++    let snapshot = snapshot(&request(&store), NOW_MS).unwrap();
++    assert!(!snapshot.capabilities.running_agents);
++    assert!(snapshot.source_instance_id.starts_with("nogen:"));
++    assert!(
++        snapshot
++            .warnings
++            .iter()
++            .any(|warning| warning.code == "index_db_unavailable")
++    );
++}
++
++#[test]
++fn a_wrong_protocol_version_is_refused() {
++    let store = store();
++    seed(&store);
++    let mut request = request(&store);
++    request.schema_version = 2;
++    assert!(snapshot(&request, NOW_MS).is_err());
++}
++
++#[test]
++fn oversize_requests_are_refused() {
++    let payload = vec![b'x'; MAX_REQUEST_BYTES + 1];
++    assert!(read_request(&mut payload.as_slice()).is_err());
++}
++
++#[test]
++fn relative_paths_are_refused() {
++    let store = store();
++    let mut request = request(&store);
++    request.data_root = PathBuf::from("relative/root");
++    assert!(snapshot(&request, NOW_MS).is_err());
++}
+diff --git a/src/tui/dep_graph.rs b/src/tui/dep_graph.rs
+index 0a39c8f..430073c 100644
+--- a/src/tui/dep_graph.rs
++++ b/src/tui/dep_graph.rs
+@@ -61,7 +61,10 @@ impl DepGraph {
+ }
+ 
+ /// Parse the comma-separated `referenced_tasks` field into dependency IDs.
+-fn parse_refs(refs: &Option<String>) -> Vec<String> {
++///
++/// Public so an out-of-process reader resolves dependencies with the board's
++/// own rule rather than its own guess at the separator and trimming.
++pub fn parse_referenced_task_ids(refs: &Option<String>) -> Vec<String> {
+     match refs.as_deref() {
+         Some(s) => s
+             .split(',')
+@@ -96,7 +99,7 @@ pub fn build_dep_graph(tasks: &[Task], deps_satisfied: impl Fn(&Task) -> bool) -
+     // For each task: its in-graph dependency ids.
+     let mut deps: HashMap<String, Vec<String>> = HashMap::new();
+     for task in tasks {
+-        let refs: Vec<String> = parse_refs(&task.referenced_tasks)
++        let refs: Vec<String> = parse_referenced_task_ids(&task.referenced_tasks)
+             .into_iter()
+             .filter(|r| known.contains(r.as_str()))
+             .collect();
+@@ -239,7 +242,7 @@ mod tests {
+     /// referenced task in `tasks` is Review/Done (missing => satisfied).
+     fn satisfied_fn(tasks: Vec<Task>) -> impl Fn(&Task) -> bool {
+         move |t: &Task| {
+-            let refs = parse_refs(&t.referenced_tasks);
++            let refs = parse_referenced_task_ids(&t.referenced_tasks);
+             refs.iter().all(|rid| {
+                 tasks.iter().find(|x| &x.id == rid).map_or(true, |dep| {
+                     matches!(dep.status, TaskStatus::Review | TaskStatus::Done)

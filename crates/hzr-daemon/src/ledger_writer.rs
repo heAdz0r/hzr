@@ -9,11 +9,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hzr_core::{
-    DetailedOperationAttribution, FidelityAllowance, FidelitySessionUsage, Ledger, LedgerError,
-    LedgerRecord, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-    PricingCatalog, PrivacyPseudonymizer, PrivacySafeFidelityOperation, ProviderEconomicReceipt,
-    ProviderReceiptRecordResult, privacy_identity_hash,
+    AgentApplyContext, AgentGap, AgentSnapshotApplied, AgentSourceIdentity,
+    AgentUsageImportOutcome, DetailedOperationAttribution, FidelityAllowance, FidelitySessionUsage,
+    Ledger, LedgerError, LedgerRecord, OperationAttribution, OperationChannel,
+    OperationMeasurement, OperationRoute, PricingCatalog, PrivacyPseudonymizer,
+    PrivacySafeFidelityOperation, ProviderEconomicReceipt, ProviderReceiptRecordResult,
+    privacy_identity_hash,
 };
+use hzr_protocol::agents::{AgentSnapshotCapabilities, AgentSnapshotEnvelope, AgentUsageReceiptV1};
 use hzr_protocol::{
     AccountingChannel, EngineAccountingReceipt, FidelityReconcileReceipt,
     FidelityUnknownResolution, TraceId,
@@ -61,6 +64,41 @@ enum WriteCommand {
     PolicyEvent {
         record: Box<PolicyEventRecord>,
         reply: oneshot::Sender<Result<(), LedgerError>>,
+    },
+    /// 0.8.7: agtx Agent Observatory writes go through the same single writer,
+    /// so an observation can never contend with an accounting write.
+    AgentSnapshot {
+        identity: Box<AgentSourceIdentity>,
+        envelope: Box<AgentSnapshotEnvelope>,
+        capabilities: Box<AgentSnapshotCapabilities>,
+        max_observation_interval_ms: i64,
+        reply: oneshot::Sender<Result<AgentSnapshotApplied, LedgerError>>,
+    },
+    AgentGapRecord {
+        project_hash: String,
+        source_key: String,
+        code: String,
+        observed_at_ms: i64,
+        reply: oneshot::Sender<Result<(), LedgerError>>,
+    },
+    AgentUsageImport {
+        receipts: Vec<AgentUsageReceiptV1>,
+        now_ms: u64,
+        reply: oneshot::Sender<Result<AgentUsageImportOutcome, LedgerError>>,
+    },
+    AgentSessionLink {
+        identity: Box<AgentSourceIdentity>,
+        source_task_id: String,
+        source_project_id: String,
+        host: String,
+        session_hash: String,
+        now_ms: i64,
+        reply: oneshot::Sender<Result<(bool, bool), LedgerError>>,
+    },
+    AgentPrune {
+        retention_days: u32,
+        now_ms: i64,
+        reply: oneshot::Sender<Result<u64, LedgerError>>,
     },
     FidelityUsage {
         session_id: String,
@@ -544,6 +582,8 @@ impl LedgerWriter {
         std::thread::Builder::new()
             .name("hzr-ledger-writer".into())
             .spawn(move || {
+                // Transactional agent-projection writes need `&mut Ledger`.
+                let mut ledger = ledger;
                 let mut pending_fidelity = initial_pending.pending;
                 let fidelity_blocked = initial_pending.integrity_issues > 0;
                 while let Some(command) = receiver.blocking_recv() {
@@ -597,6 +637,92 @@ impl LedgerWriter {
                                 replacement_family: record.replacement_family.as_deref(),
                                 command_identity: record.command_identity.as_deref(),
                             }));
+                        }
+                        WriteCommand::AgentSnapshot {
+                            identity,
+                            envelope,
+                            capabilities,
+                            max_observation_interval_ms,
+                            reply,
+                        } => {
+                            let pseudonym = |value: &str| {
+                                actor_privacy.hash("session", value)
+                            };
+                            let result = ledger
+                                .agent_source_upsert(
+                                    &identity,
+                                    &capabilities,
+                                    &envelope.upstream_version,
+                                    &envelope.upstream_commit,
+                                    &envelope.patch_identity,
+                                    envelope.observed_at_ms,
+                                )
+                                .and_then(|_| {
+                                    ledger.agent_apply_snapshot(
+                                        &identity,
+                                        &envelope,
+                                        &AgentApplyContext {
+                                            session_pseudonym: &pseudonym,
+                                            max_observation_interval_ms,
+                                        },
+                                    )
+                                });
+                            let _ = reply.send(result);
+                        }
+                        WriteCommand::AgentGapRecord {
+                            project_hash,
+                            source_key,
+                            code,
+                            observed_at_ms,
+                            reply,
+                        } => {
+                            let _ = reply.send(ledger.agent_record_gap(AgentGap {
+                                project_hash: &project_hash,
+                                source_key: &source_key,
+                                code: &code,
+                                observed_at_ms,
+                            }));
+                        }
+                        WriteCommand::AgentUsageImport {
+                            receipts,
+                            now_ms,
+                            reply,
+                        } => {
+                            let project_hash =
+                                |path: &str| privacy_identity_hash("project", path);
+                            let pseudonym =
+                                |value: &str| actor_privacy.hash("session", value);
+                            let _ = reply.send(ledger.agent_import_usage(
+                                &receipts,
+                                &project_hash,
+                                &pseudonym,
+                                now_ms,
+                            ));
+                        }
+                        WriteCommand::AgentSessionLink {
+                            identity,
+                            source_task_id,
+                            source_project_id,
+                            host,
+                            session_hash,
+                            now_ms,
+                            reply,
+                        } => {
+                            let _ = reply.send(ledger.agent_link_session(
+                                &identity,
+                                &source_task_id,
+                                &source_project_id,
+                                &host,
+                                &session_hash,
+                                now_ms,
+                            ));
+                        }
+                        WriteCommand::AgentPrune {
+                            retention_days,
+                            now_ms,
+                            reply,
+                        } => {
+                            let _ = reply.send(ledger.agent_prune_events(retention_days, now_ms));
                         }
                         WriteCommand::FidelityUsage {
                             session_id,
@@ -1049,6 +1175,114 @@ impl LedgerWriter {
             .map_err(|_| LedgerWriterError::Unavailable)?;
         result.await.map_err(|_| LedgerWriterError::Unavailable)??;
         Ok(())
+    }
+
+    /// Apply one observed agtx snapshot page through the single ledger writer.
+    pub async fn record_agent_snapshot(
+        &self,
+        identity: AgentSourceIdentity,
+        envelope: AgentSnapshotEnvelope,
+        max_observation_interval_ms: i64,
+    ) -> Result<AgentSnapshotApplied, LedgerWriterError> {
+        let (reply, result) = oneshot::channel();
+        let capabilities = envelope.capabilities.clone();
+        self.sender
+            .send(WriteCommand::AgentSnapshot {
+                identity: Box::new(identity),
+                envelope: Box::new(envelope),
+                capabilities: Box::new(capabilities),
+                max_observation_interval_ms,
+                reply,
+            })
+            .await
+            .map_err(|_| LedgerWriterError::Unavailable)?;
+        Ok(result.await.map_err(|_| LedgerWriterError::Unavailable)??)
+    }
+
+    /// Record a failed or interrupted observation as a visible gap.
+    pub async fn record_agent_gap(
+        &self,
+        project_hash: String,
+        source_key: String,
+        code: String,
+        observed_at_ms: i64,
+    ) -> Result<(), LedgerWriterError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriteCommand::AgentGapRecord {
+                project_hash,
+                source_key,
+                code,
+                observed_at_ms,
+                reply,
+            })
+            .await
+            .map_err(|_| LedgerWriterError::Unavailable)?;
+        result.await.map_err(|_| LedgerWriterError::Unavailable)??;
+        Ok(())
+    }
+
+    /// Validate and atomically commit one normalized usage import batch.
+    pub async fn import_agent_usage(
+        &self,
+        receipts: Vec<AgentUsageReceiptV1>,
+        now_ms: u64,
+    ) -> Result<AgentUsageImportOutcome, LedgerWriterError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriteCommand::AgentUsageImport {
+                receipts,
+                now_ms,
+                reply,
+            })
+            .await
+            .map_err(|_| LedgerWriterError::Unavailable)?;
+        Ok(result.await.map_err(|_| LedgerWriterError::Unavailable)??)
+    }
+
+    /// Record an explicit user-supplied task/session link.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn link_agent_session(
+        &self,
+        identity: AgentSourceIdentity,
+        source_task_id: String,
+        source_project_id: String,
+        host: String,
+        session_hash: String,
+        now_ms: i64,
+    ) -> Result<(bool, bool), LedgerWriterError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriteCommand::AgentSessionLink {
+                identity: Box::new(identity),
+                source_task_id,
+                source_project_id,
+                host,
+                session_hash,
+                now_ms,
+                reply,
+            })
+            .await
+            .map_err(|_| LedgerWriterError::Unavailable)?;
+        Ok(result.await.map_err(|_| LedgerWriterError::Unavailable)??)
+    }
+
+    /// Prune observed agent events past the retention window.
+    pub async fn prune_agent_events(
+        &self,
+        retention_days: u32,
+        now_ms: i64,
+    ) -> Result<u64, LedgerWriterError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriteCommand::AgentPrune {
+                retention_days,
+                now_ms,
+                reply,
+            })
+            .await
+            .map_err(|_| LedgerWriterError::Unavailable)?;
+        Ok(result.await.map_err(|_| LedgerWriterError::Unavailable)??)
     }
 
     pub async fn fidelity_session_usage(

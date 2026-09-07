@@ -462,6 +462,66 @@ pub fn price_avoided_input_tokens(
     })
 }
 
+/// Identity and price of one *single-sided* usage observation.
+///
+/// [`price_receipt`] prices a baseline/delivered pair and reports a saving.
+/// An imported provider request has no baseline, and inventing a zero one
+/// would turn "we observed one request" into "we saved its whole cost". This
+/// returns the amount alone, with the catalog identity that produced it, so an
+/// estimate stays reproducible after the catalog moves on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SingleUsagePrice {
+    pub currency: String,
+    pub microunits: u64,
+    pub price_table_identity: String,
+    pub entry_version: String,
+}
+
+/// The catalog coordinates of one usage observation.
+#[derive(Clone, Copy, Debug)]
+pub struct SingleUsageRequest<'a> {
+    pub harness: &'a str,
+    pub provider: &'a str,
+    pub model: &'a str,
+    pub method: &'a str,
+    /// Actual priced-request input, not the model's context capacity.
+    pub request_input_tokens: Option<u64>,
+    pub usage: ProviderTokenUsage,
+    pub currency: &'a str,
+}
+
+/// Price one normalized usage observation against the catalog.
+///
+/// Every failure mode — unknown model, unknown method, a nonzero dimension with
+/// no rate, a missing context tier, an expired or stale entry, arithmetic
+/// overflow — comes back as a [`BillingError`] with its reason. None of them is
+/// a zero.
+pub fn price_single_usage(
+    catalog: &PricingCatalog,
+    request: SingleUsageRequest<'_>,
+) -> Result<SingleUsagePrice, BillingError> {
+    let entry = find_entry(
+        catalog,
+        request.harness,
+        request.provider,
+        request.model,
+        request.method,
+        request.request_input_tokens,
+    )?;
+    if entry.currency != request.currency {
+        return Err(BillingError::PricingUnavailable(format!(
+            "catalog currency {} does not match reported currency {}",
+            entry.currency, request.currency
+        )));
+    }
+    Ok(SingleUsagePrice {
+        currency: entry.currency.clone(),
+        microunits: price_usage(request.usage, entry.rates)?,
+        price_table_identity: catalog.identity.clone(),
+        entry_version: entry.version.clone(),
+    })
+}
+
 pub fn receipt_payload_hash(receipt: &ProviderEconomicReceipt) -> Result<String, BillingError> {
     let bytes = serde_json::to_vec(receipt)
         .map_err(|error| BillingError::InvalidReceipt(error.to_string()))?;

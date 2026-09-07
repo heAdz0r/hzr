@@ -30,6 +30,8 @@ export interface MemoryEdge {
 export type MemoryRetrieval = "hybrid" | "fts5" | "unavailable";
 
 export interface DashboardMemoryObservatory {
+  /** True when this install publishes real topic names and memory content. */
+  content_published?: boolean;
   state: DashboardState;
   project: string | null;
   retrieval: MemoryRetrieval;
@@ -280,6 +282,8 @@ export interface DashboardProjectArtifacts {
 
 export interface DashboardProject {
   name: string;
+  /** Home-relative workspace path; absent when this install withholds names. */
+  display_path?: string | null;
   root: string;
   repository_id: string;
   worktree_id: string;

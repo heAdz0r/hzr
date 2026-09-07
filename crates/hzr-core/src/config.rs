@@ -19,6 +19,8 @@ pub struct Config {
     pub activation: ActivationConfig,
     pub instructions: InstructionConfig,
     pub billing: BillingConfig,
+    // 0.8.7: opt-in monitoring integrations live in the one configuration loader.
+    pub integrations: IntegrationsConfig,
 }
 
 impl Default for Config {
@@ -34,6 +36,7 @@ impl Default for Config {
             activation: ActivationConfig::default(),
             instructions: InstructionConfig::default(),
             billing: BillingConfig::default(),
+            integrations: IntegrationsConfig::default(), // 0.8.7
         }
     }
 }
@@ -242,6 +245,152 @@ impl Config {
                     .is_some_and(|tokens| tokens == 0)
             {
                 return Err(ConfigError::InvalidBilling);
+            }
+        }
+        self.integrations.agtx.validate()?; // 0.8.7
+        Ok(())
+    }
+}
+
+/// Optional, off-by-default monitoring integrations.
+///
+/// A section that is absent from the file is the same as one that is present
+/// and disabled: no download, no process, no store read, no listener.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct IntegrationsConfig {
+    pub agtx: AgtxConfig,
+}
+
+/// Enrollment and cadence for the agtx Agent Observatory.
+///
+/// `enabled` is the global switch and each project carries its own; **both**
+/// must be true before anything is read. The global one flips to true on the
+/// first successful `hzr agents enable`, and back to false when the last
+/// enrollment goes away, so "the integration is on" can never mean "on for a
+/// project the user never enrolled".
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgtxConfig {
+    pub enabled: bool,
+    pub poll_interval_ms: u64,
+    /// Age past which observed source state is presented as stale rather than live.
+    pub stale_after_ms: u64,
+    /// Observed-event retention, 1–365 days. Task projections and usage receipt
+    /// deduplication keys outlive it.
+    pub history_retention_days: u32,
+    /// Publish the source's own task titles and branch names alongside the
+    /// pseudonyms.
+    ///
+    /// On by default because a board labelled only by opaque ids cannot be
+    /// used: nobody can tell which task is which, and every screenshot and
+    /// support question becomes a guessing game. Turning it off returns the
+    /// dashboard to pseudonyms only, which is the right choice for a machine
+    /// whose loopback surface other people can reach.
+    pub publish_task_titles: bool,
+    pub projects: Vec<AgtxProject>,
+}
+
+impl Default for AgtxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_interval_ms: 5_000,
+            stale_after_ms: 30_000,
+            history_retention_days: 30,
+            publish_task_titles: true,
+            projects: Vec::new(),
+        }
+    }
+}
+
+/// One explicitly enrolled agtx project.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgtxProject {
+    /// Canonical worktree root. Absolute, and never taken from a browser.
+    pub project_path: PathBuf,
+    /// The agtx store root holding `index.db` and `projects/`.
+    pub data_dir: PathBuf,
+    #[serde(default = "crate::config::default_true")]
+    pub enabled: bool,
+}
+
+pub(crate) fn default_true() -> bool {
+    true
+}
+
+impl AgtxConfig {
+    pub const MIN_POLL_INTERVAL_MS: u64 = 1_000;
+    pub const MAX_POLL_INTERVAL_MS: u64 = 300_000;
+    pub const MAX_PROJECTS: usize = 64;
+
+    /// Enrollments that are individually enabled, when the integration is on.
+    ///
+    /// Empty whenever the global flag is off, so a caller cannot accidentally
+    /// poll a project on the strength of its own flag alone.
+    #[must_use]
+    pub fn active_projects(&self) -> Vec<&AgtxProject> {
+        if !self.enabled {
+            return Vec::new();
+        }
+        self.projects
+            .iter()
+            .filter(|project| project.enabled)
+            .collect()
+    }
+
+    #[must_use]
+    pub fn find(&self, project_path: &Path) -> Option<&AgtxProject> {
+        self.projects
+            .iter()
+            .find(|project| project.project_path == project_path)
+    }
+
+    /// Add or replace one enrollment and turn the integration on.
+    pub fn enroll(&mut self, project: AgtxProject) {
+        self.projects
+            .retain(|existing| existing.project_path != project.project_path);
+        self.projects.push(project);
+        self.projects
+            .sort_by(|left, right| left.project_path.cmp(&right.project_path));
+        self.enabled = true;
+    }
+
+    /// Disable one enrollment. The row is kept so re-enabling is one flag, and
+    /// the global switch follows the last remaining enabled project.
+    pub fn disable_project(&mut self, project_path: &Path) -> bool {
+        let mut changed = false;
+        for project in &mut self.projects {
+            if project.project_path == project_path && project.enabled {
+                project.enabled = false;
+                changed = true;
+            }
+        }
+        if !self.projects.iter().any(|project| project.enabled) {
+            self.enabled = false;
+        }
+        changed
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !(Self::MIN_POLL_INTERVAL_MS..=Self::MAX_POLL_INTERVAL_MS)
+            .contains(&self.poll_interval_ms)
+            || self.stale_after_ms < self.poll_interval_ms
+            || !(1..=365).contains(&self.history_retention_days)
+            || self.projects.len() > Self::MAX_PROJECTS
+        {
+            return Err(ConfigError::InvalidAgtxIntegration);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for project in &self.projects {
+            if !project.project_path.is_absolute()
+                || !project.data_dir.is_absolute()
+                || project.project_path.as_os_str().len() > 4096
+                || project.data_dir.as_os_str().len() > 4096
+                || !seen.insert(project.project_path.clone())
+            {
+                return Err(ConfigError::InvalidAgtxIntegration);
             }
         }
         Ok(())
@@ -510,6 +659,25 @@ pub struct PrivacyConfig {
     pub telemetry: bool,
     pub raw_retention_seconds: u64,
     pub redact_secrets: bool,
+    /// Show each registered workspace by its directory name on the local
+    /// dashboard.
+    ///
+    /// On by default: the dashboard binds to loopback and shows the user their
+    /// own machine, and a list of a hundred `Project 6a1be071` rows cannot be
+    /// used for anything — nobody can tell which one is which. Turning it off
+    /// returns the registry to pseudonyms only, which is the right choice when
+    /// somebody else can reach that loopback port. Identity hashes are
+    /// published either way; this only adds the name beside them.
+    pub publish_workspace_names: bool,
+    /// Show real ICM topic names and memory content on the local dashboard.
+    ///
+    /// On by default, for the same reason as workspace names: a graph of
+    /// `Memory topic 14` nodes whose every leaf reads "content is redacted"
+    /// cannot be navigated to anything, so it answers no question at all. The
+    /// data is the user's own and the endpoint is loopback-only. Turning it off
+    /// restores the redacted projection, which is the right choice when
+    /// somebody else can reach that port.
+    pub publish_memory_content: bool,
 }
 
 impl Default for PrivacyConfig {
@@ -518,6 +686,8 @@ impl Default for PrivacyConfig {
             telemetry: false,
             raw_retention_seconds: 0,
             redact_secrets: true,
+            publish_workspace_names: true,
+            publish_memory_content: true,
         }
     }
 }
@@ -554,6 +724,10 @@ pub enum ConfigError {
         "billing selection requires bounded ASCII identifiers, input/cache_read basis, positive request_input_tokens when set, and an absolute pricing_file"
     )]
     InvalidBilling,
+    #[error(
+        "[integrations.agtx] requires a 1000-300000 ms poll interval, stale_after_ms at or above it, 1-365 retention days, and at most 64 distinct absolute project enrollments"
+    )]
+    InvalidAgtxIntegration,
 }
 
 #[cfg(unix)]

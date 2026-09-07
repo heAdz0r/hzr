@@ -6,6 +6,10 @@ use hzr_codec::Transform;
 use hzr_core::{Config, EngineManifest, ProviderEconomicReceipt, ProviderReceiptRecordResult};
 use hzr_exec::{ExecJobSnapshot, ExecJobState, ExecutionOutcome, RtkRewriteOutcome};
 use hzr_memory::{MemoryRecord, MemoryTransport};
+use hzr_protocol::agents::{
+    AgentLinkRequest, AgentLinkResponse, AgentSyncRequest, AgentSyncResponse,
+    AgentUsageImportRequest, AgentUsageImportResponse, AgentsStatusResponse,
+};
 use hzr_protocol::{
     CodecApiRequest, ContextPlanApiRequest, ContextPlanApiResponse, ErrorResponse, ExecApiRequest,
     ExecApprovalApiRequest, ExecJobApiRequest, ExecStartApiRequest, FidelityReconcileApiRequest,
@@ -335,6 +339,38 @@ impl DaemonClient {
         receipt: &ProviderEconomicReceipt,
     ) -> Result<ProviderReceiptRecordResult, ClientError> {
         self.post("/v1/billing/receipts", receipt).await
+    }
+
+    // 0.8.7: agtx Agent Observatory control. Every one of these is a mutation
+    // or an operator read, so all of them go through the authenticated routes.
+    pub async fn agents_status(&self) -> Result<AgentsStatusResponse, ClientError> {
+        self.get("/v1/agents/status").await
+    }
+
+    /// Make a running daemon adopt the enrollment set the CLI just wrote.
+    pub async fn agents_reload(&self) -> Result<AgentsStatusResponse, ClientError> {
+        self.post("/v1/agents/reload", &serde_json::json!({})).await
+    }
+
+    pub async fn agents_sync(
+        &self,
+        request: &AgentSyncRequest,
+    ) -> Result<AgentSyncResponse, ClientError> {
+        self.post("/v1/agents/sync", request).await
+    }
+
+    pub async fn agents_link(
+        &self,
+        request: &AgentLinkRequest,
+    ) -> Result<AgentLinkResponse, ClientError> {
+        self.post("/v1/agents/links", request).await
+    }
+
+    pub async fn agents_usage_import(
+        &self,
+        request: &AgentUsageImportRequest,
+    ) -> Result<AgentUsageImportResponse, ClientError> {
+        self.post("/v1/agents/usage/import", request).await
     }
 
     async fn get<T: DeserializeOwned>(&self, path: &'static str) -> Result<T, ClientError> {

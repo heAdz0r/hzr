@@ -17,21 +17,28 @@ pub use billing::{
     BUILTIN_PRICING_CATALOG_IDENTITY, BillingError, EconomicAmount, EconomicScopeSummary,
     PricingCatalog, PricingEntry, ProviderEconomicReceipt, ProviderReceiptRecordResult,
     ProviderTokenUsage, PublicEstimate, RawPublicEstimate, RawPublicEstimateRequest,
-    ReceiptProvenance, SessionEconomicSummary, TokenRates, builtin_pricing_catalog,
-    load_pricing_catalog, price_avoided_input_tokens, price_receipt, receipt_payload_hash,
-    validate_receipt,
+    ReceiptProvenance, SessionEconomicSummary, SingleUsagePrice, SingleUsageRequest, TokenRates,
+    builtin_pricing_catalog, load_pricing_catalog, price_avoided_input_tokens, price_receipt,
+    price_single_usage, receipt_payload_hash, validate_receipt,
 };
 pub use bounded_file::{BoundedFileError, read_bounded_regular_file};
 pub use budget::{BudgetPlanner, FusionInput};
 pub use config::{
-    ActivationConfig, ActivationMode, BillingConfig, Config, ConfigError, ConfigPaths,
-    DaemonConfig, EnabledWorkspace, EngineConfig, InstructionConfig, InstructionScope,
-    PrivacyConfig,
+    ActivationConfig, ActivationMode, AgtxConfig, AgtxProject, BillingConfig, Config, ConfigError,
+    ConfigPaths, DaemonConfig, EnabledWorkspace, EngineConfig, InstructionConfig, InstructionScope,
+    IntegrationsConfig, PrivacyConfig,
 };
 pub use engines::{EngineManifest, EnginePin, locked_engines};
 pub use host_grant::{
     ambient_host_grants_execution, ambient_session_id, inspect_ambient_host_grant,
     normalize_session_id,
+};
+pub use ledger::agents::{
+    AgentApplyContext, AgentCoverageCounts, AgentEconomicsQuery, AgentEdgeRow, AgentEventRow,
+    AgentGap, AgentSessionLinkRow, AgentSnapshotApplied, AgentSourceIdentity, AgentSourceRow,
+    AgentTaskRow, AgentUsageAggregate, AgentUsageImportOutcome, AgentUsageRow,
+    MAX_USAGE_RECEIPTS_PER_IMPORT, SUPPORTED_USAGE_KIND, TOMBSTONE_COMPLETE_SCANS,
+    agent_task_label,
 };
 pub use ledger::{
     BypassSummary, BypassTool, BypassWindow, CURRENT_ACCOUNTING_POLICY_VERSION,

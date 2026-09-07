@@ -14,8 +14,9 @@ HZR_BUILD_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-build.XXXXXX")"
 HZR_COMPONENT_CACHE="${HZR_COMPONENT_CACHE:-${HZR_REPOSITORY_ROOT}/target/hzr-component-cache}"
 HZR_DOWNLOAD_CACHE="${HZR_DOWNLOAD_CACHE:-${HZR_COMPONENT_CACHE}/downloads}"
 HZR_WARM_COMPONENT_CACHE_ONLY="${HZR_WARM_COMPONENT_CACHE_ONLY:-0}"
+HZR_BUILD_AGTX_OBSERVER="${HZR_BUILD_AGTX_OBSERVER:-0}"
 HZR_BUILD_STAGE=0
-HZR_BUILD_STAGE_TOTAL=9
+HZR_BUILD_STAGE_TOTAL=10
 
 hzr_build_stage() {
   HZR_BUILD_STAGE=$((HZR_BUILD_STAGE + 1))
@@ -185,6 +186,12 @@ if [[ "${HZR_WARM_COMPONENT_CACHE_ONLY}" != 0 && \
   exit 2
 fi
 
+if [[ "${HZR_BUILD_AGTX_OBSERVER}" != 0 && \
+  "${HZR_BUILD_AGTX_OBSERVER}" != 1 ]]; then
+  echo "HZR_BUILD_AGTX_OBSERVER must be 0 or 1" >&2
+  exit 2
+fi
+
 hzr_build_stage "Verifying fork-core provenance and parity"
 "${HZR_REPOSITORY_ROOT}/scripts/verify-fork-core.sh"
 
@@ -196,7 +203,9 @@ mkdir -p \
   "${HZR_PROVENANCE_OUTPUT}/fork-core" \
   "${HZR_PROVENANCE_OUTPUT}/skills/hzr-tdd/references" \
   "${HZR_PROVENANCE_OUTPUT}/patches/grepai" \
-  "${HZR_PROVENANCE_OUTPUT}/patches/icm"
+  "${HZR_PROVENANCE_OUTPUT}/patches/icm" \
+  "${HZR_PROVENANCE_OUTPUT}/patches/agtx" \
+  "${HZR_PROVENANCE_OUTPUT}/integrations/agtx"
 
 HZR_NODE_VERSION="22.17.1"
 case "$(uname -s)-$(uname -m)" in
@@ -348,6 +357,33 @@ fi
 if [[ "${HZR_WARM_COMPONENT_CACHE_ONLY}" == 1 ]]; then
   echo "HZR component cache warmed for ${HZR_PLATFORM}"
   exit 0
+fi
+
+hzr_build_stage "Building the optional agtx observer (flag-gated)"
+if [[ "${HZR_BUILD_AGTX_OBSERVER}" == 1 ]]; then
+  HZR_AGTX_COMMIT="d307c4c182dff19a65370a50403185cb826f7f49"
+  HZR_AGTX_PATCH_DIGEST="c7ad1c32074acc470edca6738ba3dd74e0845c7d62712337ded6052ad197a90d"
+  verify_sha256 \
+    "${HZR_AGTX_PATCH_DIGEST}" \
+    "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch"
+  clone_at_commit \
+    "https://github.com/fynnfluegge/agtx" \
+    "${HZR_AGTX_COMMIT}" \
+    "${HZR_BUILD_TEMP}/agtx"
+  git -C "${HZR_BUILD_TEMP}/agtx" apply --check \
+    "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch"
+  git -C "${HZR_BUILD_TEMP}/agtx" apply \
+    "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch"
+  cargo build \
+    --manifest-path "${HZR_BUILD_TEMP}/agtx/Cargo.toml" \
+    --locked --release --bin hzr-agtx-observer
+  install -m 0755 "${HZR_BUILD_TEMP}/agtx/target/release/hzr-agtx-observer" \
+    "${HZR_ENGINE_OUTPUT}/hzr-agtx-observer"
+  install -m 0644 "${HZR_BUILD_TEMP}/agtx/LICENSE" \
+    "${HZR_LICENSE_OUTPUT}/agtx-LICENSE.txt"
+  "${HZR_ENGINE_OUTPUT}/hzr-agtx-observer" --version | grep -F "1.0.4" >/dev/null
+else
+  echo "Skipped: HZR_BUILD_AGTX_OBSERVER=1 builds the pinned observer into the bundle."
 fi
 
 HZR_CAVEMAN_STAGE="${HZR_BUILD_TEMP}/caveman-code"
@@ -505,6 +541,13 @@ install -m 0644 \
 install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-exit-with-parent.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/icm/0.10.61-exit-with-parent.patch"
+install -m 0644 \
+  "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch" \
+  "${HZR_PROVENANCE_OUTPUT}/patches/agtx/1.0.4-readonly-observer.patch"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/agtx/PROVENANCE.json" \
+  "${HZR_PROVENANCE_OUTPUT}/integrations/agtx/PROVENANCE.json"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/agtx/README.md" \
+  "${HZR_PROVENANCE_OUTPUT}/integrations/agtx/README.md"
 
 hzr_build_stage "Generating the manifest and smoke-testing the bundle"
 "${HZR_REPOSITORY_ROOT}/scripts/generate-bundle-manifest.sh" "${HZR_OUTPUT_ROOT}"
