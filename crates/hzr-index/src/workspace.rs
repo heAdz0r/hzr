@@ -131,7 +131,13 @@ impl Workspace {
         let git = discover_git(&start, git_binary, deadline).await?;
         let (root, git_common_dir, linked_worktree) = match git {
             Some(git) => (git.root, Some(git.common_dir), git.linked_worktree),
-            None => (find_non_git_root(&start), None, false),
+            None => {
+                let home = directories::BaseDirs::new().map(|base| {
+                    fs::canonicalize(base.home_dir())
+                        .unwrap_or_else(|_| base.home_dir().to_path_buf())
+                });
+                (find_non_git_root(&start, home.as_deref()), None, false)
+            }
         };
 
         let repository_basis = git_common_dir.as_deref().unwrap_or(&root);
@@ -601,9 +607,11 @@ fn parse_path_output(bytes: &[u8], field: &'static str) -> Result<PathBuf> {
     Ok(PathBuf::from(value))
 }
 
-fn find_non_git_root(start: &Path) -> PathBuf {
+fn find_non_git_root(start: &Path, home: Option<&Path>) -> PathBuf {
     start
         .ancestors()
+        // A home-wide or filesystem-root index must not capture unrelated projects.
+        .take_while(|path| path.parent().is_some() && Some(*path) != home)
         .find(|path| path.join(".grepai/config.yaml").is_file())
         .unwrap_or(start)
         .to_path_buf()
@@ -703,4 +711,44 @@ fn hash_parts(parts: &[&[u8]]) -> String {
         hash.update(part);
     }
     hex::encode(hash.finalize())
+}
+
+#[cfg(test)]
+mod root_tests {
+    use super::find_non_git_root;
+    use std::fs;
+
+    #[test]
+    fn home_index_does_not_capture_a_non_git_project() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let home = temporary.path().join("home");
+        let project = home.join("Programming/project");
+        fs::create_dir_all(home.join(".grepai")).expect("home index");
+        fs::create_dir_all(&project).expect("project");
+        fs::write(home.join(".grepai/config.yaml"), "version: 1").expect("config");
+        assert_eq!(find_non_git_root(&project, Some(&home)), project);
+    }
+
+    #[test]
+    fn project_index_still_owns_nested_directories_below_home() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let home = temporary.path().join("home");
+        let project = home.join("project");
+        let nested = project.join("service/src");
+        fs::create_dir_all(project.join(".grepai")).expect("project index");
+        fs::create_dir_all(&nested).expect("nested directory");
+        fs::write(project.join(".grepai/config.yaml"), "version: 1").expect("config");
+        assert_eq!(find_non_git_root(&nested, Some(&home)), project);
+    }
+
+    #[test]
+    fn ancestor_above_home_cannot_capture_a_project() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let home = temporary.path().join("home");
+        let project = home.join("project");
+        fs::create_dir_all(temporary.path().join(".grepai")).expect("ancestor index");
+        fs::create_dir_all(&project).expect("project");
+        fs::write(temporary.path().join(".grepai/config.yaml"), "version: 1").expect("config");
+        assert_eq!(find_non_git_root(&project, Some(&home)), project);
+    }
 }

@@ -4,6 +4,12 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-09-07
+
+### Fixed
+
+- Non-Git workspace discovery stops before home and filesystem roots, preventing a home-wide legacy grepai config from capturing unrelated projects and triggering out-of-project permission failures. Nested directories still use their project index; existing indexes and permissions are preserved.
+
 ## [0.8.4] - 2026-09-07
 
 ### Fixed
