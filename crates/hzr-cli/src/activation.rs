@@ -1,6 +1,11 @@
+use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::{LazyLock, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use hzr_core::{ActivationConfig, ActivationMode, Config, EnabledWorkspace, InstructionScope};
@@ -154,6 +159,191 @@ pub fn instruction_desired_state(
     })
 }
 
+/// Deadline for one per-project Git probe. Matches `Deadlines::version`.
+///
+/// Doctor walks every registered workspace, so a repository whose `git` never returns —
+/// an unreachable volume, a credential helper waiting on a terminal, a wedged hook — used
+/// to stall the whole pass on that one project with nothing reported. A probe that outlives
+/// this is killed and becomes a finding naming the project.
+const GIT_PROBE_DEADLINE: Duration = Duration::from_secs(10);
+const GIT_PROBE_POLL: Duration = Duration::from_millis(20);
+/// Grace for draining stdout after the child exited; only a surviving descendant needs it.
+const GIT_PROBE_DRAIN_GRACE: Duration = Duration::from_secs(2);
+/// Projects with an unresponsive Git tolerated in one pass before the rest are refused.
+///
+/// A wedged Git is usually systemic (an unmounted volume, a machine-wide credential prompt),
+/// so a 110-workspace fleet would otherwise cost 110 x the deadline before doctor finishes.
+const GIT_PROBE_TIMEOUT_BUDGET: usize = 3;
+
+/// Roots whose Git already missed the deadline in this pass.
+///
+/// Counting roots rather than probes keeps one wedged project to a single deadline — its
+/// remaining probes are refused at once — and keeps the budget spendable by other projects.
+static WEDGED_ROOTS: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Open a new fleet pass: a previous pass's timeouts must not refuse this one.
+pub fn reset_git_probe_budget() {
+    if let Ok(mut wedged) = WEDGED_ROOTS.lock() {
+        wedged.clear();
+    }
+}
+
+/// Run one non-interactive `git` in `root`, killing it at `deadline`.
+///
+/// `Ok(None)` means the deadline was exceeded and the child was killed; the caller decides
+/// how to report it. Stdin is closed and every prompt path is disabled, so the probe can
+/// never block waiting for a human that no longer has a terminal attached.
+fn bounded_git(
+    binary: &Path,
+    root: &Path,
+    args: &[&OsStr],
+    capture: bool,
+    deadline: Duration,
+    operation: &str,
+) -> Result<Option<Output>> {
+    let mut command = Command::new(binary);
+    command
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(if capture {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stderr(Stdio::null())
+        // A probe must never wait on a human: no terminal prompt, no askpass helper, and
+        // no optional index lock another Git in the same repository is holding.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env_remove("GIT_ASKPASS")
+        .env_remove("SSH_ASKPASS");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        // Own process group: a hook or credential helper Git spawned must die with it.
+        // A surviving grandchild keeps the pipe open and outlives the kill.
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("failed to run git for {operation}"))?;
+    // Drain the pipe on its own thread: the probe must not deadlock on a full pipe buffer
+    // while the parent polls for exit, and must not later block on a drain that never ends.
+    let (sender, drained) = mpsc::channel();
+    match child.stdout.take() {
+        Some(mut pipe) => {
+            std::thread::spawn(move || {
+                let mut buffer = Vec::new();
+                let _ = pipe.read_to_end(&mut buffer);
+                let _ = sender.send(buffer);
+            });
+        }
+        None => drop(sender),
+    }
+    let expires = Instant::now() + deadline;
+    let status = loop {
+        match child
+            .try_wait()
+            .with_context(|| format!("failed to wait for git during {operation}"))?
+        {
+            Some(status) => break Some(status),
+            None if Instant::now() >= expires => {
+                terminate_group(&mut child);
+                break None;
+            }
+            None => std::thread::sleep(GIT_PROBE_POLL),
+        }
+    };
+    let Some(status) = status else {
+        // The drain thread ends on its own once the killed group releases the pipe;
+        // waiting for it here would reintroduce the stall the deadline just prevented.
+        return Ok(None);
+    };
+    let stdout = match drained.recv_timeout(GIT_PROBE_DRAIN_GRACE) {
+        Ok(buffer) => buffer,
+        // Something Git spawned still owns the pipe: report the probe as unanswered
+        // rather than block the pass on a descendant nobody is waiting for.
+        Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Vec::new(),
+    };
+    Ok(Some(Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    }))
+}
+
+/// SIGKILL the probe's whole process group, then reap the direct child.
+fn terminate_group(child: &mut Child) {
+    #[cfg(unix)]
+    if let Ok(pid) = i32::try_from(child.id()) {
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// Why this probe must not run, if the pass already learned enough to skip it.
+fn probe_refusal(
+    wedged: &HashSet<PathBuf>,
+    root: &Path,
+    deadline: Duration,
+    operation: &str,
+) -> Option<String> {
+    if wedged.contains(root) {
+        return Some(format!(
+            "{operation} skipped: this project's Git already exceeded {}s in this pass",
+            deadline.as_secs()
+        ));
+    }
+    if wedged.len() >= GIT_PROBE_TIMEOUT_BUDGET {
+        return Some(format!(
+            "{operation} skipped for {}: {} other project(s) already had an unresponsive Git in this pass, so the remainder are reported instead of stalling it",
+            root.display(),
+            wedged.len()
+        ));
+    }
+    None
+}
+
+fn git_probe(root: &Path, args: &[&OsStr], capture: bool, operation: &str) -> Result<Output> {
+    // A poisoned lock must not stop the diagnosis: fall through and probe.
+    if let Some(reason) = WEDGED_ROOTS
+        .lock()
+        .ok()
+        .and_then(|wedged| probe_refusal(&wedged, root, GIT_PROBE_DEADLINE, operation))
+    {
+        bail!("{reason}");
+    }
+    match bounded_git(
+        Path::new("git"),
+        root,
+        args,
+        capture,
+        GIT_PROBE_DEADLINE,
+        operation,
+    )? {
+        Some(output) => Ok(output),
+        None => {
+            let seen = WEDGED_ROOTS.lock().ok().map_or(1, |mut wedged| {
+                wedged.insert(root.to_path_buf());
+                wedged.len()
+            });
+            bail!(
+                "{operation} did not answer within {}s in {}; that project's Git is unresponsive (unreachable volume, credential prompt, or a stuck hook) — repair it or unregister the workspace ({seen} unresponsive project(s) this pass)",
+                GIT_PROBE_DEADLINE.as_secs(),
+                root.display()
+            )
+        }
+    }
+}
+
 pub fn is_tracked_shared_instruction(root: &Path, target: &InstructionTarget) -> Result<bool> {
     if target.location != InstructionLocation::WorkspaceShared || !root.join(".git").exists() {
         return Ok(false);
@@ -165,16 +355,18 @@ pub fn is_tracked_shared_instruction(root: &Path, target: &InstructionTarget) ->
             root.display()
         )
     })?;
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "--error-unmatch", "--"])
-        .arg(relative)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("failed to inspect tracked workspace instructions")?;
-    match status.code() {
+    let output = git_probe(
+        root,
+        &[
+            OsStr::new("ls-files"),
+            OsStr::new("--error-unmatch"),
+            OsStr::new("--"),
+            relative.as_os_str(),
+        ],
+        false,
+        "tracked-instruction check",
+    )?;
+    match output.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
         _ => bail!(
@@ -236,10 +428,16 @@ pub fn local_exclude_path(root: &Path) -> Result<Option<PathBuf>> {
     if !root.join(".git").exists() {
         return Ok(None);
     }
-    let output = Command::new("git")
-        .args(["rev-parse", "--git-path", "info/exclude"])
-        .current_dir(root)
-        .output()?;
+    let output = git_probe(
+        root,
+        &[
+            OsStr::new("rev-parse"),
+            OsStr::new("--git-path"),
+            OsStr::new("info/exclude"),
+        ],
+        true,
+        "local-exclude probe",
+    )?;
     if !output.status.success() {
         anyhow::bail!(
             "git could not resolve the local exclude file for {}",
@@ -349,15 +547,18 @@ pub fn render_status_text(report: &ActivationStatusReport) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::collections::HashSet;
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+    use std::time::{Duration, Instant};
 
     use hzr_core::{ActivationMode, Config, EnabledWorkspace, InstructionScope};
     use tempfile::tempdir;
 
     use super::{
-        ActivationStatusReport, InstructionLocation, discover, instruction_desired_state,
-        is_enabled, is_tracked_shared_instruction, reconcile_local_instruction_excludes, record,
-        render_status_text,
+        ActivationStatusReport, GIT_PROBE_TIMEOUT_BUDGET, InstructionLocation, bounded_git,
+        discover, instruction_desired_state, is_enabled, is_tracked_shared_instruction,
+        probe_refusal, reconcile_local_instruction_excludes, record, render_status_text,
     };
 
     #[test]
@@ -454,6 +655,84 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&exclude).expect("removed exclude"),
             "user-pattern\n"
+        );
+    }
+
+    /// A `git` that never exits is the failure that used to stall doctor on one project.
+    #[cfg(unix)]
+    #[test]
+    fn a_wedged_git_probe_is_killed_at_its_deadline() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = tempdir().expect("temporary directory");
+        let stub = directory.path().join("git-stub");
+        // `sh` outlives its own kill through the `sleep` grandchild unless the whole
+        // process group is signalled, which is exactly what a Git hook or helper does.
+        std::fs::write(&stub, "#!/bin/sh\nsleep 600\n").expect("stub git");
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+            .expect("executable stub");
+
+        let started = Instant::now();
+        let answered = bounded_git(
+            &stub,
+            directory.path(),
+            &[OsStr::new("rev-parse")],
+            true,
+            Duration::from_millis(200),
+            "stub probe",
+        )
+        .expect("the probe itself must not fail");
+        assert!(
+            answered.is_none(),
+            "a stub that never exits must not answer"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the probe ran for {:?}, so it was not bounded",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn one_wedged_project_costs_one_deadline_and_a_wedged_fleet_stops_costing_any() {
+        let mut wedged = HashSet::new();
+        let first = PathBuf::from("/work/first");
+        assert!(
+            probe_refusal(&wedged, &first, Duration::from_secs(10), "probe").is_none(),
+            "an unknown project is probed"
+        );
+
+        wedged.insert(first.clone());
+        let repeat = probe_refusal(&wedged, &first, Duration::from_secs(10), "probe")
+            .expect("a known-wedged project is refused at once");
+        assert!(
+            repeat.contains("this project's Git already exceeded"),
+            "{repeat}"
+        );
+        assert!(
+            probe_refusal(
+                &wedged,
+                Path::new("/work/second"),
+                Duration::from_secs(10),
+                "probe"
+            )
+            .is_none(),
+            "the budget is not spent by one project"
+        );
+
+        for index in 1..GIT_PROBE_TIMEOUT_BUDGET {
+            wedged.insert(PathBuf::from(format!("/work/wedged-{index}")));
+        }
+        let refused = probe_refusal(
+            &wedged,
+            Path::new("/work/second"),
+            Duration::from_secs(10),
+            "probe",
+        )
+        .expect("past the budget every remaining project is refused");
+        assert!(
+            refused.contains("already had an unresponsive Git"),
+            "{refused}"
         );
     }
 

@@ -4,6 +4,13 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.601] - 2026-09-07
+
+### Fixed
+
+- `hzr doctor` no longer stalls forever on one project whose Git never answers. Every per-project Git probe — the tracked-instruction check and the local-exclude probe, in the current workspace and across the registered fleet — runs with a closed stdin, no terminal or askpass prompt, no optional index lock, in its own process group, and is killed after 10 seconds. A probe that misses the deadline becomes a warning naming that project instead of blocking the pass.
+- A wedged project now costs one deadline, not one per probe, and after three unresponsive projects the remaining Git probes are refused outright, so a systemic failure cannot cost the fleet one deadline per registered workspace.
+
 ## [0.8.6] - 2026-09-07
 
 ### Fixed

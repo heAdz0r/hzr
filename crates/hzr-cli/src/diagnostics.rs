@@ -703,6 +703,8 @@ pub async fn reconcile_fleet_contracts(
     dry_run: bool,
     migrate_legacy_indexes: bool,
 ) -> FleetReconcileReport {
+    // One pass, one Git-probe budget: a wedged project reports and the walk continues.
+    activation::reset_git_probe_budget();
     let snapshot = registered_workspaces(&config.data_dir);
     let mut report = FleetReconcileReport {
         dry_run,
@@ -1422,6 +1424,8 @@ fn fleet_instruction_health_checks(config: &Config, current_workspace: &Path) ->
 }
 
 pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> DoctorReport {
+    // One pass, one Git-probe budget: a wedged project reports and the walk continues.
+    activation::reset_git_probe_budget();
     let mut checks = Vec::new();
     let mut client_workspace_bindings = Vec::new();
     let adoption_status =
