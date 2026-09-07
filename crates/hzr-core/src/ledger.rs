@@ -26,7 +26,7 @@ use crate::billing::{
     receipt_payload_hash, validate_receipt, validate_receipt_observed_at,
 };
 
-// 0.8.602: durable projections for the opt-in agtx Agent Observatory.
+// 0.8.603: durable projections for the opt-in agtx Agent Observatory.
 pub mod agents;
 mod delivery;
 mod fleet;
@@ -1595,7 +1595,7 @@ impl Ledger {
                  );",
             )
             .map_err(LedgerError::Database)?;
-        agents::init_agent_schema(&connection)?; // 0.8.602
+        agents::init_agent_schema(&connection)?; // 0.8.603
         initialize_identity_hmac(&connection)?;
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN agent TEXT", []);
         let _ = connection.execute(

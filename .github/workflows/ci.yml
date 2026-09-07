@@ -134,9 +134,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      AGTX_DATA_DIR: ${{ runner.temp }}/hzr-agtx-test/data
-      AGTX_CONFIG_DIR: ${{ runner.temp }}/hzr-agtx-test/config
-      AGTX_AGENT_HOME: ${{ runner.temp }}/hzr-agtx-test/agent
+      AGTX_DATA_DIR: /tmp/hzr-agtx-test/data
+      AGTX_CONFIG_DIR: /tmp/hzr-agtx-test/config
+      AGTX_AGENT_HOME: /tmp/hzr-agtx-test/agent
     steps:
       - uses: actions/checkout@v5
       # The observer is built outside HZR's workspace at the verified toolchain.

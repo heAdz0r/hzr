@@ -1,4 +1,4 @@
-# HZR 0.8.602
+# HZR 0.8.603
 
 Adds the opt-in agtx Agent Observatory and hardens its initial integration.
 
@@ -27,7 +27,7 @@ This release fixes defects found in the implementation review:
   returns the pinned producer commit and reads a transaction-consistent snapshot.
 
 The previous source version 0.8.7 sorts below the already published 0.8.601.
-0.8.602 restores monotonic SemVer ordering.
+0.8.603 restores monotonic SemVer ordering.
 
 The helper remains an optional local build. No prebuilt adapted agtx binary is
 published while its pinned LICENSE/manifest provenance discrepancy is unresolved.

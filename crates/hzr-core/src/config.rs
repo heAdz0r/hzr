@@ -19,7 +19,7 @@ pub struct Config {
     pub activation: ActivationConfig,
     pub instructions: InstructionConfig,
     pub billing: BillingConfig,
-    // 0.8.602: opt-in monitoring integrations live in the one configuration loader.
+    // 0.8.603: opt-in monitoring integrations live in the one configuration loader.
     pub integrations: IntegrationsConfig,
 }
 
@@ -36,7 +36,7 @@ impl Default for Config {
             activation: ActivationConfig::default(),
             instructions: InstructionConfig::default(),
             billing: BillingConfig::default(),
-            integrations: IntegrationsConfig::default(), // 0.8.602
+            integrations: IntegrationsConfig::default(), // 0.8.603
         }
     }
 }
@@ -247,7 +247,7 @@ impl Config {
                 return Err(ConfigError::InvalidBilling);
             }
         }
-        self.integrations.agtx.validate()?; // 0.8.602
+        self.integrations.agtx.validate()?; // 0.8.603
         Ok(())
     }
 }

@@ -4,6 +4,12 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.8.603] - 2026-09-08
+
+- Publish the agtx Observatory hotfix after correcting the isolated upstream-test
+  CI environment. The 0.8.602 tag was retained and its release was cancelled
+  before publication because GitHub rejected that workflow configuration.
+
 ## [0.8.602] - 2026-09-08
 
 - Review and harden the opt-in agtx Observatory: bounded helper IO, atomic pinned
@@ -1759,4 +1765,5 @@ First public HZR release.
 [0.7.1]: https://github.com/heAdz0r/hzr/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/heAdz0r/hzr/compare/v0.6.6...v0.7.0
 [0.6.6]: https://github.com/heAdz0r/hzr/compare/v0.6.5...v0.6.6
+[0.8.603]: https://github.com/heAdz0r/hzr/compare/v0.8.602...v0.8.603
 [0.8.602]: https://github.com/heAdz0r/hzr/compare/v0.8.7...v0.8.602
