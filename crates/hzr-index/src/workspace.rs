@@ -69,6 +69,8 @@ pub struct Workspace {
     pub index: IndexLayout,
     pub placement_policy: IndexPlacementPolicy,
     pub duplicate_index_dirs: Vec<PathBuf>,
+    #[serde(default)]
+    pub unreadable_index_paths: Vec<PathBuf>,
     pub git_binary: PathBuf,
 }
 
@@ -169,8 +171,9 @@ impl Workspace {
             owner_lock: directory.join("hzr-owner.lock"),
             directory,
         };
+        let mut unreadable_index_paths = Vec::new();
         let duplicate_index_dirs = if audit_duplicates {
-            find_duplicate_indexes(&root, &project_entry)?
+            find_duplicate_indexes(&root, &project_entry, &mut unreadable_index_paths)?
         } else {
             Vec::new()
         };
@@ -186,6 +189,7 @@ impl Workspace {
             index,
             placement_policy,
             duplicate_index_dirs,
+            unreadable_index_paths,
             git_binary: git_binary.to_path_buf(),
         })
     }
@@ -617,10 +621,25 @@ fn find_non_git_root(start: &Path, home: Option<&Path>) -> PathBuf {
         .to_path_buf()
 }
 
-fn find_duplicate_indexes(root: &Path, canonical: &Path) -> Result<Vec<PathBuf>> {
+fn find_duplicate_indexes(
+    root: &Path,
+    canonical: &Path,
+    unreadable: &mut Vec<PathBuf>,
+) -> Result<Vec<PathBuf>> {
     let mut duplicates = Vec::new();
     let mut entries = WalkDir::new(root).follow_links(false).into_iter();
     while let Some(entry) = entries.next() {
+        let entry = match entry {
+            Err(error)
+                if error
+                    .io_error()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::PermissionDenied) =>
+            {
+                unreadable.push(error.path().unwrap_or(root).to_path_buf());
+                continue;
+            }
+            other => other,
+        };
         let entry = entry.map_err(|source| IndexError::Io {
             operation: "scan for grepai indexes",
             path: source
@@ -640,7 +659,23 @@ fn find_duplicate_indexes(root: &Path, canonical: &Path) -> Result<Vec<PathBuf>>
             continue;
         }
         if entry.file_type().is_dir()
-            && matches!(name.as_ref(), ".git" | "target" | "node_modules" | ".venv")
+            && (matches!(
+                name.as_ref(),
+                ".git" | "target" | "node_modules" | ".venv" | ".Trash"
+            ) || matches!(
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|extension| extension.to_str()),
+                Some(
+                    "photoslibrary"
+                        | "musiclibrary"
+                        | "tvlibrary"
+                        | "imovielibrary"
+                        | "fcpbundle"
+                        | "app"
+                )
+            ))
         {
             entries.skip_current_dir();
             continue;
@@ -656,6 +691,8 @@ fn find_duplicate_indexes(root: &Path, canonical: &Path) -> Result<Vec<PathBuf>>
         }
     }
     duplicates.sort();
+    unreadable.sort();
+    unreadable.dedup();
     Ok(duplicates)
 }
 

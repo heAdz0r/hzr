@@ -133,10 +133,14 @@ pub async fn repair_legacy_index(
         deadlines.version,
     )
     .await?;
-    if !matches!(
-        discovered.placement()?,
-        IndexPlacement::LegacyProject { .. }
-    ) {
+    // Doctor must still print its warnings and finish fleet reconciliation. Explicit
+    // migration retains its stricter completeness gate.
+    if !discovered.unreadable_index_paths.is_empty()
+        || !matches!(
+            discovered.placement()?,
+            IndexPlacement::LegacyProject { .. }
+        )
+    {
         return Ok(None);
     }
     migrate_legacy_index(
@@ -481,6 +485,7 @@ pub struct FleetReconcileReport {
     pub local_excludes: Vec<activation::LocalExcludeReport>,
     pub legacy_indexes: Vec<FleetLegacyIndexAction>,
     pub workspace_errors: Vec<FleetWorkspaceError>,
+    pub workspace_warnings: Vec<FleetWorkspaceError>,
     pub skipped_disabled: Vec<PathBuf>,
     // 0.8.1: registrations whose root directory was deleted (removed worktrees) and their fate.
     pub stale_registrations: Vec<FleetStaleRegistration>,
@@ -719,6 +724,7 @@ pub async fn reconcile_fleet_contracts(
         local_excludes: Vec::new(),
         legacy_indexes: Vec::new(),
         workspace_errors: Vec::new(),
+        workspace_warnings: Vec::new(),
         skipped_disabled: Vec::new(),
         stale_registrations: Vec::new(), // 0.8.1
         conflicts_left_for_the_owner: Vec::new(),
@@ -1047,6 +1053,15 @@ async fn reconcile_legacy_index(
             return;
         }
     };
+    for path in &discovered.unreadable_index_paths {
+        report.workspace_warnings.push(FleetWorkspaceError {
+            workspace: workspace_root.to_path_buf(),
+            error: format!(
+                "index audit incomplete: permission denied at {}",
+                path.display()
+            ),
+        });
+    }
     let placement = match discovered.placement() {
         Ok(placement) => placement,
         Err(error) => {
@@ -2011,6 +2026,16 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 )),
                 Err(error) => checks.push(check("grepai_ownership", CheckStatus::Error, error)),
             }
+            for path in &discovered.unreadable_index_paths {
+                checks.push(check(
+                    "grepai_scan",
+                    CheckStatus::Warning,
+                    format!(
+                        "index audit incomplete: permission denied at {}",
+                        path.display()
+                    ),
+                ));
+            }
             let duplicate_detail = discovered
                 .duplicate_index_dirs
                 .iter()
@@ -2018,7 +2043,11 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 .collect::<Vec<_>>()
                 .join(", ");
             checks.push(if discovered.duplicate_index_dirs.is_empty() {
-                check("grepai_duplicates", CheckStatus::Pass, "none found")
+                check(
+                    "grepai_duplicates",
+                    CheckStatus::Pass,
+                    "none found in readable scan scope",
+                )
             } else if matches!(
                 discovered.require_single_index(),
                 Err(hzr_index::IndexError::DuplicateIndexes { .. })
@@ -2848,6 +2877,7 @@ fn index_status_snapshot(workspace: &Workspace) -> Result<IndexStatus, String> {
         symbols_present: workspace.index.symbols.is_file(),
         repository_graph_present: workspace.index.repository_graph.is_file(),
         duplicate_index_dirs: workspace.duplicate_index_dirs.clone(),
+        unreadable_index_paths: workspace.unreadable_index_paths.clone(),
         generation: initialized
             .then(|| IndexGeneration::read(workspace))
             .transpose()
@@ -3191,6 +3221,37 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn doctor_fix_defers_legacy_migration_when_a_subtree_is_unreadable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = tempfile::tempdir().expect("fixture");
+        let root = fixture.path().join("workspace");
+        let blocked = root.join("blocked");
+        fs::create_dir_all(root.join(".grepai")).expect("legacy index");
+        fs::write(root.join(".grepai/config.yaml"), "version: 1").expect("legacy config");
+        fs::create_dir(&blocked).expect("blocked subtree");
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).expect("permissions");
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Config::default()
+        };
+        let inaccessible = fs::read_dir(&blocked).is_err();
+        let result = if inaccessible {
+            Some(repair_legacy_index(&config, &root).await)
+        } else {
+            None
+        };
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700))
+            .expect("restore permissions");
+        if let Some(result) = result {
+            assert!(result.expect("doctor continues").is_none());
+        }
+        assert!(root.join(".grepai/config.yaml").is_file());
+        assert!(!config.data_dir.exists());
+    }
+
     #[test]
     fn acceptance_gate_doctor_rejects_stale_managed_instructions() {
         let fixture = tempfile::tempdir().expect("fixture directory");
@@ -3352,6 +3413,7 @@ justification = "This repository measures upstream RTK as the explicit benchmark
             symbols_present: symbols,
             repository_graph_present: repository_graph,
             duplicate_index_dirs: Vec::new(),
+            unreadable_index_paths: Vec::new(),
             generation: None,
         }
     }

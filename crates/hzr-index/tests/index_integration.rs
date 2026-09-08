@@ -35,6 +35,87 @@ async fn test_workspace_uses_git_root_and_reports_dormant_nested_indexes() {
 }
 
 #[tokio::test]
+async fn test_workspace_reports_unreadable_subtree_and_keeps_readable_duplicates() {
+    let repo = git_repo();
+    let blocked = repo.path().join("blocked");
+    fs::create_dir_all(blocked.join(".grepai")).expect("index scan fixture");
+    let duplicate = repo.path().join("readable/.grepai");
+    fs::create_dir_all(&duplicate).expect("index scan fixture");
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).expect("index scan fixture");
+    let inaccessible = fs::read_dir(&blocked).is_err();
+    let result = Workspace::discover(repo.path(), Path::new("git"), Duration::from_secs(5)).await;
+    let data = tempfile::tempdir().expect("migration data");
+    let migration = hzr_index::migrate_legacy_index(
+        repo.path(),
+        Path::new("git"),
+        data.path(),
+        Duration::from_secs(5),
+    )
+    .await;
+    fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).expect("index scan fixture");
+    if inaccessible {
+        assert!(
+            migration
+                .expect_err("incomplete audit must prevent migration")
+                .to_string()
+                .contains("incomplete index audit")
+        );
+        assert_eq!(
+            fs::read_dir(data.path()).expect("migration data").count(),
+            0
+        );
+    }
+    let workspace = result.expect("an inaccessible subtree must not abort discovery");
+    assert!(
+        workspace
+            .duplicate_index_dirs
+            .contains(&duplicate.canonicalize().expect("index scan fixture"))
+    );
+    if inaccessible {
+        assert_eq!(
+            workspace.unreadable_index_paths,
+            vec![blocked.canonicalize().expect("index scan fixture")]
+        );
+    } else {
+        // Root can read mode-000 directories; it must report both visible indexes.
+        assert!(
+            workspace.duplicate_index_dirs.contains(
+                &blocked
+                    .join(".grepai")
+                    .canonicalize()
+                    .expect("index scan fixture")
+            )
+        );
+    }
+    workspace
+        .require_single_index()
+        .expect("canonical placement remains usable");
+}
+
+#[tokio::test]
+async fn test_workspace_skips_media_bundles_without_losing_source_indexes() {
+    let repo = git_repo();
+    for bundle in [
+        "Photos.photoslibrary",
+        "Music.musiclibrary",
+        "Video.tvlibrary",
+        "Edit.imovielibrary",
+        "Film.fcpbundle",
+        "Example.app",
+    ] {
+        fs::create_dir_all(repo.path().join(bundle).join(".grepai")).expect("index scan fixture");
+    }
+    let duplicate = repo.path().join("src/.grepai");
+    fs::create_dir_all(&duplicate).expect("index scan fixture");
+    let workspace = discover(repo.path()).await;
+    assert_eq!(
+        workspace.duplicate_index_dirs,
+        vec![duplicate.canonicalize().expect("index scan fixture")]
+    );
+    assert!(workspace.unreadable_index_paths.is_empty());
+}
+
+#[tokio::test]
 async fn test_workspace_does_not_claim_a_nested_git_roots_index() {
     let repo = git_repo();
     let nested_repo = repo.path().join("vendor/independent");

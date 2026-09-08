@@ -65,6 +65,13 @@ pub fn print_index_status(status: &IndexStatus) -> io::Result<()> {
         status.repository_graph_present
     )?;
     writeln!(output, "duplicates: {}", status.duplicate_index_dirs.len())?;
+    for path in &status.unreadable_index_paths {
+        writeln!(
+            output,
+            "WARN index audit incomplete: permission denied at {}",
+            path.display()
+        )?;
+    }
     if let Some(generation) = &status.generation {
         writeln!(output, "generation: {}", generation.generation)?;
     }
@@ -471,6 +478,14 @@ pub fn print_fleet_reconcile(report: &crate::diagnostics::FleetReconcileReport) 
             let rendered = serde_json::to_string(&argv).map_err(io::Error::other)?;
             writeln!(output, "    next argv: {}", rendered)?;
         }
+    }
+    for entry in &report.workspace_warnings {
+        writeln!(
+            output,
+            "WARN {}: {}",
+            entry.workspace.display(),
+            entry.error
+        )?;
     }
     for entry in &report.workspace_errors {
         writeln!(

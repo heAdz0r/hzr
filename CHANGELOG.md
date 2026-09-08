@@ -4,6 +4,13 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-09-08
+
+### Fixed
+
+- Index discovery continues past permission-denied subtrees (including macOS TCC errors), reports unreadable paths in doctor/fleet/index status, and skips media/application bundles. An incomplete scan does not count as evidence that an unreadable subtree has no index; legacy migration still refuses an incomplete audit.
+- The managed execution planner no longer turns a missing Claude Bash permission rule into a mandatory HZR approval. The host retains its normal permission checks, including Auto mode, while explicit ask/deny rules and HZR policy ambiguity remain enforced.
+
 ## [0.9.2] - 2026-09-08
 
 ### Fixed
@@ -1816,3 +1823,4 @@ First public HZR release.
 [0.6.6]: https://github.com/heAdz0r/hzr/compare/v0.6.5...v0.6.6
 [0.8.603]: https://github.com/heAdz0r/hzr/compare/v0.8.602...v0.8.603
 [0.8.602]: https://github.com/heAdz0r/hzr/compare/v0.8.7...v0.8.602
+[0.9.3]: https://github.com/heAdz0r/hzr/compare/v0.9.2...v0.9.3

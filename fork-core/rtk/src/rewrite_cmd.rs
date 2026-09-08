@@ -91,16 +91,18 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
             attribution,
             reason: Some(RewritePlanReason::PermissionPolicy),
         },
-        (PermissionVerdict::Allow, registry::RewriteOutcome::Rewritten(command)) => RewritePlan {
+        // This typed API selects a route inside HZR. The host still checks the Bash call;
+        // absence of a static allow rule is not an explicit request for a second prompt.
+        (
+            PermissionVerdict::Allow | PermissionVerdict::Default,
+            registry::RewriteOutcome::Rewritten(command),
+        ) => RewritePlan {
             decision: RewritePlanDecision::Rewrite,
             proposed: Some(command.clone()),
             attribution,
             reason: None,
         },
-        (
-            PermissionVerdict::Ask | PermissionVerdict::Default,
-            registry::RewriteOutcome::Rewritten(command),
-        ) => RewritePlan {
+        (PermissionVerdict::Ask, registry::RewriteOutcome::Rewritten(command)) => RewritePlan {
             decision: RewritePlanDecision::Ask,
             proposed: Some(command.clone()),
             attribution,

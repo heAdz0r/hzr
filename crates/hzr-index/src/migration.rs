@@ -419,6 +419,12 @@ pub async fn migrate_legacy_index(
     deadline: Duration,
 ) -> Result<IndexMigrationOutcome> {
     let workspace = Workspace::discover_managed(start, git_binary, data_root, deadline).await?;
+    if !workspace.unreadable_index_paths.is_empty() {
+        return Err(conflict(format!(
+            "cannot migrate after an incomplete index audit; unreadable paths: {:?}",
+            workspace.unreadable_index_paths
+        )));
+    }
     if !workspace.duplicate_index_dirs.is_empty() {
         return Err(IndexError::DuplicateIndexes {
             canonical: workspace.index.project_entry.clone(),

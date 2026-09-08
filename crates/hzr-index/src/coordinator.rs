@@ -208,6 +208,7 @@ impl IndexCoordinator {
             symbols_present: workspace.index.symbols.is_file(),
             repository_graph_present: workspace.index.repository_graph.is_file(),
             duplicate_index_dirs: workspace.duplicate_index_dirs.clone(),
+            unreadable_index_paths: workspace.unreadable_index_paths.clone(),
             generation: initialized
                 .then(|| IndexGeneration::read(&workspace))
                 .transpose()?,

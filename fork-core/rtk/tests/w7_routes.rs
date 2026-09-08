@@ -14,6 +14,8 @@ fn rtk_bin() -> Command {
 fn rtk_with_default_permissions(home: &TempDir) -> Command {
     let mut command = rtk_bin();
     command
+        .current_dir(home.path())
+        .env("CLAUDE_CONFIG_DIR", home.path().join(".claude"))
         .env("HOME", home.path())
         .env("XDG_CONFIG_HOME", home.path().join("xdg"));
     command
@@ -47,13 +49,43 @@ fn hidden_rewrite_plan_dispatches_one_typed_json_object() {
         .expect("typed rewrite plan");
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
-    assert_eq!(value["decision"], "ask");
-    assert_eq!(value["reason"], "permission_policy");
+    assert_eq!(value["decision"], "rewrite");
+    assert!(value.get("reason").is_none());
     assert_eq!(value["proposed"], "rtk ps aux");
     assert_eq!(
         output.stdout.iter().filter(|byte| **byte == b'\n').count(),
         1
     );
+}
+
+#[test]
+fn typed_plan_preserves_explicit_permission_rules() {
+    let home = TempDir::new().expect("clean home");
+    std::fs::create_dir(home.path().join(".claude")).unwrap();
+    for (rules, expected) in [
+        (serde_json::json!({}), "rewrite"),
+        (serde_json::json!({"ask": ["Bash(ls:*)"]}), "ask"),
+        (
+            serde_json::json!({"deny": ["Bash(ls:*)"], "allow": ["Bash(*)"]}),
+            "deny",
+        ),
+    ] {
+        std::fs::write(
+            home.path().join(".claude/settings.json"),
+            serde_json::to_vec(&serde_json::json!({"permissions": rules})).unwrap(),
+        )
+        .unwrap();
+        let output = rtk_with_default_permissions(&home)
+            .args(["rewrite-plan", "ls"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(plan["decision"], expected);
+        if expected != "rewrite" {
+            assert_eq!(plan["reason"], "permission_policy");
+        }
+    }
 }
 
 #[test]

@@ -116,6 +116,8 @@ pub struct IndexStatus {
     pub symbols_present: bool,
     pub repository_graph_present: bool,
     pub duplicate_index_dirs: Vec<PathBuf>,
+    #[serde(default)]
+    pub unreadable_index_paths: Vec<PathBuf>,
     pub generation: Option<IndexGeneration>,
 }
 
@@ -159,6 +161,7 @@ impl GrepAi {
             symbols_present: self.workspace.index.symbols.is_file(),
             repository_graph_present: self.workspace.index.repository_graph.is_file(),
             duplicate_index_dirs: self.workspace.duplicate_index_dirs.clone(),
+            unreadable_index_paths: self.workspace.unreadable_index_paths.clone(),
             generation: initialized
                 .then(|| IndexGeneration::read(&self.workspace))
                 .transpose()?,
