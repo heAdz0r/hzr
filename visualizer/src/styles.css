@@ -2738,7 +2738,7 @@ main {
 
 .project-card summary {
   display: grid;
-  grid-template-columns: 40px minmax(180px, 2fr) minmax(260px, 1fr) auto 32px;
+  grid-template-columns: 40px minmax(180px, 2fr) minmax(260px, 1fr) auto auto 32px; /* 0.9.2: open action */
   gap: 12px;
   align-items: center;
   min-height: 72px;
@@ -4474,5 +4474,41 @@ h3 {
   .trace-hash,
   .trace-time {
     display: none;
+  }
+}
+
+/* 0.9.2 — the observatory action on the collapsed project row */
+.project-open {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, var(--ember-500) 40%, var(--surface-border));
+  border-radius: 999px;
+  color: var(--ember-300);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  background: rgba(243, 106, 33, 0.08);
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.project-open:hover:not(:disabled) {
+  border-color: var(--ember-500);
+  background: rgba(243, 106, 33, 0.16);
+}
+
+.project-open:disabled {
+  color: var(--text-tertiary);
+  border-color: var(--surface-border);
+  background: transparent;
+  cursor: default;
+}
+
+@media (max-width: 720px) {
+  .project-open {
+    display: none; /* the expanded card keeps the action on small screens */
   }
 }

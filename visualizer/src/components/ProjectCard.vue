@@ -56,6 +56,18 @@ const actionCommand = computed(() => props.project.remedy ?? props.project.comma
         <span>Seen {{ relativeTime(project.last_seen_at_ms) }}</span>
       </span>
       <StatusChip :state="project.state" compact />
+      <!-- 0.9.2: the observatory action lives on the collapsed row too; a reader
+           should not have to expand a card to open its project. -->
+      <button
+        class="project-open"
+        type="button"
+        :disabled="selected"
+        :title="selected ? 'This project is selected' : 'Open this project in the observatory'"
+        @click.prevent.stop="$emit('select', project.worktree_id)"
+      >
+        <AppIcon name="activity" :size="14" />
+        {{ selected ? "Selected" : "Open observatory" }}
+      </button>
       <span class="project-chevron"><AppIcon name="chevron" :size="18" /></span>
     </summary>
 

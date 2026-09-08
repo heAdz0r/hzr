@@ -4,6 +4,17 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-09-08
+
+### Fixed
+
+- The **Open observatory** action is back on every project row. 0.9.1 reorganised the project card and left the action inside the expanded view only, so a reader had to open each card to find it; the collapsed row now carries it, and the selected project's row says so.
+- A dashboard opened with no stored selection prefers a workspace that has an index. "Seen most recently" alone picked whatever scratch directory an agent had touched a minute earlier and opened on a standby index over a fleet of ready ones.
+
+### Changed
+
+- The project registry follows the scope selector: with a project selected, the Projects tab opens on that project alone (`Selected 1`), with the whole fleet one chip away.
+
 ## [0.9.1] - 2026-09-08
 
 ### Fixed

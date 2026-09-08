@@ -1326,13 +1326,23 @@ fn elapsed_ms(started_at: Instant) -> u64 {
     u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-/// The workspace to show when the request names none: the one seen most recently. // 0.9.1
+/// The workspace to show when the request names none. // 0.9.1
+///
+/// 0.9.2: prefer a workspace that has an index. A throwaway scratch directory an
+/// agent touched a minute ago is "seen most recently" too, and opening the
+/// dashboard on it showed a standby index over a fleet of ready ones.
 fn default_dashboard_registration(
     registrations: &[WorkspaceRegistration],
 ) -> Option<WorkspaceRegistration> {
     registrations
         .iter()
-        .max_by_key(|registration| (registration.last_seen_at_ms, registration.registered_at_ms))
+        .max_by_key(|registration| {
+            (
+                registration.index_directory.join("index.gob").is_file(),
+                registration.last_seen_at_ms,
+                registration.registered_at_ms,
+            )
+        })
         .cloned()
 }
 

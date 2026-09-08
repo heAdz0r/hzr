@@ -1,4 +1,13 @@
-# HZR 0.9.1
+# HZR 0.9.2
+
+0.9.1 plus what its own dashboard review turned up within the hour: the
+**Open observatory** action is on every project row again (0.9.1 had left it
+inside the expanded card only); the Projects tab follows the scope selector and
+opens on the selected project with the fleet one chip away; and a dashboard
+opened fresh prefers a workspace that has an index over whatever scratch
+directory an agent touched last.
+
+## Everything in 0.9.1
 
 A hotfix for the feature 0.9.0 shipped, plus a dashboard that explains itself:
 what is wrong, which commands ran, what they cost, and what HZR saved.
