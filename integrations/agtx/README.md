@@ -99,9 +99,13 @@ with the task id validated as a plain filename component and the file required
 to be a regular non-symlink under the size cap. `transcript_path` is never
 followed. `message` and `tool` are never exported.
 
-Nothing on the wire carries a task title, description, branch, PR URL, worktree
-path, tmux session name, notification prose or transcript path. The public
-dashboard goes further and labels tasks pseudonymously (`Task 7ac3`).
+Nothing on the wire carries a task description, PR URL, worktree path, tmux
+session name, notification prose or transcript path. The task title and branch
+cross only when the enrollment asks for them (`publish_task_titles`, on by
+default), because a board labelled only `Task 7ac3` cannot be read; both are
+bounded and stripped of control characters at the source, and the pseudonym is
+published beside them either way. Turning the flag off returns the dashboard to
+pseudonyms alone.
 
 ## Fixtures
 
@@ -113,6 +117,29 @@ partial, source-reset, incompatible) used by the HZR-side ingestion tests.
 `pricing-synthetic.json` and `usage-import-v1.json` are the deterministic
 economics fixtures; the prices in them are invented for arithmetic, not market
 rates.
+
+## Measured budgets
+
+Verified against the acceptance fixture in the PRD — 1 000 tasks and 4 985
+dependency references — using the real pinned helper against a real SQLite
+store, not a mock:
+
+| Budget | Limit | Measured |
+| --- | --- | --- |
+| Full snapshot traversal | 3 000 ms | 59 ms across 5 pages |
+| Peak helper RSS | 128 MiB | 8.7 MiB |
+| Response page | 2 MiB | 192 KB |
+| Warm `GET /v1/dashboard/agents` p95, 100 requests | 250 ms | 11.6 ms |
+| Warm `…/agents/events` p95 | 250 ms | 7.9 ms |
+| Warm `…/agents/economics` p95 | 250 ms | 7.3 ms |
+| Durable growth over unchanged polls | 1 KiB / 100 polls | 0 bytes over ~20 cycles |
+
+The zero is the point of the idempotency rule: an identical snapshot bumps no
+revision, records no event and rewrites no projection, so a board nobody is
+touching costs nothing to keep watching.
+
+Still unverified: Windows. The component reports itself unavailable on
+platforms without a verified build rather than assuming one exists.
 
 ## Known limits
 

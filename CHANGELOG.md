@@ -4,6 +4,19 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-08
+
+### Changed
+
+- **Identities are readable by default.** A dashboard that labelled a hundred workspaces `Project 6a1be071`, every ICM topic `Memory topic 14` and every agtx card `Task 7ac3` could not be used to find anything, so withholding those names protected nothing and removed the only way to tell rows apart. Workspaces now show their own directory with the home-relative path beside it, ICM topics their topic name, memories their content, and observed agtx tasks their title. The pseudonymous identity is published alongside every name, so cross-project isolation, session attribution and support workflows are unchanged. `[privacy] publish_workspace_names`, `[privacy] publish_memory_content` and `[integrations.agtx] publish_task_titles` restore the pseudonymous view for an install whose loopback port other people can reach.
+- Observability traces are named by what they did — `optimized · rtk → grepai` — instead of by a truncated hash, and the latest attributed session is named by its command families and operation count. Both keep the digest as the copyable handle.
+- Project search matches the workspace path a user would actually type, not only its digest.
+- The Agents workspace loads its graph library on demand, so the dashboard's main bundle no longer carries it for visitors who never open the dependency view.
+
+### Fixed
+
+- An absent optional component is no longer an HZR health failure. `hzr doctor` inspects every pinned engine binary, which turned the opt-in agtx observer — absent on every ordinary install — into a mandatory check and failed all three release bundle jobs. Pins marked `runtime = false` are skipped, and the observer reports through its own check that warns when an enrolled project has no component but never fails.
+
 ## [0.8.603] - 2026-09-08
 
 - Publish the agtx Observatory hotfix after correcting the isolated upstream-test

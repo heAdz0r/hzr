@@ -1,8 +1,26 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import type { DashboardSessionRoi } from "../types";
 import { formatCount, formatEconomicAmount, formatSignedCount } from "../utils";
 
-defineProps<{ roi: DashboardSessionRoi }>();
+const props = defineProps<{ roi: DashboardSessionRoi }>();
+
+/**
+ * Name the session by what it did.
+ *
+ * "Session output evidence" over a bare digest identifies nothing; the command
+ * families and the operation count are already in this payload and are what a
+ * reader recognises. The digest stays beside it as the copyable handle.
+ */
+const sessionName = computed(() => {
+  if (!props.roi.session_hash) return "No attributed session";
+  const families = props.roi.top_commands
+    .map((command) => command.command_family)
+    .filter(Boolean)
+    .slice(0, 3);
+  if (!families.length) return `Session · ${formatCount(props.roi.operations)} operations`;
+  return `${families.join(", ")} · ${formatCount(props.roi.operations)} operations`;
+});
 </script>
 
 <template>
@@ -10,7 +28,7 @@ defineProps<{ roi: DashboardSessionRoi }>();
     <div class="session-roi-head">
       <div>
         <span class="eyebrow">Latest attributed session</span>
-        <h3 id="session-roi-title">{{ roi.session_hash ? "Session output evidence" : "No attributed session" }}</h3>
+        <h3 id="session-roi-title">{{ sessionName }}</h3>
         <p>{{ roi.detail }}</p>
       </div>
       <code v-if="roi.session_hash" :title="roi.session_hash">{{ roi.session_hash.slice(0, 20) }}…</code>

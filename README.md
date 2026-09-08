@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-<a href="Cargo.toml"><img alt="Version 0.8.603" src="https://img.shields.io/badge/version-0.8.603-e64a19"></a>
+<a href="Cargo.toml"><img alt="Version 0.9.0" src="https://img.shields.io/badge/version-0.9.0-e64a19"></a>
   <a href="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/heAdz0r/hzr/releases"><img alt="Release" src="https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/control_plane-Apache--2.0-37474f"></a>
@@ -109,7 +109,7 @@ and [recorded run](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RES
 
 ## Install
 
-HZR 0.8.603 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
+HZR 0.9.0 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
 Apple Silicon. Intel macOS is no longer supported. System Git is the only engine prerequisite; Node.js, RTK,
 grepai, and ICM are bundled. Windows is not currently published.
 
@@ -117,7 +117,7 @@ Download, inspect, then run the installer:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.8.603/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.9.0/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -192,10 +192,27 @@ hzr agents status --json
 The visualizer gains an **Agents** workspace — board, dependency graph, observed timeline and
 task economics — fed by the same daemon and privacy projections as every other view. Reported
 usage, reported cost and catalog-priced estimates stay separate; nothing is summed into a fake
-total. Ownership, protocol, safety and limits are documented in
+total, and an unobserved value renders as an em dash with a reason rather than a zero.
+Ownership, protocol, safety and limits are documented in
 [`integrations/agtx/README.md`](integrations/agtx/README.md); the pinned commit, patch digests
 and the unresolved license discrepancy are recorded in
 [`integrations/agtx/PROVENANCE.json`](integrations/agtx/PROVENANCE.json).
+
+Things are named, not numbered. The dashboard shows each workspace by its own directory
+(`hzr`, with `~/Programming/hzr` beside it), each ICM topic by its topic name, each memory by
+what it says, and each observed agtx task by its title — with the pseudonymous identity kept
+beside the name as the stable handle. That is the default because a list of a hundred
+`Project 6a1be071` rows cannot be used to find anything. An install whose loopback port other
+people can reach turns it off and gets the pseudonymous view back:
+
+```toml
+[privacy]
+publish_workspace_names = false
+publish_memory_content = false
+
+[integrations.agtx]
+publish_task_titles = false
+```
 
 ## Session ROI where the agent can see it
 
@@ -401,7 +418,7 @@ policy: no repository file can buy an exception to a bypass HZR could replace at
 
 ## Honest boundaries
 
-| Guarantee | 0.8.603 posture |
+| Guarantee | 0.9.0 posture |
 |---|---|
 | one versioned control plane and pinned engine bundle | implemented |
 | one canonical index owner per worktree | implemented |

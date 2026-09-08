@@ -2,11 +2,32 @@ import type { DashboardObservability, DashboardTraceSpan } from "./types";
 
 export interface TraceGroup {
   hash: string;
+  /**
+   * What this trace actually did, e.g. `search · grepai` or `read · rtk`.
+   *
+   * A trace identified only by `a3f9c2…` tells a reader nothing, and a list of
+   * them cannot be scanned. The route and the engines that ran are already in
+   * the spans, so the name costs no new data.
+   */
+  label: string;
   linkedFrom: string | null;
   spans: DashboardTraceSpan[];
   observedAt: number;
   duration: number;
   failed: boolean;
+}
+
+/** Name a trace by its route and the distinct engines it ran, in order. */
+export function traceLabel(spans: readonly DashboardTraceSpan[]): string {
+  const engines: string[] = [];
+  for (const span of spans) {
+    if (span.engine && !engines.includes(span.engine)) engines.push(span.engine);
+  }
+  const route = spans.find((span) => span.route)?.route;
+  const failed = spans.find((span) => span.error_code)?.error_code;
+  const parts = [route, engines.join(" → ")].filter(Boolean);
+  const name = parts.length ? parts.join(" · ") : "trace";
+  return failed ? `${name} · ${failed}` : name;
 }
 
 export function groupTraceSpans(spans: DashboardTraceSpan[], limit = 12): TraceGroup[] {
@@ -19,6 +40,7 @@ export function groupTraceSpans(spans: DashboardTraceSpan[], limit = 12): TraceG
   return [...grouped.entries()]
     .map(([hash, trace]) => ({
       hash,
+      label: traceLabel(trace),
       linkedFrom: trace.find((span) => span.linked_trace_hash !== null)?.linked_trace_hash ?? null,
       spans: [...trace].sort((left, right) => left.span_id - right.span_id),
       observedAt: Math.max(...trace.map((span) => span.observed_at_ms)),

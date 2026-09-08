@@ -550,9 +550,12 @@ onBeforeUnmount(() => {
           <h4>Linked sessions</h4>
           <ul class="agents-session-list">
             <li v-for="session in detail.sessions" :key="session.session_id">
-              <code>{{ session.session_id.slice(-12) }}</code>
-              · {{ session.host }} · {{ session.provenance === "explicit_user" ? "explicit link" : "agtx hook" }}
+              <!-- The host and how the link was established are what identify a
+                   session to a reader; the digest is the handle, not the name. -->
+              <strong>{{ session.host }}</strong>
+              · {{ session.provenance === "explicit_user" ? "explicit link" : "agtx hook" }}
               · {{ session.usage_receipt_count }} usage receipts
+              <code :title="session.session_id">{{ session.session_id.slice(-12) }}</code>
               <em v-if="session.conflict">
                 shared with another task — its spend stays unallocated
               </em>

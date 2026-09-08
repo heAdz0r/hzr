@@ -35,7 +35,8 @@ function label(value: string): string {
           <details v-for="trace in traces" :key="trace.hash">
             <summary>
               <span class="trace-state" :class="{ failed: trace.failed }"></span>
-              <code>{{ shortHash(trace.hash) }}</code>
+              <strong class="trace-label">{{ trace.label }}</strong>
+              <code :title="trace.hash">{{ shortHash(trace.hash) }}</code>
               <span v-if="trace.linkedFrom" class="trace-continuation">continues {{ shortHash(trace.linkedFrom) }}</span>
               <span>{{ relativeTime(trace.observedAt) }}</span>
               <strong>{{ formatDuration(trace.duration) }}</strong>

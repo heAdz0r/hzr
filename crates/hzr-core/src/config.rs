@@ -19,7 +19,7 @@ pub struct Config {
     pub activation: ActivationConfig,
     pub instructions: InstructionConfig,
     pub billing: BillingConfig,
-    // 0.8.603: opt-in monitoring integrations live in the one configuration loader.
+    // 0.9.0: opt-in monitoring integrations live in the one configuration loader.
     pub integrations: IntegrationsConfig,
 }
 
@@ -36,7 +36,7 @@ impl Default for Config {
             activation: ActivationConfig::default(),
             instructions: InstructionConfig::default(),
             billing: BillingConfig::default(),
-            integrations: IntegrationsConfig::default(), // 0.8.603
+            integrations: IntegrationsConfig::default(), // 0.9.0
         }
     }
 }
@@ -247,7 +247,7 @@ impl Config {
                 return Err(ConfigError::InvalidBilling);
             }
         }
-        self.integrations.agtx.validate()?; // 0.8.603
+        self.integrations.agtx.validate()?; // 0.9.0
         Ok(())
     }
 }
@@ -282,8 +282,9 @@ pub struct AgtxConfig {
     /// Publish the source's own task titles and branch names alongside the
     /// pseudonyms.
     ///
-    /// Requires explicit opt-in because dashboard reads are unauthenticated.
-    /// Enrolling a project does not authorize publishing its source text.
+    /// On by default: a board whose cards read only `Task 7ac3` cannot be used
+    /// to find a task. Titles are bounded and stripped of control characters at
+    /// the source, and the pseudonym stays beside them as the stable handle.
     pub publish_task_titles: bool,
     pub projects: Vec<AgtxProject>,
 }
@@ -295,7 +296,7 @@ impl Default for AgtxConfig {
             poll_interval_ms: 5_000,
             stale_after_ms: 30_000,
             history_retention_days: 30,
-            publish_task_titles: false,
+            publish_task_titles: true,
             projects: Vec::new(),
         }
     }
@@ -659,13 +660,19 @@ pub struct PrivacyConfig {
     /// Show each registered workspace by its directory name on the local
     /// dashboard.
     ///
-    /// Explicit opt-in for the unauthenticated dashboard. Existing identity
-    /// hashes remain available when names are withheld.
+    /// On by default. The dashboard binds to loopback and shows the operator
+    /// their own machine; a registry of a hundred `Project 6a1be071` rows
+    /// cannot be used to find anything, so withholding names does not protect
+    /// a secret, it removes the only way to tell the rows apart. Identity
+    /// hashes are published beside the name either way, so cross-project
+    /// isolation and support workflows are unchanged. Set this to `false` on a
+    /// machine whose loopback port other people can reach.
     pub publish_workspace_names: bool,
     /// Show real ICM topic names and memory content on the local dashboard.
     ///
-    /// Explicit opt-in: upgrading HZR must not expose previously private
-    /// memory content to unauthenticated dashboard readers.
+    /// On by default, for the same reason: a graph of `Memory topic 14` nodes
+    /// whose every leaf reads "content is redacted" answers no question at all.
+    /// The data is the operator's own.
     pub publish_memory_content: bool,
 }
 
@@ -675,8 +682,8 @@ impl Default for PrivacyConfig {
             telemetry: false,
             raw_retention_seconds: 0,
             redact_secrets: true,
-            publish_workspace_names: false,
-            publish_memory_content: false,
+            publish_workspace_names: true,
+            publish_memory_content: true,
         }
     }
 }
@@ -766,17 +773,27 @@ fn sync_directory(_path: &Path) -> Result<(), std::io::Error> {
 #[cfg(test)]
 mod tests {
 
+    /// Names and content are published by default, and can be withheld.
+    ///
+    /// A dashboard that labels a hundred workspaces `Project 6a1be071`, every
+    /// memory topic `Memory topic 14` and every board card `Task 7ac3` cannot
+    /// be used to find anything, so the default withheld nothing worth
+    /// protecting and removed the only way to tell rows apart. Identity hashes
+    /// are published beside the names either way. An install that shares its
+    /// loopback port sets these to `false` and gets the pseudonymous view back.
     #[test]
-    fn legacy_config_does_not_enable_public_content_on_upgrade() {
-        let config: Config = toml::from_str("").expect("legacy default config");
-        assert!(!config.privacy.publish_workspace_names);
-        assert!(!config.privacy.publish_memory_content);
-        assert!(!config.integrations.agtx.publish_task_titles);
-        let explicit: Config = toml::from_str(
-        "[privacy]\npublish_workspace_names = true\npublish_memory_content = true\n[integrations.agtx]\npublish_task_titles = true"
-    ).expect("explicit opt-in");
-        assert!(explicit.privacy.publish_memory_content);
-        assert!(explicit.integrations.agtx.publish_task_titles);
+    fn identities_are_readable_by_default_and_can_be_withheld() {
+        let config: Config = toml::from_str("").expect("default config");
+        assert!(config.privacy.publish_workspace_names);
+        assert!(config.privacy.publish_memory_content);
+        assert!(config.integrations.agtx.publish_task_titles);
+
+        let withheld: Config = toml::from_str(
+            "[privacy]\npublish_workspace_names = false\npublish_memory_content = false\n[integrations.agtx]\npublish_task_titles = false"
+        ).expect("explicit opt-out");
+        assert!(!withheld.privacy.publish_workspace_names);
+        assert!(!withheld.privacy.publish_memory_content);
+        assert!(!withheld.integrations.agtx.publish_task_titles);
     }
 
     use std::fs;
