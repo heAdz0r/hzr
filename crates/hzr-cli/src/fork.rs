@@ -30,11 +30,20 @@ pub async fn passthrough(config: &Config, args: &[OsString]) -> Result<ExitCode>
     let project =
         std::fs::canonicalize(std::env::current_dir()?).context("resolve direct fork workspace")?;
     let agent = std::env::var("HZR_CLIENT").ok();
-    AccountingReceiptContextStore::new(&config.data_dir).register(
+    // 0.9.1: the rows drained from this run's receipts name the command they came from.
+    let command_text = args
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
+    AccountingReceiptContextStore::new(&config.data_dir).register_with_command(
         accounting.correlation_id(),
         &project,
         agent.as_deref(),
         ambient_session_id().as_deref(),
+        hzr_protocol::AccountingChannel::HookCli,
+        None,
+        hzr_core::command_summary(&command_text),
     )?;
     command
         .stdin(Stdio::inherit())

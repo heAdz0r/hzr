@@ -59,6 +59,7 @@ enum WriteCommand {
         agent: Option<String>,
         session_id: Option<String>,
         channel: AccountingChannel,
+        command_summary: Option<String>, // 0.9.1
         reply: oneshot::Sender<Result<bool, LedgerError>>,
     },
     PolicyEvent {
@@ -618,6 +619,7 @@ impl LedgerWriter {
                             agent,
                             session_id,
                             channel,
+                            command_summary,
                             reply,
                         } => {
                             let _ = reply.send(ledger.record_engine_accounting_receipt(
@@ -626,6 +628,7 @@ impl LedgerWriter {
                                 agent.as_deref(),
                                 session_id.as_deref(),
                                 channel,
+                                command_summary.as_deref(), // 0.9.1
                             ));
                         }
                         WriteCommand::PolicyEvent { record, reply } => {
@@ -1144,6 +1147,7 @@ impl LedgerWriter {
         agent: Option<String>,
         session_id: Option<String>,
         channel: AccountingChannel,
+        command_summary: Option<String>, // 0.9.1
     ) -> Result<bool, LedgerWriterError> {
         let (reply, result) = oneshot::channel();
         self.sender
@@ -1153,6 +1157,7 @@ impl LedgerWriter {
                 agent,
                 session_id,
                 channel,
+                command_summary,
                 reply,
             })
             .await

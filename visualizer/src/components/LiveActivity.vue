@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import AppIcon from "./AppIcon.vue";
-import type { DashboardLocalOperation } from "../types";
+import type { DashboardCommandBreakdown, DashboardLocalOperation } from "../types";
 import { formatCount, formatSignedCount } from "../utils";
 import { filterActivity, tokenBarWidth, type ActivityRoute } from "../evidence";
 
@@ -12,7 +12,33 @@ const props = defineProps<{
   nativeCount: number;
   unmeasuredCount: number;
   measurement: string;
+  /** Savings by command for the whole project scope. 0.9.1 */
+  breakdown?: DashboardCommandBreakdown[];
+  baseline?: number;
+  delivered?: number;
+  netAvoided?: number;
 }>();
+
+// 0.9.1: the one sentence a reader needs before any table — what HZR handed the
+// model instead of what the tools produced, and how much that was.
+const savingsPct = computed(() => {
+  const baseline = props.baseline ?? 0;
+  return baseline > 0 ? ((props.netAvoided ?? 0) * 100) / baseline : null;
+});
+const breakdownRows = computed(() => {
+  const rows = props.breakdown ?? [];
+  const maxBaseline = Math.max(1, ...rows.map((row) => row.baseline_tokens_estimated));
+  return rows.map((row) => ({
+    ...row,
+    pct: row.baseline_tokens_estimated > 0 ? (row.net_avoided_tokens_estimated * 100) / row.baseline_tokens_estimated : null,
+    baselineWidth: tokenBarWidth(row.baseline_tokens_estimated, maxBaseline),
+    deliveredWidth: tokenBarWidth(row.delivered_tokens_estimated, maxBaseline),
+  }));
+});
+/** What the row says it ran: the recorded summary, else the operation family. */
+function commandLabel(operation: DashboardLocalOperation): string {
+  return operation.command_summary ?? operation.operation;
+}
 const selectedKey = ref<string | null>(null);
 const routeFilter = ref<ActivityRoute>("all");
 const agentFilter = ref("");
@@ -143,9 +169,53 @@ function routeDetail(operation: DashboardLocalOperation): string {
       </section>
       <section>
         <header><span>Privacy boundary</span><b>ON</b></header>
-        <p>Commands, arguments, queries, paths, environment values, SQL, and heredocs are never returned by this endpoint.</p>
+        <p>Each row names its program, subcommand and flags. Operands — paths, queries, environment values, SQL, heredocs — are never recorded or returned.</p>
       </section>
     </div>
+
+    <!-- 0.9.1: efficiency, stated plainly, then broken down by the commands that produced it. -->
+    <section v-if="(baseline ?? 0) > 0" class="savings-brief" aria-label="What HZR saved in this project">
+      <div class="savings-brief-head">
+        <div>
+          <span class="eyebrow">What HZR saved here</span>
+          <p class="savings-sentence">
+            Tools produced <strong>{{ formatCount(baseline ?? 0) }}</strong> tokens; HZR handed the model
+            <strong>{{ formatCount(delivered ?? 0) }}</strong>
+            <span v-if="savingsPct !== null" class="savings-pct" :class="{ negative: (netAvoided ?? 0) < 0 }">{{ savingsPct >= 0 ? "−" : "+" }}{{ Math.abs(savingsPct).toFixed(1) }}%</span>
+          </p>
+        </div>
+        <div class="savings-brief-total" :class="{ negative: (netAvoided ?? 0) < 0 }">
+          <strong>{{ formatSignedCount(netAvoided ?? 0) }}</strong>
+          <span>estimated tokens the model never had to read</span>
+        </div>
+      </div>
+      <div class="savings-scale" aria-hidden="true">
+        <i class="savings-scale-baseline"></i>
+        <i class="savings-scale-delivered" :style="{ width: tokenBarWidth(delivered ?? 0, baseline ?? 1) }"></i>
+      </div>
+      <div v-if="breakdownRows.length" class="command-breakdown" role="table" aria-label="Savings by command">
+        <div class="command-breakdown-row command-breakdown-head" role="row">
+          <span role="columnheader">Command</span>
+          <span role="columnheader">Runs</span>
+          <span role="columnheader">Produced → delivered</span>
+          <span role="columnheader">Saved</span>
+        </div>
+        <div v-for="row in breakdownRows" :key="row.command" class="command-breakdown-row" role="row">
+          <code role="cell" :title="row.command">{{ row.command }}</code>
+          <span role="cell" class="command-breakdown-runs">{{ formatCount(row.executions) }}<small v-if="row.optimized_executions < row.executions"> · {{ formatCount(row.executions - row.optimized_executions) }} raw</small></span>
+          <span role="cell" class="command-breakdown-bars">
+            <i class="baseline-bar" :style="{ width: row.baselineWidth }"></i>
+            <i class="delivered-bar" :style="{ width: row.deliveredWidth }"></i>
+            <small>{{ formatCount(row.baseline_tokens_estimated) }} → {{ formatCount(row.delivered_tokens_estimated) }}</small>
+          </span>
+          <span role="cell" class="command-breakdown-saved" :class="{ negative: row.net_avoided_tokens_estimated < 0 }">
+            <strong>{{ formatSignedCount(row.net_avoided_tokens_estimated) }}</strong>
+            <small v-if="row.pct !== null">{{ row.pct.toFixed(0) }}%</small>
+          </span>
+        </div>
+      </div>
+      <p v-else class="command-breakdown-empty">Command summaries are recorded from 0.9.1 on; rows written before that show only their family.</p>
+    </section>
 
     <div class="route-summary">
       <div class="route-summary-bar" aria-label="Measured and uncovered operation share">
@@ -180,7 +250,7 @@ function routeDetail(operation: DashboardLocalOperation): string {
           <span class="activity-directory" title="Project identity is hashed">
             <AppIcon name="folder" :size="13" />private scope
           </span>
-          <strong>{{ operation.operation }}</strong>
+          <strong class="activity-command" :title="commandLabel(operation)">{{ commandLabel(operation) }}</strong>
           <div class="output-bars" :aria-label="`${operation.baseline_tokens_estimated} producer baseline tokens and ${operation.delivered_tokens_estimated} produced tokens`">
             <span class="baseline-bar" :style="{ width: width(operation.baseline_tokens_estimated) }"></span>
             <span class="delivered-bar" :style="{ width: width(operation.delivered_tokens_estimated) }"></span>
@@ -199,6 +269,7 @@ function routeDetail(operation: DashboardLocalOperation): string {
             <span class="evidence-state"><AppIcon name="check" :size="14" /> Recorded by HZR</span>
           </div>
           <dl>
+            <div class="wide"><dt>Command</dt><dd><code>{{ commandLabel(operation) }}</code><small v-if="!operation.command_summary"> · family only; summaries start at 0.9.1</small></dd></div>
             <div class="wide"><dt>Command digest</dt><dd><code>{{ shortHash(operation.command_hash) }}</code></dd></div>
             <div class="wide"><dt>Project digest</dt><dd><code>{{ shortHash(operation.project_hash) }}</code></dd></div>
             <div><dt>Agent</dt><dd>{{ operation.agent ?? "Unattributed" }}</dd></div>
@@ -222,7 +293,7 @@ function routeDetail(operation: DashboardLocalOperation): string {
     </div>
     <div v-else class="activity-empty">{{ operations.length ? "No recent operations match these filters. Reset filters to see the available snapshot." : "No operations in this project snapshot. Choose a project with recorded activity or refresh after an agent runs a command." }}</div>
     <p class="activity-footnote">
-      Coverage: current privacy-typed rows for this project and its subdirectories. Commands, arguments, queries, paths, environment values, SQL, heredocs, prompts, responses, stdin, and output bodies are not exposed here.
+      Coverage: current privacy-typed rows for this project and its subdirectories. Command summaries carry program, subcommand and flags only. Arguments, queries, paths, environment values, SQL, heredocs, prompts, responses, stdin, and output bodies are not exposed here.
     </p>
   </div>
 </template>

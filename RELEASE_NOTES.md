@@ -1,75 +1,75 @@
-# HZR 0.9.0
+# HZR 0.9.1
 
-Makes the dashboard readable, and stops an optional component from failing HZR's
-health.
+A hotfix for the feature 0.9.0 shipped, plus a dashboard that explains itself:
+what is wrong, which commands ran, what they cost, and what HZR saved.
 
-## Things are named, not numbered
+## `hzr agents component install` works from an installed HZR
 
-A registry of a hundred `Project 6a1be071` rows, a memory graph of
-`Memory topic 14` nodes whose every leaf read "content is redacted", and an
-agtx board of `Task 7ac3` cards could not be used to find anything. Withholding
-those names protected nothing on a loopback dashboard showing the operator their
-own machine; it removed the only way to tell one row from another.
+`install.sh` links `~/.local/bin/hzr` to the release binary and tells you to put
+that directory on PATH. Through that link, `current_exe()` on macOS reports the
+link rather than its target, and the bundle root derived from it was two
+directories short of the packaged observer patch. Every installed user who ran
+the command outside a source checkout was told to run it from one. The
+executable is resolved before the root is derived — the same correction the
+visualizer asset lookup has needed since 0.6 — and the command now finds its
+patch from any directory.
 
-By default HZR now shows:
+## A warning says what is wrong and how to fix it
 
-- each registered workspace by its own directory, with the home-relative path
-  beside it (`hzr` · `~/Programming/hzr`), and project search matches that path;
-- each ICM topic by its topic name (`context-hzr`, `errors-resolved`) and each
-  memory by what it says;
-- each observed agtx task by its title and branch, bounded and stripped of
-  control characters at the source;
-- each observability trace by what it did (`optimized · rtk → grepai`) and the
-  latest attributed session by its command families and operation count.
+A workspace card marked `Warning` used to show a coloured chip, four grey dots
+and a placeholder command. It now shows, in the card:
 
-Every one of them keeps its pseudonymous identity published beside the name, so
-cross-project isolation, session attribution and support workflows are
-unchanged, and identity hashes remain the thing to quote. An install whose
-loopback port other people can reach restores the pseudonymous view:
+- **what is wrong** — which index artifacts are absent, or that the index
+  directory or the workspace itself is missing;
+- **how to fix it** — a real `hzr index init --workspace ~/Programming/compass`
+  with your path already in it, copyable in one click;
+- when nothing can fix it from here — a directory that no longer exists — an
+  explanation and no command, because a command that would fail is worse than
+  none.
 
-```toml
-[privacy]
-publish_workspace_names = false
-publish_memory_content = false
+The index artifact lights say what each artifact is for (config, semantic
+search, code structure, repository map) and whether it is present.
 
-[integrations.agtx]
-publish_task_titles = false
-```
+## `Standby` over a working control plane is gone
 
-## An absent optional component is not a failure
+Two bugs made a healthy daemon look idle. The posture chip matched the selected
+project by comparing a filesystem path with the published identity digest, so
+it never matched and fell through to "nothing selected". And the grepai line
+read `Standby · waiting for its watcher` whenever the on-demand watcher had
+idled out — which it does after fifteen minutes by design — although semantic
+search was being served from the index the whole time. A complete index now
+reads `Ready` and says the watcher starts on the next search; only a workspace
+with no index is in standby, and its detail carries the `hzr index init`
+command. A dashboard opened fresh lands on the workspace seen most recently.
 
-`hzr doctor` inspects every pinned engine binary, which turned the opt-in agtx
-observer — absent on every ordinary install — into a mandatory health check and
-failed all three 0.8.7 release bundle jobs at the clean-install smoke. Pins
-marked `runtime = false` are now skipped, and the observer reports through its
-own check: no component and no enrollment passes, an enrollment whose component
-is missing warns and names the command that completes it, and neither state can
-fail HZR.
+## Pricing shows up, and says what it is
 
-## Measured
+The public-list estimate was withheld whenever host delivery was unconfirmed,
+which with no host acknowledging deliveries was always; the catalog was never
+even named, so `claude-opus-5` showed as `Unavailable` while its entry sat in
+the table. The estimate is now priced and carries a qualifier saying what
+evidence is still missing, and the catalog identity is always reported.
 
-The agtx Observatory's resource budgets were verified at the acceptance fixture
-scale of 1 000 tasks and 4 985 dependency references, against the real pinned
-helper and a real SQLite store:
+## You can see which commands ran
 
-| Budget | Limit | Measured |
-| --- | --- | --- |
-| Full snapshot traversal | 3 000 ms | 59 ms (5 pages) |
-| Peak helper RSS | 128 MiB | 8.7 MiB |
-| Response page | 2 MiB | 192 KB |
-| Warm dashboard p95 over 100 requests | 250 ms | 11.6 ms board, 7.9 ms events, 7.3 ms economics |
-| Durable growth over unchanged polls | 1 KiB | 0 bytes |
+Every operation now records a bounded, path-free summary — program, subcommand,
+flags: `cargo test --locked`, `git commit -m`, `read --outline` — and never an
+operand, so no path, query, secret or heredoc crosses. It shows on each activity
+row and in a per-project **savings by command** table with runs, produced →
+delivered tokens and the saved share, under a one-sentence brief: tools produced
+N tokens, HZR handed the model M. `[privacy] publish_command_summaries = false`
+withholds it. Rows written before 0.9.1 keep their family only.
 
-Zero growth across roughly twenty unchanged polling cycles is the idempotency
-rule working: an identical snapshot bumps no revision, writes no event and
-touches no projection.
+## The dashboard carries the brand
 
-## Unchanged
+The header's placeholder letter is replaced by the HZR logomark — one hollow
+flame on an ink tile, the ember gradient of the illustration, legible at 16 px
+in a browser tab. The
+illustration itself sits behind the header as a masked ember overlay: only its
+flame survives the mask, as warmth in the dark, and it carries no information so
+assistive technology never sees it.
 
-The observer remains an optional local build. No prebuilt adapted agtx binary is
-published while its pinned LICENSE/manifest provenance discrepancy is
-unresolved. Polling observes transitions, not every message between agents.
-Reported amounts, current-catalog API estimates and HZR output estimates stay
-separate, and an unobserved value renders as an em dash with a reason rather
-than a zero. Windows acceptance for the observer is still unverified; the
-component reports itself unavailable there.
+## Unchanged from 0.9.0
+
+Identities are readable by default and can be withheld; the observer stays an
+optional local build; Windows acceptance for it is still unverified.

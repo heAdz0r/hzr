@@ -141,6 +141,10 @@ async fn component_status(config: &Config, json: bool) -> Result<ExitCode> {
 
 fn repository_root() -> Option<PathBuf> {
     if let Ok(executable) = std::env::current_exe() {
+        // `current_exe()` keeps the public `~/.local/bin/hzr` symlink on macOS,
+        // whose grandparent is `~/.local`, not the release root. Resolving it
+        // first is the same correction `visualizer::assets_directory` needs.
+        let executable = executable.canonicalize().unwrap_or(executable);
         if let Some(root) = executable.parent().and_then(Path::parent) {
             let bundled = root.join("share/hzr");
             if bundled.join(AGTX_PATCH).is_file() && bundled.join("engines.lock.toml").is_file() {
@@ -681,6 +685,51 @@ mod tests {
             std::fs::read(&destination).expect("still installed"),
             installed
         );
+    }
+
+    /// An installed `hzr` finds its packaged patch through the public symlink.
+    ///
+    /// `current_exe()` reports `~/.local/bin/hzr` on macOS, whose grandparent is
+    /// `~/.local` rather than the release root, so deriving the bundle path
+    /// without resolving the link sent the lookup to a directory that holds no
+    /// patch and told the user to run from a checkout they may not have.
+    #[test]
+    fn the_bundle_root_is_derived_from_the_resolved_executable() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let release = directory.path().join("versions/v9.9.9/bin");
+        let share = directory.path().join("versions/v9.9.9/share/hzr");
+        std::fs::create_dir_all(&release).expect("release bin");
+        std::fs::create_dir_all(share.join("patches/agtx")).expect("packaged patches");
+        std::fs::write(release.join("hzr"), "#!/bin/sh\n").expect("binary");
+        std::fs::write(share.join("engines.lock.toml"), "schema_version = 1\n").expect("lock");
+        std::fs::write(share.join(AGTX_PATCH), "patch\n").expect("patch");
+
+        let public = directory.path().join("bin");
+        std::fs::create_dir_all(&public).expect("public bin");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(release.join("hzr"), public.join("hzr")).expect("symlink");
+
+        let unresolved = public.join("hzr");
+        let naive = unresolved
+            .parent()
+            .and_then(Path::parent)
+            .map(|root| root.join("share/hzr"));
+        assert!(
+            !naive
+                .expect("naive root")
+                .join("engines.lock.toml")
+                .is_file(),
+            "the unresolved symlink path is the wrong root, which is the bug"
+        );
+
+        let resolved = unresolved.canonicalize().expect("resolved binary");
+        let root = resolved
+            .parent()
+            .and_then(Path::parent)
+            .map(|root| root.join("share/hzr"))
+            .expect("bundle root");
+        assert!(root.join("engines.lock.toml").is_file());
+        assert!(root.join(AGTX_PATCH).is_file());
     }
 
     #[test]

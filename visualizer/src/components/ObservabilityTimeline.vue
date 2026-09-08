@@ -33,13 +33,16 @@ function label(value: string): string {
         <header><strong>Recent traces</strong><span>{{ traces.length }}</span></header>
         <div v-if="traces.length" class="trace-list">
           <details v-for="trace in traces" :key="trace.hash">
-            <summary>
+            <!-- 0.9.1: one grid, label first and left-aligned, so a list of traces scans as a list. -->
+            <summary class="trace-summary">
               <span class="trace-state" :class="{ failed: trace.failed }"></span>
-              <strong class="trace-label">{{ trace.label }}</strong>
-              <code :title="trace.hash">{{ shortHash(trace.hash) }}</code>
-              <span v-if="trace.linkedFrom" class="trace-continuation">continues {{ shortHash(trace.linkedFrom) }}</span>
-              <span>{{ relativeTime(trace.observedAt) }}</span>
-              <strong>{{ formatDuration(trace.duration) }}</strong>
+              <span class="trace-title">
+                <strong class="trace-label">{{ trace.label }}</strong>
+                <small>{{ trace.spans.length }} span{{ trace.spans.length === 1 ? "" : "s" }}<template v-if="trace.linkedFrom"> · continues {{ shortHash(trace.linkedFrom) }}</template></small>
+              </span>
+              <code class="trace-hash" :title="trace.hash">{{ shortHash(trace.hash) }}</code>
+              <time class="trace-time">{{ relativeTime(trace.observedAt) }}</time>
+              <strong class="trace-duration">{{ formatDuration(trace.duration) }}</strong>
             </summary>
             <ol>
               <li v-if="trace.linkedFrom" class="trace-link-row">
@@ -59,7 +62,7 @@ function label(value: string): string {
             </ol>
           </details>
         </div>
-        <p v-else>No traced control-plane requests in this project snapshot.</p>
+        <p v-else class="trace-empty">No traced requests since this daemon started. Spans live in memory and reset on restart; the next HZR-routed command in this workspace appears here.</p>
       </section>
 
       <section aria-label="Recent lifecycle events">

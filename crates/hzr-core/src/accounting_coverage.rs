@@ -134,6 +134,11 @@ pub struct AccountingReceiptContext {
     /// the daemon attaches it to the receipts it drains.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evasion: Option<hzr_protocol::EvasionAttribution>,
+    /// 0.9.1: the bounded, path-free summary of the command this producer will run
+    /// (`cargo test --locked`). Receipts carry no command text, and a ledger row that
+    /// says only `[engine receipt]` cannot tell a reader which command it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_summary: Option<String>,
 }
 
 fn default_accounting_channel() -> hzr_protocol::AccountingChannel {
@@ -218,6 +223,30 @@ impl AccountingReceiptContextStore {
         channel: hzr_protocol::AccountingChannel,
         evasion: Option<hzr_protocol::EvasionAttribution>,
     ) -> Result<(), AccountingCoverageError> {
+        self.register_with_command(
+            correlation_id,
+            project_path,
+            agent,
+            session_id,
+            channel,
+            evasion,
+            None,
+        )
+    }
+
+    /// 0.9.1: register a producer together with the summary of the command it will run,
+    /// so the rows drained from its receipts can name the command.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_with_command(
+        &self,
+        correlation_id: &str,
+        project_path: &Path,
+        agent: Option<&str>,
+        session_id: Option<&str>,
+        channel: hzr_protocol::AccountingChannel,
+        evasion: Option<hzr_protocol::EvasionAttribution>,
+        command_summary: Option<String>,
+    ) -> Result<(), AccountingCoverageError> {
         validate_correlation_id(correlation_id)?;
         let context = AccountingReceiptContext {
             correlation_id: correlation_id.to_owned(),
@@ -228,6 +257,7 @@ impl AccountingReceiptContextStore {
             completed_at_unix: None,
             channel,
             evasion,
+            command_summary,
         };
         let path = self.context_path(correlation_id);
         let parent = path.parent().ok_or_else(|| {

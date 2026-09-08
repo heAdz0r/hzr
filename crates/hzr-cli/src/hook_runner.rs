@@ -315,13 +315,14 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
             // register the same context the daemon would have; the sweeper drains it later.
             if let Some(correlation_id) = outcome.accounting_correlation_id.as_deref() {
                 if let Err(error) = AccountingReceiptContextStore::new(&config.data_dir)
-                    .register_with_attribution(
+                    .register_with_command(
                         correlation_id,
                         &cwd,
                         Some(&agent_attribution(input)),
                         input.get("session_id").and_then(Value::as_str),
                         AccountingChannel::HookCli,
                         outcome.evasion, // 0.8.3: classification travels with the registration
+                        hzr_core::command_summary(raw), // 0.9.1
                     )
                 {
                     eprintln!("HZR daemon-free accounting context was not registered: {error}");
@@ -348,6 +349,11 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         let _ = record_local_policy_decision(config, input, &decision, None).await;
     }
     write_decision(input, decision, accounting_notice.as_deref())
+}
+
+/// Is the daemon accepting connections right now? A bounded TCP probe, no request. // 0.9.1
+fn daemon_listening(config: &Config) -> bool {
+    std::net::TcpStream::connect_timeout(&config.daemon.bind, Duration::from_millis(250)).is_ok()
 }
 
 fn accounting_transition(config: &Config, input: &Value, degraded: bool) -> Option<String> {
@@ -1701,13 +1707,31 @@ pub async fn feedback(config: &Config) {
         let _ = update_session(config, &input, |state| state.operations_this_turn = 0);
     }
     if event == "UserPromptSubmit" && state.accounting_degraded {
-        let _ = write_hook_json(json!({
-            "hookSpecificOutput": {
-                "hookEventName": "UserPromptSubmit",
-                "additionalContext": "HZR ACCOUNTING DEGRADED: the ledger is not recording this session's operations, so savings and leakage for this interval are unknown rather than zero. Check `hzr daemon service status`.",
+        // 0.9.1: the flag is set when one hook write fails and was cleared only by the
+        // next hook-routed write. A session whose later commands are accounted through
+        // `hzr exec run` inside the command itself never makes such a write, so the
+        // operator read "not recording" for hours over a ledger that was recording.
+        // The prompt boundary is where they read it; probe the daemon here and, if it
+        // answers, record the recovery instead of repeating a stale claim.
+        if daemon_listening(config) {
+            if let Some(notice) = accounting_transition(config, &input, false) {
+                let _ = write_hook_json(json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": notice,
+                    }
+                }));
+                return;
             }
-        }));
-        return;
+        } else {
+            let _ = write_hook_json(json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": "HZR ACCOUNTING DEGRADED: the ledger is not recording this session's operations, so savings and leakage for this interval are unknown rather than zero. Check `hzr daemon service status`.",
+                }
+            }));
+            return;
+        }
     }
     match event {
         "UserPromptSubmit" if crosses_threshold && !state.nudged => {

@@ -19,7 +19,7 @@ pub struct Config {
     pub activation: ActivationConfig,
     pub instructions: InstructionConfig,
     pub billing: BillingConfig,
-    // 0.9.0: opt-in monitoring integrations live in the one configuration loader.
+    // 0.9.1: opt-in monitoring integrations live in the one configuration loader.
     pub integrations: IntegrationsConfig,
 }
 
@@ -36,7 +36,7 @@ impl Default for Config {
             activation: ActivationConfig::default(),
             instructions: InstructionConfig::default(),
             billing: BillingConfig::default(),
-            integrations: IntegrationsConfig::default(), // 0.9.0
+            integrations: IntegrationsConfig::default(), // 0.9.1
         }
     }
 }
@@ -247,7 +247,7 @@ impl Config {
                 return Err(ConfigError::InvalidBilling);
             }
         }
-        self.integrations.agtx.validate()?; // 0.9.0
+        self.integrations.agtx.validate()?; // 0.9.1
         Ok(())
     }
 }
@@ -674,6 +674,14 @@ pub struct PrivacyConfig {
     /// whose every leaf reads "content is redacted" answers no question at all.
     /// The data is the operator's own.
     pub publish_memory_content: bool,
+    /// Show the bounded, path-free command summary (`cargo test --locked`) of
+    /// each recorded operation on the local dashboard.
+    ///
+    /// On by default. The summary carries the program, its subcommand and its
+    /// flags and never an operand, so no path, query or secret is in it; what
+    /// it adds is the ability to see which commands an agent ran and which of
+    /// them HZR made cheaper. // 0.9.1
+    pub publish_command_summaries: bool,
 }
 
 impl Default for PrivacyConfig {
@@ -684,6 +692,7 @@ impl Default for PrivacyConfig {
             redact_secrets: true,
             publish_workspace_names: true,
             publish_memory_content: true,
+            publish_command_summaries: true, // 0.9.1
         }
     }
 }
@@ -785,13 +794,15 @@ mod tests {
     fn identities_are_readable_by_default_and_can_be_withheld() {
         let config: Config = toml::from_str("").expect("default config");
         assert!(config.privacy.publish_workspace_names);
+        assert!(config.privacy.publish_command_summaries); // 0.9.1
         assert!(config.privacy.publish_memory_content);
         assert!(config.integrations.agtx.publish_task_titles);
 
         let withheld: Config = toml::from_str(
-            "[privacy]\npublish_workspace_names = false\npublish_memory_content = false\n[integrations.agtx]\npublish_task_titles = false"
+            "[privacy]\npublish_workspace_names = false\npublish_memory_content = false\npublish_command_summaries = false\n[integrations.agtx]\npublish_task_titles = false"
         ).expect("explicit opt-out");
         assert!(!withheld.privacy.publish_workspace_names);
+        assert!(!withheld.privacy.publish_command_summaries); // 0.9.1
         assert!(!withheld.privacy.publish_memory_content);
         assert!(!withheld.integrations.agtx.publish_task_titles);
     }

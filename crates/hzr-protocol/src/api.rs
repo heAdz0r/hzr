@@ -1061,6 +1061,18 @@ pub struct DashboardProject {
     pub registered_at_ms: u64,
     pub last_seen_at_ms: u64,
     pub artifacts: DashboardProjectArtifacts,
+    /// Exactly what is wrong, in a sentence, when the state is not `ready`.
+    ///
+    /// A coloured `Warning` chip tells a reader that something is off and
+    /// nothing about what, so every non-ready state names the missing artifact
+    /// or the broken path instead of leaving them to guess.
+    #[serde(default)]
+    pub state_reason: Option<String>,
+    /// A command that addresses `state_reason`, with the real workspace path
+    /// already substituted so it can be copied and run as-is. `None` when the
+    /// situation has no command that would help.
+    #[serde(default)]
+    pub remedy: Option<String>,
     pub command: String,
 }
 
@@ -1245,6 +1257,21 @@ pub struct DashboardLocalActivity {
     pub unscoped_operations: u64,
     pub measurement: String,
     pub recent_operations: Vec<DashboardLocalOperation>,
+    /// Savings by command for the selected project; empty for older daemons. // 0.9.1
+    #[serde(default)]
+    pub command_breakdown: Vec<DashboardCommandBreakdown>,
+}
+
+/// One kind of command inside a project: how often it ran and what it saved. // 0.9.1
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardCommandBreakdown {
+    pub command: String,
+    pub executions: u64,
+    pub optimized_executions: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub avg_execution_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1273,6 +1300,10 @@ pub struct DashboardLocalOperation {
     pub execution_ms: u64,
     pub replacement: Option<String>,
     pub rationale: Option<String>,
+    /// Bounded, path-free command summary (`cargo test --locked`); absent when the
+    /// install withholds it or the row predates 0.9.1. // 0.9.1
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_summary: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1382,6 +1413,9 @@ pub struct DashboardRawPublicEstimate {
     pub entry_version: String,
     pub preliminary: bool,
     pub disclaimer: String,
+    /// Why this is a potential figure: what evidence is still missing. // 0.9.1
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_qualifier: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

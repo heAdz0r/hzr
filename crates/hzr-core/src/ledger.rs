@@ -26,7 +26,7 @@ use crate::billing::{
     receipt_payload_hash, validate_receipt, validate_receipt_observed_at,
 };
 
-// 0.9.0: durable projections for the opt-in agtx Agent Observatory.
+// 0.9.1: durable projections for the opt-in agtx Agent Observatory.
 pub mod agents;
 mod delivery;
 mod fleet;
@@ -365,6 +365,25 @@ pub struct ProjectActivitySummary {
     pub unscoped_operations: u64,
     pub excluded_legacy_operations: u64,
     pub recent_operations: Vec<ProjectOperationSummary>,
+    /// Savings grouped by the bounded command summary, for the local dashboard. // 0.9.1
+    #[serde(default)]
+    pub command_breakdown: Vec<ProjectCommandBreakdown>,
+}
+
+/// What one kind of command cost and saved inside a project.
+///
+/// A family (`other`) cannot be acted on; `cargo test --locked` can. The key is
+/// the path-free summary recorded with each operation, falling back to the safe
+/// recorded command for rows written before the summary existed. // 0.9.1
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProjectCommandBreakdown {
+    pub command: String,
+    pub executions: u64,
+    pub optimized_executions: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub avg_execution_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -393,6 +412,9 @@ pub struct ProjectOperationSummary {
     pub execution_ms: u64,
     pub replacement: Option<String>,
     pub rationale: Option<String>,
+    /// Bounded, path-free rendering of the command (`cargo test --locked`). // 0.9.1
+    #[serde(default)]
+    pub command_summary: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1595,7 +1617,7 @@ impl Ledger {
                  );",
             )
             .map_err(LedgerError::Database)?;
-        agents::init_agent_schema(&connection)?; // 0.9.0
+        agents::init_agent_schema(&connection)?; // 0.9.1
         initialize_identity_hmac(&connection)?;
         let _ = connection.execute("ALTER TABLE commands ADD COLUMN agent TEXT", []);
         let _ = connection.execute(
@@ -1659,6 +1681,7 @@ impl Ledger {
             "replacement_reason TEXT",
             "fidelity_reservation_id TEXT",
             "host_grant_applied INTEGER NOT NULL DEFAULT 0",
+            "command_summary TEXT", // 0.9.1
         ] {
             let _ = connection.execute(&format!("ALTER TABLE commands ADD COLUMN {column}"), []);
         }
@@ -3351,12 +3374,12 @@ impl Ledger {
                     evasion_class, wrapper_depth, interpreter_kind, path_form, stage_count,
                     hatch_marker, avoidable, enforcement_tier, fidelity_reason,
                     fidelity_validation, replacement_capability, replacement_route,
-                    replacement_reason, host_grant_applied
+                    replacement_reason, host_grant_applied, command_summary
                  ) VALUES (
                     datetime('now'), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
                     ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
                     ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40,
-                    ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49
+                    ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50
                  )",
                 params![
                     format!("[redacted:{family}]"),
@@ -3416,6 +3439,11 @@ impl Ledger {
                     replacement_route,
                     replacement.as_ref().map(|value| value.rationale),
                     accounting.host_grant_applied,
+                    // 0.9.1: a placeholder original (`[engine receipt]`) is not a command;
+                    // a row with no summary falls back to its family in every view.
+                    (!original_command.starts_with('['))
+                        .then(|| crate::operation::command_summary(original_command))
+                        .flatten(),
                 ],
             )
             .map_err(LedgerError::Database)?;
@@ -3429,6 +3457,7 @@ impl Ledger {
         agent: Option<&str>,
         session_id: Option<&str>,
         channel: EngineAccountingChannel,
+        command_summary: Option<&str>, // 0.9.1: from the producer's registration
     ) -> Result<bool, LedgerError> {
         let measurement = match receipt.measurement {
             EngineAccountingMeasurement::Estimated => OperationMeasurement::Estimated,
@@ -3486,8 +3515,10 @@ impl Ledger {
             return Ok(false);
         }
         let recorded_command = format!("hzr {}", receipt.attribution.mode.as_str());
+        // 0.9.1: the summary is already path-free, so it can stand as the original
+        // command; a receipt registered without one keeps the placeholder.
         self.record_operation_attributed_with_detail(
-            "[engine receipt]",
+            command_summary.unwrap_or("[engine receipt]"),
             &recorded_command,
             receipt.baseline_tokens,
             receipt.delivered_tokens,
@@ -3955,6 +3986,7 @@ impl Ledger {
                         unscoped_operations: 0,
                         excluded_legacy_operations: 0,
                         recent_operations: Vec::new(),
+                        command_breakdown: Vec::new(), // 0.9.1
                     })
                 },
             )
@@ -4046,7 +4078,8 @@ impl Ledger {
             .prepare_cached(
                 "SELECT id, timestamp, rtk_cmd, agent, command_hash, project_hash, session_hash,
                         input_tokens, output_tokens, input_tokens - output_tokens, exec_time_ms,
-                        COALESCE(route, ''), producer_version, accounting_policy_version
+                        COALESCE(route, ''), producer_version, accounting_policy_version,
+                        command_summary
                  FROM commands
                  WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
                    AND accounting_policy_version = ?2
@@ -4095,13 +4128,66 @@ impl Ledger {
                         execution_ms: row.get(10)?,
                         replacement,
                         rationale,
+                        command_summary: row.get(14)?, // 0.9.1
                     })
                 },
             )
             .map_err(LedgerError::Database)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(LedgerError::Database)?;
+        summary.command_breakdown = self.project_command_breakdown(&project_hash)?; // 0.9.1
         Ok(summary)
+    }
+
+    /// Savings by command for one project: which commands the agents ran and
+    /// what each one cost and saved, keyed by the bounded summary. // 0.9.1
+    fn project_command_breakdown(
+        &self,
+        project_hash: &str,
+    ) -> Result<Vec<ProjectCommandBreakdown>, LedgerError> {
+        let raw_predicate = raw_route_sql_predicate("rtk_cmd");
+        let query = format!(
+            "SELECT COALESCE(command_summary, rtk_cmd) AS command,
+                    COUNT(*),
+                    COALESCE(SUM(CASE WHEN NOT ({raw_predicate}) THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN ({raw_predicate}) THEN output_tokens ELSE input_tokens END), 0),
+                    COALESCE(SUM(output_tokens), 0),
+                    COALESCE(SUM(CASE WHEN ({raw_predicate}) THEN 0 ELSE input_tokens - output_tokens END), 0),
+                    CAST(COALESCE(AVG(exec_time_ms), 0) AS INTEGER)
+             FROM commands
+             WHERE instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0
+               AND accounting_policy_version = ?2
+               AND command_hash IS NOT NULL
+               AND measurement = 'estimated'
+               AND COALESCE(route, '') != 'native_unaccounted'
+               AND accounting_stage = 'internal_transport'
+             GROUP BY command
+             ORDER BY COUNT(*) DESC, command
+             LIMIT 16"
+        );
+        let mut statement = self
+            .connection
+            .prepare_cached(&query)
+            .map_err(LedgerError::Database)?;
+        let rows = statement
+            .query_map(
+                params![project_hash, CURRENT_ACCOUNTING_POLICY_VERSION],
+                |row| {
+                    Ok(ProjectCommandBreakdown {
+                        command: row.get(0)?,
+                        executions: row.get(1)?,
+                        optimized_executions: row.get(2)?,
+                        baseline_tokens_estimated: row.get(3)?,
+                        delivered_tokens_estimated: row.get(4)?,
+                        net_avoided_tokens_estimated: row.get(5)?,
+                        avg_execution_ms: row.get(6)?,
+                    })
+                },
+            )
+            .map_err(LedgerError::Database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LedgerError::Database)?;
+        Ok(rows)
     }
 
     pub fn migrate_legacy_efficiency(

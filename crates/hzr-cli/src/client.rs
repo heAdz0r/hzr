@@ -341,7 +341,7 @@ impl DaemonClient {
         self.post("/v1/billing/receipts", receipt).await
     }
 
-    // 0.9.0: agtx Agent Observatory control. Every one of these is a mutation
+    // 0.9.1: agtx Agent Observatory control. Every one of these is a mutation
     // or an operator read, so all of them go through the authenticated routes.
     pub async fn agents_status(&self) -> Result<AgentsStatusResponse, ClientError> {
         self.get("/v1/agents/status").await

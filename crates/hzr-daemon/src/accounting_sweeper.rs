@@ -51,11 +51,13 @@ pub(crate) fn register(
         session_id,
         channel,
         None,
+        None,
     )
 }
 
 /// 0.8.3: register a producer with the classification of the command it will run, so the
 /// sweeper can attribute receipts that arrive without one (see [`attribute_receipt`]).
+#[allow(clippy::too_many_arguments)]
 pub fn register_attributed(
     state: &AppState,
     correlation_id: &str,
@@ -64,19 +66,21 @@ pub fn register_attributed(
     session_id: Option<&str>,
     channel: AccountingChannel,
     evasion: Option<EvasionAttribution>,
+    command_summary: Option<String>, // 0.9.1
 ) -> Result<(), String> {
     let runner = state.rtk.runner().map_err(|error| error.to_string())?;
     runner
         .accounting_handle(correlation_id)
         .map_err(|error| error.to_string())?;
     AccountingReceiptContextStore::new(&state.config.data_dir)
-        .register_with_attribution(
+        .register_with_command(
             correlation_id,
             project_path,
             agent,
             session_id,
             channel,
             evasion,
+            command_summary,
         )
         .map_err(|error| error.to_string())
 }
@@ -375,6 +379,7 @@ async fn sweep_orphan_journals(
                     None,
                     None,
                     AccountingChannel::HookCli,
+                    None, // 0.9.1: an orphan has no registration to name its command
                 )
                 .await
                 .map_err(|error| error.to_string())?;
@@ -493,6 +498,7 @@ async fn sweep_context(
                 context.agent.clone(),
                 context.session_id.clone(),
                 context.channel,
+                context.command_summary.clone(), // 0.9.1
             )
             .await
             .map_err(|error| error.to_string())?;
@@ -1162,6 +1168,7 @@ exit 64
             Some("s3"),
             hzr_protocol::AccountingChannel::HookCli,
             Some(registered),
+            None,
         )
         .expect("attributed registration");
         let contexts = AccountingReceiptContextStore::new(&state.config.data_dir);

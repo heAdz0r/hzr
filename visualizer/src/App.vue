@@ -4,6 +4,7 @@ import { version as uiVersion } from "../package.json";
 import AgentsWorkspace from "./components/AgentsWorkspace.vue";
 import CommandCard from "./components/CommandCard.vue";
 import AppIcon from "./components/AppIcon.vue";
+import BrandMark from "./components/BrandMark.vue";
 import MetricCard from "./components/MetricCard.vue";
 import EvidenceOverview from "./components/EvidenceOverview.vue";
 import MemoryGraph from "./components/MemoryGraph.vue";
@@ -56,7 +57,9 @@ const selectedProjectLabel = computed(() =>
   snapshot.value?.projects.find((project) => project.worktree_id === selectedProjectId.value)?.name ??
   (selectedProjectId.value ? "Selected project" : "Choose a workspace"),
 );
-const projectFilter = ref<ProjectState | "all">("all");
+// 0.9.1: "selected" scopes the registry to the project in view, and is the
+// default whenever one is selected — the scope selector means scope everywhere.
+const projectFilter = ref<ProjectState | "all" | "selected">("all");
 const toast = ref<string | null>(null);
 const liveMessage = ref("");
 const selectedProjectId = ref<string | null>(null);
@@ -70,7 +73,8 @@ let mounted = false;
 let fullRefreshBackoffMs = FULL_REFRESH_INTERVAL_MS;
 let observabilityBackoffMs = OBSERVABILITY_INTERVAL_MS;
 
-const projectFilters: Array<ProjectState | "all"> = [
+const projectFilters: Array<ProjectState | "all" | "selected"> = [
+  "selected",
   "all",
   "ready",
   "warming",
@@ -79,9 +83,17 @@ const projectFilters: Array<ProjectState | "all"> = [
   "unavailable",
 ];
 
-const projects = computed(() =>
-  filterProjects(snapshot.value?.projects ?? [], query.value, projectFilter.value),
-);
+const projects = computed(() => {
+  const loaded = snapshot.value?.projects ?? [];
+  if (projectFilter.value === "selected") {
+    return filterProjects(
+      loaded.filter((project) => project.worktree_id === selectedProjectId.value),
+      query.value,
+      "all",
+    );
+  }
+  return filterProjects(loaded, query.value, projectFilter.value);
+});
 
 // `Standby` covers two different situations. Say which one this is, so an idle daemon is
 // never read as a stalled one.
@@ -148,6 +160,15 @@ async function refresh(manual = false): Promise<void> {
       if (!refreshRequests.isCurrent(ticket, selectedProjectId.value)) return;
       const previousState = snapshot.value?.overall_state;
       snapshot.value = next;
+      // 0.9.1: with no stored selection the daemon opens on the workspace it saw
+      // most recently. Adopt it so every scoped panel follows the same project.
+      if (selectedProjectId.value === null && next.selected_worktree_id) {
+        selectedProjectId.value = next.selected_worktree_id;
+        if (projectFilter.value === "all") projectFilter.value = "selected";
+        refreshRequests.switchProject(next.selected_worktree_id);
+        observabilityRequests.switchProject(next.selected_worktree_id);
+        try { window.localStorage.setItem("hzr.dashboard.project", next.selected_worktree_id); } catch { /* storage may be unavailable */ }
+      }
       error.value = null;
       if (manual) liveMessage.value = "Dashboard refreshed";
       if (previousState && previousState !== next.overall_state) {
@@ -171,6 +192,7 @@ async function selectProject(worktreeId: string | null): Promise<void> {
   refreshRequests.switchProject(worktreeId);
   observabilityRequests.switchProject(worktreeId);
   selectedProjectId.value = worktreeId;
+  projectFilter.value = worktreeId ? "selected" : "all"; // 0.9.1: the registry follows the scope
   error.value = null;
   if (worktreeId) window.localStorage.setItem("hzr.dashboard.project", worktreeId);
   else window.localStorage.removeItem("hzr.dashboard.project");
@@ -330,18 +352,21 @@ async function copyCommand(command: string): Promise<void> {
   }, 2_500);
 }
 
-function filterLabel(filter: ProjectState | "all"): string {
+function filterLabel(filter: ProjectState | "all" | "selected"): string {
+  if (filter === "selected") return "Selected";
   return filter === "all" ? "All" : projectStateLabel[filter];
 }
 
-function filterCount(filter: ProjectState | "all"): number {
+function filterCount(filter: ProjectState | "all" | "selected"): number {
   const all = snapshot.value?.projects ?? [];
+  if (filter === "selected") return selectedProjectId.value === null ? 0 : 1;
   return filter === "all" ? all.length : all.filter((project) => project.state === filter).length;
 }
 
 onMounted(() => {
   mounted = true;
   selectedProjectId.value = window.localStorage.getItem("hzr.dashboard.project");
+  if (selectedProjectId.value) projectFilter.value = "selected"; // 0.9.1
   refreshRequests.switchProject(selectedProjectId.value);
   observabilityRequests.switchProject(selectedProjectId.value);
   void refresh();
@@ -364,10 +389,15 @@ onBeforeUnmount(() => {
 <template>
   <a class="skip-link" href="#main-content">Skip to dashboard</a>
   <div class="app-shell">
+    <!-- The brand illustration, masked into the ink so only its flame reads as
+         an ember glow behind the header. Purely decorative: it carries no
+         information, so it is hidden from assistive technology, and it is a
+         static image, so reduced-motion needs nothing from it. -->
+    <div class="hero-overlay" aria-hidden="true"></div>
     <header class="dashboard-header">
       <div class="dashboard-topbar">
         <a class="wordmark" href="#main-content" aria-label="HZR dashboard home" @click="section = 'overview'">
-          <span class="wordmark-glyph" aria-hidden="true">H</span>
+          <BrandMark :size="42" />
           <span class="wordmark-copy"><strong>HZR</strong><small>Agent control plane</small></span>
         </a>
         <div v-if="snapshot" class="dashboard-status">
@@ -525,8 +555,8 @@ onBeforeUnmount(() => {
                 <dd>{{ snapshot.index_observatory.search_activity.observed_at ? relativeTime(Date.parse(snapshot.index_observatory.search_activity.observed_at)) : "None observed" }}</dd>
               </div>
               <div><dt>Artifacts</dt><dd>{{ formatBytes(snapshot.index_observatory.artifacts.size_bytes) }} · {{ snapshot.index_observatory.artifacts.modified_at_ms ? relativeTime(snapshot.index_observatory.artifacts.modified_at_ms) : "No files" }}</dd></div>
-              <div><dt>Watcher age</dt><dd>{{ snapshot.index_observatory.watcher.uptime_ms !== null ? formatDuration(snapshot.index_observatory.watcher.uptime_ms) : "Standby" }}</dd></div>
-              <div><dt>Ownership</dt><dd>{{ snapshot.index_observatory.watcher.owned_by_hzr ? "HZR managed" : "Not attached" }}</dd></div>
+              <div><dt>Watcher age</dt><dd>{{ snapshot.index_observatory.watcher.uptime_ms !== null ? formatDuration(snapshot.index_observatory.watcher.uptime_ms) : "Idle · starts on demand" }}</dd></div>
+              <div><dt>Ownership</dt><dd>{{ snapshot.index_observatory.watcher.owned_by_hzr ? "HZR managed" : "Not running · HZR starts it on the next search" }}</dd></div>
             </dl>
           </article>
         </section>
@@ -571,6 +601,10 @@ onBeforeUnmount(() => {
               :native-count="snapshot.local_activity.native_unaccounted_operations"
               :unmeasured-count="snapshot.local_activity.unmeasured_bypass_operations"
               :measurement="snapshot.local_activity.measurement"
+              :breakdown="snapshot.local_activity.command_breakdown ?? []"
+              :baseline="snapshot.local_activity.baseline_tokens_estimated"
+              :delivered="snapshot.local_activity.delivered_tokens_estimated"
+              :net-avoided="snapshot.local_activity.net_avoided_tokens_estimated"
             />
             <SessionRoi :roi="snapshot.session_roi" />
             <details class="detail-disclosure"><summary>Request traces & lifecycle events</summary><ObservabilityTimeline :observability="snapshot.observability" /></details>
@@ -766,7 +800,7 @@ onBeforeUnmount(() => {
 
     <footer v-if="snapshot" class="site-footer">
       <div class="footer-brand">
-        <span class="wordmark-glyph small" aria-hidden="true">H</span>
+        <BrandMark :size="26" />
         <div><strong>HZR Visualizer</strong><span>Private · local · loopback only</span></div>
       </div>
       <div class="footer-meta">

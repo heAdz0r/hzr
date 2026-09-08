@@ -51,16 +51,17 @@ pub use ledger::{
     LegacyEfficiencyMigration, LegacyEfficiencySource, OperationAttribution, OperationContext,
     OperationFamilySummary, OperationModeSummary, PolicyEvent, PolicyEventSummary, PriceTable,
     PrivacyPseudonymizer, PrivacySafeFidelityOperation, PrivacySafeOperationKey,
-    ProjectActivitySummary, ProjectOperationRoute, ProjectOperationSummary,
-    RERUN_DETECTION_WINDOW_OPERATIONS, ReadPipelineSummary, SessionEfficiencySummary,
-    SessionEvasionSummary, StatsCollection, StatsQuery, StatsSnapshot, discover_legacy_rtk_history,
-    inspect_legacy_efficiency, privacy_identity_hash, privacy_keyed_identity_hash,
+    ProjectActivitySummary, ProjectCommandBreakdown, ProjectOperationRoute,
+    ProjectOperationSummary, RERUN_DETECTION_WINDOW_OPERATIONS, ReadPipelineSummary,
+    SessionEfficiencySummary, SessionEvasionSummary, StatsCollection, StatsQuery, StatsSnapshot,
+    discover_legacy_rtk_history, inspect_legacy_efficiency, privacy_identity_hash,
+    privacy_keyed_identity_hash,
 };
 pub use operation::{
     FidelityBudget, FidelityPreflight, OperationChannel, OperationClassification,
     OperationMeasurement, OperationRoute, OperationSubsystem, RawFidelityReason,
-    RawFidelityRequest, RawReplacement, ReplacementCapability, classify_operation,
+    RawFidelityRequest, RawReplacement, ReplacementCapability, classify_operation, command_summary,
     explicit_raw_fidelity, fidelity_preflight, fidelity_preflight_required,
     first_class_replacement, is_direct_hzr_command, managed_raw_payload, raw_fidelity_request,
     raw_route_sql_predicate,
-};
+}; // 0.9.1: command_summary

@@ -117,8 +117,11 @@ fn test_recent_activity_exposes_only_hashed_request_context() {
         operation.session_hash.as_deref(),
         Some(privacy_identity_hash("session", "thread-123").as_str())
     );
+    // 0.9.1: the row names its command — program and flags — and nothing that
+    // could carry a path, a query or a secret.
+    assert_eq!(operation.command_summary.as_deref(), Some("rg --files"));
     let encoded = serde_json::to_string(operation).expect("operation JSON");
-    for sensitive in ["visualizer/src", "/work/project", "thread-123", "--files"] {
+    for sensitive in ["visualizer/src", "/work/project", "thread-123"] {
         assert!(!encoded.contains(sensitive), "leaked {sensitive}");
     }
 }

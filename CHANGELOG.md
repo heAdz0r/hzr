@@ -4,6 +4,31 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-08
+
+### Fixed
+
+- `hzr agents component install` works from an installed HZR, not only from a source checkout. `current_exe()` reports the public `~/.local/bin/hzr` symlink on macOS — the very link `install.sh` creates and tells users to put on PATH — and deriving the bundle root from it landed two directories short of the packaged patch, so every installed user who tried the new opt-in feature was told to run from a checkout they may not have. The executable is now resolved first, the same correction the visualizer asset lookup already needed.
+
+- The posture chip no longer reads `Standby` over a healthy control plane with a project in view. The dashboard matched the selected project by comparing a filesystem path with the published identity digest, so it never matched, and the overall state fell through to "nothing selected". Selection now matches on the worktree identity.
+- `grepai index · Standby · Managed index is waiting for its watcher` is gone. The watcher is started by routed searches and reaped after fifteen idle minutes, and searches are answered from the index whether or not it is up; a complete index with an idle watcher is now `Ready`, with the detail saying the watcher starts on the next search. Only a workspace with no index is in standby, and its detail carries the `hzr index init` command.
+- A dashboard opened without a stored project selection opens on the workspace seen most recently instead of an empty scope; the UI adopts the daemon's choice so every scoped panel agrees.
+- Pricing is no longer withheld whenever host delivery is unconfirmed — which, with no host acknowledging deliveries, was always. The `claude-opus-5` catalog entry the dashboard reported as `Unavailable` was there the whole time; the early return happened before the catalog was even named. The estimate is now priced and carries a `delivery_qualifier` saying what evidence is missing, and the catalog identity is always reported.
+
+### Added
+
+- Command visibility. The ledger records a bounded, path-free `command_summary` for every operation — the program, its subcommand for tools that have them, and its flags (`cargo test --locked`, `git commit -m`, `read --outline`) — and never an operand, so no path, query, secret or heredoc can cross. A family alone (`other` for most of a session) said nothing about which commands an agent ran or which ones HZR made cheaper. The summary appears on each activity row and in a per-project **savings by command** table (`local_activity.command_breakdown`) with runs, produced → delivered tokens and the saved share per command. `[privacy] publish_command_summaries = false` withholds it. Rows written before 0.9.1 keep their family only.
+- An efficiency brief above the activity stream: one sentence — tools produced N tokens, HZR handed the model M, −P% — with a scale bar and the net figure, so the saving is legible before any table.
+
+### Changed
+
+- The `HZR ACCOUNTING DEGRADED` note at each prompt no longer sticks for hours over a ledger that is recording. The flag was set when one hook write failed and cleared only by the next hook-routed write, which a session whose commands are accounted through `hzr exec run` inside the command never makes. The prompt hook now probes the daemon and, when it answers, records the recovery instead of repeating a stale claim.
+- Rows drained from fork-core receipts — the `hzr exec run` path, most of a session — used to record `[engine receipt]` as their command. The command summary now travels with the receipt registration (daemon rewrite, approved execution, MCP fork tools and the daemon-free hook fallback alike), so those rows name their command too.
+- The trace list is a real grid: label first and left-aligned, digest, time and duration in fixed columns; the empty state says spans live in memory since daemon start rather than implying nothing was traced.
+- A cleaner logomark and favicon: one hollow flame on an ink tile that reads at 16 px; the first mark quoted the whole hero bird and turned to noise in a browser tab.
+- A workspace that is not ready now says exactly what is wrong and how to fix it, on the card itself. A `Warning` chip alone sent the reader hunting; each non-ready state names the missing index artifacts or the broken path and hands back a real `hzr index init --workspace ~/your/path` with the path already substituted, copyable in one click. A directory that no longer exists gets an explanation and no command, because any command would fail against it.
+- The dashboard carries the HZR brand: a phoenix-flame logomark replaces the placeholder letter tile in the header and the browser tab, and the brand illustration sits behind the header as a masked ember overlay. The project card's expanded view is reorganised into a reading order — diagnosis, index artifacts with what each is for, then actions.
+
 ## [0.9.0] - 2026-09-08
 
 ### Changed

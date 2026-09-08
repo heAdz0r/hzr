@@ -570,11 +570,13 @@ exit 64
             payload["session_roi"]["reported_actual"]["savings_microunits"],
             10
         );
+        // 0.9.1: unconfirmed host delivery no longer withholds pricing; with the
+        // default config the estimate is simply opt-in and disabled.
         assert!(payload["session_roi"]["raw_public_estimate"].is_null());
         assert!(
             payload["session_roi"]["raw_public_estimate_unavailable_reason"]
                 .as_str()
-                .is_some_and(|reason| reason.contains("linked, complete host delivery"))
+                .is_some_and(|reason| reason.contains("opt-in"))
         );
         assert_eq!(
             payload["session_roi"]["top_commands"][0]["command_family"],
@@ -1069,10 +1071,12 @@ exit 64
             .expect("dashboard body");
         let dashboard_body =
             String::from_utf8(dashboard_body.to_vec()).expect("UTF-8 dashboard body");
+        // 0.9.1: the program name and its flags are the published command summary;
+        // the operand (`private-needle`) must still never cross.
+        assert!(dashboard_body.contains("secret-dashboard-command --query"));
         for secret in [
             alpha_canonical.to_str().expect("UTF-8 alpha workspace"),
             alpha_repository.as_str(),
-            "secret-dashboard-command",
             "private-needle",
             "secret-provider-agent",
             "secret-provider-session",

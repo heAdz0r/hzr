@@ -3908,3 +3908,571 @@ main {
     overflow-x: auto;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * 0.9.1 — brand mark, hero overlay, and the project diagnosis panel
+ * ------------------------------------------------------------------------- */
+
+/* The logomark sits where the letter tile used to; same footprint, same glow. */
+.brand-mark {
+  display: block;
+  flex: none;
+  filter: drop-shadow(0 0 22px rgba(243, 106, 33, 0.28));
+}
+
+/* The brand illustration, masked into the ink. It is parchment-light, so it is
+ * pulled through a luminosity blend and a steep gradient mask: only the flame
+ * survives, as a warm bloom behind the header, and the dark theme stays dark. */
+.hero-overlay {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 520px;
+  pointer-events: none;
+  background-image: url("/hzr-hero.png");
+  background-repeat: no-repeat;
+  background-position: right -6% top -30%;
+  background-size: min(1180px, 92vw) auto;
+  opacity: 0.16;
+  mix-blend-mode: screen;
+  -webkit-mask-image:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.55) 45%, transparent 100%),
+    radial-gradient(ellipse 70% 80% at 78% 12%, #000 0%, transparent 70%);
+  mask-image:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.55) 45%, transparent 100%),
+    radial-gradient(ellipse 70% 80% at 78% 12%, #000 0%, transparent 70%);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  z-index: 0;
+}
+
+.app-shell > :not(.hero-overlay) {
+  position: relative;
+  z-index: 1;
+}
+
+/* Project card: the detail becomes a reading order — diagnosis, facts, actions. */
+.project-detail {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  align-items: stretch;
+  padding: 20px 20px 22px 68px;
+}
+
+.project-diagnosis {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px 16px 20px;
+  border: 1px solid rgba(255, 180, 84, 0.22);
+  border-radius: 14px;
+  background:
+    radial-gradient(ellipse 60% 100% at 0% 0%, rgba(255, 180, 84, 0.1), transparent 70%),
+    rgba(255, 180, 84, 0.04);
+}
+
+.project-diagnosis::before {
+  content: "";
+  position: absolute;
+  inset: 14px auto 14px 0;
+  width: 3px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--ember-300), var(--warning));
+}
+
+.project-state-degraded .project-diagnosis,
+.project-state-unavailable .project-diagnosis {
+  border-color: rgba(255, 98, 109, 0.24);
+  background:
+    radial-gradient(ellipse 60% 100% at 0% 0%, rgba(255, 98, 109, 0.1), transparent 70%),
+    rgba(255, 98, 109, 0.04);
+}
+
+.project-state-degraded .project-diagnosis::before,
+.project-state-unavailable .project-diagnosis::before {
+  background: linear-gradient(180deg, var(--error), var(--ember-650));
+}
+
+.project-diagnosis-ready {
+  border-color: rgba(61, 220, 151, 0.18);
+  background:
+    radial-gradient(ellipse 60% 100% at 0% 0%, rgba(61, 220, 151, 0.08), transparent 70%),
+    rgba(61, 220, 151, 0.03);
+}
+
+.project-diagnosis-ready::before {
+  background: linear-gradient(180deg, var(--success), rgba(61, 220, 151, 0.4));
+}
+
+.project-diagnosis-head {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.project-diagnosis-head p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.project-diagnosis-glyph {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--warning);
+  background: rgba(255, 180, 84, 0.12);
+}
+
+.project-state-degraded .project-diagnosis-glyph,
+.project-state-unavailable .project-diagnosis-glyph {
+  color: var(--error);
+  background: rgba(255, 98, 109, 0.12);
+}
+
+.project-diagnosis-ready .project-diagnosis-glyph {
+  color: var(--success);
+  background: rgba(61, 220, 151, 0.12);
+}
+
+/* The remedy is a real command with the real path: rendered as code, copied
+ * with one click, never a placeholder to fill in. */
+.project-remedy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "label label" "code copy";
+  gap: 8px 12px;
+  align-items: center;
+  margin-left: 46px;
+}
+
+.project-remedy-label {
+  grid-area: label;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.project-remedy code {
+  grid-area: code;
+  min-width: 0;
+  padding: 10px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius-10);
+  background: rgba(10, 11, 13, 0.7);
+  color: var(--parchment-100);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.project-remedy-copy {
+  grid-area: copy;
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: var(--radius-10);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.project-remedy-none {
+  margin: 0 0 0 46px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.project-facts {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(220px, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.artifact-grid > div {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  grid-template-areas: "light name" "light hint";
+  gap: 2px 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--surface-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.artifact-grid .artifact-light {
+  grid-area: light;
+  align-self: center;
+}
+
+.artifact-name {
+  grid-area: name;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.artifact-hint {
+  grid-area: hint;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.artifact-ready .artifact-name {
+  color: var(--text-primary);
+}
+
+.project-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .project-detail {
+    padding-left: 20px;
+  }
+  .project-facts {
+    grid-template-columns: 1fr;
+  }
+  .artifact-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .project-remedy,
+  .project-remedy-none {
+    margin-left: 0;
+  }
+  .project-remedy {
+    grid-template-columns: 1fr;
+    grid-template-areas: "label" "code" "copy";
+  }
+  .hero-overlay {
+    height: 380px;
+    opacity: 0.12;
+    background-size: 900px auto;
+    background-position: right -40% top -20%;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   0.9.1 — efficiency brief, savings by command, trace list, type refinements
+   --------------------------------------------------------------------------- */
+
+.savings-brief {
+  display: grid;
+  gap: 14px;
+  margin: 14px 0 18px;
+  padding: 20px 22px;
+  border: 1px solid color-mix(in srgb, var(--success) 26%, var(--surface-border));
+  border-radius: 18px;
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(61, 220, 151, 0.1), transparent 55%),
+    rgba(10, 11, 13, 0.6);
+}
+
+.savings-brief-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 32px;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.savings-sentence {
+  margin: 6px 0 0;
+  max-width: 44ch;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.45;
+  letter-spacing: -0.005em;
+}
+
+.savings-sentence strong {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.savings-pct {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: rgba(61, 220, 151, 0.12);
+  vertical-align: middle;
+}
+
+.savings-pct.negative,
+.savings-brief-total.negative strong,
+.command-breakdown-saved.negative strong {
+  color: var(--error);
+}
+
+.savings-brief-total {
+  display: grid;
+  justify-items: end;
+  text-align: right;
+}
+
+.savings-brief-total strong {
+  color: var(--success);
+  font-size: clamp(1.9rem, 3.4vw, 2.8rem);
+  font-weight: 600;
+  letter-spacing: -0.045em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.savings-brief-total span {
+  max-width: 22ch;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.savings-scale {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.savings-scale i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+}
+
+.savings-scale-baseline {
+  width: 100%;
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0 6px, transparent 6px 12px);
+}
+
+.savings-scale-delivered {
+  background: linear-gradient(90deg, var(--ember-650), var(--ember-300));
+  box-shadow: 0 0 18px rgba(243, 106, 33, 0.35);
+  transition: width 400ms ease;
+}
+
+.command-breakdown {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.command-breakdown-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.1fr) 84px minmax(160px, 1.6fr) 110px;
+  gap: 14px;
+  align-items: center;
+  min-height: 38px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.command-breakdown-row:nth-child(even) {
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.command-breakdown-head {
+  min-height: 0;
+  padding-top: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--surface-border);
+  border-radius: 0;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.command-breakdown-head span:last-child,
+.command-breakdown-saved,
+.command-breakdown-runs {
+  text-align: right;
+}
+
+.command-breakdown-row > code {
+  overflow: hidden;
+  color: var(--parchment-100);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-breakdown-runs small,
+.command-breakdown-bars small,
+.command-breakdown-saved small {
+  color: var(--text-tertiary);
+}
+
+.command-breakdown-bars {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  align-content: center;
+}
+
+.command-breakdown-bars i {
+  display: block;
+  height: 5px;
+  border-radius: 999px;
+}
+
+.command-breakdown-bars .baseline-bar {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.command-breakdown-bars .delivered-bar {
+  background: linear-gradient(90deg, var(--ember-650), var(--ember-300));
+}
+
+.command-breakdown-bars small {
+  font-size: 10px;
+}
+
+.command-breakdown-saved {
+  display: grid;
+  justify-items: end;
+  line-height: 1.15;
+}
+
+.command-breakdown-saved strong {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.command-breakdown-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.activity-command {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--parchment-100);
+}
+
+/* Trace list: label first, everything else in fixed columns. */
+.trace-list summary.trace-summary {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto auto 3.75rem;
+  gap: 12px;
+  align-items: center;
+  justify-content: initial;
+  padding: 10px 4px;
+}
+
+.trace-title {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  text-align: left;
+}
+
+.trace-title .trace-label {
+  overflow: hidden;
+  font-size: 12.5px;
+  letter-spacing: -0.005em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-title small {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+.trace-hash {
+  max-width: 11rem;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+.trace-time {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.trace-duration {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.trace-empty {
+  margin: 8px 0 0;
+  color: var(--text-tertiary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.session-roi-disclaimer {
+  margin: 0 0 12px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.session-roi-value small,
+.session-roi-evidence dd small {
+  color: var(--text-tertiary);
+}
+
+/* Type refinements: numbers align, headings tighten, labels breathe. */
+.metric-value,
+.evidence-number,
+.activity-volume,
+.activity-saving,
+.observatory-statline strong {
+  font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.eyebrow {
+  letter-spacing: 0.12em;
+}
+
+@media (max-width: 720px) {
+  .command-breakdown-row {
+    grid-template-columns: minmax(0, 1fr) 64px 90px;
+  }
+
+  .command-breakdown-bars {
+    display: none;
+  }
+
+  .trace-list summary.trace-summary {
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+  }
+
+  .trace-hash,
+  .trace-time {
+    display: none;
+  }
+}

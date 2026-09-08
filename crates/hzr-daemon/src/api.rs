@@ -323,7 +323,13 @@ pub async fn dashboard(
     let health = health_response(&state, memory_health.clone(), index_health);
     let registry = registered_workspaces(&state.config.data_dir);
     let registry_warnings = registry.warnings.len();
-    let selected = dashboard_registration(&registry.registrations, query.project.as_deref())?;
+    // 0.9.1: a dashboard opened without a stored selection used to show an empty
+    // project scope and a `Standby` posture over a healthy control plane. The
+    // workspace seen most recently is what an operator opened this for.
+    let selected = match query.project.as_deref() {
+        Some(project) => dashboard_registration(&registry.registrations, Some(project))?,
+        None => default_dashboard_registration(&registry.registrations),
+    };
     let all_projects = registry
         .registrations
         .iter()
@@ -435,17 +441,37 @@ pub async fn dashboard(
         }
     }
     if let Some(grepai) = services.iter_mut().find(|service| service.id == "grepai") {
-        grepai.state = index_observatory.state;
-        grepai.detail = match index_observatory.state {
-            DashboardState::Ready => "Managed index artifacts and watcher are ready".into(),
-            DashboardState::Rebuilding => "Managed index artifacts are warming".into(),
-            DashboardState::Degraded => index_observatory.watcher.detail.clone(),
-            _ => "Managed index is waiting for its watcher".into(),
-        };
+        if selected.is_some() {
+            grepai.state = index_observatory.state;
+            grepai.detail = match index_observatory.state {
+                // 0.9.1: the watcher is on demand and idles out after 15 minutes;
+                // an idle watcher over a complete index is a ready index, not a
+                // component "waiting" for something.
+                DashboardState::Ready if index_observatory.watcher.pid.is_some() => {
+                    "Managed index is complete; the HZR-owned watcher is live".into()
+                }
+                DashboardState::Ready => {
+                    "Managed index is complete; semantic search is served from it and the watcher starts on the next routed search".into()
+                }
+                DashboardState::Rebuilding => "Managed index artifacts are warming".into(),
+                DashboardState::Degraded => index_observatory.watcher.detail.clone(),
+                DashboardState::Standby => {
+                    "No index for this workspace yet; run `hzr index init --workspace .`".into()
+                }
+                _ => index_observatory.watcher.detail.clone(),
+            };
+        } else {
+            grepai.detail = "Engine is ready; select a workspace to see its index".into();
+        }
     }
-    let selected_project = selected_path
-        .as_deref()
-        .and_then(|root| all_projects.iter().find(|project| project.root == root));
+    // 0.9.1: `DashboardProject.root` is the published identity digest, not the
+    // path, so matching it against the filesystem path never found the selected
+    // project and the posture read `Standby` with a project in view.
+    let selected_project = selected.as_ref().and_then(|registration| {
+        all_projects
+            .iter()
+            .find(|project| project.worktree_id == registration.worktree_id)
+    });
     let overall_state = dashboard_overall_state(&services, selected_project);
     let reduction_pct = signed_percentage(
         estimated.net_avoided_tokens_estimated,
@@ -566,8 +592,28 @@ pub async fn dashboard(
                     execution_ms: operation.execution_ms,
                     replacement: operation.replacement,
                     rationale: operation.rationale,
+                    command_summary: operation
+                        .command_summary
+                        .filter(|_| state.config.privacy.publish_command_summaries), // 0.9.1
                 })
                 .collect(),
+            command_breakdown: if state.config.privacy.publish_command_summaries {
+                activity
+                    .command_breakdown
+                    .into_iter()
+                    .map(|entry| hzr_protocol::DashboardCommandBreakdown {
+                        command: entry.command,
+                        executions: entry.executions,
+                        optimized_executions: entry.optimized_executions,
+                        baseline_tokens_estimated: entry.baseline_tokens_estimated,
+                        delivered_tokens_estimated: entry.delivered_tokens_estimated,
+                        net_avoided_tokens_estimated: entry.net_avoided_tokens_estimated,
+                        avg_execution_ms: entry.avg_execution_ms,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }, // 0.9.1
         },
         observability,
         provider_receipts: DashboardProviderReceipts {
@@ -672,17 +718,18 @@ fn dashboard_session_roi(
         )
     };
 
-    if !efficiency.explicit_delivery.complete {
-        response.raw_public_estimate_unavailable_reason = Some(
-            "producer reductions cannot be priced without linked, complete host delivery evidence"
-                .into(),
-        );
-        return response;
-    }
+    // 0.9.1: this used to return before the catalog was even named whenever host
+    // delivery was unconfirmed — which, with no host acknowledging deliveries, was
+    // always. The dashboard then said "Unavailable" about a catalog that has the
+    // selected model in it. The estimate is now priced and labelled with what is
+    // missing, which is what "preliminary" was always meant to carry.
     let catalog = load_pricing_catalog(config.billing.pricing_file.as_deref());
     if let Ok(catalog) = &catalog {
         response.catalog_identity = Some(catalog.identity.clone());
     }
+    let delivery_qualifier = (!efficiency.explicit_delivery.complete).then(|| {
+        "Host delivery is unconfirmed: this prices producer-side reductions only, not a measured saving in the model's context.".to_owned()
+    });
     if !config.billing.public_estimate_enabled {
         response.raw_public_estimate_unavailable_reason =
             Some("public pricing estimate is opt-in and currently disabled".into());
@@ -720,6 +767,7 @@ fn dashboard_session_roi(
                 entry_version: estimate.entry_version,
                 preliminary: estimate.preliminary,
                 disclaimer: estimate.disclaimer,
+                delivery_qualifier, // 0.9.1
             });
         }
         Err(error) => response.raw_public_estimate_unavailable_reason = Some(error.to_string()),
@@ -1164,7 +1212,9 @@ fn index_snapshot_observatory(
             ready_marker_observed: snapshot.watcher.ready_marker_observed,
             detail: match snapshot.watcher.state {
                 IndexWatcherState::Live => "HZR-owned watcher is live".into(),
-                IndexWatcherState::Standby => "Watcher has not started for this daemon".into(),
+                IndexWatcherState::Standby => {
+                    "Watcher is idle; HZR starts it on the next routed search and stops it after 15 idle minutes".into() // 0.9.1
+                }
                 IndexWatcherState::Failed => "Managed watcher exited unexpectedly".into(),
             },
         },
@@ -1178,6 +1228,11 @@ fn dashboard_index_state(artifact_ready: bool, watcher_state: IndexWatcherState)
         IndexWatcherState::Failed => DashboardState::Degraded,
         IndexWatcherState::Live if artifact_ready => DashboardState::Ready,
         IndexWatcherState::Live => DashboardState::Rebuilding,
+        // 0.9.1: the watcher is started by routed searches and reaped after an idle
+        // TTL. Searches are answered from the artifacts whether or not it is up, so
+        // a complete index with an idle watcher is ready; only a missing index is
+        // in standby.
+        IndexWatcherState::Standby if artifact_ready => DashboardState::Ready,
         IndexWatcherState::Standby => DashboardState::Standby,
     }
 }
@@ -1269,6 +1324,16 @@ fn index_artifact_metadata(workspace: &Workspace) -> (u64, Option<u64>) {
 
 fn elapsed_ms(started_at: Instant) -> u64 {
     u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The workspace to show when the request names none: the one seen most recently. // 0.9.1
+fn default_dashboard_registration(
+    registrations: &[WorkspaceRegistration],
+) -> Option<WorkspaceRegistration> {
+    registrations
+        .iter()
+        .max_by_key(|registration| (registration.last_seen_at_ms, registration.registered_at_ms))
+        .cloned()
 }
 
 fn dashboard_registration(
@@ -1404,6 +1469,66 @@ fn workspace_display_path(root: &Path) -> Option<String> {
     (!cleaned.is_empty()).then_some(cleaned)
 }
 
+/// Say exactly what is wrong with a workspace, and what fixes it.
+///
+/// A `Warning` chip on its own sends the reader hunting; naming the absent
+/// artifact and handing back a command with the real path already in it is the
+/// difference between a status light and an answer. The commands here are real
+/// `hzr index` subcommands, and the path is the workspace's own — never a
+/// `<placeholder>` the reader has to fill in.
+fn workspace_diagnosis(
+    state: DashboardProjectState,
+    artifacts: &DashboardProjectArtifacts,
+    display_path: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let scope = display_path.unwrap_or("<workspace>");
+    let missing = |artifacts: &DashboardProjectArtifacts| {
+        let mut absent = Vec::new();
+        if !artifacts.config_present {
+            absent.push("config");
+        }
+        if !artifacts.vectors_present {
+            absent.push("vectors");
+        }
+        if !artifacts.symbols_present {
+            absent.push("symbols");
+        }
+        absent.join(", ")
+    };
+    match state {
+        DashboardProjectState::Ready => (None, None),
+        DashboardProjectState::Warming => (
+            Some(format!(
+                "Index artifacts are incomplete: {} not written yet. grepai builds them on demand, so this clears itself once the workspace is indexed.",
+                missing(artifacts)
+            )),
+            Some(format!("hzr index init --workspace {scope}")),
+        ),
+        DashboardProjectState::Registered => (
+            Some(
+                "The workspace is registered but has no index config, so nothing is indexed for it yet."
+                    .to_string(),
+            ),
+            Some(format!("hzr index init --workspace {scope}")),
+        ),
+        DashboardProjectState::Degraded => (
+            Some(
+                "The index directory recorded for this workspace is missing, so its artifacts cannot be read."
+                    .to_string(),
+            ),
+            Some(format!("hzr index init --workspace {scope}")),
+        ),
+        DashboardProjectState::Unavailable => (
+            Some(format!(
+                "The registered directory {scope} no longer exists. HZR keeps the registration rather than deleting evidence; re-create the directory or unregister it."
+            )),
+            // Nothing to run against a path that is gone: `hzr index init`
+            // would fail, and suggesting it would waste the reader's time.
+            None,
+        ),
+    }
+}
+
 fn dashboard_project(
     registration: &WorkspaceRegistration,
     observability: &crate::observability::ObservabilityStore,
@@ -1440,14 +1565,20 @@ fn dashboard_project(
     let named = publish_names
         .then(|| workspace_display_name(&registration.root))
         .flatten();
+    let display_path = named
+        .is_some()
+        .then(|| workspace_display_path(&registration.root))
+        .flatten();
+    // The diagnosis uses the published path when there is one, so a copied
+    // command runs as-is; a withholding install still gets the sentence.
+    let (state_reason, remedy) = workspace_diagnosis(state, &artifacts, display_path.as_deref());
     Ok(DashboardProject {
         name: named
             .clone()
             .unwrap_or_else(|| format!("Project {short_identity}")),
-        display_path: named
-            .is_some()
-            .then(|| workspace_display_path(&registration.root))
-            .flatten(),
+        display_path: display_path.clone(),
+        state_reason,
+        remedy,
         root: identity,
         repository_id: observability.repository_hash(&registration.repository_id),
         worktree_id: registration.worktree_id.clone(),
@@ -2329,6 +2460,7 @@ pub(crate) async fn execute_command(
         request.session_id.as_deref(),
         request.channel,
         None, // 0.8.3: the execution envelope sets the attribution for the engine itself
+        hzr_core::command_summary(&request.command), // 0.9.1
     )?;
     let mut envelope = ExecutionEnvelope::allow_raw(command);
     envelope.decision = decision;
@@ -2725,6 +2857,7 @@ pub async fn exec_approval(
         pending.session_id.as_deref(),
         pending.channel,
         None, // 0.8.3: the execution envelope sets the attribution for the engine itself
+        hzr_core::command_summary(&canonical_command_text(&pending.requested)), // 0.9.1
     )?;
     let accounting_correlation_id = pending.accounting_correlation_id.clone();
     let mut envelope = ExecutionEnvelope::allow_raw(pending.requested);
@@ -2956,6 +3089,7 @@ pub async fn fork_run(
         None => (request.args, request.stdin, None),
     };
     validate_managed_fork_tool(&args, &cwd)?;
+    let command_summary = hzr_core::command_summary(&args.join(" ")); // 0.9.1
     let runner = state
         .rtk
         .runner()
@@ -2983,6 +3117,7 @@ pub async fn fork_run(
         agent,
         session_id,
         &operation_family,
+        command_summary,
     )
     .await?;
     let outcome = executed.outcome;
@@ -3020,6 +3155,18 @@ pub async fn fork_run(
     }))
 }
 
+/// The text of a canonical command for summarising; never executed, never stored. // 0.9.1
+fn canonical_command_text(command: &hzr_exec::CanonicalCommand) -> String {
+    match command {
+        hzr_exec::CanonicalCommand::Argv { program, args } => std::iter::once(program.as_str())
+            .chain(args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" "),
+        hzr_exec::CanonicalCommand::Shell { command, .. } => command.clone(),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn commit_fork_accounting(
     state: &AppState,
     handle: &ForkAccountingHandle,
@@ -3027,6 +3174,7 @@ async fn commit_fork_accounting(
     agent: Option<String>,
     session_id: Option<String>,
     operation_family: &str,
+    command_summary: Option<String>, // 0.9.1
 ) -> Result<(), ApiError> {
     let workspace_hash = privacy_identity_hash("workspace", project_path);
     let session_hash = session_id
@@ -3078,6 +3226,7 @@ async fn commit_fork_accounting(
                 agent.clone(),
                 session_id.clone(),
                 hzr_protocol::AccountingChannel::Mcp,
+                command_summary.clone(), // 0.9.1
             )
             .await
             .map_err(|error| {
@@ -3408,6 +3557,7 @@ pub async fn exec_rewrite(
         request.session_id.as_deref(),
         request.channel,
         outcome.evasion, // 0.8.3: the hook no longer exports this into the command
+        hzr_core::command_summary(&request.command), // 0.9.1: the row can name its command
     )?;
     record_exec_policy_event(&state, &request, &cwd, outcome.evasion.as_ref(), &decision).await?;
     // The attribution travels with the decision: the hook forwards it to the process that will
@@ -3429,6 +3579,7 @@ fn complete_accounting_context(state: &AppState, correlation_id: Option<&str>) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn register_accounting_context(
     state: &AppState,
     correlation_id: Option<&str>,
@@ -3437,6 +3588,7 @@ fn register_accounting_context(
     session_id: Option<&str>,
     channel: Option<hzr_protocol::AccountingChannel>,
     evasion: Option<hzr_protocol::EvasionAttribution>, // 0.8.3: travels with the registration
+    command_summary: Option<String>,                   // 0.9.1
 ) -> Result<(), ApiError> {
     let Some(correlation_id) = correlation_id else {
         return Ok(());
@@ -3449,6 +3601,7 @@ fn register_accounting_context(
         session_id,
         channel.unwrap_or(hzr_protocol::AccountingChannel::HookCli),
         evasion,
+        command_summary,
     )
     .map_err(|error| ApiError::internal(format!("accounting receipt registration failed: {error}")))
 }
@@ -4372,10 +4525,11 @@ mod tests {
         ManagedExecutionBudget, apply_caller_path, apply_host_grant, approved_execution_decision,
         caveman_engine_health, daemon_fidelity_preflight, dashboard_index_state,
         dashboard_memory_detail, dashboard_overall_state, dashboard_registration,
-        dashboard_search_activity, dashboard_session_roi, enforce_first_class,
-        fidelity_operation_record_for_context, fork_outcome_with_managed_unwrap,
-        materialize_managed_write, memory_mutation_targets, memory_ready_state,
-        overall_engine_state, raw_policy_evasion, validate_caller_path, validate_managed_fork_tool,
+        dashboard_search_activity, dashboard_session_roi, default_dashboard_registration,
+        enforce_first_class, fidelity_operation_record_for_context,
+        fork_outcome_with_managed_unwrap, materialize_managed_write, memory_mutation_targets,
+        memory_ready_state, overall_engine_state, raw_policy_evasion, validate_caller_path,
+        validate_managed_fork_tool,
     };
     use crate::ledger_writer::{LedgerWriter, PolicyEventRecord};
     use hzr_core::{
@@ -4505,12 +4659,24 @@ mod tests {
         assert_eq!(roi.selected_model, "qwen3.5-plus");
         assert_eq!(roi.receipt_provenance.as_deref(), Some("user_supplied"));
         assert!(!roi.receipt_externally_verified);
-        assert!(roi.raw_public_estimate.is_none());
+        // 0.9.1: unconfirmed host delivery qualifies the estimate instead of
+        // withholding it and the catalog that would have priced it.
         assert!(
-            roi.raw_public_estimate_unavailable_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("linked, complete host delivery"))
+            roi.catalog_identity.is_some(),
+            "catalog identity is always named"
         );
+        let estimate = roi
+            .raw_public_estimate
+            .as_ref()
+            .expect("a preliminary estimate is priced from the catalog");
+        assert!(estimate.preliminary);
+        assert!(
+            estimate
+                .delivery_qualifier
+                .as_deref()
+                .is_some_and(|qualifier| qualifier.contains("unconfirmed"))
+        );
+        assert!(roi.raw_public_estimate_unavailable_reason.is_none());
         assert_eq!(
             roi.reported_actual
                 .expect("separate imported claim")
@@ -5246,7 +5412,13 @@ exit 64
 
     #[test]
     fn index_state_distinguishes_standby_from_active_rebuild() {
-        let standby = dashboard_index_state(true, IndexWatcherState::Standby);
+        // 0.9.1: a complete index whose on-demand watcher has idled out is ready —
+        // searches are served from the artifacts — and only a missing index is in
+        // standby. This is what showed `Standby · waiting for its watcher` over a
+        // working semantic search.
+        let idle_complete = dashboard_index_state(true, IndexWatcherState::Standby);
+        assert_eq!(idle_complete, DashboardState::Ready);
+        let standby = dashboard_index_state(false, IndexWatcherState::Standby);
         assert_eq!(
             dashboard_overall_state(
                 &[DashboardService {
@@ -5305,6 +5477,31 @@ exit 64
         assert!(dashboard_registration(&[], Some("malformed")).is_err());
     }
 
+    /// A fresh dashboard used to open on no project at all; it opens on the
+    /// workspace seen most recently. // 0.9.1
+    #[test]
+    fn the_default_dashboard_project_is_the_most_recently_seen_workspace() {
+        let registration = |id: &str, last_seen_at_ms: u64| WorkspaceRegistration {
+            schema_version: 1,
+            root: std::path::PathBuf::from(format!("/tmp/{id}")),
+            repository_id: id.repeat(64),
+            worktree_id: id.repeat(64),
+            git_backed: true,
+            linked_worktree: false,
+            index_directory: std::path::PathBuf::from(format!("/tmp/{id}/.grepai")),
+            registered_at_ms: 1,
+            last_seen_at_ms,
+        };
+        assert!(default_dashboard_registration(&[]).is_none());
+        let selected = default_dashboard_registration(&[
+            registration("a", 10),
+            registration("b", 30),
+            registration("c", 20),
+        ])
+        .expect("a registered workspace is selected");
+        assert_eq!(selected.worktree_id, "b".repeat(64));
+    }
+
     #[test]
     fn public_memory_detail_separates_identity_hashing_from_content_redaction() {
         let privacy = hzr_core::PrivacyPseudonymizer::from_key("11".repeat(32)).expect("key");
@@ -5356,6 +5553,50 @@ exit 64
                 .count(),
             96
         );
+    }
+
+    /// A warning names the missing artifact and hands back a runnable command.
+    #[test]
+    fn a_non_ready_workspace_says_what_is_wrong_and_how_to_fix_it() {
+        let warming = DashboardProjectArtifacts {
+            config_present: true,
+            vectors_present: false,
+            symbols_present: false,
+            repository_graph_present: false,
+            size_bytes: 0,
+            modified_at_ms: None,
+        };
+        let (reason, remedy) = super::workspace_diagnosis(
+            DashboardProjectState::Warming,
+            &warming,
+            Some("~/Programming/compass"),
+        );
+        let reason = reason.expect("a warming workspace explains itself");
+        assert!(reason.contains("vectors, symbols"), "{reason}");
+        assert!(
+            !reason.contains("config"),
+            "present artifacts are not listed as missing"
+        );
+        assert_eq!(
+            remedy.as_deref(),
+            Some("hzr index init --workspace ~/Programming/compass"),
+            "the command carries the real path, not a placeholder"
+        );
+
+        let (reason, remedy) =
+            super::workspace_diagnosis(DashboardProjectState::Ready, &warming, None);
+        assert_eq!(reason, None);
+        assert_eq!(remedy, None);
+
+        // A directory that is gone gets an explanation and no command, because
+        // any command would fail against it.
+        let (reason, remedy) = super::workspace_diagnosis(
+            DashboardProjectState::Unavailable,
+            &warming,
+            Some("~/gone"),
+        );
+        assert!(reason.expect("explanation").contains("no longer exists"));
+        assert_eq!(remedy, None);
     }
 
     #[test]
@@ -5428,6 +5669,8 @@ exit 64
         let project = DashboardProject {
             name: "project".into(),
             display_path: None,
+            state_reason: None,
+            remedy: None,
             root: "project".into(),
             repository_id: "repository".into(),
             worktree_id: "worktree".into(),
@@ -5574,6 +5817,7 @@ exit 64
                 execution_ms: 3,
                 replacement: None,
                 rationale: None,
+                command_summary: None, // 0.9.1
             },
             ProjectOperationSummary {
                 ledger_id: 41,
@@ -5592,6 +5836,7 @@ exit 64
                 execution_ms: 17,
                 replacement: None,
                 rationale: None,
+                command_summary: None, // 0.9.1
             },
         ];
 

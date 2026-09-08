@@ -142,6 +142,19 @@ export interface DashboardLocalActivity {
   unscoped_operations: number;
   measurement: string;
   recent_operations: DashboardLocalOperation[];
+  /** Savings by command for the selected project; absent from older daemons. 0.9.1 */
+  command_breakdown?: DashboardCommandBreakdown[];
+}
+
+/** One kind of command inside a project: how often it ran and what it saved. 0.9.1 */
+export interface DashboardCommandBreakdown {
+  command: string;
+  executions: number;
+  optimized_executions: number;
+  baseline_tokens_estimated: number;
+  delivered_tokens_estimated: number;
+  net_avoided_tokens_estimated: number;
+  avg_execution_ms: number;
 }
 
 export interface DashboardLocalOperation {
@@ -161,6 +174,8 @@ export interface DashboardLocalOperation {
   execution_ms: number;
   replacement: string | null;
   rationale: string | null;
+  /** Bounded, path-free command summary such as `cargo test --locked`. 0.9.1 */
+  command_summary?: string | null;
 }
 
 export type TraceStage = "request" | "policy" | "engine" | "ledger";
@@ -230,6 +245,8 @@ export interface DashboardRawPublicEstimate {
   entry_version: string;
   preliminary: boolean;
   disclaimer: string;
+  /** What evidence is still missing for this figure to be more than potential. 0.9.1 */
+  delivery_qualifier?: string | null;
 }
 
 export interface DashboardSessionCommand {
@@ -293,6 +310,10 @@ export interface DashboardProject {
   registered_at_ms: number;
   last_seen_at_ms: number;
   artifacts: DashboardProjectArtifacts;
+  /** Exactly what is wrong when the state is not ready. */
+  state_reason?: string | null;
+  /** A runnable command with the real path already substituted, when one helps. */
+  remedy?: string | null;
   command: string;
 }
 

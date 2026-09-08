@@ -853,6 +853,160 @@ fn operation_identity(head: &str) -> String {
     }
 }
 
+/// Tools whose first positional word is a subcommand rather than an operand.
+///
+/// `git commit`, `cargo test` and `hzr memory recall` are what a reader needs to
+/// tell one operation from another; `cat <file>` is not, and the operand after
+/// `cat` is exactly the path the ledger must never publish.
+const SUBCOMMAND_TOOLS: &[&str] = &[
+    "hzr",
+    "rtk",
+    "git",
+    "gh",
+    "cargo",
+    "rustup",
+    "bun",
+    "npm",
+    "pnpm",
+    "yarn",
+    "npx",
+    "bunx",
+    "docker",
+    "podman",
+    "kubectl",
+    "helm",
+    "go",
+    "pip",
+    "pip3",
+    "uv",
+    "poetry",
+    "brew",
+    "apt",
+    "systemctl",
+    "launchctl",
+    "make",
+    "just",
+    "task",
+    "gradle",
+    "mvn",
+    "dotnet",
+    "terraform",
+    "aws",
+    "gcloud",
+    "az",
+    "flutter",
+    "swift",
+    "xcodebuild",
+    "icm",
+    "grepai",
+    "native",
+];
+
+const COMMAND_SUMMARY_MAX_CHARS: usize = 64; // 0.9.1
+const COMMAND_SUMMARY_MAX_PARTS: usize = 6;
+
+/// A bounded, path-free rendering of what a command was, for the local dashboard.
+///
+/// The ledger stores `[redacted:<family>]` for the command itself, and a family
+/// alone (`other` for four hundred of one session's operations) says nothing
+/// about which commands an agent used or which ones HZR made cheaper. This keeps
+/// only the program, its subcommand words for tools that have them, and its
+/// flags — never an operand, so a path, a query, a secret or a heredoc cannot
+/// cross — so a reader sees `cargo test --locked` or `hzr read --outline`, not
+/// the file that was read. Returns `None` for an empty command.
+pub fn command_summary(command: &str) -> Option<String> {
+    // 0.9.1
+    let words = shell_words(skip_leading_cd(command));
+    let (route, payload) = strip_bypass_prefix(&words);
+    let payload = match route {
+        OperationRoute::Bypassed => strip_execution_wrappers(payload),
+        OperationRoute::Optimized => strip_execution_wrappers(strip_wrappers(payload)),
+        OperationRoute::NativeUnaccounted => payload,
+    };
+    let head = payload.first()?;
+    let program = operation_identity(head);
+    let takes_subcommands = SUBCOMMAND_TOOLS.contains(&program.as_str());
+    let mut parts = vec![program];
+    let mut subcommands = 0;
+    let mut seen_flag = false;
+    for word in payload.iter().skip(1) {
+        if word
+            .chars()
+            .any(|character| matches!(character, '|' | ';' | '&' | '<' | '>' | '`' | '$'))
+        {
+            break;
+        }
+        if let Some(flag) = word.strip_prefix('-') {
+            let flag = flag
+                .split('=')
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+                .take(24)
+                .collect::<String>();
+            seen_flag = true;
+            if !flag.is_empty() {
+                parts.push(format!("-{flag}"));
+            }
+        } else if takes_subcommands && !seen_flag && subcommands < 2 && is_subcommand_word(word) {
+            // Subcommands precede flags (`git commit -m`); a bare word after a flag
+            // is that flag's value (`-p hzr-core`) and stays out.
+            parts.push(word.clone());
+            subcommands += 1;
+        }
+        if parts.len() >= COMMAND_SUMMARY_MAX_PARTS {
+            break;
+        }
+    }
+    Some(
+        parts
+            .join(" ")
+            .chars()
+            .take(COMMAND_SUMMARY_MAX_CHARS)
+            .collect(),
+    )
+}
+
+/// `cd <dir>; <command>` and `cd <dir> && <command>` are about the command, not
+/// the `cd`: an agent prefixes nearly every shell call with one, and a column of
+/// `cd` rows would say nothing. Drop leading `cd`/`pushd` segments only. // 0.9.1
+fn skip_leading_cd(command: &str) -> &str {
+    let mut rest = command.trim_start();
+    loop {
+        let head = rest.split_whitespace().next().unwrap_or_default();
+        if head != "cd" && head != "pushd" {
+            return rest;
+        }
+        let Some(separator) = rest.find(';').into_iter().chain(rest.find("&&")).min() else {
+            return rest;
+        };
+        let skip = if rest[separator..].starts_with("&&") {
+            2
+        } else {
+            1
+        };
+        rest = rest[separator + skip..].trim_start();
+        if rest.is_empty() {
+            return rest;
+        }
+    }
+}
+
+/// A subcommand looks like `commit`, `memory`, `Read`: one short word, no
+/// separators a path or a value would carry.
+fn is_subcommand_word(word: &str) -> bool {
+    !word.is_empty()
+        && word.len() <= 20
+        && word
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphabetic())
+        && word
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
 fn optimized_subsystem(head: &str) -> OperationSubsystem {
     match head {
         "read" | "cat" | "head" | "tail" | "nl" => OperationSubsystem::Read,
@@ -998,5 +1152,52 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn command_summaries_keep_programs_and_flags_but_never_operands() {
+        // 0.9.1
+        assert_eq!(
+            command_summary("hzr exec run 'cargo test --locked -p hzr-core'").as_deref(),
+            Some("cargo test --locked -p")
+        );
+        assert_eq!(
+            command_summary("hzr read /Users/someone/secret/notes.md --outline").as_deref(),
+            Some("read --outline")
+        );
+        assert_eq!(
+            command_summary("cat /etc/passwd | grep root").as_deref(),
+            Some("cat")
+        );
+        assert_eq!(
+            command_summary("git commit -m 'token=abc123'").as_deref(),
+            Some("git commit -m")
+        );
+        assert_eq!(
+            command_summary("sqlite3 ~/private.db 'select * from x'").as_deref(),
+            Some("sqlite3")
+        );
+        assert_eq!(
+            command_summary("native Read").as_deref(),
+            Some("native Read")
+        );
+        assert_eq!(
+            command_summary("cd /Users/someone/repo && cargo build --release").as_deref(),
+            Some("cargo build --release")
+        );
+        assert_eq!(
+            command_summary("cd /tmp; cd /var; git log -n 3").as_deref(),
+            Some("git log -n")
+        );
+        assert_eq!(command_summary("cd /tmp").as_deref(), Some("cd"));
+        assert_eq!(command_summary("   "), None);
+        let long = format!(
+            "cargo {}",
+            (0..40)
+                .map(|_| "--very-long-flag")
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+        assert!(command_summary(&long).expect("summary").chars().count() <= 64);
     }
 }
