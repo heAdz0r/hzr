@@ -284,6 +284,20 @@ pub fn record_completion_from_env(config: &Config, report: &DoctorReport) {
     record_completion_for_marker(config, Path::new(&requested), report);
 }
 
+/// Record the outcome of a manual `hzr doctor --reconcile-fleet --fix` run. It is the same
+/// pass `schedule_if_needed` launches detached, so the `reference_state` remedy can clear
+/// the warning that prescribes it. A run that carries the marker environment keeps the
+/// stricter path-checked flow.
+pub fn record_completion_for_manual_pass(config: &Config, report: &DoctorReport) {
+    if std::env::var(MARKER_ENV).is_ok() {
+        record_completion_from_env(config, report);
+        return;
+    }
+    if let Err(error) = record_completion(config, report) {
+        eprintln!("HZR reference-state completion was not recorded: {error:#}");
+    }
+}
+
 fn record_completion_for_marker(config: &Config, requested: &Path, report: &DoctorReport) {
     if requested != marker_path(config) {
         eprintln!(
@@ -462,6 +476,56 @@ mod tests {
         let marker = read_marker(&config).expect("read").expect("marker");
         assert_eq!(marker.state, ReferenceState::Complete);
         assert_eq!(marker.hzr_version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn manual_reconcile_pass_clears_a_failed_marker_without_the_env() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config = config(directory.path());
+        fs::create_dir_all(config.data_dir.join("runtime")).expect("runtime");
+        // The state the bug leaves behind: a pass recorded Failed for the running
+        // version, while a later manual `doctor --reconcile-fleet --fix` is healthy.
+        write_marker(
+            &config,
+            &ReferenceStateMarker {
+                schema_version: SCHEMA_VERSION,
+                hzr_version: env!("CARGO_PKG_VERSION").into(),
+                state: ReferenceState::Failed,
+                scheduled_at_unix: 1,
+                completed_at_unix: Some(2),
+                report_path: None,
+                summary: None,
+                error: Some("doctor still reports errors: fidelity_durability".into()),
+            },
+        )
+        .expect("marker");
+        assert_eq!(reference_state_check(&config).status, CheckStatus::Warning);
+
+        let report = DoctorReport {
+            hzr_version: env!("CARGO_PKG_VERSION").into(),
+            config_path: PathBuf::new(),
+            data_dir: config.data_dir.clone(),
+            workspace: PathBuf::new(),
+            healthy: true,
+            readiness: crate::diagnostics::ReadinessReport::default(),
+            checks: vec![DoctorCheck {
+                name: "daemon".into(),
+                status: CheckStatus::Pass,
+                detail: String::new(),
+            }],
+            client_workspace_bindings: Vec::new(),
+            response_codec_coverage: Vec::new(),
+            repair: None,
+            fidelity_reconcile: None,
+            fleet_reconcile: None,
+            orphan_cleanup: None,
+        };
+        // No MARKER_ENV in the test process: the manual path must record on its own.
+        record_completion_for_manual_pass(&config, &report);
+        let check = reference_state_check(&config);
+        assert_eq!(check.status, CheckStatus::Pass, "{}", check.detail);
+        let marker = read_marker(&config).expect("read").expect("marker");
+        assert_eq!(marker.state, ReferenceState::Complete);
     }
 
     #[test]
