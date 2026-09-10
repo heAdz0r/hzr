@@ -675,6 +675,9 @@ async fn failed_watcher_status_polling_does_not_extend_its_tombstone_ttl() {
     let data = tempfile::tempdir().expect("managed data root");
     write_source(repo.path(), "pub fn coordinated() {}\n");
     fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    // Failure must be observed before the one-second live idle TTL expires.
+    fs::write(repo.path().join("fake-watch-fast-failure"), b"enabled")
+        .expect("fast failure marker");
     let coordinator = IndexCoordinator::with_watcher_limits(
         data.path().to_path_buf(),
         PathBuf::from("git"),
@@ -1102,7 +1105,9 @@ case "$command_name" in
     fi
     cleanup() {{ rm -f "$log_dir/fake.pid" "$log_dir/fake.ready"; exit 0; }}
     trap cleanup INT TERM
-    while [ ! -f fake-watch-die ]; do sleep 1; done
+    watch_delay=1
+    if [ -f fake-watch-fast-failure ]; then watch_delay=0.01; fi
+    while [ ! -f fake-watch-die ]; do sleep "$watch_delay"; done
     rm -f "$log_dir/fake.pid" "$log_dir/fake.ready"
     exit 17
     ;;

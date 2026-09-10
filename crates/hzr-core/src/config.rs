@@ -527,8 +527,7 @@ impl Default for EngineConfig {
 
 impl EngineConfig {
     pub fn binary(&self, name: &str) -> PathBuf {
-        const MANAGED_BINARIES: [&str; 4] = ["grepai", "icm", "node", "rtk"];
-        if MANAGED_BINARIES.contains(&name) {
+        if BUNDLE_ENGINES.contains(&name) {
             return self
                 .directory
                 .as_ref()
@@ -549,7 +548,7 @@ fn discover_bundle_engine_directory() -> Option<PathBuf> {
 }
 
 /// Engine executables a bundle engine directory must contain to be usable.
-const BUNDLE_ENGINES: [&str; 4] = ["rtk", "grepai", "icm", "node"];
+const BUNDLE_ENGINES: [&str; 6] = ["rtk", "grepai", "icm", "node", "agtx", "hzr-agtx-observer"];
 
 fn has_all_engines(directory: &Path) -> bool {
     BUNDLE_ENGINES
@@ -781,6 +780,21 @@ fn sync_directory(_path: &Path) -> Result<(), std::io::Error> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_binaries_resolve_inside_the_bundle_without_path_lookup() {
+        let directory = PathBuf::from("/hzr-test-bundle/engines");
+        let config = EngineConfig {
+            directory: Some(directory.clone()),
+            ..EngineConfig::default()
+        };
+        for name in ["agtx", "hzr-agtx-observer"] {
+            assert_eq!(config.binary(name), directory.join(name));
+        }
+        assert_eq!(
+            config.binary("unmanaged-tool"),
+            PathBuf::from("unmanaged-tool")
+        );
+    }
 
     /// Names and content are published by default, and can be withheld.
     ///
@@ -809,13 +823,13 @@ mod tests {
 
     use std::fs;
     use std::net::SocketAddr;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use tempfile::tempdir;
 
     use super::{
-        ActivationMode, Config, ConfigError, EnabledWorkspace, EngineConfig, InstructionScope,
-        PolicyConfig, discover_bundle_engine_directory, sibling_engine_directory,
+        ActivationMode, BUNDLE_ENGINES, Config, ConfigError, EnabledWorkspace, EngineConfig,
+        InstructionScope, PolicyConfig, discover_bundle_engine_directory, sibling_engine_directory,
         stable_engine_directory,
     };
 
@@ -828,7 +842,7 @@ mod tests {
         fs::create_dir_all(&bin).expect("bin directory");
         fs::create_dir_all(&engines).expect("engines directory");
         fs::write(bin.join("hzr"), []).expect("hzr fixture");
-        for engine in ["rtk", "grepai", "icm", "node"] {
+        for engine in BUNDLE_ENGINES {
             fs::write(engines.join(engine), []).expect("engine fixture");
         }
         release_root
@@ -959,7 +973,7 @@ mod tests {
         fs::write(&executable, []).expect("write executable fixture");
 
         assert!(sibling_engine_directory(&executable).is_none());
-        for engine in ["rtk", "grepai", "icm", "node"] {
+        for engine in BUNDLE_ENGINES {
             fs::write(engines.join(engine), []).expect("write engine fixture");
         }
 

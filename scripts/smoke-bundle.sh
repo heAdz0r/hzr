@@ -379,7 +379,7 @@ HZR_DOCTOR_JSON="$(
 )"
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-  for (const name of ["engine_grepai", "engine_icm", "engine_rtk", "caveman_code"]) {
+  for (const name of ["engine_grepai", "engine_icm", "engine_rtk", "engine_agtx", "engine_hzr-agtx-observer", "caveman_code"]) {
     const check = report.checks.find((candidate) => candidate.name === name);
     if (!check || check.status !== "pass") {
       console.error(`assembled doctor check failed: ${name}`, check);

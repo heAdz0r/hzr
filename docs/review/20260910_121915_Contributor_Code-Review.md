@@ -77,8 +77,14 @@ installer/error tests. UI tests and production build passed.
 Full source gate passed: 59 suites, 2,940 passed, 0 failed, 3 intentionally
 ignored. This local run preceded the version-only bump to 0.9.5; release CI
 must validate the exact published commit. The first attempt hit the existing
-watcher tombstone timing test while a parallel bundle was compiling; its isolated
-rerun and the serial full rerun both passed. No failed run is counted green.
+watcher tombstone timing test. A later recurrence identified a fixture race:
+its one-second failure poll competed with a one-second live idle TTL.
+The failure fixture now polls at 10 ms; all 26 index integration tests passed.
+No production watcher policy was weakened and no failed run is counted green.
+Archive installation also caught the new engine names missing from the shared
+bundle-path resolver. The resolver now uses the required bundle inventory, with
+an explicit agtx/observer path regression and doctor smoke for both binaries.
+A real isolated board launch created index.db and projects/ and exited zero.
 All 535 patched upstream agtx library tests passed under isolated data/config/agent roots.
 The UI suite passed 37 tests and the production build. The high-severity npm audit
 gate passed, with one existing moderate adm-zip advisory (GHSA-vwc7-r8mq-g2x9)
