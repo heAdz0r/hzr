@@ -117,8 +117,8 @@ The Linux x64 CI bundle and `.github/workflows/bundle-cache.yml` warm release Ca
 and verified native component caches on `main`. Tagged releases restore those caches, then re-check
 every cached binary and pinned upstream licence before packaging it. Cache misses remain safe but
 slower: `scripts/build-bundle.sh` rebuilds and verifies the component from its pinned source. Set
-`HZR_WARM_COMPONENT_CACHE_ONLY=1` only for cache-warming jobs; it stops after grepai, ICM, and the
-managed RTK fork have been built and verified.
+`HZR_WARM_COMPONENT_CACHE_ONLY=1` only for cache-warming jobs; it stops after grepai, ICM, the
+managed RTK fork, agtx, and hzr-agtx-observer have been built and verified.
 
 ## Pull requests
 

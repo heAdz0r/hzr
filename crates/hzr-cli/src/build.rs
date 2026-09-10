@@ -23,11 +23,13 @@ use crate::release_version;
 /// Engines whose versions are verified after the switch. Checking `hzr --version` alone
 /// is what let a stale bundle look current: the public binary can be new while every
 /// engine underneath it is still the previous release's.
-const VERIFIED_ENGINES: [(&str, &[&str], &str); 4] = [
+const VERIFIED_ENGINES: [(&str, &[&str], &str); 6] = [
     ("rtk", &["--version"], "0.44.1-fork.1"),
     ("grepai", &["version"], "0.35.0"),
     ("icm", &["--version"], "0.10.61"),
     ("node", &["--version"], "22.17.1"),
+    ("agtx", &["--version"], "1.0.4"),
+    ("hzr-agtx-observer", &["--version"], "1.0.4"),
 ];
 const DAEMON_VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 const DAEMON_VERSION_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
@@ -394,9 +396,12 @@ mod tests {
     }
 
     #[test]
-    fn test_all_four_engines_are_verified_not_just_the_public_binary() {
+    fn test_all_six_engines_are_verified_not_just_the_public_binary() {
         let names: Vec<&str> = VERIFIED_ENGINES.iter().map(|(name, _, _)| *name).collect();
-        assert_eq!(names, vec!["rtk", "grepai", "icm", "node"]);
+        assert_eq!(
+            names,
+            vec!["rtk", "grepai", "icm", "node", "agtx", "hzr-agtx-observer"]
+        );
         assert!(
             !names.contains(&"hzr"),
             "verifying only hzr is what let a stale bundle look current"
@@ -405,12 +410,23 @@ mod tests {
 
     #[test]
     fn test_engine_pins_match_the_locked_versions() {
-        for (name, _, expected) in VERIFIED_ENGINES {
-            assert!(
-                !expected.is_empty(),
-                "{name} must assert a concrete pinned version"
-            );
-        }
+        let manifest = hzr_core::locked_engines().expect("engine lock parses");
+        let mut locked: Vec<_> = manifest
+            .engine
+            .iter()
+            .filter(|pin| !pin.binary.is_empty() && pin.runtime != Some(false))
+            .map(|pin| (pin.binary.as_str(), pin.version.as_str()))
+            .collect();
+        let mut verified: Vec<_> = VERIFIED_ENGINES
+            .iter()
+            .map(|(name, _, version)| (*name, *version))
+            .collect();
+        locked.sort_unstable();
+        verified.sort_unstable();
+        assert_eq!(
+            verified, locked,
+            "every shipped engine must be version-checked"
+        );
     }
 
     #[test]
