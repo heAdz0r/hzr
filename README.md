@@ -181,13 +181,13 @@ task, and what that work reportedly cost. Monitoring creates no task, starts no 
 advances no phase and answers no permission prompt on agtx's behalf.
 
 The pinned agtx runtime and read-only observer ship together in HZR. No Rust toolchain or
-separate agtx installation is needed. Monitoring remains opt-in; for a new board, open the
-bundled application explicitly before enrollment:
+separate agtx installation is needed. Monitoring remains opt-in and is one command; `onboard`
+verifies the bundled observer itself, then enrolls the project:
 
 ```bash
-hzr agents component install                                  # verify the bundled observer
-hzr agents board --project /absolute/worktree --agtx-data-dir /absolute/agtx/data  # new board only
-hzr agents enable --project /absolute/worktree --agtx-data-dir /absolute/agtx/data
+hzr agents onboard --project /absolute/worktree --agtx-data-dir /absolute/agtx/data
+# New board only: open the bundled app once, then run `onboard` again.
+hzr agents board --project /absolute/worktree --agtx-data-dir /absolute/agtx/data
 hzr agents status --json
 ```
 

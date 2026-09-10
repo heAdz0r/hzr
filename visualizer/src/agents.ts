@@ -416,9 +416,12 @@ export function graphSignature(
   return `${nodes}#${links}`;
 }
 
-/** Verify the component, initialize a board if needed, then enroll it. */
-export const AGENT_ONBOARDING_COMMANDS = [
-  "hzr agents component install",
-  "hzr agents board --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>",
-  "hzr agents enable --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>",
-] as const;
+/** One-command opt-in. `onboard` verifies the bundled observer itself, so the
+ * component install is no longer a step the user runs by hand. */
+export const AGENT_ONBOARD_COMMAND =
+  "hzr agents onboard --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>";
+
+/** Only a brand-new board needs this once: it opens the bundled agtx app and
+ * creates the store `onboard` then enrolls. Skip it for an existing board. */
+export const AGENT_BOARD_COMMAND =
+  "hzr agents board --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>";

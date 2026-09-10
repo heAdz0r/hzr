@@ -67,13 +67,17 @@ pub async fn execute(
                 from_binary,
                 source_dir,
                 force,
-            } => install_component(config, from_binary, source_dir, force, json).await,
+            } => install_component(config, from_binary, source_dir, force, json, false).await,
             AgentsComponentCommand::Status => component_status(config, json).await,
         },
         AgentsCommand::Enable {
             project,
             agtx_data_dir,
         } => enable(config, config_path, &project, &agtx_data_dir, json).await,
+        AgentsCommand::Onboard {
+            project,
+            agtx_data_dir,
+        } => onboard(config, config_path, &project, &agtx_data_dir, json).await,
         AgentsCommand::Disable { project } => disable(config, config_path, &project, json).await,
         AgentsCommand::Status => status(config, json).await,
         AgentsCommand::Sync { project } => sync(config, &project, json).await,
@@ -203,6 +207,7 @@ async fn install_component(
     source_dir: Option<PathBuf>,
     force: bool,
     json: bool,
+    quiet: bool,
 ) -> Result<ExitCode> {
     let destination = component_path(config);
     if destination.is_file() && !force {
@@ -210,13 +215,17 @@ async fn install_component(
         if identity.as_ref().is_some_and(|(_, schema, patch)| {
             *schema == AGENT_SNAPSHOT_SCHEMA_VERSION && patch == AGENT_OBSERVER_PATCH_IDENTITY
         }) {
-            if !json {
+            if !json && !quiet {
                 println!(
                     "agents-component already-installed path={}",
                     destination.display()
                 );
             }
-            return component_status(config, json).await;
+            return if quiet {
+                Ok(ExitCode::SUCCESS)
+            } else {
+                component_status(config, json).await
+            };
         }
     }
     if let Some(parent) = destination.parent() {
@@ -283,7 +292,11 @@ async fn install_component(
     staged
         .persist(&destination)
         .context("activate observer atomically")?;
-    component_status(config, json).await
+    if quiet {
+        Ok(ExitCode::SUCCESS)
+    } else {
+        component_status(config, json).await
+    }
 }
 
 /// Build the observer from the pinned upstream commit plus the pinned patch.
@@ -461,6 +474,49 @@ fn canonical_existing(path: &Path, what: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
+/// One-command opt-in: verify or install the pinned observer, then enroll.
+///
+/// This is the single step the UI and README point at. Component installation
+/// is folded in because it is idempotent and side-effect-free — a bundle user
+/// just verifies in place, and only a source checkout ever builds. Enrollment
+/// remains the only action that turns monitoring on. The store prerequisite
+/// stays with `board`: HZR never creates the agtx store and never launches its
+/// runtime implicitly, so a brand-new board still needs one explicit
+/// `hzr agents board` first.
+///
+/// If the component cannot be made compatible, `onboard` fails and never
+/// reaches `enable`: enrollment and the config are left untouched rather than
+/// being written into the missing-component half-state. A user who wants that
+/// half-state on purpose runs the standalone `hzr agents enable`.
+async fn onboard(
+    config: &Config,
+    config_path: &Path,
+    project: &Path,
+    data_dir: &Path,
+    json: bool,
+) -> Result<ExitCode> {
+    ensure_component(config).await?;
+    enable(config, config_path, project, data_dir, json).await
+}
+
+/// Make the observer component present without reporting, or fail.
+///
+/// A compatible component is verified in place with no output. A missing or
+/// unusable component is installed (a bundle verifies, a source checkout
+/// builds); when that installation cannot produce the pinned identity, the
+/// error propagates instead of leaving a half-enrolled state behind.
+async fn ensure_component(config: &Config) -> Result<()> {
+    let component = component_path(config);
+    let compatible = probe(&component).await.is_some_and(|(_, schema, patch)| {
+        schema == AGENT_SNAPSHOT_SCHEMA_VERSION && patch == AGENT_OBSERVER_PATCH_IDENTITY
+    });
+    if compatible {
+        return Ok(());
+    }
+    install_component(config, None, None, false, false, true).await?;
+    Ok(())
+}
+
 async fn enable(
     config: &Config,
     config_path: &Path,
@@ -585,7 +641,7 @@ async fn status(config: &Config, json: bool) -> Result<ExitCode> {
         println!("component-unavailable platform={platform}");
     }
     if status.enrollments.is_empty() {
-        println!("no enrolled projects; monitoring needs both steps:");
+        println!("no enrolled projects; monitoring is one step:");
         for (step, command) in onboarding_commands().iter().enumerate() {
             println!("  {}. {command}", step + 1);
         }
@@ -743,13 +799,13 @@ async fn link(
 }
 
 /// The exact commands the settings UI shows for an empty state.
+///
+/// Onboarding is one command; `onboard` verifies the bundled observer itself.
+/// A brand-new board still names the `board` prerequisite in its error rather
+/// than being listed here as a step everyone must run.
 #[must_use]
-pub fn onboarding_commands() -> [&'static str; 3] {
-    [
-        "hzr agents component install",
-        "hzr agents board --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>",
-        "hzr agents enable --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>",
-    ]
+pub fn onboarding_commands() -> [&'static str; 1] {
+    ["hzr agents onboard --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>"]
 }
 
 #[cfg(test)]
@@ -786,7 +842,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut config = Config::default();
         config.engines.directory = Some(directory.path().join("engines"));
-        let error = install_component(&config, None, None, false, false)
+        let error = install_component(&config, None, None, false, false, false)
             .await
             .expect_err("missing bundled observer");
         assert!(error.to_string().contains("bundle is missing"));
@@ -843,6 +899,94 @@ mod tests {
         assert!(!config_path.exists());
     }
 
+    /// A missing observer must fail `onboard` before `enable` is reached, so the
+    /// enrollment and config stay untouched.
+    #[tokio::test]
+    async fn onboard_fails_without_enrolling_when_the_observer_is_missing() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("config.toml");
+        let mut config = Config::default();
+        config.engines.directory = Some(directory.path().join("engines"));
+        let error = onboard(
+            &config,
+            &config_path,
+            directory.path(),
+            directory.path(),
+            false,
+        )
+        .await
+        .expect_err("a missing observer must abort onboarding");
+        assert!(
+            error.to_string().contains("bundle is missing"),
+            "unactionable error: {error:#}"
+        );
+        assert!(!config_path.exists(), "config must stay unchanged");
+    }
+
+    /// A present-but-unusable observer (probe exits nonzero) must fail `onboard`
+    /// before `enable` is reached; file existence alone is not compatibility.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn onboard_fails_without_enrolling_when_the_observer_is_unusable() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("config.toml");
+        let engines = directory.path().join("engines");
+        std::fs::create_dir_all(&engines).expect("engines");
+        let binary = engines.join(OBSERVER_BINARY);
+        std::fs::write(&binary, "#!/bin/sh\nexit 9\n").expect("broken observer");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        let mut config = Config::default();
+        config.engines.directory = Some(engines);
+        let error = onboard(
+            &config,
+            &config_path,
+            directory.path(),
+            directory.path(),
+            false,
+        )
+        .await
+        .expect_err("an unusable observer must abort onboarding");
+        assert!(
+            error.to_string().contains("observer"),
+            "unactionable error: {error:#}"
+        );
+        assert!(!config_path.exists(), "config must stay unchanged");
+    }
+
+    /// A compatible observer verifies in place and `onboard` enrolls normally.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn onboard_enrolls_when_the_observer_is_compatible() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("config.toml");
+        let engines = directory.path().join("engines");
+        std::fs::create_dir_all(&engines).expect("engines");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' '{} {} schema={} patch={}'\n",
+            OBSERVER_BINARY,
+            AGTX_VERSION,
+            AGENT_SNAPSHOT_SCHEMA_VERSION,
+            AGENT_OBSERVER_PATCH_IDENTITY
+        );
+        let binary = engines.join(OBSERVER_BINARY);
+        std::fs::write(&binary, &script).expect("observer");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        let store = directory.path().join("store");
+        std::fs::create_dir(&store).expect("store");
+        std::fs::write(store.join("index.db"), "").expect("index.db");
+        let mut config = Config::default();
+        config.engines.directory = Some(engines);
+        let exit = onboard(&config, &config_path, directory.path(), &store, false)
+            .await
+            .expect("a compatible observer must enroll");
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(config_path.exists(), "enrollment must write the config");
+        let written = Config::load_or_default(&config_path).expect("written config parses");
+        assert_eq!(written.integrations.agtx.active_projects().len(), 1);
+    }
+
     #[test]
     fn resolve_cargo_finds_the_toolchain_that_runs_this_test() {
         // cargo is running this test, so resolution must succeed: through $CARGO
@@ -875,7 +1019,7 @@ mod tests {
         );
         std::fs::write(&source, &script).expect("source");
         std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755)).expect("mode");
-        install_component(&config, Some(source.clone()), None, true, true)
+        install_component(&config, Some(source.clone()), None, true, true, false)
             .await
             .expect("install");
         assert!(
@@ -890,7 +1034,7 @@ mod tests {
         let installed = std::fs::read(&destination).expect("installed");
         std::fs::write(&source, format!("{script}exit 7\n")).expect("bad source");
         assert!(
-            install_component(&config, Some(source), None, true, true)
+            install_component(&config, Some(source), None, true, true, false)
                 .await
                 .is_err()
         );
@@ -1007,10 +1151,11 @@ mod tests {
     }
 
     #[test]
-    fn onboarding_names_both_steps_in_order() {
+    fn onboarding_names_a_single_onboard_step() {
         let steps = onboarding_commands();
-        assert!(steps[0].contains("component install"));
-        assert!(steps[1].contains("agents board"));
-        assert!(steps[2].contains("agents enable"));
+        assert_eq!(steps.len(), 1);
+        assert!(steps[0].contains("agents onboard"));
+        assert!(steps[0].contains("--project"));
+        assert!(steps[0].contains("--agtx-data-dir"));
     }
 }
