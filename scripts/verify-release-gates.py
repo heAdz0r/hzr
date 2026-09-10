@@ -137,7 +137,7 @@ def verify_repository(repository: Path) -> None:
     verify_ci((repository / ".github/workflows/ci.yml").read_text())
     verify_release((repository / ".github/workflows/release.yml").read_text())
     metadata = json.loads(subprocess.check_output(
-        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+        ["cargo", "metadata", "--locked", "--format-version", "1", "--no-deps"],
         cwd=repository,
         text=True,
     ))
