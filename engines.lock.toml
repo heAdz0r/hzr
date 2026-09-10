@@ -105,13 +105,22 @@ version = "1.0.4"
 tag = "source-snapshot"
 commit = "d307c4c182dff19a65370a50403185cb826f7f49"
 repository = "https://github.com/fynnfluegge/agtx"
-# The pinned tree's LICENSE says Apache-2.0 and its Cargo.toml says MIT. Both
-# are recorded as observed evidence in integrations/agtx/PROVENANCE.json; the
-# discrepancy is a gate on publishing an adapted binary, which is why this
-# component is optional and built on request rather than shipped in the bundle.
-license = "MIT (manifest) / Apache-2.0 (LICENSE); unresolved"
+license = "Apache-2.0"
+binary = "agtx"
+runtime = true
+source_kind = "adapted-source-build"
+patches = ["patches/agtx/1.0.4-readonly-observer.patch", "patches/agtx/1.0.4-apache-license.patch"]
+patch_sha256 = ["13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8", "8cf45fc45ce2e515be4bf07710e71435a754bc53e0a419e3c47d957e3f768980"]
+
+[[engine]]
+name = "hzr-agtx-observer"
+version = "1.0.4"
+tag = "source-snapshot"
+commit = "d307c4c182dff19a65370a50403185cb826f7f49"
+repository = "https://github.com/fynnfluegge/agtx"
+license = "Apache-2.0"
 binary = "hzr-agtx-observer"
-runtime = false
-source_kind = "optional-adapted-source-build"
-patches = ["patches/agtx/1.0.4-readonly-observer.patch"]
-patch_sha256 = ["13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8"]
+runtime = true
+source_kind = "adapted-source-build"
+patches = ["patches/agtx/1.0.4-readonly-observer.patch", "patches/agtx/1.0.4-apache-license.patch"]
+patch_sha256 = ["13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8", "8cf45fc45ce2e515be4bf07710e71435a754bc53e0a419e3c47d957e3f768980"]

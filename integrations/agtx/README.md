@@ -2,14 +2,15 @@
 
 HZR can *observe* an [agtx](https://github.com/fynnfluegge/agtx) board: its tasks,
 their dependencies, the transitions HZR sees while it is watching, which coding
-sessions belong to which task, and what that work reportedly cost. It cannot
-operate one. Nothing here creates a task, starts an agent, advances a phase,
+sessions belong to which task, and what that work reportedly cost. The observer cannot
+operate one. Monitoring never creates a task, starts an agent, advances a phase,
 sends terminal input, creates a worktree, merges a branch or answers a
 permission prompt. A running agtx remains the sole author of its own state.
 
-Everything on this page is **off by default**. A default HZR install downloads
-nothing from agtx, runs no agtx process, opens no agtx database and adds no
-listener.
+Monitoring is **off by default**. Release bundles include the pinned agtx runtime
+and observer, but installation starts neither, opens no agtx store and adds no listener.
+The explicit `hzr agents board` command launches the upstream application under
+operator control; its actions are separate from read-only monitoring.
 
 ## Ownership
 
@@ -23,12 +24,37 @@ listener.
 HZR never registers an agtx MCP server, never proxies agtx's web routes and never
 treats agtx's loopback listener as an authorization boundary.
 
-## Two steps, both explicit
+## Setup from the HZR bundle
+
+No separate agtx installation, Cargo or network fetch is required. Both binaries
+come from the same pinned source plus the same audited patches.
 
 ```bash
 hzr agents component install
+# Only for a new board: open the bundled interactive application, then exit it.
+hzr agents board --project /absolute/worktree --agtx-data-dir /absolute/agtx/data
 hzr agents enable --project /absolute/worktree --agtx-data-dir /absolute/agtx/data
 ```
+
+Use the same absolute data root for `board` and `enable`. agtx creates its store
+when the board first opens; enrollment expects `index.db` or `projects/`.
+Skip `board` for an existing store. Do not assume `~/.agtx` and do not create
+an empty directory to bypass validation. Operating agents through the upstream
+board still needs its normal prerequisites, including tmux and the chosen
+coding-agent executable.
+
+`component install` verifies the bundled observer's version, schema and patch
+identity. A damaged bundle fails with an update/reinstall remedy; it does not
+silently download source or invoke Cargo. Developers can explicitly choose
+`--source-dir <DIR>` (requires Cargo/Git) or `--from-binary <PATH>` (identity
+checked). Source checkouts without a bundle retain the pinned source-build path;
+install Rust through [rustup](https://rustup.rs) and ensure Cargo is visible to
+the invoking shell/service, or set `CARGO` to its executable.
+
+Apache-2.0 was confirmed by the repository owner on 2026-09-10. The source
+manifest's historical MIT label is corrected in the derivative. Bundles retain
+the upstream license, HZR modification notices, exact patches and
+[provenance](PROVENANCE.json).
 
 Installing the component does not enable monitoring for anything; enabling a
 project does not install the component. Both must have happened, and the global
@@ -47,8 +73,8 @@ already recorded. Re-enabling resumes under a new enrollment generation.
 
 ## The component
 
-`hzr-agtx-observer` is built from the pinned agtx commit plus one auditable
-patch (`patches/agtx/1.0.4-readonly-observer.patch`). It is a separate
+`hzr-agtx-observer` is built from the pinned agtx commit plus the observer
+patch and the license/notice patch under `patches/agtx/`. It is a separate
 executable, outside HZR's Cargo workspace, because:
 
 - HZR is on `rusqlite 0.36` and the pinned agtx on `0.34`, and linking both

@@ -416,8 +416,9 @@ export function graphSignature(
   return `${nodes}#${links}`;
 }
 
-/** The two commands the empty state must show, in order. */
+/** Verify the component, initialize a board if needed, then enroll it. */
 export const AGENT_ONBOARDING_COMMANDS = [
   "hzr agents component install",
+  "hzr agents board --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>",
   "hzr agents enable --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>",
 ] as const;

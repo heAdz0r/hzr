@@ -533,6 +533,17 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 post_upgrade::record_completion_from_env(&config, &report);
             }
+            if let Some(check) = report
+                .checks
+                .iter_mut()
+                .find(|check| check.name == "reference_state")
+            {
+                *check = post_upgrade::reference_state_check(&config);
+            }
+            report.readiness = diagnostics::ReadinessReport::from_checks(
+                &report.checks,
+                &report.response_codec_coverage,
+            );
             if cli.json {
                 print_json(&report)?;
             } else {

@@ -14,11 +14,14 @@
     "license_file_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
   },
   "license_evidence": {
-    "resolved": false,
+    "resolved": true,
     "package_manifest_declares": "MIT",
     "license_file_contains": "Apache-2.0",
-    "note": "Both labels are recorded as observed source evidence at the pinned commit. They disagree, and this repository does not resolve the disagreement. No dual license is claimed from the mismatch.",
-    "distribution_gate": "Publishing an adapted binary requires establishing the applicable upstream licensing provenance at this exact commit, retaining the applicable license text and notices, marking modifications, and correcting derivative manifest and SBOM metadata. Until that is recorded here as resolved, HZR builds the component locally on request and ships no prebuilt adapted artifact."
+    "note": "Original MIT package label is retained as historical evidence; the derivative manifest is corrected to Apache-2.0.",
+    "distribution_gate": "Resolved: ship Apache-2.0 license text, HZR modification notices, both exact patches and corrected engine metadata.",
+    "applicable_license": "Apache-2.0",
+    "resolution_date": "2026-09-10",
+    "resolution_source": "Repository owner confirmed that upstream licensing was clarified as Apache-2.0."
   },
   "patches": [
     {
@@ -38,10 +41,15 @@
         "src/db/schema.rs",
         "src/tui/dep_graph.rs"
       ]
+    },
+    {
+      "path": "patches/agtx/1.0.4-apache-license.patch",
+      "sha256": "8cf45fc45ce2e515be4bf07710e71435a754bc53e0a419e3c47d957e3f768980",
+      "summary": "Corrects derivative Cargo license metadata and marks HZR-modified source files; no runtime behavior changes."
     }
   ],
   "build": {
-    "command": "cargo build --locked --release --bin hzr-agtx-observer",
+    "command": "cargo build --locked --release --bin agtx --bin hzr-agtx-observer",
     "workspace": "outside the HZR cargo workspace; the component is built from a temporary checkout of the pinned commit",
     "verified_toolchain": "rustc 1.92.0 (ded5c06cf 2025-12-08); cargo 1.92.0",
     "verified_platform": "darwin-arm64",
@@ -62,5 +70,14 @@
     "network": "none",
     "starts_processes": "none; no tmux, no coding agent, no MCP server, no web listener",
     "exports_free_text": "Titles and branch labels only when the explicit include_titles request is enabled; disabled by default. No descriptions, PR URLs, worktree paths, notification prose, hook message/tool text or transcript paths are exported."
+  },
+  "distribution": {
+    "binaries": [
+      "engines/agtx",
+      "engines/hzr-agtx-observer"
+    ],
+    "same_patched_source": true,
+    "monitoring_requires_enrollment": true,
+    "runtime_launch": "Explicit hzr agents board only; observer never starts agents"
   }
 }

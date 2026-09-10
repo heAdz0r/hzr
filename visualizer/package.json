@@ -1,6 +1,6 @@
 {
   "name": "@headz0r/hzr-visualizer",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.2.19",

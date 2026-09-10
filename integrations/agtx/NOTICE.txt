@@ -1,0 +1,13 @@
+HZR distribution of agtx 1.0.4
+Upstream: https://github.com/fynnfluegge/agtx
+Pinned commit: d307c4c182dff19a65370a50403185cb826f7f49
+Applicable upstream license: Apache License, Version 2.0.
+The repository owner confirmed the licensing clarification on 2026-09-10.
+The original Cargo.toml label MIT is retained as historical provenance only.
+
+HZR modifications: read-only snapshot observer, bounded export protocol,
+public wrappers for shared store-path and dependency parsing, and corrected
+derivative package-license metadata. Modified source files carry HZR notices.
+Both agtx and hzr-agtx-observer are built from the same patched source tree.
+See share/hzr/patches/agtx and integrations/agtx/PROVENANCE.json for exact deltas.
+The upstream license text accompanies this notice as agtx-Apache-2.0.txt.

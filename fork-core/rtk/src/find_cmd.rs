@@ -476,11 +476,7 @@ fn format_grouped_results(files: &[String], max_results: usize) -> String {
             break;
         }
         let files_in_dir = &by_dir[dir];
-        let dir_display = if dir.len() > 50 {
-            format!("...{}", &dir[dir.len() - 47..])
-        } else {
-            dir.clone()
-        };
+        let dir_display = dir;
         let remaining_budget = max_results - displayed;
         if files_in_dir.len() <= remaining_budget {
             body.push_str(&format!("{}/ {}\n", dir_display, files_in_dir.join(" ")));
@@ -636,6 +632,15 @@ mod tests {
         // resolves that against its own cwd. Stripping the root breaks it.
         let matches = collect_matches("find_cmd.rs", "src", "f", false, None);
         assert_eq!(matches, vec!["src/find_cmd.rs".to_string()]);
+    }
+
+    #[test]
+    fn grouped_output_preserves_long_unicode_directories() {
+        let root = format!("/{}", "я".repeat(40));
+        let files = vec![format!("{root}/a.rs"), format!("{root}/b.rs")];
+        let output = format_grouped_results(&files, 10);
+        assert!(output.contains(&format!("{root}/ a.rs b.rs")), "{output}");
+        assert!(!output.contains("..."));
     }
 
     #[test]

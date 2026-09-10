@@ -88,7 +88,7 @@ for HZR_INSTALL_OUTPUT in \
   '[3/5] Unpacking and checking the bundle contents' \
   '[4/5] Placing the files and command-line entry points' \
   '[5/5] Registering this project and starting the background service' \
-  'HZR v0.9.4 is installed.' \
+  'HZR v0.9.5 is installed.' \
   'What went where' \
   'Next steps' \
   'hzr doctor --workspace .'; do
@@ -143,7 +143,7 @@ run_hzr() {
   PATH="${HZR_INSTALLED_BIN}:${HZR_SMOKE_TEMP}/tools:/usr/bin:/bin" \
     "${HZR_INSTALLED_BIN}/hzr" "$@"
 }
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.9.4" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.9.5" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/grepai" version | grep -F "0.35.0" >/dev/null
@@ -369,7 +369,7 @@ for HZR_HOOK_PERMISSION in absent default bypassPermissions; do
       PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" \
       "${HZR_INSTALLED_BIN}/hzr" hooks dispatch
   ) >"${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json"
-  # 0.9.4: in a prompting mode with no Claude allow rule for the command, the hook stays silent so
+  # 0.9.5: in a prompting mode with no Claude allow rule for the command, the hook stays silent so
   # the host prompts for the operator's own command and its answer can become a durable rule. A
   # managed rewrite here would make the host evaluate its allowlist against a script no rule matches.
   if [[ "${HZR_HOOK_PERMISSION}" == "default" ]]; then
@@ -564,7 +564,7 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) HZR_SMOKE_PLATFORM="linux-x64" ;;
   *) echo "unsupported upgrade-smoke platform" >&2; exit 1 ;;
 esac
-HZR_UPGRADE_VERSION="0.9.4-upgrade-smoke"
+HZR_UPGRADE_VERSION="0.9.5-upgrade-smoke"
 HZR_UPGRADE_ARTIFACT="hzr-v${HZR_UPGRADE_VERSION}-${HZR_SMOKE_PLATFORM}.tar.gz"
 HZR_UPGRADE_CHECKSUMS="${HZR_SMOKE_TEMP}/SHA256SUMS.upgrade"
 awk -v artifact="${HZR_UPGRADE_ARTIFACT}" \
@@ -607,7 +607,7 @@ if [[ "${HZR_RESOLVED_ENGINES}" != "${HZR_EXPECTED_ENGINES}" ]]; then
   exit 1
 fi
 
-PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.9.4" >/dev/null
+PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.9.5" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
   | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 "${HZR_CURRENT_LINK}/engines/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null

@@ -32,6 +32,8 @@ for HZR_EXECUTABLE in \
   "${HZR_BINARY_ROOT}/hzrd" \
   "${HZR_ENGINE_ROOT}/grepai" \
   "${HZR_ENGINE_ROOT}/icm" \
+  "${HZR_ENGINE_ROOT}/agtx" \
+  "${HZR_ENGINE_ROOT}/hzr-agtx-observer" \
   "${HZR_NODE_BINARY}" \
   "${HZR_ENGINE_ROOT}/rtk"; do
   if [[ ! -x "${HZR_EXECUTABLE}" ]]; then
@@ -83,6 +85,9 @@ for HZR_PROVENANCE_FILE in \
   install.sh \
   skills/hzr-tdd/SKILL.md \
   skills/hzr-tdd/references/testing-patterns.md \
+  integrations/agtx/PROVENANCE.json \
+  integrations/agtx/NOTICE.txt \
+  patches/agtx/1.0.4-apache-license.patch \
   integrations/claude-code/hzr-awareness.md \
   integrations/claude-code/hzr-awareness-codex.md \
   fork-core/CURRENT_ENGINE.toml \
@@ -215,6 +220,10 @@ verify_sha256 \
   "49966552514373129de9faea43a890bf6a8b04f158b2966876a57fdf915980e5" \
   "${HZR_BUNDLE_ROOT}/licenses/grepai-MIT.txt"
 verify_sha256 \
+  "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4" \
+  "${HZR_BUNDLE_ROOT}/licenses/agtx-Apache-2.0.txt"
+test -s "${HZR_BUNDLE_ROOT}/licenses/HZR-agtx-NOTICE.txt"
+verify_sha256 \
   "db0693db32ddac486c96656ec8b827467c1d5d7dc7468eaa0051298425edf2cc" \
   "${HZR_BUNDLE_ROOT}/licenses/ICM-Apache-2.0.txt"
 verify_matches_repository \
@@ -253,7 +262,7 @@ verify_matches_repository \
   '
 )
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.9.4" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.9.5" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
@@ -341,6 +350,28 @@ HZR_SMOKE_PORT="$("${HZR_NODE_BINARY}" -e '
 mkdir -p "${HZR_SMOKE_TEMP}/home" "${HZR_SMOKE_TEMP}/data" "${HZR_SMOKE_TEMP}/workspace"
 export HOME="${HZR_SMOKE_TEMP}/home"
 git -C "${HZR_SMOKE_TEMP}/workspace" init --quiet
+
+# A distributed observer must install without fetching sources or a Rust toolchain.
+mkdir -p "${HZR_SMOKE_TEMP}/no-build-tools"
+for HZR_BLOCKED_TOOL in cargo git curl; do
+  printf '%s\n' '#!/bin/sh' 'echo "unexpected source-build/network tool" >&2' 'exit 97' \
+    >"${HZR_SMOKE_TEMP}/no-build-tools/${HZR_BLOCKED_TOOL}"
+  chmod 0755 "${HZR_SMOKE_TEMP}/no-build-tools/${HZR_BLOCKED_TOOL}"
+done
+HZR_COMPONENT_JSON="$(PATH="${HZR_SMOKE_TEMP}/no-build-tools" \
+  CARGO="${HZR_SMOKE_TEMP}/no-build-tools/cargo" \
+  "${HZR_BINARY_ROOT}/hzr" --config "${HZR_SMOKE_CONFIG}" --json agents component install)"
+"${HZR_NODE_BINARY}" -e '
+  const component = JSON.parse(process.argv[1]);
+  if (!component.installed || !component.compatible || component.version !== "1.0.4"
+      || component.patch_identity !== "hzr-agtx-readonly-observer-2") process.exit(1);
+' "${HZR_COMPONENT_JSON}"
+PATH="${HZR_SMOKE_TEMP}/no-build-tools" \
+  CARGO="${HZR_SMOKE_TEMP}/no-build-tools/cargo" \
+  "${HZR_BINARY_ROOT}/hzr" --config "${HZR_SMOKE_CONFIG}" --json agents component install --force \
+  >"${HZR_SMOKE_TEMP}/forced-component.json"
+"${HZR_ENGINE_ROOT}/agtx" --version | grep -Fx "agtx 1.0.4" >/dev/null
+
 HZR_DOCTOR_JSON="$(
   "${HZR_BINARY_ROOT}/hzr" \
     --config "${HZR_SMOKE_CONFIG}" \
@@ -399,7 +430,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-if (report.protocol_version !== 1 || report.hzr_version !== "0.9.4") {
+if (report.protocol_version !== 1 || report.hzr_version !== "0.9.5") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -439,7 +470,7 @@ if (report.protocol_version !== 1 || report.hzr_version !== "0.9.4") {
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
       const ids = new Set(report.services.map((service) => service.id));
-if (response.status !== 200 || report.hzr_version !== "0.9.4" ||
+if (response.status !== 200 || report.hzr_version !== "0.9.5" ||
           !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
         throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
       }

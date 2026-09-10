@@ -479,6 +479,14 @@ pub enum McpCommand {
 
 /// 0.8.7: `hzr agents` — the opt-in agtx Agent Observatory.
 pub enum AgentsCommand {
+    #[command(about = "Open the bundled agtx board explicitly; may create or update its store")]
+    Board {
+        #[arg(long, value_name = "DIR")]
+        project: PathBuf,
+        /// Absolute store root; agtx creates it on first launch
+        #[arg(long, value_name = "DIR")]
+        agtx_data_dir: PathBuf,
+    },
     #[command(
         about = "Manage the optional pinned agtx observer component",
         long_about = "Install or inspect the optional read-only agtx observer. Installing it enrolls no project; monitoring starts only after `hzr agents enable`."
@@ -541,8 +549,8 @@ pub enum AgentsCommand {
 #[derive(Subcommand, Debug)]
 pub enum AgentsComponentCommand {
     #[command(
-        about = "Build and install the pinned read-only observer",
-        long_about = "Build `hzr-agtx-observer` from the pinned agtx commit plus HZR's audited patch, then install it into HZR's private component directory and verify its reported identity."
+        about = "Verify or install the pinned read-only observer",
+        long_about = "Use the bundled observer without network access or Cargo. Source checkouts can build the pinned component; --from-binary and --source-dir select explicit alternatives. Every installed binary is identity-checked."
     )]
     Install {
         /// Install an already-built observer instead of building one; its identity is still verified

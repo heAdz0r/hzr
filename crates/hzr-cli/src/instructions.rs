@@ -287,7 +287,8 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
         concat!(
             "Claude Code hooks route supported Bash calls through HZR without granting new\n",
             "permissions. Native Read/Grep/Glob/Edit/Write retain exact host semantics in all\n",
-            "legacy modes; no optimization-only deny/retry is emitted. The PostToolUse observer\n",
+            "legacy modes; no optimization-only deny/retry is emitted. Native Explore workers\n",
+            "also pass through unchanged, with host permissions preserved. The PostToolUse observer\n",
             "stores no content and grants no savings credit. Missing accounting stays visible.\n",
             "Run `hzr hooks capabilities --host claude --probe` for local adapter checks; these\n",
             "checks do not prove installation, trusted activation or model-visible delivery.\n"

@@ -2101,13 +2101,8 @@ async fn task(config: &Config, input: &Value) -> Result<()> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     if subagent.eq_ignore_ascii_case("explore") {
-        return write_hook_json(json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": "Native Explore is replaced by the unified HZR planner. Use `hzr context plan <intent>` or `hzr rtk -- memory explore <path>`.",
-            }
-        }));
+        // A planner supplies evidence; it cannot replace a delegated worker.
+        return Ok(());
     }
     let Some(prompt) = input.pointer("/tool_input/prompt").and_then(Value::as_str) else {
         return Ok(());

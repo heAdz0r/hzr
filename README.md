@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-<a href="Cargo.toml"><img alt="Version 0.9.4" src="https://img.shields.io/badge/version-0.9.4-e64a19"></a>
+<a href="Cargo.toml"><img alt="Version 0.9.5" src="https://img.shields.io/badge/version-0.9.5-e64a19"></a>
   <a href="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/heAdz0r/hzr/releases"><img alt="Release" src="https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/control_plane-Apache--2.0-37474f"></a>
@@ -109,7 +109,7 @@ and [recorded run](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RES
 
 ## Install
 
-HZR 0.9.4 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
+HZR 0.9.5 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
 Apple Silicon. Intel macOS is no longer supported. System Git is the only engine prerequisite; Node.js, RTK,
 grepai, and ICM are bundled. Windows is not currently published.
 
@@ -117,7 +117,7 @@ Download, inspect, then run the installer:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.9.4/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.9.5/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -177,14 +177,16 @@ inherited fork-core command, so build projects through `hzr exec run '<project b
 
 HZR can *watch* an existing [agtx](https://github.com/fynnfluegge/agtx) board — its tasks, their
 dependency graph, the transitions HZR sees while it is watching, which sessions belong to which
-task, and what that work reportedly cost. It cannot run one: no task is created, no agent
-started, no phase advanced and no permission prompt answered on agtx's behalf.
+task, and what that work reportedly cost. Monitoring creates no task, starts no agent,
+advances no phase and answers no permission prompt on agtx's behalf.
 
-Everything is opt-in and read-only. A default install downloads nothing from agtx, runs no agtx
-process and opens no agtx store:
+The pinned agtx runtime and read-only observer ship together in HZR. No Rust toolchain or
+separate agtx installation is needed. Monitoring remains opt-in; for a new board, open the
+bundled application explicitly before enrollment:
 
 ```bash
-hzr agents component install                                  # pinned, patched, read-only observer
+hzr agents component install                                  # verify the bundled observer
+hzr agents board --project /absolute/worktree --agtx-data-dir /absolute/agtx/data  # new board only
 hzr agents enable --project /absolute/worktree --agtx-data-dir /absolute/agtx/data
 hzr agents status --json
 ```
@@ -195,7 +197,7 @@ usage, reported cost and catalog-priced estimates stay separate; nothing is summ
 total, and an unobserved value renders as an em dash with a reason rather than a zero.
 Ownership, protocol, safety and limits are documented in
 [`integrations/agtx/README.md`](integrations/agtx/README.md); the pinned commit, patch digests
-and the unresolved license discrepancy are recorded in
+and the confirmed Apache-2.0 licensing provenance are recorded in
 [`integrations/agtx/PROVENANCE.json`](integrations/agtx/PROVENANCE.json).
 
 Things are named, not numbered. The dashboard shows each workspace by its own directory
@@ -419,7 +421,7 @@ policy: no repository file can buy an exception to a bypass HZR could replace at
 
 ## Honest boundaries
 
-| Guarantee | 0.9.4 posture |
+| Guarantee | 0.9.5 posture |
 |---|---|
 | one versioned control plane and pinned engine bundle | implemented |
 | one canonical index owner per worktree | implemented |

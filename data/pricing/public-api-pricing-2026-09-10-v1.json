@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "identity": "hzr-public-api-pricing-2026-09-05-v1",
+  "identity": "hzr-public-api-pricing-2026-09-10-v1",
   "retrieved_at": "2026-09-05",
   "max_age_days": 30,
   "entries": [
@@ -402,6 +402,26 @@
         "cache_write_1h_microunits_per_million": 2000000
       },
       "note": "First-party Claude API standard pricing."
+    },
+    {
+      "version": "anthropic-claude-fable-5-standard-2026-09-10",
+      "harness": "claude_code",
+      "provider": "anthropic",
+      "model": "claude-fable-5",
+      "aliases": [],
+      "method": "standard",
+      "currency": "USD",
+      "effective_at": "2026-09-10",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 10000000,
+        "output_microunits_per_million": 50000000,
+        "cache_read_microunits_per_million": 1000000,
+        "cache_write_5m_microunits_per_million": 12500000,
+        "cache_write_1h_microunits_per_million": 20000000
+      },
+      "note": "First-party Claude API standard pricing observed 2026-09-10. Fable 5 cache reads cost $1 per million tokens; it is not an alias of Fable 5.1 ($0.25). Subscription billing is not inferred. Catalog retrieved_at remains the oldest retained observation date."
     },
     {
       "version": "anthropic-claude-fable-5.1-standard-2026-09-05",

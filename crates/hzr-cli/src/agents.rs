@@ -1,14 +1,14 @@
 //! `hzr agents` — install, enroll and inspect the optional agtx Agent Observatory.
 //!
-//! Two steps, deliberately separate. Installing the component downloads and
-//! builds a pinned binary and enrolls nothing; enrolling a project turns
+//! Installing the bundled component needs no network or toolchain and enrolls
+//! nothing; enrolling a project turns
 //! monitoring on for that project and installs nothing. A user who does only
 //! one of them ends up with a clearly reported half-state rather than silent
 //! monitoring they did not ask for.
 //!
-//! Nothing here starts an agtx process, writes to an agtx store, or touches
-//! agent configuration. `disable` stops HZR from looking; it does not stop
-//! anybody's agents.
+//! Monitoring never writes to the agtx store or starts agents. The explicit
+//! `board` command opens the bundled upstream runtime under operator control.
+//! `disable` stops observation, not anybody's agents.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -33,6 +33,9 @@ pub const AGTX_PATCH: &str = "patches/agtx/1.0.4-readonly-observer.patch";
 pub const AGTX_PATCH_SHA256: &str =
     "13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8";
 
+const AGTX_LICENSE_PATCH: &str = "patches/agtx/1.0.4-apache-license.patch";
+const AGTX_LICENSE_PATCH_SHA256: &str =
+    "8cf45fc45ce2e515be4bf07710e71435a754bc53e0a419e3c47d957e3f768980";
 const OBSERVER_BINARY: &str = "hzr-agtx-observer";
 /// Import files are bounded well below the daemon's body limit.
 const MAX_IMPORT_BYTES: u64 = 1_048_576;
@@ -55,6 +58,10 @@ pub async fn execute(
     json: bool,
 ) -> Result<ExitCode> {
     match command {
+        AgentsCommand::Board {
+            project,
+            agtx_data_dir,
+        } => board(config, &project, &agtx_data_dir),
         AgentsCommand::Component { command } => match command {
             AgentsComponentCommand::Install {
                 from_binary,
@@ -139,6 +146,34 @@ async fn component_status(config: &Config, json: bool) -> Result<ExitCode> {
     })
 }
 
+fn board(config: &Config, project: &Path, data_dir: &Path) -> Result<ExitCode> {
+    let project = canonical_existing(project, "--project")?;
+    if !data_dir.is_absolute() {
+        bail!("--agtx-data-dir must be an absolute path; agtx creates the store on first launch");
+    }
+    let directory = config
+        .engines
+        .directory
+        .as_ref()
+        .context("the agtx runtime requires an HZR bundle; install or update HZR")?;
+    let binary = directory.join("agtx");
+    if !binary.is_file() {
+        bail!("the HZR bundle is missing engines/agtx; reinstall or update HZR");
+    }
+    let status = Command::new(&binary)
+        .arg(&project)
+        .env("AGTX_DATA_DIR", data_dir)
+        .current_dir(&project)
+        .status()
+        .with_context(|| format!("launch bundled agtx {}", binary.display()))?;
+    Ok(ExitCode::from(
+        status
+            .code()
+            .and_then(|code| u8::try_from(code).ok())
+            .unwrap_or(1),
+    ))
+}
+
 fn repository_root() -> Option<PathBuf> {
     if let Ok(executable) = std::env::current_exe() {
         // `current_exe()` keeps the public `~/.local/bin/hzr` symlink on macOS,
@@ -209,6 +244,12 @@ async fn install_component(
                 );
             }
             path
+        }
+        None if source_dir.is_none() && config.engines.directory.is_some() => {
+            probe(&destination).await.context(
+                "the HZR bundle is missing a compatible observer; reinstall or update HZR, or explicitly select --from-binary / --source-dir"
+            )?;
+            destination.clone()
         }
         None => {
             workspace = build_component(source_dir)?;
@@ -307,11 +348,21 @@ fn build_component(source_dir: Option<PathBuf>) -> Result<tempfile::TempDir> {
         bail!("agtx checkout is at {head}, expected the pinned {AGTX_COMMIT}");
     }
 
-    let patch_argument = patch.to_string_lossy().into_owned();
-    // `apply --check` first: a partially applied patch would leave a tree that
-    // builds into something nobody pinned.
-    run(workspace, "git", &["apply", "--check", &patch_argument])?;
-    run(workspace, "git", &["apply", &patch_argument])?;
+    let license_patch = root.join(AGTX_LICENSE_PATCH);
+    let digest = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(
+        read_bounded_regular_file(&license_patch, 4 * 1_048_576)?,
+    ));
+    if digest != AGTX_LICENSE_PATCH_SHA256 {
+        bail!(
+            "license patch digest mismatch for {}",
+            license_patch.display()
+        );
+    }
+    for patch in [patch, license_patch] {
+        let argument = patch.to_string_lossy();
+        run(workspace, "git", &["apply", "--check", &argument])?;
+        run(workspace, "git", &["apply", &argument])?;
+    }
 
     eprintln!("building {OBSERVER_BINARY} (this compiles the pinned agtx source once)");
     run(
@@ -335,12 +386,19 @@ fn resolve_cargo() -> Result<PathBuf> {
         candidates.push(PathBuf::from(cargo));
     }
     candidates.push(PathBuf::from("cargo"));
+    if let Some(home) = std::env::var_os("CARGO_HOME") {
+        candidates.push(Path::new(&home).join("bin/cargo"));
+    }
     if let Some(home) = std::env::var_os("HOME") {
         candidates.push(Path::new(&home).join(".cargo/bin/cargo"));
     }
     candidates.push(PathBuf::from("/opt/homebrew/bin/cargo"));
     candidates.push(PathBuf::from("/usr/local/bin/cargo"));
     candidates.push(PathBuf::from("/usr/bin/cargo"));
+    resolve_cargo_candidates(candidates)
+}
+
+fn resolve_cargo_candidates(candidates: Vec<PathBuf>) -> Result<PathBuf> {
     for candidate in candidates {
         if Command::new(&candidate)
             .arg("--version")
@@ -355,8 +413,9 @@ fn resolve_cargo() -> Result<PathBuf> {
     bail!(
         "cargo was not found on PATH or in the standard install locations; install a Rust \
          toolchain (https://rustup.rs), install an already-built observer with \
-         `hzr agents component install --from-binary <PATH>`, or build from an existing \
-         checkout with `--source-dir <DIR>`"
+         `hzr agents component install --from-binary <PATH>`. After installing Rust, \
+         restart the invoking shell/service or set CARGO to the cargo executable. \
+         --source-dir selects local source but still requires cargo"
     )
 }
 
@@ -410,7 +469,14 @@ async fn enable(
     json: bool,
 ) -> Result<ExitCode> {
     let project = canonical_existing(project, "--project")?;
-    let data_dir = canonical_existing(data_dir, "--agtx-data-dir")?;
+    let data_dir = canonical_existing(data_dir, "--agtx-data-dir").with_context(|| {
+        format!(
+            "Agent Observatory requires an existing agtx {AGTX_VERSION} store. The observer installer \
+             does not start agtx. Run `hzr agents board --project <worktree> --agtx-data-dir <absolute-store-root>` \
+             to initialize a board using the bundled agtx ({AGTX_REPOSITORY}, commit {AGTX_COMMIT}), \
+             then enroll the same root containing index.db or projects/; creating an empty directory is insufficient"
+        )
+    })?;
     // An enrollment that names a store with no index is almost certainly a
     // typo, and monitoring nothing while reporting "enabled" is worse than
     // refusing now.
@@ -678,9 +744,10 @@ async fn link(
 
 /// The exact commands the settings UI shows for an empty state.
 #[must_use]
-pub fn onboarding_commands() -> [&'static str; 2] {
+pub fn onboarding_commands() -> [&'static str; 3] {
     [
         "hzr agents component install",
+        "hzr agents board --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>",
         "hzr agents enable --project <absolute-worktree> --agtx-data-dir <absolute-agtx-data-dir>",
     ]
 }
@@ -688,6 +755,42 @@ pub fn onboarding_commands() -> [&'static str; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn board_uses_bundled_runtime_and_preserves_store_and_project_arguments() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("tempdir");
+        let engines = directory.path().join("engines");
+        std::fs::create_dir(&engines).expect("engines");
+        let binary = engines.join("agtx");
+        std::fs::write(&binary, "#!/bin/sh\n[ \"$#\" = 1 ] || exit 8\n[ \"$1\" = \"$PWD\" ] || exit 9\n[ \"$AGTX_DATA_DIR\" = \"$PWD/store with spaces\" ] || exit 10\nexit 7\n").expect("stub");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+            .expect("permissions");
+        let mut config = Config::default();
+        config.engines.directory = Some(engines);
+        let root = directory.path().canonicalize().expect("canonical root");
+        assert_eq!(
+            board(&config, &root, &root.join("store with spaces")).expect("launch"),
+            ExitCode::from(7)
+        );
+        assert!(
+            !root.join("store with spaces").exists(),
+            "HZR does not initialize the store itself"
+        );
+        assert!(board(&config, &root, Path::new("relative-store")).is_err());
+    }
+
+    #[tokio::test]
+    async fn incomplete_bundle_does_not_fall_back_to_source_build() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut config = Config::default();
+        config.engines.directory = Some(directory.path().join("engines"));
+        let error = install_component(&config, None, None, false, false)
+            .await
+            .expect_err("missing bundled observer");
+        assert!(error.to_string().contains("bundle is missing"));
+    }
 
     #[test]
     fn run_names_a_missing_program_instead_of_a_raw_os_error() {
@@ -703,6 +806,41 @@ mod tests {
             message.contains("not installed or not on PATH"),
             "unactionable error: {message}"
         );
+    }
+
+    #[test]
+    fn missing_cargo_explains_installation_without_claiming_source_avoids_compilation() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let error = resolve_cargo_candidates(vec![directory.path().join("missing-cargo")])
+            .expect_err("missing cargo");
+        let message = error.to_string();
+        assert!(message.contains("https://rustup.rs"));
+        assert!(message.contains("--from-binary"));
+        assert!(message.contains("--source-dir selects local source but still requires cargo"));
+    }
+
+    #[tokio::test]
+    async fn missing_agtx_store_explains_prerequisite_without_creating_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("config.toml");
+        let missing = directory.path().join("missing-store");
+        let error = enable(
+            &Config::default(),
+            &config_path,
+            directory.path(),
+            &missing,
+            false,
+        )
+        .await
+        .expect_err("missing store");
+        assert!(
+            error
+                .to_string()
+                .contains("observer installer does not start agtx")
+        );
+        assert!(error.to_string().contains(AGTX_COMMIT));
+        assert!(!missing.exists());
+        assert!(!config_path.exists());
     }
 
     #[test]
@@ -872,6 +1010,7 @@ mod tests {
     fn onboarding_names_both_steps_in_order() {
         let steps = onboarding_commands();
         assert!(steps[0].contains("component install"));
-        assert!(steps[1].contains("--agtx-data-dir"));
+        assert!(steps[1].contains("agents board"));
+        assert!(steps[2].contains("agents enable"));
     }
 }

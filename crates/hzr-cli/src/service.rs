@@ -236,7 +236,7 @@ fn launchd(action: ServiceCommand, home: &Path, binary: &Path) -> Result<Service
 
     match action {
         ServiceCommand::Install => {
-            // 0.9.4: re-bootstrap only when the definition changed or the job is not loaded.
+            // 0.9.5: re-bootstrap only when the definition changed or the job is not loaded.
             // Every `bootout` + `bootstrap` makes Background Task Management re-register the
             // agent, which re-posts the "hzrd may run in the background" notification and
             // leaves the previous item generation behind as a duplicate row in

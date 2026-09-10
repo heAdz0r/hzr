@@ -14,7 +14,6 @@ HZR_BUILD_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-build.XXXXXX")"
 HZR_COMPONENT_CACHE="${HZR_COMPONENT_CACHE:-${HZR_REPOSITORY_ROOT}/target/hzr-component-cache}"
 HZR_DOWNLOAD_CACHE="${HZR_DOWNLOAD_CACHE:-${HZR_COMPONENT_CACHE}/downloads}"
 HZR_WARM_COMPONENT_CACHE_ONLY="${HZR_WARM_COMPONENT_CACHE_ONLY:-0}"
-HZR_BUILD_AGTX_OBSERVER="${HZR_BUILD_AGTX_OBSERVER:-0}"
 HZR_BUILD_STAGE=0
 HZR_BUILD_STAGE_TOTAL=10
 
@@ -186,12 +185,6 @@ if [[ "${HZR_WARM_COMPONENT_CACHE_ONLY}" != 0 && \
   exit 2
 fi
 
-if [[ "${HZR_BUILD_AGTX_OBSERVER}" != 0 && \
-  "${HZR_BUILD_AGTX_OBSERVER}" != 1 ]]; then
-  echo "HZR_BUILD_AGTX_OBSERVER must be 0 or 1" >&2
-  exit 2
-fi
-
 hzr_build_stage "Verifying fork-core provenance and parity"
 "${HZR_REPOSITORY_ROOT}/scripts/verify-fork-core.sh"
 
@@ -354,36 +347,54 @@ else
 fi
 "${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
 
+hzr_build_stage "Building the pinned agtx runtime and observer"
+HZR_AGTX_COMMIT="d307c4c182dff19a65370a50403185cb826f7f49"
+HZR_AGTX_PATCH_DIGEST="13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8"
+HZR_AGTX_LICENSE_PATCH_DIGEST="8cf45fc45ce2e515be4bf07710e71435a754bc53e0a419e3c47d957e3f768980"
+HZR_AGTX_LICENSE_DIGEST="c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+verify_sha256 "${HZR_AGTX_PATCH_DIGEST}" \
+  "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch"
+verify_sha256 "${HZR_AGTX_LICENSE_PATCH_DIGEST}" \
+  "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-apache-license.patch"
+HZR_AGTX_CACHE_KEY="$(component_cache_key \
+  agtx "${HZR_AGTX_COMMIT}" "${HZR_AGTX_PATCH_DIGEST}" "${HZR_AGTX_LICENSE_PATCH_DIGEST}" \
+  "${HZR_PLATFORM}" "${HZR_RUST_TOOLCHAIN_KEY}" "${HZR_BUILD_SCRIPT_SHA256}")"
+if restore_cached_component \
+  agtx "${HZR_AGTX_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/agtx" \
+  "${HZR_LICENSE_OUTPUT}/agtx-Apache-2.0.txt" "${HZR_AGTX_LICENSE_DIGEST}" && \
+  restore_cached_component \
+  hzr-agtx-observer "${HZR_AGTX_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/hzr-agtx-observer" \
+  "${HZR_LICENSE_OUTPUT}/agtx-Apache-2.0.txt" "${HZR_AGTX_LICENSE_DIGEST}"; then
+  :
+else
+  clone_at_commit "https://github.com/fynnfluegge/agtx" \
+    "${HZR_AGTX_COMMIT}" "${HZR_BUILD_TEMP}/agtx"
+  for HZR_AGTX_PATCH in 1.0.4-readonly-observer.patch 1.0.4-apache-license.patch; do
+    git -C "${HZR_BUILD_TEMP}/agtx" apply --check \
+      "${HZR_REPOSITORY_ROOT}/patches/agtx/${HZR_AGTX_PATCH}"
+    git -C "${HZR_BUILD_TEMP}/agtx" apply \
+      "${HZR_REPOSITORY_ROOT}/patches/agtx/${HZR_AGTX_PATCH}"
+  done
+  verify_sha256 "${HZR_AGTX_LICENSE_DIGEST}" "${HZR_BUILD_TEMP}/agtx/LICENSE"
+  cargo build --manifest-path "${HZR_BUILD_TEMP}/agtx/Cargo.toml" \
+    --locked --release --bin agtx --bin hzr-agtx-observer
+  install -m 0644 "${HZR_BUILD_TEMP}/agtx/LICENSE" "${HZR_LICENSE_OUTPUT}/agtx-Apache-2.0.txt"
+  for HZR_AGTX_BINARY in agtx hzr-agtx-observer; do
+    install -m 0755 "${HZR_BUILD_TEMP}/agtx/target/release/${HZR_AGTX_BINARY}" \
+      "${HZR_ENGINE_OUTPUT}/${HZR_AGTX_BINARY}"
+    store_cached_component "${HZR_AGTX_BINARY}" "${HZR_AGTX_CACHE_KEY}" \
+      "${HZR_ENGINE_OUTPUT}/${HZR_AGTX_BINARY}" "${HZR_BUILD_TEMP}/agtx/LICENSE"
+  done
+fi
+"${HZR_ENGINE_OUTPUT}/agtx" --version | grep -Fx "agtx 1.0.4" >/dev/null
+"${HZR_ENGINE_OUTPUT}/hzr-agtx-observer" --version | \
+  grep -Fx "hzr-agtx-observer 1.0.4 schema=1 patch=hzr-agtx-readonly-observer-2" >/dev/null
+install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/agtx/NOTICE.txt" \
+  "${HZR_LICENSE_OUTPUT}/HZR-agtx-NOTICE.txt"
+
 if [[ "${HZR_WARM_COMPONENT_CACHE_ONLY}" == 1 ]]; then
   echo "HZR component cache warmed for ${HZR_PLATFORM}"
   exit 0
-fi
-
-hzr_build_stage "Building the optional agtx observer (flag-gated)"
-if [[ "${HZR_BUILD_AGTX_OBSERVER}" == 1 ]]; then
-  HZR_AGTX_COMMIT="d307c4c182dff19a65370a50403185cb826f7f49"
-  HZR_AGTX_PATCH_DIGEST="13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8"
-  verify_sha256 \
-    "${HZR_AGTX_PATCH_DIGEST}" \
-    "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch"
-  clone_at_commit \
-    "https://github.com/fynnfluegge/agtx" \
-    "${HZR_AGTX_COMMIT}" \
-    "${HZR_BUILD_TEMP}/agtx"
-  git -C "${HZR_BUILD_TEMP}/agtx" apply --check \
-    "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch"
-  git -C "${HZR_BUILD_TEMP}/agtx" apply \
-    "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch"
-  cargo build \
-    --manifest-path "${HZR_BUILD_TEMP}/agtx/Cargo.toml" \
-    --locked --release --bin hzr-agtx-observer
-  install -m 0755 "${HZR_BUILD_TEMP}/agtx/target/release/hzr-agtx-observer" \
-    "${HZR_ENGINE_OUTPUT}/hzr-agtx-observer"
-  install -m 0644 "${HZR_BUILD_TEMP}/agtx/LICENSE" \
-    "${HZR_LICENSE_OUTPUT}/agtx-LICENSE.txt"
-  "${HZR_ENGINE_OUTPUT}/hzr-agtx-observer" --version | grep -F "1.0.4" >/dev/null
-else
-  echo "Skipped: HZR_BUILD_AGTX_OBSERVER=1 builds the pinned observer into the bundle."
 fi
 
 HZR_CAVEMAN_STAGE="${HZR_BUILD_TEMP}/caveman-code"
@@ -554,6 +565,10 @@ install -m 0644 \
 install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/agtx/1.0.4-readonly-observer.patch"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-apache-license.patch" \
+  "${HZR_PROVENANCE_OUTPUT}/patches/agtx/1.0.4-apache-license.patch"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/agtx/NOTICE.txt" \
+  "${HZR_PROVENANCE_OUTPUT}/integrations/agtx/NOTICE.txt"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/agtx/PROVENANCE.json" \
   "${HZR_PROVENANCE_OUTPUT}/integrations/agtx/PROVENANCE.json"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/agtx/README.md" \

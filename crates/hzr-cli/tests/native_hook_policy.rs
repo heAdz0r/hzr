@@ -1,4 +1,51 @@
 use std::io::Write;
+
+#[test]
+fn native_explore_workers_preserve_host_permissions_in_all_modes() {
+    let directory = tempdir().expect("temporary root");
+    let workspace = directory.path().join("unenrolled-worktree");
+    std::fs::create_dir(&workspace).expect("workspace");
+    let config_path = directory.path().join("config.toml");
+    let config = Config {
+        data_dir: directory.path().join("data"),
+        ..Config::default()
+    };
+    config.ensure_layout().expect("layout");
+    config.write(&config_path).expect("config");
+    for mode in ["observe", "steer", "strict"] {
+        for tool in ["Agent", "Task"] {
+            for permission in [
+                "default",
+                "auto",
+                "plan",
+                "acceptEdits",
+                "bypassPermissions",
+            ] {
+                let request = serde_json::to_vec(&json!({
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": tool,
+                    "permission_mode": permission,
+                    "tool_input": {
+                        "subagent_type": "Explore",
+                        "prompt": "Investigate this separate worktree",
+                        "run_in_background": true
+                    },
+                    "cwd": workspace,
+                    "session_id": "native-explore"
+                }))
+                .expect("request");
+                let output = run_hook(&config_path, &workspace, mode, &request);
+                assert!(output.status.success());
+                assert!(
+                    output.stdout.is_empty(),
+                    "{mode} {tool} {permission}: {output:?}"
+                );
+                assert!(output.stderr.is_empty(), "{output:?}");
+            }
+        }
+    }
+}
+
 use std::process::{Command, Output, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 

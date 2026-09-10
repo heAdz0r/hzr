@@ -1,0 +1,64 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,10 +1,11 @@
++# HZR modification: corrected package licensing to the confirmed Apache-2.0 license.
+ [package]
+ name = "agtx"
+ version = "1.0.4"
+ edition = "2021"
+ description = "Terminal-native kanban board for managing coding agents"
+ authors = ["agtx contributors"]
+-license = "MIT"
++license = "Apache-2.0"
+ repository = "https://github.com/fynnfluegge/agtx"
+ keywords = ["tui", "tmux", "agents", "kanban", "claude"]
+ categories = ["command-line-utilities", "development-tools"]
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,4 @@
++// HZR modification: read-only observer integration; see the distributed HZR-agtx-NOTICE.txt.
+ pub mod agent;
+ pub mod config;
+ pub mod core;
+--- a/src/db/schema.rs
++++ b/src/db/schema.rs
+@@ -1,3 +1,4 @@
++// HZR modification: read-only observer integration; see the distributed HZR-agtx-NOTICE.txt.
+ use anyhow::{Context, Result};
+ use rusqlite::{params, Connection};
+ use std::path::Path;
+--- a/src/tui/dep_graph.rs
++++ b/src/tui/dep_graph.rs
+@@ -1,3 +1,4 @@
++// HZR modification: read-only observer integration; see the distributed HZR-agtx-NOTICE.txt.
+ //! Pure, TUI-independent dependency-graph model.
+ //!
+ //! Builds a topologically-leveled view of task dependencies from the
+--- a/src/observer/mod.rs
++++ b/src/observer/mod.rs
+@@ -1,3 +1,4 @@
++// HZR modification: read-only observer integration; see the distributed HZR-agtx-NOTICE.txt.
+ //! Bounded, read-only snapshot export for an external monitor.
+ //!
+ //! This is the whole of the observer surface: one request in, one snapshot out,
+--- a/src/observer/readonly.rs
++++ b/src/observer/readonly.rs
+@@ -1,3 +1,4 @@
++// HZR modification: read-only observer integration; see the distributed HZR-agtx-NOTICE.txt.
+ //! Read-only access to an agtx store.
+ //!
+ //! [`Database::open_project`] and [`Database::open_global`] are constructors for
+--- a/src/observer/tests.rs
++++ b/src/observer/tests.rs
+@@ -1,3 +1,4 @@
++// HZR modification: read-only observer integration; see the distributed HZR-agtx-NOTICE.txt.
+ use super::*;
+ 
+ #[test]
+--- a/src/bin/hzr-agtx-observer.rs
++++ b/src/bin/hzr-agtx-observer.rs
+@@ -1,3 +1,4 @@
++// HZR modification: read-only observer integration; see the distributed HZR-agtx-NOTICE.txt.
+ //! `hzr-agtx-observer` — one bounded read-only snapshot of an agtx store.
+ //!
+ //! Deliberately not `agtx`: this binary has no TUI, no tmux, no MCP server, no

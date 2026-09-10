@@ -1,7 +1,7 @@
-# HZR 0.9.4 — fork-core parity ledger
+# HZR 0.9.5 — fork-core parity ledger
 
 **Audit date:** 2026-09-03
-**Status:** HZR 0.9.4 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
+**Status:** HZR 0.9.5 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -42,7 +42,17 @@ The 0.6.0 gate verified current engine manifest
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
 
-### 0.9.4 host-verdict and push-notice delta
+### Contributor find-path fidelity delta (2026-09-10)
+
+PR #10 preserves the caller's absolute or relative search root when collecting
+find matches, including a matching directory root itself. Review additionally
+removed grouped-output directory shortening: it discarded path bytes and could
+panic when slicing a Unicode directory. Grouping and bounded result recovery
+remain intact. Tests cover absolute/relative roots and long Unicode directory
+headers. The immutable import baseline remains unchanged; current-engine
+manifests are refreshed after these edits.
+
+### 0.9.5 host-verdict and push-notice delta
 
 The typed `rewrite-plan` interface carries `host_permission` — the verdict of the
 host's own Claude Bash rules for the command as written (`allow`, `ask`, `deny`,
@@ -54,7 +64,7 @@ Regression coverage: the four isolated permission policies on `rewrite-plan`, an
 GitLab, GitHub, plain and up-to-date push transcripts on the compaction. No
 accounting measurements change.
 
-### 0.9.4 managed permission-planning delta
+### 0.9.5 managed permission-planning delta
 
 The typed `rewrite-plan` interface distinguishes a missing Claude Bash rule from
 an explicit ask rule. The former selects the existing optimized command; the

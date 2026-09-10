@@ -13,7 +13,7 @@ additional pinned engines plus a private Node.js runtime without removing their 
 | caveman-code managed SDK | 0.65.2 | MIT | https://github.com/JuliusBrussee/caveman-code | managed runtime |
 | extract-zip hardened compatibility fork | 2.0.2 | BSD-2-Clause | https://github.com/max-mapper/extract-zip | rejects archive path and symlink escape in the managed Caveman runtime |
 | Node.js official binary distribution | 22.17.1 | MIT and bundled dependency licenses | https://nodejs.org/download/release/v22.17.1/ | private runtime for caveman-code |
-| agtx pinned source snapshot | 1.0.4 | MIT (manifest) / Apache-2.0 (LICENSE), unresolved | https://github.com/fynnfluegge/agtx | read-only Agent Observatory component; built locally on request, no prebuilt artifact shipped |
+| agtx pinned source snapshot | 1.0.4 | Apache-2.0 | https://github.com/fynnfluegge/agtx | bundled pinned agtx runtime and read-only Agent Observatory observer |
 
 The RTK runtime descends from the exact 516-entry snapshot recorded in `fork-core/SNAPSHOT.toml`. Its canonical
 v0.1.0 baseline v2 SHA-256 is `f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16`;
@@ -60,14 +60,14 @@ no longer leave an orphaned memory server behind. Modified-source distributions 
 Apache-2.0 license and identify this change. Patch SHA-256:
 `c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8`.
 
-HZR applies `patches/agtx/1.0.4-readonly-observer.patch` to the pinned agtx source. The patch
-adds a read-only store reader and a bounded snapshot exporter so the separate
-`hzr-agtx-observer` binary can watch an agtx board without writing to it. Upstream licence
-metadata disagrees at the pinned commit: the package manifest declares MIT while the checked-in
-LICENSE file contains Apache-2.0. Both labels are recorded as evidence and the mismatch is not
-resolved here, so HZR ships no prebuilt adapted agtx artifact — the component is built locally
-on request (`hzr agents component install`) or through a flag-gated bundle build. Patch SHA-256:
-`c7ad1c32074acc470edca6738ba3dd74e0845c7d62712337ded6052ad197a90d`.
+HZR distributes agtx and its read-only observer under the confirmed Apache-2.0
+license. The repository owner confirmed upstream clarification on 2026-09-10.
+The historical MIT Cargo label is corrected by the separate license patch;
+the upstream LICENSE text is retained. Both binaries use the same commit and
+patches. HZR-modified source carries notices, and bundles include
+`licenses/agtx-Apache-2.0.txt` and `licenses/HZR-agtx-NOTICE.txt`.
+Exact source evidence and patch hashes are recorded in
+`integrations/agtx/PROVENANCE.json` and `engines.lock.toml`.
 
 HZR replaces caveman-code's vulnerable `extract-zip` 2.0.1 dependency with the vendored
 BSD-2-Clause compatibility fork under `integrations/caveman-code/vendor/extract-zip`. The fork

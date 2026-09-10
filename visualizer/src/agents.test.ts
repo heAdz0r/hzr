@@ -173,8 +173,9 @@ describe("naming", () => {
 
 describe("onboarding", () => {
   test("names installation and enrollment as two separate steps", () => {
-    expect(AGENT_ONBOARDING_COMMANDS).toHaveLength(2);
+    expect(AGENT_ONBOARDING_COMMANDS).toHaveLength(3);
     expect(AGENT_ONBOARDING_COMMANDS[0]).toContain("component install");
-    expect(AGENT_ONBOARDING_COMMANDS[1]).toContain("--agtx-data-dir");
+    expect(AGENT_ONBOARDING_COMMANDS[1]).toContain("agents board");
+    expect(AGENT_ONBOARDING_COMMANDS[2]).toContain("agents enable");
   });
 });

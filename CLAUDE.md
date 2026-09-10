@@ -84,7 +84,8 @@ Never register `rtk`, `grepai`, `icm` as separate MCP servers.
 
 Claude Code hooks route supported Bash calls through HZR without granting new
 permissions. Native Read/Grep/Glob/Edit/Write retain exact host semantics in all
-legacy modes; no optimization-only deny/retry is emitted. The PostToolUse observer
+legacy modes; no optimization-only deny/retry is emitted. Native Explore workers
+also pass through unchanged, with host permissions preserved. The PostToolUse observer
 stores no content and grants no savings credit. Missing accounting stays visible.
 Run `hzr hooks capabilities --host claude --probe` for local adapter checks; these
 checks do not prove installation, trusted activation or model-visible delivery.

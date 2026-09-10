@@ -326,8 +326,11 @@ onBeforeUnmount(() => {
       <span class="eyebrow">{{ stateLabel }}</span>
       <h3>No agtx project is enrolled.</h3>
       <p>
-        Monitoring needs two separate steps. Installing the component enrolls nothing;
-        enrolling a project installs nothing. Neither one starts an agent.
+        The pinned agtx runtime and observer are included in HZR; no Cargo or separate
+        agtx installation is needed. Verify the component, open a board to initialize
+        its data directory if needed, then enroll it for read-only monitoring.
+        The board command opens the interactive application; skip it for an existing board.
+        Installing or enrolling alone never starts an agent.
       </p>
       <ol class="agents-onboarding">
         <li v-for="command in AGENT_ONBOARDING_COMMANDS" :key="command">

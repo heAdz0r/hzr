@@ -1948,10 +1948,8 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 format!("{} pinned components", manifest.engine.len()),
             ));
             for pin in manifest.engine.iter().filter(|pin| {
-                // `runtime = false` marks a component the bundle deliberately
-                // does not ship — the agtx observer is opt-in and absent on
-                // every default install. Demanding it here would turn an
-                // integration nobody enabled into a failed health check.
+                // Source-only components are excluded; bundled runtimes are required
+                // even when their integration has not been enabled.
                 !pin.binary.is_empty() && pin.name != "caveman-code" && pin.runtime != Some(false)
             }) {
                 checks.push(
@@ -2681,25 +2679,18 @@ mod agent_component_tests {
     }
 
     #[test]
-    fn the_optional_pin_is_excluded_from_the_mandatory_engine_sweep() {
-        // Doctor inspects every pinned binary; a component the bundle does not
-        // ship must be filtered out, or its absence fails an ordinary install.
+    fn bundled_agtx_binaries_are_included_in_the_mandatory_engine_sweep() {
         let manifest = hzr_core::locked_engines().expect("engine lock parses");
-        let agtx = manifest
+        let binaries: Vec<_> = manifest
             .engine
             .iter()
-            .find(|pin| pin.name == "agtx")
-            .expect("agtx pin");
-        assert_eq!(agtx.runtime, Some(false));
-        assert!(
-            manifest
-                .engine
-                .iter()
-                .filter(|pin| !pin.binary.is_empty()
-                    && pin.name != "caveman-code"
-                    && pin.runtime != Some(false))
-                .all(|pin| pin.name != "agtx")
-        );
+            .filter(|pin| {
+                !pin.binary.is_empty() && pin.name != "caveman-code" && pin.runtime != Some(false)
+            })
+            .map(|pin| pin.binary.as_str())
+            .collect();
+        assert!(binaries.contains(&"agtx"));
+        assert!(binaries.contains(&"hzr-agtx-observer"));
     }
 }
 

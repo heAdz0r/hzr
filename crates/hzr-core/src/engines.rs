@@ -143,29 +143,39 @@ mod tests {
             Some("f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16")
         );
 
-        // 0.8.7: the optional agtx observer is pinned like every other
-        // component, and is explicitly not a runtime the bundle ships.
         let agtx = manifest
             .engine
             .iter()
             .find(|engine| engine.name == "agtx")
             .expect("agtx pin");
-        assert_eq!(agtx.version, "1.0.4");
-        assert_eq!(agtx.commit, "d307c4c182dff19a65370a50403185cb826f7f49");
-        assert_eq!(agtx.repository, "https://github.com/fynnfluegge/agtx");
-        assert_eq!(agtx.binary, "hzr-agtx-observer");
-        assert_eq!(agtx.runtime, Some(false));
-        assert_eq!(
-            agtx.source_kind.as_deref(),
-            Some("optional-adapted-source-build")
-        );
-        // The upstream license discrepancy is carried in the pin itself, so a
-        // re-pin cannot quietly resolve it to whichever label is convenient.
-        assert!(agtx.license.contains("unresolved"));
-        assert_eq!(agtx.patches, ["patches/agtx/1.0.4-readonly-observer.patch"]);
-        assert_eq!(
-            agtx.patch_sha256,
-            ["13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8"]
-        );
+        let observer = manifest
+            .engine
+            .iter()
+            .find(|engine| engine.name == "hzr-agtx-observer")
+            .expect("observer pin");
+        for engine in [agtx, observer] {
+            assert_eq!(engine.version, "1.0.4");
+            assert_eq!(engine.commit, "d307c4c182dff19a65370a50403185cb826f7f49");
+            assert_eq!(engine.repository, "https://github.com/fynnfluegge/agtx");
+            assert_eq!(engine.runtime, Some(true));
+            assert_eq!(engine.source_kind.as_deref(), Some("adapted-source-build"));
+            assert_eq!(engine.license, "Apache-2.0");
+            assert_eq!(
+                engine.patches,
+                [
+                    "patches/agtx/1.0.4-readonly-observer.patch",
+                    "patches/agtx/1.0.4-apache-license.patch"
+                ]
+            );
+            assert_eq!(
+                engine.patch_sha256,
+                [
+                    "13ca1bbb4406eae4406ce8da3f9258a547a907c30d6a39d590d1ab1558cd0ea8",
+                    "8cf45fc45ce2e515be4bf07710e71435a754bc53e0a419e3c47d957e3f768980"
+                ]
+            );
+        }
+        assert_eq!(agtx.binary, "agtx");
+        assert_eq!(observer.binary, "hzr-agtx-observer");
     }
 }
