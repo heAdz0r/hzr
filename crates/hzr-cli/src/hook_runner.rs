@@ -13,9 +13,11 @@ use hzr_core::{
     SessionEvasionSummary, fidelity_preflight_required, first_class_replacement,
     load_pricing_catalog, price_avoided_input_tokens, privacy_identity_hash, raw_fidelity_request,
 };
+// 0.9.4: HostPermissionVerdict joins the imports
 use hzr_exec::{
-    CanonicalCommand, ForkRuntimePaths, HOST_GRANT_APPLIED_ENV, PinnedRtkAdapter, RewriteDecision,
-    RewriteSource, RtkAdapterConfig, RtkRewriteOutcome, host_grant_applied, reconcile_host_grant,
+    CanonicalCommand, ForkRuntimePaths, HOST_GRANT_APPLIED_ENV, HostPermissionVerdict,
+    PinnedRtkAdapter, RewriteDecision, RewriteSource, RtkAdapterConfig, RtkRewriteOutcome,
+    host_grant_applied, reconcile_host_grant,
 };
 use hzr_index::registered_workspaces;
 use hzr_protocol::{
@@ -258,7 +260,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         HookFidelityPreflight::Allow(evasion) => Some(evasion),
         HookFidelityPreflight::Ask { decision, evasion } => {
             let _ = record_local_policy_decision(config, input, &decision, Some(evasion)).await;
-            return write_decision(input, decision, None);
+            return write_decision(input, decision, None, false); // 0.9.4
         }
     };
     if fidelity_evasion.is_none() && hzr_core::is_direct_hzr_command(raw) {
@@ -268,6 +270,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
                 "command already enters the HZR control plane; no fork proxy is needed",
             ),
             None,
+            false, // 0.9.4
         );
     }
     let request = ExecApiRequest {
@@ -299,12 +302,18 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         None
     };
     let daemon_recorded_policy = managed.is_some();
-    let (decision, accounting_notice, managed_evasion) = match managed {
+    // 0.9.4: the host-rule verdict for the operator's command rides along with the decision.
+    let (decision, accounting_notice, managed_evasion, host_permission) = match managed {
         Some(outcome) => {
             let notice = recover_accounting_for_input(config, input)
                 .ok()
                 .and_then(|()| accounting_transition(config, input, false));
-            (outcome.decision, notice, outcome.evasion)
+            (
+                outcome.decision,
+                notice,
+                outcome.evasion,
+                outcome.host_permission, // 0.9.4
+            )
         }
         None => {
             let _ = record_degraded_rewrite_for_input(config, input);
@@ -328,7 +337,12 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
                     eprintln!("HZR daemon-free accounting context was not registered: {error}");
                 }
             }
-            (outcome.decision, notice, outcome.evasion)
+            (
+                outcome.decision,
+                notice,
+                outcome.evasion,
+                outcome.host_permission, // 0.9.4
+            )
         }
     };
     let decision = steer_to_first_class(raw, decision);
@@ -339,6 +353,9 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     // rewrites content the provider already cached, so it is append-class at every turn position.
     let decision = apply_filter_placement(config, input, PrefixEffect::Append, decision);
     let decision = honor_host_permission_mode(input, decision);
+    // 0.9.4: the host's own Bash rules, evaluated on the operator's command, drive the answer.
+    let decision = reconcile_host_permission_rules(input, host_permission, decision);
+    let host_rule_allows = host_rule_allows(input, raw, host_permission);
     let decision = attach_hook_evasion(raw, decision, evasion.as_ref());
     let decision = attach_policy_feedback(config, input, decision);
     let decision = attach_session_attribution(input, decision);
@@ -348,7 +365,12 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     if !daemon_recorded_policy {
         let _ = record_local_policy_decision(config, input, &decision, None).await;
     }
-    write_decision(input, decision, accounting_notice.as_deref())
+    write_decision(
+        input,
+        decision,
+        accounting_notice.as_deref(),
+        host_rule_allows,
+    ) // 0.9.4
 }
 
 /// Is the daemon accepting connections right now? A bounded TCP probe, no request. // 0.9.1
@@ -780,6 +802,86 @@ fn steer_to_first_class(raw: &str, decision: RewriteDecision) -> RewriteDecision
     hzr_policy_rewrite(replacement)
 }
 
+/// Whether the hook is answering Claude Code rather than another host. // 0.9.4
+fn hook_host_is_claude(input: &Value) -> bool {
+    input["_hzr_host"].as_str() != Some("codex")
+}
+
+/// Whether the host is in a mode that prompts the operator for a Bash call it has no rule for.
+///
+/// `default`, `acceptEdits` and `plan` all prompt for Bash; `bypassPermissions` never does. A
+/// mode this build does not know is left to the managed route exactly as before, because
+/// guessing that it prompts would trade filtering for nothing. // 0.9.4
+fn host_prompts_for_unmatched_bash(input: &Value) -> bool {
+    ["permission_mode", "permissionMode"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+        .and_then(HostPermissionMode::parse)
+        .is_some_and(|mode| {
+            matches!(
+                mode,
+                HostPermissionMode::Default
+                    | HostPermissionMode::AcceptEdits
+                    | HostPermissionMode::Plan
+            )
+        })
+}
+
+/// Let the host's own Bash rules, evaluated on the operator's command, decide what the operator
+/// sees. // 0.9.4
+///
+/// The managed form of a command is a multi-line environment prelude that carries a per-run
+/// correlation id, so no `Bash(...)` rule the operator has written — or could write from the
+/// prompt — will ever match it. Returning it without a decision therefore turned every
+/// unmatched command into a Yes/No prompt over a script, with no way to stop being asked.
+///
+/// When fork-core reports that no rule matched and the host is in a prompting mode, the command
+/// is left as the operator wrote it: the host prompts for that command, a "don't ask again"
+/// answer becomes a durable rule, and the next call arrives with an allow verdict and takes the
+/// managed route silently. Explicit ask and deny rules, `bypassPermissions`, Codex, and HZR's
+/// own policy answers are untouched.
+fn reconcile_host_permission_rules(
+    input: &Value,
+    host_permission: Option<HostPermissionVerdict>,
+    decision: RewriteDecision,
+) -> RewriteDecision {
+    if host_grants_execution(input) || !hook_host_is_claude(input) {
+        return decision;
+    }
+    if host_permission != Some(HostPermissionVerdict::Default)
+        || !host_prompts_for_unmatched_bash(input)
+    {
+        return decision;
+    }
+    match decision {
+        RewriteDecision::AllowRewrite { .. } => RewriteDecision::allow_raw(
+            "no Claude permission rule matched this command, so the host prompts for the command \
+             as written and its answer can become a durable rule; this run is unfiltered and \
+             earns no savings credit",
+        ),
+        other => other,
+    }
+}
+
+/// Whether an allow rule the operator wrote for the original command lets the hook answer
+/// `allow` for its managed form. // 0.9.4
+///
+/// fork-core evaluates the host's `Bash(...)` rules on the command as written; a match means the
+/// host would have run it without a prompt, so approving the managed form grants nothing the
+/// operator has not already granted. Constructs the host refuses to prefix-match — command
+/// substitution, backticks, more than one line — are left to the host's own judgement.
+fn host_rule_allows(
+    input: &Value,
+    raw: &str,
+    host_permission: Option<HostPermissionVerdict>,
+) -> bool {
+    hook_host_is_claude(input)
+        && host_permission == Some(HostPermissionVerdict::Allow)
+        && !raw.contains('\n')
+        && !raw.contains("$(")
+        && !raw.contains('`')
+}
+
 /// Whether the host has already decided that commands run without prompting.
 ///
 /// Claude Code reports its permission mode on every hook call. `bypassPermissions` is an explicit
@@ -1011,6 +1113,7 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RtkRewrite
                 },
                 evasion: None,
                 accounting_correlation_id: None,
+                host_permission: None, // 0.9.4
             };
         }
         RawFidelityRequest::InvalidReason => {
@@ -1021,6 +1124,7 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RtkRewrite
                 },
                 evasion: None,
                 accounting_correlation_id: None,
+                host_permission: None, // 0.9.4
             };
         }
         RawFidelityRequest::Authorized { payload, .. } => {
@@ -1029,6 +1133,7 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RtkRewrite
                     decision: hzr_policy_rewrite(replacement),
                     evasion: None,
                     accounting_correlation_id: None,
+                    host_permission: None, // 0.9.4
                 };
             }
             payload
@@ -1062,7 +1167,12 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RtkRewrite
     outcome
 }
 
-fn write_decision(input: &Value, decision: RewriteDecision, notice: Option<&str>) -> Result<()> {
+fn write_decision(
+    input: &Value,
+    decision: RewriteDecision,
+    notice: Option<&str>,
+    host_rule_allows: bool, // 0.9.4: an allow rule for the original command keeps `allow`
+) -> Result<()> {
     let mut output = match decision {
         RewriteDecision::AllowRaw { .. } => match notice {
             Some(notice) => json!({"systemMessage": notice}),
@@ -1105,9 +1215,12 @@ fn write_decision(input: &Value, decision: RewriteDecision, notice: Option<&str>
     } else {
         crate::host_hooks::HookHost::Claude
     };
-    if let Some(output) =
-        crate::host_hooks::adapt_response(host, input, output, host_grants_execution(input))
-    {
+    if let Some(output) = crate::host_hooks::adapt_response(
+        host,
+        input,
+        output,
+        host_grants_execution(input) || host_rule_allows, // 0.9.4
+    ) {
         serde_json::to_writer(io::stdout().lock(), &output)?;
         io::stdout().lock().write_all(b"\n")?;
     }
@@ -2472,7 +2585,10 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::adoption::NativeToolMode;
-    use hzr_exec::{CanonicalCommand, PINNED_RTK_VERSION, RewriteDecision, RewriteSource};
+    // 0.9.4: HostPermissionVerdict joins the imports
+    use hzr_exec::{
+        CanonicalCommand, HostPermissionVerdict, PINNED_RTK_VERSION, RewriteDecision, RewriteSource,
+    };
 
     use super::anti_evasion_fixture::{ProbeDecision, ProbeLayer, ProbeNativeMode, ProbeSurface};
     use super::{
@@ -2481,8 +2597,9 @@ mod tests {
         attach_hook_evasion, attach_host_grant, attach_policy_feedback, attach_session_attribution,
         close_open_accounting_gaps, context_brief, deepest_registered_root,
         degraded_rewrite_coverage, degraded_rewrite_coverage_at, fallback_decision,
-        honor_host_permission_mode, hook_fidelity_preflight, native_observation_policy,
-        read_session, reconcile_host_grant, record_accounting_gap_now, record_degraded_rewrite_at,
+        honor_host_permission_mode, hook_fidelity_preflight, host_rule_allows,
+        native_observation_policy, read_session, reconcile_host_grant,
+        reconcile_host_permission_rules, record_accounting_gap_now, record_degraded_rewrite_at,
         remember_observed_model, render_command, run_statusline_upstream, scorecard_message,
         steer_to_first_class, update_session,
     };
@@ -2781,6 +2898,116 @@ mod tests {
             },
         );
         assert!(matches!(untouched, RewriteDecision::Ask { .. }));
+    }
+
+    /// The host's own rules, evaluated on the operator's command, decide what the operator sees.
+    ///
+    /// 0.9.3 returned the managed form without a decision whenever no rule matched, so Claude
+    /// Code ran its allowlist against a multi-line environment prelude with a per-run
+    /// correlation id — a command no `Bash(...)` rule can ever match — and prompted Yes/No on
+    /// every call with no way to stop being asked. // 0.9.4
+    #[test]
+    fn acceptance_gate_host_rules_are_applied_to_the_operators_command() {
+        let default_mode = serde_json::json!({"permission_mode": "default", "_hzr_host": "claude"});
+        let managed = || RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("# HZR managed route\nrtk read f"),
+            source: RewriteSource::HzrPolicy,
+            reason: "managed".into(),
+        };
+
+        // No rule matched and the host prompts: the operator's command is left alone so the
+        // prompt names it and can mint a durable rule.
+        assert!(matches!(
+            reconcile_host_permission_rules(
+                &default_mode,
+                Some(HostPermissionVerdict::Default),
+                managed()
+            ),
+            RewriteDecision::AllowRaw { .. }
+        ));
+        // An allow rule matched the original: the managed route runs and the host hears `allow`.
+        assert!(matches!(
+            reconcile_host_permission_rules(
+                &default_mode,
+                Some(HostPermissionVerdict::Allow),
+                managed()
+            ),
+            RewriteDecision::AllowRewrite { .. }
+        ));
+        assert!(host_rule_allows(
+            &default_mode,
+            "cat f",
+            Some(HostPermissionVerdict::Allow)
+        ));
+        // Constructs the host refuses to prefix-match stay with the host.
+        for raw in ["cat $(f)", "cat `f`", "cat f\nrm g"] {
+            assert!(!host_rule_allows(
+                &default_mode,
+                raw,
+                Some(HostPermissionVerdict::Allow)
+            ));
+        }
+        assert!(!host_rule_allows(
+            &default_mode,
+            "cat f",
+            Some(HostPermissionVerdict::Default)
+        ));
+        assert!(!host_rule_allows(
+            &serde_json::json!({"permission_mode": "default", "_hzr_host": "codex"}),
+            "cat f",
+            Some(HostPermissionVerdict::Allow)
+        ));
+
+        // Bypass, an unknown mode, a missing mode, Codex and an engine without the verdict all
+        // keep the managed route exactly as before.
+        for (input, verdict) in [
+            (
+                serde_json::json!({"permission_mode": "bypassPermissions", "_hzr_host": "claude"}),
+                Some(HostPermissionVerdict::Default),
+            ),
+            (
+                serde_json::json!({"permission_mode": "auto", "_hzr_host": "claude"}),
+                Some(HostPermissionVerdict::Default),
+            ),
+            (
+                serde_json::json!({"_hzr_host": "claude"}),
+                Some(HostPermissionVerdict::Default),
+            ),
+            (
+                serde_json::json!({"permission_mode": "default", "_hzr_host": "codex"}),
+                Some(HostPermissionVerdict::Default),
+            ),
+            (default_mode.clone(), None),
+        ] {
+            assert!(
+                matches!(
+                    reconcile_host_permission_rules(&input, verdict, managed()),
+                    RewriteDecision::AllowRewrite { .. }
+                ),
+                "{input}"
+            );
+        }
+
+        // Explicit ask and deny rules are rules, not absent ones.
+        let asked = RewriteDecision::Ask {
+            proposed: Some(CanonicalCommand::shell("rtk git push")),
+            reason: "ask rule".into(),
+        };
+        assert!(matches!(
+            reconcile_host_permission_rules(&default_mode, Some(HostPermissionVerdict::Ask), asked),
+            RewriteDecision::Ask { .. }
+        ));
+        let denied = RewriteDecision::Deny {
+            reason: "deny rule".into(),
+        };
+        assert!(matches!(
+            reconcile_host_permission_rules(
+                &default_mode,
+                Some(HostPermissionVerdict::Deny),
+                denied
+            ),
+            RewriteDecision::Deny { .. }
+        ));
     }
 
     #[test]

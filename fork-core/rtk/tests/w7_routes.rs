@@ -51,6 +51,7 @@ fn hidden_rewrite_plan_dispatches_one_typed_json_object() {
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
     assert_eq!(value["decision"], "rewrite");
     assert!(value.get("reason").is_none());
+    assert_eq!(value["host_permission"], "default"); // 0.9.4
     assert_eq!(value["proposed"], "rtk ps aux");
     assert_eq!(
         output.stdout.iter().filter(|byte| **byte == b'\n').count(),
@@ -62,11 +63,19 @@ fn hidden_rewrite_plan_dispatches_one_typed_json_object() {
 fn typed_plan_preserves_explicit_permission_rules() {
     let home = TempDir::new().expect("clean home");
     std::fs::create_dir(home.path().join(".claude")).unwrap();
-    for (rules, expected) in [
-        (serde_json::json!({}), "rewrite"),
-        (serde_json::json!({"ask": ["Bash(ls:*)"]}), "ask"),
+    // 0.9.4: the plan also names the host-rule verdict for the original command, so the hook
+    // can answer `allow` for a command the operator's own rules already allow.
+    for (rules, expected, host_permission) in [
+        (serde_json::json!({}), "rewrite", "default"),
+        (
+            serde_json::json!({"allow": ["Bash(ls:*)"]}),
+            "rewrite",
+            "allow",
+        ),
+        (serde_json::json!({"ask": ["Bash(ls:*)"]}), "ask", "ask"),
         (
             serde_json::json!({"deny": ["Bash(ls:*)"], "allow": ["Bash(*)"]}),
+            "deny",
             "deny",
         ),
     ] {
@@ -82,6 +91,7 @@ fn typed_plan_preserves_explicit_permission_rules() {
         assert!(output.status.success());
         let plan: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(plan["decision"], expected);
+        assert_eq!(plan["host_permission"], host_permission); // 0.9.4
         if expected != "rewrite" {
             assert_eq!(plan["reason"], "permission_policy");
         }

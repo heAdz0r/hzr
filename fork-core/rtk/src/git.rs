@@ -1376,44 +1376,9 @@ fn run_push(args: &[String], verbose: u8, global_args: &[String]) -> Result<()> 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let raw = format!("{}{}", stdout, stderr);
 
-    // upstream v0.41: noise-skipping prefixes for git push progress lines
-    const GIT_PUSH_NOISE_PREFIXES: &[&str] = &[
-        "Enumerating objects:",
-        "Counting objects:",
-        "Compressing objects:",
-        "Writing objects:",
-        "Delta compression using",
-        "Total ",
-    ];
-
     if output.status.success() {
-        let compact = if stderr.contains("Everything up-to-date") {
-            "ok (up-to-date)".to_string()
-        } else {
-            let mut result = String::new();
-            // upstream v0.41: filter noise lines before extracting ref info
-            for line in stderr.lines() {
-                let trimmed = line.trim();
-                if GIT_PUSH_NOISE_PREFIXES
-                    .iter()
-                    .any(|p| trimmed.starts_with(p))
-                {
-                    continue;
-                }
-                if line.contains("->") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 3 {
-                        result = format!("ok {}", parts[parts.len() - 1]);
-                        break;
-                    }
-                }
-            }
-            if !result.is_empty() {
-                result
-            } else {
-                "ok".to_string()
-            }
-        };
+        // 0.9.4: the server's merge-request link survives the compaction
+        let compact = compact_push_output(&stderr);
 
         println!("{}", compact);
 
@@ -1434,6 +1399,69 @@ fn run_push(args: &[String], verbose: u8, global_args: &[String]) -> Result<()> 
     }
 
     Ok(())
+}
+
+/// Compact a successful `git push` to one `ok <ref>` line plus the server notices that carry a
+/// link. // 0.9.4
+///
+/// GitLab answers a push with the merge request it created (`-o merge_request.create`) or the
+/// URL to open one; GitHub and Bitbucket print the equivalent pull-request link. Those
+/// `remote:` lines used to be dropped together with the object-count progress, so an agent that
+/// had just opened a merge request could not report where it was. Blank rows, `====` decoration
+/// and progress rows stay out; only a notice with a URL or one that names a merge or pull
+/// request is kept.
+fn compact_push_output(stderr: &str) -> String {
+    if stderr.contains("Everything up-to-date") {
+        return "ok (up-to-date)".to_string();
+    }
+
+    // upstream v0.41: noise-skipping prefixes for git push progress lines
+    const GIT_PUSH_NOISE_PREFIXES: &[&str] = &[
+        "Enumerating objects:",
+        "Counting objects:",
+        "Compressing objects:",
+        "Writing objects:",
+        "Delta compression using",
+        "Total ",
+    ];
+
+    let mut result = String::new();
+    let mut notices: Vec<&str> = Vec::new();
+    for line in stderr.lines() {
+        let trimmed = line.trim();
+        if let Some(notice) = trimmed.strip_prefix("remote:") {
+            let notice = notice.trim();
+            let lower = notice.to_ascii_lowercase();
+            if notice.contains("://")
+                || lower.contains("merge request")
+                || lower.contains("pull request")
+            {
+                notices.push(notice);
+            }
+            continue;
+        }
+        // upstream v0.41: filter noise lines before extracting ref info
+        if GIT_PUSH_NOISE_PREFIXES
+            .iter()
+            .any(|p| trimmed.starts_with(p))
+        {
+            continue;
+        }
+        if result.is_empty() && line.contains("->") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                result = format!("ok {}", parts[parts.len() - 1]);
+            }
+        }
+    }
+    if result.is_empty() {
+        result.push_str("ok");
+    }
+    for notice in notices {
+        result.push_str("\nremote: ");
+        result.push_str(notice);
+    }
+    result
 }
 
 fn run_pull(args: &[String], verbose: u8, global_args: &[String]) -> Result<()> {
@@ -2503,6 +2531,65 @@ mod tests {
         // remote-only should show release/v2 but not main or feature/auth (already local)
         assert!(result.contains("remote-only"));
         assert!(result.contains("release/v2"));
+    }
+
+    // 0.9.4: a push that opened a merge request reports where it is.
+    #[test]
+    fn test_compact_push_output_keeps_the_merge_request_link() {
+        let stderr = "Enumerating objects: 5, done.\n\
+Counting objects: 100% (5/5), done.\n\
+Delta compression using up to 8 threads\n\
+Compressing objects: 100% (3/3), done.\n\
+Writing objects: 100% (3/3), 300 bytes | 300.00 KiB/s, done.\n\
+Total 3 (delta 2), reused 0 (delta 0), pack-reused 0\n\
+remote: \n\
+remote: ========================================================================\n\
+remote: \n\
+remote:     View merge request for samoilov-dp-price-calculator:\n\
+remote:        https://fox.example.com/team/compass/-/merge_requests/123\n\
+remote: \n\
+remote: ========================================================================\n\
+remote: \n\
+To fox.example.com:team/compass.git\n\
+   1a2b3c4..5d6e7f8  samoilov-dp-price-calculator -> samoilov-dp-price-calculator\n";
+        assert_eq!(
+            compact_push_output(stderr),
+            "ok samoilov-dp-price-calculator\n\
+remote: View merge request for samoilov-dp-price-calculator:\n\
+remote: https://fox.example.com/team/compass/-/merge_requests/123"
+        );
+    }
+
+    #[test]
+    fn test_compact_push_output_keeps_the_pull_request_hint() {
+        let stderr = "remote: \n\
+remote: Create a pull request for 'feature' on GitHub by visiting:\n\
+remote:      https://github.com/owner/repo/pull/new/feature\n\
+remote: \n\
+To github.com:owner/repo.git\n\
+ * [new branch]      feature -> feature\n";
+        assert_eq!(
+            compact_push_output(stderr),
+            "ok feature\n\
+remote: Create a pull request for 'feature' on GitHub by visiting:\n\
+remote: https://github.com/owner/repo/pull/new/feature"
+        );
+    }
+
+    #[test]
+    fn test_compact_push_output_without_notices_stays_one_line() {
+        let stderr = "Enumerating objects: 3, done.\n\
+Writing objects: 100% (3/3), 250 bytes | 250.00 KiB/s, done.\n\
+Total 3 (delta 0), reused 0 (delta 0), pack-reused 0\n\
+remote: Resolving deltas: 100% (1/1), completed with 1 local object.\n\
+To github.com:owner/repo.git\n\
+   1a2b3c4..5d6e7f8  main -> main\n";
+        assert_eq!(compact_push_output(stderr), "ok main");
+        assert_eq!(
+            compact_push_output("Everything up-to-date\n"),
+            "ok (up-to-date)"
+        );
+        assert_eq!(compact_push_output(""), "ok");
     }
 
     #[test]

@@ -136,6 +136,17 @@ mod tests {
         );
     }
 
+    /// 0.9.4: when the host's own rules already allow the operator's command, the hook's
+    /// `allow` for the managed form grants nothing new and must survive.
+    #[test]
+    fn claude_keeps_allow_when_the_host_already_allows_the_command() {
+        let output = json!({"hookSpecificOutput":{"hookEventName":"PreToolUse",
+            "permissionDecision":"allow","updatedInput": input()["tool_input"]}});
+        let adapted = adapt_response(HookHost::Claude, &input(), output, true)
+            .expect("supported host response fixture");
+        assert_eq!(adapted["hookSpecificOutput"]["permissionDecision"], "allow");
+    }
+
     #[test]
     fn codex_rewrite_requires_explicit_host_grant_and_never_emits_ask() {
         let output = json!({"hookSpecificOutput":{"permissionDecision":"allow","updatedInput":input()["tool_input"]}});

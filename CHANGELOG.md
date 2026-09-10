@@ -4,6 +4,14 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-09-10
+
+### Fixed
+
+- Claude Code no longer prompts Yes/No on every HZR-routed Bash command for an operator who is not in `bypassPermissions`. The hook returned the managed form — a multi-line environment prelude with a per-run correlation id — without a permission decision, so the host ran its allowlist against a command no `Bash(...)` rule can match and asked every time, with no "don't ask again" option. fork-core's `rewrite-plan` now reports the host-rule verdict for the command as the operator wrote it: when an allow rule matches, the hook answers `allow` for the managed form; when no rule matches in a prompting mode, the command is left as written so the host's prompt names it and its answer becomes a durable rule. Explicit ask and deny rules, `bypassPermissions`, Codex and HZR's own policy answers are unchanged.
+- `git push` keeps the server's merge-request or pull-request link. GitLab's "View merge request" notice and the URL to create one, GitHub's "Create a pull request" hint and any other `remote:` line carrying a URL now follow the `ok <ref>` line instead of being dropped with the object-count progress, so an agent that pushed with `-o merge_request.create` can report where the merge request is.
+- macOS no longer accumulates duplicate `hzrd` rows in System Settings > Login Items, nor re-posts the "hzrd may run in the background" notification on every release. Bundled binaries now carry a stable ad-hoc code-signing identifier (`dev.headz0r.hzr.hzrd`) instead of the linker's per-build one, so Background Task Management recognises the upgraded daemon as the same item; `hzr daemon service install` re-bootstraps the launchd job only when the definition changed or the job is not loaded. Rows already left behind disappear after `sfltool resetbtm` and a re-login.
+
 ## [0.9.3] - 2026-09-08
 
 ### Fixed
@@ -1823,4 +1831,5 @@ First public HZR release.
 [0.6.6]: https://github.com/heAdz0r/hzr/compare/v0.6.5...v0.6.6
 [0.8.603]: https://github.com/heAdz0r/hzr/compare/v0.8.602...v0.8.603
 [0.8.602]: https://github.com/heAdz0r/hzr/compare/v0.8.7...v0.8.602
+[0.9.4]: https://github.com/heAdz0r/hzr/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/heAdz0r/hzr/compare/v0.9.2...v0.9.3

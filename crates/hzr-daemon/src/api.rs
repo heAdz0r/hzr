@@ -2293,6 +2293,7 @@ pub(crate) async fn execute_command(
             },
             evasion: Some(*evasion),
             accounting_correlation_id: None,
+            host_permission: None, // 0.9.4
         },
         FidelityPreflight::NotRequested | FidelityPreflight::Allow { .. } => {
             if request.fidelity_requested {
@@ -2483,6 +2484,7 @@ pub(crate) async fn execute_command(
         decision: envelope.decision.clone(),
         evasion: plan.evasion,
         accounting_correlation_id: plan.accounting_correlation_id.clone(),
+        host_permission: None, // 0.9.4
     }
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
@@ -2878,6 +2880,7 @@ pub async fn exec_approval(
         decision: envelope.decision.clone(),
         evasion: pending.evasion,
         accounting_correlation_id: accounting_correlation_id.clone(),
+        host_permission: None, // 0.9.4
     }
     .apply_evasion_environment(&mut envelope.environment)
     .map_err(|error| ApiError::internal(format!("evasion plan encoding failed: {error}")))?;
@@ -3534,6 +3537,7 @@ pub async fn exec_rewrite(
             },
             evasion: Some(*evasion),
             accounting_correlation_id: None,
+            host_permission: None, // 0.9.4
         },
         FidelityPreflight::NotRequested | FidelityPreflight::Allow { .. } => {
             fork_outcome_with_managed_unwrap(&state.rtk, &request.command, &cwd).await
@@ -3576,6 +3580,7 @@ pub async fn exec_rewrite(
         decision,
         evasion: outcome.evasion,
         accounting_correlation_id,
+        host_permission: outcome.host_permission, // 0.9.4: forwarded to the hook untouched
     }))
 }
 
@@ -3767,6 +3772,7 @@ async fn fork_outcome_with_managed_unwrap(
                 },
                 evasion: policy_evasion,
                 accounting_correlation_id: None,
+                host_permission: None, // 0.9.4
             };
         }
         RawFidelityRequest::InvalidReason => {
@@ -3777,6 +3783,7 @@ async fn fork_outcome_with_managed_unwrap(
                 },
                 evasion: policy_evasion,
                 accounting_correlation_id: None,
+                host_permission: None, // 0.9.4
             };
         }
         RawFidelityRequest::Authorized { payload, .. } => {
@@ -3789,6 +3796,7 @@ async fn fork_outcome_with_managed_unwrap(
                     decision: hzr_policy_rewrite(replacement),
                     evasion: policy_evasion,
                     accounting_correlation_id: None,
+                    host_permission: None, // 0.9.4
                 };
             }
             payload
@@ -4838,6 +4846,7 @@ mod tests {
             decision,
             evasion: Some(evasion),
             accounting_correlation_id: None,
+            host_permission: None, // 0.9.4
         }
         .apply_evasion_environment(&mut envelope.environment)
         .expect("closed evasion environment");
@@ -5147,6 +5156,7 @@ exit 64
             decision: envelope.decision.clone(),
             evasion: Some(evasion),
             accounting_correlation_id: None,
+            host_permission: None, // 0.9.4
         }
         .apply_evasion_environment(&mut envelope.environment)
         .expect("closed evasion environment");

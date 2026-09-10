@@ -1,6 +1,8 @@
 use crate::discover::registry;
 use crate::permissions::{check_command, PermissionVerdict};
-use hzr_engine_contract::{RewritePlan, RewritePlanDecision, RewritePlanReason, BYTE_FIDELITY_ENV};
+use hzr_engine_contract::{
+    HostPermissionVerdict, RewritePlan, RewritePlanDecision, RewritePlanReason, BYTE_FIDELITY_ENV,
+}; // 0.9.4: HostPermissionVerdict
 use std::io::Write;
 
 /// Run the `rtk rewrite` command.
@@ -75,6 +77,9 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
         })
         .unwrap_or_default();
     let verdict = check_command(cmd);
+    // 0.9.4: the host's own verdict for the operator's command travels with the plan, because the
+    // host cannot re-derive it from the rewritten form.
+    let host_permission = Some(host_permission_verdict(&verdict));
     let byte_fidelity =
         std::env::var_os(BYTE_FIDELITY_ENV).as_deref() == Some(std::ffi::OsStr::new("1"));
     let outcome = registry::rewrite_command_outcome_with_fidelity(
@@ -90,6 +95,7 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
             proposed: None,
             attribution,
             reason: Some(RewritePlanReason::PermissionPolicy),
+            host_permission, // 0.9.4
         },
         // This typed API selects a route inside HZR. The host still checks the Bash call;
         // absence of a static allow rule is not an explicit request for a second prompt.
@@ -101,12 +107,14 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
             proposed: Some(command.clone()),
             attribution,
             reason: None,
+            host_permission, // 0.9.4
         },
         (PermissionVerdict::Ask, registry::RewriteOutcome::Rewritten(command)) => RewritePlan {
             decision: RewritePlanDecision::Ask,
             proposed: Some(command.clone()),
             attribution,
             reason: Some(RewritePlanReason::PermissionPolicy),
+            host_permission, // 0.9.4
         },
         (PermissionVerdict::Allow, registry::RewriteOutcome::ByteFidelityProxy)
         | (_, registry::RewriteOutcome::NoEquivalent) => RewritePlan {
@@ -114,6 +122,7 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
             proposed: None,
             attribution,
             reason: None,
+            host_permission, // 0.9.4
         },
         (_, registry::RewriteOutcome::ByteFidelityProxy)
         | (_, registry::RewriteOutcome::AmbiguousShell)
@@ -122,11 +131,22 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
             proposed: None,
             attribution,
             reason: Some(RewritePlanReason::CanonicalPolicy),
+            host_permission, // 0.9.4
         },
     };
     serde_json::to_writer(std::io::stdout().lock(), &plan)?;
     println!();
     Ok(())
+}
+
+/// 0.9.4: expose the Claude permission verdict for the original command to managed callers.
+fn host_permission_verdict(verdict: &PermissionVerdict) -> HostPermissionVerdict {
+    match verdict {
+        PermissionVerdict::Allow => HostPermissionVerdict::Allow,
+        PermissionVerdict::Ask => HostPermissionVerdict::Ask,
+        PermissionVerdict::Deny => HostPermissionVerdict::Deny,
+        PermissionVerdict::Default => HostPermissionVerdict::Default,
+    }
 }
 
 #[cfg(test)]

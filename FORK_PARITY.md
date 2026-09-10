@@ -1,7 +1,7 @@
-# HZR 0.9.3 — fork-core parity ledger
+# HZR 0.9.4 — fork-core parity ledger
 
 **Audit date:** 2026-09-03
-**Status:** HZR 0.9.3 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
+**Status:** HZR 0.9.4 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -42,7 +42,19 @@ The 0.6.0 gate verified current engine manifest
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
 
-### 0.9.3 managed permission-planning delta
+### 0.9.4 host-verdict and push-notice delta
+
+The typed `rewrite-plan` interface carries `host_permission` — the verdict of the
+host's own Claude Bash rules for the command as written (`allow`, `ask`, `deny`,
+`default`) — beside the decision it already emitted. Decisions, proposed commands
+and exit codes are unchanged; older engines simply omit the field. `git push`
+keeps `remote:` notices that carry a URL or name a merge or pull request after
+the `ok <ref>` line; progress, blank and decoration rows stay filtered.
+Regression coverage: the four isolated permission policies on `rewrite-plan`, and
+GitLab, GitHub, plain and up-to-date push transcripts on the compaction. No
+accounting measurements change.
+
+### 0.9.4 managed permission-planning delta
 
 The typed `rewrite-plan` interface distinguishes a missing Claude Bash rule from
 an explicit ask rule. The former selects the existing optimized command; the

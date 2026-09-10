@@ -483,6 +483,16 @@ cargo build \
   --locked --release --workspace
 install -m 0755 "${HZR_REPOSITORY_ROOT}/target/release/hzr" "${HZR_BINARY_OUTPUT}/hzr"
 install -m 0755 "${HZR_REPOSITORY_ROOT}/target/release/hzrd" "${HZR_BINARY_OUTPUT}/hzrd"
+# 0.9.4: give the bundled binaries a stable ad-hoc code-signing identity. The linker's
+# default ad-hoc identifier (`hzrd-<cargo metadata hash>`) changes with every version bump,
+# and macOS Background Task Management treats a legacy agent whose executable identity
+# changed as an updated item: it mints a new item UUID, re-posts the background-activity
+# notification and leaves the previous generation as a duplicate "hzrd" row in
+# System Settings > Login Items. The signature stays ad-hoc (no Developer ID is involved).
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  codesign --force --sign - --identifier dev.headz0r.hzr "${HZR_BINARY_OUTPUT}/hzr"
+  codesign --force --sign - --identifier dev.headz0r.hzr.hzrd "${HZR_BINARY_OUTPUT}/hzrd"
+fi
 ln -s hzr "${HZR_BINARY_OUTPUT}/rtk"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/LICENSE" "${HZR_LICENSE_OUTPUT}/HZR-Apache-2.0.txt"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/NOTICE" "${HZR_LICENSE_OUTPUT}/NOTICE"

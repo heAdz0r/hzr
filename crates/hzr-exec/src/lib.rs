@@ -36,6 +36,7 @@ pub use adapter::{
 };
 pub use error::ExecError;
 pub use executor::{ExecutionCancellation, ExecutionHandle, ExecutionPipeline};
+pub use hzr_engine_contract::HostPermissionVerdict; // 0.9.4
 pub use model::{
     AccountingIncomplete, CanonicalCommand, CaptureConfig, CaptureOverflow, CapturedContent,
     CapturedStream, Environment, ExecutionEnvelope, ExecutionEvent, ExecutionOutcome,

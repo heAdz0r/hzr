@@ -7,8 +7,8 @@ use std::time::Duration;
 use hzr_engine_contract::{
     ACCOUNTING_CORRELATION_ENV, ACCOUNTING_FAILURE_JOURNAL_ENV, ACCOUNTING_RECEIPT_JOURNAL_ENV,
     BYTE_FIDELITY_ENV, ENGINE_CONTRACT_VERSION, EngineContractIdentity, EvasionAttribution,
-    RewritePlan, RewritePlanDecision, RewritePlanReason,
-};
+    HostPermissionVerdict, RewritePlan, RewritePlanDecision, RewritePlanReason,
+}; // 0.9.4: HostPermissionVerdict joins the imports
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
@@ -324,6 +324,11 @@ pub struct RtkRewriteOutcome {
     pub evasion: Option<EvasionAttribution>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accounting_correlation_id: Option<String>,
+    /// 0.9.4: the host-rule verdict fork-core derived for the original command. The hook needs it
+    /// to answer the way the host would have answered, because the host's own rules can never
+    /// match the rewritten form.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_permission: Option<HostPermissionVerdict>,
 }
 
 impl RtkRewriteOutcome {
@@ -395,6 +400,7 @@ fn outcome_without_evasion(decision: RewriteDecision) -> RtkRewriteOutcome {
         decision,
         evasion: None,
         accounting_correlation_id: None,
+        host_permission: None, // 0.9.4
     }
 }
 
@@ -848,6 +854,7 @@ impl PinnedRtkAdapter {
             decision,
             evasion: plan.attribution,
             accounting_correlation_id,
+            host_permission: plan.host_permission, // 0.9.4: the verdict travels with the decision
         }
     }
 

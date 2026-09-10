@@ -606,6 +606,26 @@ pub enum RewritePlanReason {
     CanonicalPolicy,
 }
 
+/// The verdict fork-core derived from the host's own Bash permission rules for the command as
+/// the operator wrote it, before any rewrite. // 0.9.4
+///
+/// The host cannot evaluate those rules itself once the command has been rewritten: the managed
+/// form is a multi-line environment prelude carrying a per-run correlation id, so no `Bash(...)`
+/// rule can ever match it. Carrying the verdict for the original command lets the hook answer
+/// the way the host would have answered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostPermissionVerdict {
+    /// An explicit allow rule matched every segment of the original command.
+    Allow,
+    /// An explicit ask rule matched.
+    Ask,
+    /// An explicit deny rule matched.
+    Deny,
+    /// No rule matched; the host applies its permission mode.
+    Default,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RewritePlan {
@@ -616,6 +636,9 @@ pub struct RewritePlan {
     pub attribution: Option<EvasionAttribution>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<RewritePlanReason>,
+    /// 0.9.4: the host-rule verdict for the original command; absent from older engines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_permission: Option<HostPermissionVerdict>,
 }
 
 impl RewritePlan {
@@ -758,6 +781,7 @@ mod tests {
             proposed: Some("hzr read secret".to_owned()),
             attribution: None,
             reason: Some(RewritePlanReason::PermissionPolicy),
+            host_permission: None, // 0.9.4
         };
         assert!(!plan.is_consistent());
     }
