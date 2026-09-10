@@ -30,18 +30,19 @@ No separate agtx installation, Cargo or network fetch is required. Both binaries
 come from the same pinned source plus the same audited patches.
 
 ```bash
-hzr agents component install
-# Only for a new board: open the bundled interactive application, then exit it.
+hzr agents onboard --project /absolute/worktree --agtx-data-dir /absolute/agtx/data
+# Only for a new board: open the bundled interactive application, then exit it,
+# and run `onboard` again.
 hzr agents board --project /absolute/worktree --agtx-data-dir /absolute/agtx/data
-hzr agents enable --project /absolute/worktree --agtx-data-dir /absolute/agtx/data
 ```
 
-Use the same absolute data root for `board` and `enable`. agtx creates its store
-when the board first opens; enrollment expects `index.db` or `projects/`.
-Skip `board` for an existing store. Do not assume `~/.agtx` and do not create
-an empty directory to bypass validation. Operating agents through the upstream
-board still needs its normal prerequisites, including tmux and the chosen
-coding-agent executable.
+`onboard` verifies (or installs) the pinned observer and then enrolls, so the
+component install is no longer a separate step. Use the same absolute data root
+for `board` and `onboard`. agtx creates its store when the board first opens;
+enrollment expects `index.db` or `projects/`. Skip `board` for an existing
+store. Do not assume `~/.agtx` and do not create an empty directory to bypass
+validation. Operating agents through the upstream board still needs its normal
+prerequisites, including tmux and the chosen coding-agent executable.
 
 `component install` verifies the bundled observer's version, schema and patch
 identity. A damaged bundle fails with an update/reinstall remedy; it does not

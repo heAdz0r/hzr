@@ -159,7 +159,7 @@ pub enum Command {
     },
     #[command(
         about = "Observe an enrolled agtx agent board (opt-in)",
-        long_about = "Install the optional agtx observer component and enroll projects for read-only monitoring. Nothing is downloaded, read or observed until both steps run."
+        long_about = "Install the optional agtx observer component and enroll projects for read-only monitoring. Nothing is downloaded, read or observed until a project is enrolled."
     )]
     Agents {
         #[command(subcommand)]
@@ -500,6 +500,18 @@ pub enum AgentsCommand {
         long_about = "Enroll one agtx project. HZR observes its board, dependencies and sessions; it never creates a task, starts an agent, advances a phase or answers a permission prompt."
     )]
     Enable {
+        /// Canonical worktree of the agtx project to observe
+        #[arg(long, value_name = "DIR")]
+        project: PathBuf,
+        /// The agtx store root holding `index.db` and `projects/`
+        #[arg(long, value_name = "DIR")]
+        agtx_data_dir: PathBuf,
+    },
+    #[command(
+        about = "Verify the component and enroll one agtx project in one step",
+        long_about = "One-command opt-in for read-only agtx monitoring: verifies (or installs) the pinned observer component, then enrolls the project. A brand-new board still needs one explicit `hzr agents board` first, because HZR never creates the agtx store or launches its runtime implicitly."
+    )]
+    Onboard {
         /// Canonical worktree of the agtx project to observe
         #[arg(long, value_name = "DIR")]
         project: PathBuf,

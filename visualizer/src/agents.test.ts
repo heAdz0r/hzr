@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   AGENT_BOARD_COLUMNS,
-  AGENT_ONBOARDING_COMMANDS,
+  AGENT_BOARD_COMMAND,
+  AGENT_ONBOARD_COMMAND,
   UNKNOWN,
   coverageLabel,
   formatAge,
@@ -172,10 +173,15 @@ describe("naming", () => {
 });
 
 describe("onboarding", () => {
-  test("names installation and enrollment as two separate steps", () => {
-    expect(AGENT_ONBOARDING_COMMANDS).toHaveLength(3);
-    expect(AGENT_ONBOARDING_COMMANDS[0]).toContain("component install");
-    expect(AGENT_ONBOARDING_COMMANDS[1]).toContain("agents board");
-    expect(AGENT_ONBOARDING_COMMANDS[2]).toContain("agents enable");
+  test("names one onboarding command that folds in the component install", () => {
+    expect(AGENT_ONBOARD_COMMAND).toContain("agents onboard");
+    expect(AGENT_ONBOARD_COMMAND).toContain("--project");
+    expect(AGENT_ONBOARD_COMMAND).toContain("--agtx-data-dir");
+    expect(AGENT_ONBOARD_COMMAND).not.toContain("component install");
+  });
+
+  test("the board command is the only new-board prerequisite", () => {
+    expect(AGENT_BOARD_COMMAND).toContain("agents board");
+    expect(AGENT_BOARD_COMMAND).toContain("--agtx-data-dir");
   });
 });

@@ -12,7 +12,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import AppIcon from "./AppIcon.vue";
 import { DetailRequestCoordinator } from "../detail-request";
 import {
-  AGENT_ONBOARDING_COMMANDS,
+  AGENT_BOARD_COMMAND,
+  AGENT_ONBOARD_COMMAND,
   UNKNOWN,
   coverageLabel,
   eventKindLabel,
@@ -326,23 +327,27 @@ onBeforeUnmount(() => {
       <span class="eyebrow">{{ stateLabel }}</span>
       <h3>No agtx project is enrolled.</h3>
       <p>
-        The pinned agtx runtime and observer are included in HZR; no Cargo or separate
-        agtx installation is needed. Verify the component, open a board to initialize
-        its data directory if needed, then enroll it for read-only monitoring.
-        The board command opens the interactive application; skip it for an existing board.
-        Installing or enrolling alone never starts an agent.
+        Read-only monitoring is opt-in and one command. The pinned agtx runtime and
+        observer ship inside HZR, so <code>onboard</code> verifies the component itself —
+        no Cargo, no separate agtx install, and nothing is read or observed until it runs.
       </p>
       <ol class="agents-onboarding">
-        <li v-for="command in AGENT_ONBOARDING_COMMANDS" :key="command">
-          <code>{{ command }}</code>
-          <button type="button" @click="copyCommand(command)">
-            {{ copied === command ? "Copied" : "Copy" }}
+        <li>
+          <code>{{ AGENT_ONBOARD_COMMAND }}</code>
+          <button type="button" @click="copyCommand(AGENT_ONBOARD_COMMAND)">
+            {{ copied === AGENT_ONBOARD_COMMAND ? "Copied" : "Copy" }}
           </button>
         </li>
       </ol>
+      <p class="agents-onboarding-note">
+        New board only: if agtx has never opened this store, create it once with
+        <code>{{ AGENT_BOARD_COMMAND }}</code>, then run <code>onboard</code> again.
+        Skip this when the board already exists.
+      </p>
       <p class="health-boundary">
-        Installing and enrolling from the browser is deliberately unavailable: these are
-        authenticated actions, and the daemon secret never reaches this page.
+        Monitoring never creates a task, starts an agent, or answers a permission prompt.
+        Install and enroll run in your terminal because they are authenticated actions:
+        the daemon secret never reaches this page.
       </p>
     </div>
 

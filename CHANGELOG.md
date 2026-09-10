@@ -4,6 +4,11 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Added
+
+- `hzr agents onboard --project <worktree> --agtx-data-dir <store-root>` folds component verification/installation and enrollment into one opt-in command. The bundled observer is verified in place automatically; only a source checkout builds. A brand-new board still needs one explicit `hzr agents board` first, because HZR never creates the agtx store or launches its runtime implicitly.
+- The Agents empty state shows one onboarding command instead of three, with the board step surfaced only as a new-board prerequisite.
+
 ## [0.9.7] - 2026-09-10
 
 ### Fixed
