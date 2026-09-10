@@ -27,7 +27,9 @@ jobs:
   assembled-bundle:
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     needs: complete-gate
-    runs-on: ubuntu-latest
+    # Match the release bundle's glibc so the shared component cache never carries a
+    # binary that cannot load on the release runner (agtx is Rust and links glibc).
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
