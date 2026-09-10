@@ -526,7 +526,13 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 );
             }
             // 0.8.3: a doctor run launched as the post-upgrade reconciliation records its outcome.
-            post_upgrade::record_completion_from_env(&config, &report);
+            // A manual `--reconcile-fleet --fix` run is that same pass, so it records the outcome
+            // too: the `reference_state` remedy must be able to clear the warning it prescribes.
+            if reconcile_fleet && fix && !dry_run {
+                post_upgrade::record_completion_for_manual_pass(&config, &report);
+            } else {
+                post_upgrade::record_completion_from_env(&config, &report);
+            }
             if cli.json {
                 print_json(&report)?;
             } else {

@@ -262,6 +262,10 @@ fn build_component(source_dir: Option<PathBuf>) -> Result<tempfile::TempDir> {
         );
     }
 
+    // Resolve the toolchain before any network work: a machine without cargo
+    // must fail here with the alternatives, not mid-build with a raw os error.
+    let cargo = resolve_cargo()?;
+
     // Never build from a predictable shared directory or execute untracked
     // files from an operator's checkout. Fetch the pinned tree into a private
     // temporary repository, leaving the supplied source untouched.
@@ -312,7 +316,7 @@ fn build_component(source_dir: Option<PathBuf>) -> Result<tempfile::TempDir> {
     eprintln!("building {OBSERVER_BINARY} (this compiles the pinned agtx source once)");
     run(
         workspace,
-        "cargo",
+        &cargo,
         &["build", "--locked", "--release", "--bin", OBSERVER_BINARY],
     )?;
     let built = workspace.join("target/release").join(OBSERVER_BINARY);
@@ -322,14 +326,61 @@ fn build_component(source_dir: Option<PathBuf>) -> Result<tempfile::TempDir> {
     Ok(temporary)
 }
 
-fn run(directory: &Path, program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(program)
+/// Locate `cargo`, tolerating the minimal PATH of a hook- or service-launched process:
+/// `$CARGO` and PATH first, then the standard install locations. When no toolchain exists
+/// at all, the error names every alternative instead of surfacing a raw os error.
+fn resolve_cargo() -> Result<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(cargo) = std::env::var_os("CARGO") {
+        candidates.push(PathBuf::from(cargo));
+    }
+    candidates.push(PathBuf::from("cargo"));
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(Path::new(&home).join(".cargo/bin/cargo"));
+    }
+    candidates.push(PathBuf::from("/opt/homebrew/bin/cargo"));
+    candidates.push(PathBuf::from("/usr/local/bin/cargo"));
+    candidates.push(PathBuf::from("/usr/bin/cargo"));
+    for candidate in candidates {
+        if Command::new(&candidate)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+        {
+            return Ok(candidate);
+        }
+    }
+    bail!(
+        "cargo was not found on PATH or in the standard install locations; install a Rust \
+         toolchain (https://rustup.rs), install an already-built observer with \
+         `hzr agents component install --from-binary <PATH>`, or build from an existing \
+         checkout with `--source-dir <DIR>`"
+    )
+}
+
+fn run(directory: &Path, program: impl AsRef<std::ffi::OsStr>, args: &[&str]) -> Result<()> {
+    let program = program.as_ref();
+    let display = program.to_string_lossy();
+    let status = match Command::new(program)
         .current_dir(directory)
         .args(args)
         .status()
-        .with_context(|| format!("run {program} {}", args.join(" ")))?;
+    {
+        Ok(status) => status,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            bail!(
+                "`{display}` is not installed or not on PATH (needed to run: {display} {})",
+                args.join(" ")
+            );
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("run {display} {}", args.join(" ")));
+        }
+    };
     if !status.success() {
-        bail!("{program} {} failed with {status}", args.join(" "));
+        bail!("{display} {} failed with {status}", args.join(" "));
     }
     Ok(())
 }
@@ -637,6 +688,30 @@ pub fn onboarding_commands() -> [&'static str; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_names_a_missing_program_instead_of_a_raw_os_error() {
+        let directory = tempfile::tempdir().expect("temp");
+        let error = run(
+            directory.path(),
+            "hzr-test-program-that-does-not-exist",
+            &["--version"],
+        )
+        .expect_err("a missing program must fail");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("not installed or not on PATH"),
+            "unactionable error: {message}"
+        );
+    }
+
+    #[test]
+    fn resolve_cargo_finds_the_toolchain_that_runs_this_test() {
+        // cargo is running this test, so resolution must succeed: through $CARGO
+        // even when PATH is minimal.
+        let cargo = resolve_cargo().expect("cargo resolvable inside a cargo test run");
+        assert!(!cargo.as_os_str().is_empty());
+    }
 
     #[cfg(unix)]
     #[tokio::test]

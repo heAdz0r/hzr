@@ -430,6 +430,18 @@ const PRICING_ENABLE_STEPS: [&str; 3] = [
     "3. set [billing] harness, provider, model, method and pricing_basis to that exact row",
 ];
 
+/// True when `[billing]` already names a selection. The enable checklist is a remedy for a
+/// missing configuration only: shown next to a configured selection it sends the operator to
+/// redo settings that already resolve, while `unavailable_reason` names the actual gap
+/// (an unusable catalog row, or missing host delivery evidence).
+fn billing_selection_configured(config: &Config) -> bool {
+    config.billing.public_estimate_enabled
+        && !config.billing.harness.is_empty()
+        && !config.billing.provider.is_empty()
+        && !config.billing.model.is_empty()
+        && !config.billing.method.is_empty()
+}
+
 struct EconomicsInputs {
     project_resolved: bool,
     project_avoided: i64,
@@ -511,7 +523,7 @@ fn build_economics(
         pricing,
         unavailable_reason: (!priced)
             .then(|| unavailable_reason.unwrap_or_else(|| "no exact pricing evidence".to_owned())),
-        enable_steps: if priced {
+        enable_steps: if priced || billing_selection_configured(config) {
             Vec::new()
         } else {
             PRICING_ENABLE_STEPS.to_vec()
@@ -1063,6 +1075,51 @@ mod tests {
         PrivacySafeOperationKey, ReplacementCapability,
     };
     use hzr_protocol::{AccountingOperationKind, AccountingOperationMode, AccountingStage};
+
+    #[test]
+    fn configured_billing_suppresses_the_enable_checklist() {
+        use hzr_core::EconomicScopeSummary;
+
+        use super::{EconomicsInputs, build_economics};
+
+        let inputs = || EconomicsInputs {
+            project_resolved: true,
+            project_avoided: 10,
+            global_avoided: 10,
+            project_receipts: EconomicScopeSummary::default(),
+            global_receipts: EconomicScopeSummary::default(),
+        };
+
+        // Nothing configured: the checklist is the remedy and must be shown.
+        let unconfigured = hzr_core::Config::default();
+        let economics = build_economics(&unconfigured, None, inputs(), None);
+        assert_eq!(economics.enable_steps.len(), 3);
+
+        // A configured selection: the checklist would send the operator to redo
+        // configuration that already exists, while the reason names the actual
+        // gap (here: missing host delivery evidence). Only the reason may remain.
+        let mut configured = hzr_core::Config::default();
+        configured.billing.public_estimate_enabled = true;
+        configured.billing.harness = "claude_code".into();
+        configured.billing.provider = "anthropic".into();
+        configured.billing.model = "claude-sonnet-5".into();
+        configured.billing.method = "standard".into();
+        let economics = build_economics(
+            &configured,
+            None,
+            inputs(),
+            Some(
+                "producer reductions cannot be priced without linked, complete host delivery evidence"
+                    .into(),
+            ),
+        );
+        assert!(
+            economics.enable_steps.is_empty(),
+            "checklist shown despite a configured selection: {:?}",
+            economics.enable_steps
+        );
+        assert!(economics.unavailable_reason.is_some());
+    }
 
     #[test]
     fn test_build_report_keeps_estimated_savings_separate_from_actual_usage() {
