@@ -483,6 +483,11 @@ fn canonical_existing(path: &Path, what: &str) -> Result<PathBuf> {
 /// stays with `board`: HZR never creates the agtx store and never launches its
 /// runtime implicitly, so a brand-new board still needs one explicit
 /// `hzr agents board` first.
+///
+/// If the component cannot be made compatible, `onboard` fails and never
+/// reaches `enable`: enrollment and the config are left untouched rather than
+/// being written into the missing-component half-state. A user who wants that
+/// half-state on purpose runs the standalone `hzr agents enable`.
 async fn onboard(
     config: &Config,
     config_path: &Path,
@@ -490,27 +495,26 @@ async fn onboard(
     data_dir: &Path,
     json: bool,
 ) -> Result<ExitCode> {
-    ensure_component(config).await;
+    ensure_component(config).await?;
     enable(config, config_path, project, data_dir, json).await
 }
 
-/// Make the observer component present without reporting. `enable` already
-/// names the missing-component half-state, so this only installs quietly; when
-/// it cannot (a source checkout without a toolchain), the reason is worth
-/// printing once before enrollment still proceeds.
-async fn ensure_component(config: &Config) {
+/// Make the observer component present without reporting, or fail.
+///
+/// A compatible component is verified in place with no output. A missing or
+/// unusable component is installed (a bundle verifies, a source checkout
+/// builds); when that installation cannot produce the pinned identity, the
+/// error propagates instead of leaving a half-enrolled state behind.
+async fn ensure_component(config: &Config) -> Result<()> {
     let component = component_path(config);
     let compatible = probe(&component).await.is_some_and(|(_, schema, patch)| {
         schema == AGENT_SNAPSHOT_SCHEMA_VERSION && patch == AGENT_OBSERVER_PATCH_IDENTITY
     });
     if compatible {
-        return;
+        return Ok(());
     }
-    if let Err(error) = install_component(config, None, None, false, false, true).await {
-        eprintln!(
-            "warning: the observer component could not be installed; monitoring will report missing_component until `hzr agents component install` succeeds: {error:#}"
-        );
-    }
+    install_component(config, None, None, false, false, true).await?;
+    Ok(())
 }
 
 async fn enable(
@@ -893,6 +897,94 @@ mod tests {
         assert!(error.to_string().contains(AGTX_COMMIT));
         assert!(!missing.exists());
         assert!(!config_path.exists());
+    }
+
+    /// A missing observer must fail `onboard` before `enable` is reached, so the
+    /// enrollment and config stay untouched.
+    #[tokio::test]
+    async fn onboard_fails_without_enrolling_when_the_observer_is_missing() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("config.toml");
+        let mut config = Config::default();
+        config.engines.directory = Some(directory.path().join("engines"));
+        let error = onboard(
+            &config,
+            &config_path,
+            directory.path(),
+            directory.path(),
+            false,
+        )
+        .await
+        .expect_err("a missing observer must abort onboarding");
+        assert!(
+            error.to_string().contains("bundle is missing"),
+            "unactionable error: {error:#}"
+        );
+        assert!(!config_path.exists(), "config must stay unchanged");
+    }
+
+    /// A present-but-unusable observer (probe exits nonzero) must fail `onboard`
+    /// before `enable` is reached; file existence alone is not compatibility.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn onboard_fails_without_enrolling_when_the_observer_is_unusable() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("config.toml");
+        let engines = directory.path().join("engines");
+        std::fs::create_dir_all(&engines).expect("engines");
+        let binary = engines.join(OBSERVER_BINARY);
+        std::fs::write(&binary, "#!/bin/sh\nexit 9\n").expect("broken observer");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        let mut config = Config::default();
+        config.engines.directory = Some(engines);
+        let error = onboard(
+            &config,
+            &config_path,
+            directory.path(),
+            directory.path(),
+            false,
+        )
+        .await
+        .expect_err("an unusable observer must abort onboarding");
+        assert!(
+            error.to_string().contains("observer"),
+            "unactionable error: {error:#}"
+        );
+        assert!(!config_path.exists(), "config must stay unchanged");
+    }
+
+    /// A compatible observer verifies in place and `onboard` enrolls normally.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn onboard_enrolls_when_the_observer_is_compatible() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config_path = directory.path().join("config.toml");
+        let engines = directory.path().join("engines");
+        std::fs::create_dir_all(&engines).expect("engines");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' '{} {} schema={} patch={}'\n",
+            OBSERVER_BINARY,
+            AGTX_VERSION,
+            AGENT_SNAPSHOT_SCHEMA_VERSION,
+            AGENT_OBSERVER_PATCH_IDENTITY
+        );
+        let binary = engines.join(OBSERVER_BINARY);
+        std::fs::write(&binary, &script).expect("observer");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        let store = directory.path().join("store");
+        std::fs::create_dir(&store).expect("store");
+        std::fs::write(store.join("index.db"), "").expect("index.db");
+        let mut config = Config::default();
+        config.engines.directory = Some(engines);
+        let exit = onboard(&config, &config_path, directory.path(), &store, false)
+            .await
+            .expect("a compatible observer must enroll");
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(config_path.exists(), "enrollment must write the config");
+        let written = Config::load_or_default(&config_path).expect("written config parses");
+        assert_eq!(written.integrations.agtx.active_projects().len(), 1);
     }
 
     #[test]
