@@ -264,6 +264,33 @@ fn run_with_opts(
         );
     }
 
+    let files = collect_matches(
+        effective_pattern,
+        path,
+        file_type,
+        case_insensitive,
+        max_depth,
+    );
+
+    // Reuse the same display logic as run()
+    run_display(&files, max_results, effective_pattern, path, &timer)
+}
+
+/// Walk `path` and return every match exactly as plain `find` would print it:
+/// each result keeps the search root as it was given, relative or absolute.
+///
+/// Results used to be rewritten relative to the search root. That silently
+/// corrupted machine-consumed output — `find /a/b -name x` answered `c/x`
+/// instead of `/a/b/c/x`, with no marker that anything was rewritten — and a
+/// consumer resolving the answer against its own cwd derived a wrong location
+/// (heAdz0r/hzr#7).
+fn collect_matches(
+    effective_pattern: &str,
+    path: &str,
+    file_type: &str,
+    case_insensitive: bool,
+    max_depth: Option<usize>,
+) -> Vec<String> {
     let want_dirs = file_type == "d";
 
     let mut builder = WalkBuilder::new(path);
@@ -316,19 +343,13 @@ fn run_with_opts(
             continue;
         }
 
-        let display_path = entry_path
-            .strip_prefix(path)
-            .unwrap_or(entry_path)
-            .to_string_lossy()
-            .to_string();
-
+        let display_path = entry_path.to_string_lossy().to_string();
         if !display_path.is_empty() {
             files.push(display_path);
         }
     }
 
-    // Reuse the same display logic as run()
-    run_display(&files, max_results, effective_pattern, path, &timer)
+    files
 }
 
 /// Shared display logic extracted from run()
@@ -589,6 +610,32 @@ mod tests {
         // With max=2, should not error
         let result = run("*.rs", "src", 2, "f", 0);
         assert!(result.is_ok());
+    }
+
+    // --- search-root preservation (heAdz0r/hzr#7) ---
+
+    #[test]
+    fn absolute_search_root_is_preserved_in_results() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let nested = directory.path().join("owner/project-x");
+        std::fs::create_dir_all(&nested).expect("mkdir");
+        let root = directory.path().to_string_lossy().to_string();
+        let matches = collect_matches("project-x", &root, "d", false, Some(3));
+        assert_eq!(matches.len(), 1, "{matches:?}");
+        assert!(
+            std::path::Path::new(&matches[0]).is_absolute(),
+            "absolute search root came back relative: {}",
+            matches[0]
+        );
+        assert!(matches[0].starts_with(&root), "{}", matches[0]);
+    }
+
+    #[test]
+    fn relative_search_root_is_preserved_in_results() {
+        // `find src -name find_cmd.rs` prints `src/find_cmd.rs`; a consumer
+        // resolves that against its own cwd. Stripping the root breaks it.
+        let matches = collect_matches("find_cmd.rs", "src", "f", false, None);
+        assert_eq!(matches, vec!["src/find_cmd.rs".to_string()]);
     }
 
     #[test]
