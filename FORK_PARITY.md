@@ -1,7 +1,7 @@
-# HZR 0.9.5 — fork-core parity ledger
+# HZR 0.9.6 — fork-core parity ledger
 
 **Audit date:** 2026-09-03
-**Status:** HZR 0.9.5 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
+**Status:** HZR 0.9.6 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
 
@@ -52,7 +52,7 @@ remain intact. Tests cover absolute/relative roots and long Unicode directory
 headers. The immutable import baseline remains unchanged; current-engine
 manifests are refreshed after these edits.
 
-### 0.9.5 host-verdict and push-notice delta
+### 0.9.6 host-verdict and push-notice delta
 
 The typed `rewrite-plan` interface carries `host_permission` — the verdict of the
 host's own Claude Bash rules for the command as written (`allow`, `ask`, `deny`,
@@ -64,7 +64,7 @@ Regression coverage: the four isolated permission policies on `rewrite-plan`, an
 GitLab, GitHub, plain and up-to-date push transcripts on the compaction. No
 accounting measurements change.
 
-### 0.9.5 managed permission-planning delta
+### 0.9.6 managed permission-planning delta
 
 The typed `rewrite-plan` interface distinguishes a missing Claude Bash rule from
 an explicit ask rule. The former selects the existing optimized command; the

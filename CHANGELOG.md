@@ -4,9 +4,11 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
-## [0.9.5] - 2026-09-10
+## [0.9.6] - 2026-09-10
 
 ### Fixed
+
+- Release notes are checked against the workspace version before native builds. The unpublished v0.9.5 tag is preserved; v0.9.6 delivers its contributor fixes with corrected release metadata.
 
 - Manual `doctor --reconcile-fleet --fix` records reference-state completion and immediately refreshes its report (#4, PR #9).
 - Configured billing no longer displays the enable checklist when delivery evidence is missing; Fable 5 has an exact pricing row distinct from Fable 5.1 (#5, PR #9).

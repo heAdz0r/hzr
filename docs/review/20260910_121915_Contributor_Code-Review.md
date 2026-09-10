@@ -91,6 +91,13 @@ gate passed, with one existing moderate adm-zip advisory (GHSA-vwc7-r8mq-g2x9)
 remaining; this is not reported as a vulnerability-free dependency graph.
 Native bundle and archive installation checks are enforced by the release workflow; the platform receipts and published artifact verification are linked in the issue closure comments.
 
+The first v0.9.5 release attempt passed preflight and all three native build/install
+jobs, but publication rejected the `# HZR v0.9.5` header: the workflow requires
+`# HZR 0.9.5`. The tag is preserved. The replacement v0.9.6 uses the required
+header and adds an early source-gate check against Cargo JSON metadata plus
+historical-note equality. Seven gate regression tests pass, including rejection
+of the exact extra-`v` failure, before any native archive build.
+
 An extra full-fork rustfmt check reports existing formatting drift in
 `fork-core/rtk/src/git.rs` and `tests/git_cli_parity.rs`. Neither PR modifies
 those files. The repository's mandatory gate formats the HZR workspace and

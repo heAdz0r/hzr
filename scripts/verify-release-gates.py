@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -116,6 +117,14 @@ def verify_release(workflow: str) -> None:
     forbid(workflow, "darwin-x64", "release workflow")
 
 
+def verify_release_notes(notes: str, version: str) -> None:
+    first_line = notes.splitlines()[0] if notes else ""
+    if first_line != f"# HZR {version}":
+        raise GateError(
+            f"RELEASE_NOTES.md must start with '# HZR {version}', got {first_line!r}"
+        )
+
+
 def verify_repository(repository: Path) -> None:
     script_path = repository / "scripts/complete-gate.sh"
     if not script_path.stat().st_mode & stat.S_IXUSR:
@@ -127,9 +136,32 @@ def verify_repository(repository: Path) -> None:
     )
     verify_ci((repository / ".github/workflows/ci.yml").read_text())
     verify_release((repository / ".github/workflows/release.yml").read_text())
+    metadata = json.loads(subprocess.check_output(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+        cwd=repository,
+        text=True,
+    ))
+    version = next(package["version"] for package in metadata["packages"]
+                   if package["name"] == "hzr-cli")
+    notes = (repository / "RELEASE_NOTES.md").read_text()
+    verify_release_notes(notes, version)
+    if (repository / f"docs/releases/v{version}.md").read_text() != notes:
+        raise GateError("historical release notes must match RELEASE_NOTES.md")
+
 
 
 class ReleaseGateRegressionTests(unittest.TestCase):
+    def test_release_notes_accept_the_current_version(self) -> None:
+        verify_release_notes("# HZR 0.9.5\n\nChanges", "0.9.5")
+
+    def test_release_notes_reject_a_tag_prefix_before_building(self) -> None:
+        with self.assertRaises(GateError):
+            verify_release_notes("# HZR v0.9.5\n", "0.9.5")
+
+    def test_release_notes_reject_another_version(self) -> None:
+        with self.assertRaises(GateError):
+            verify_release_notes("# HZR 0.9.4\n", "0.9.5")
+
     def test_ordinary_unit_failure_stops_before_fork_gate(self) -> None:
         self.assert_source_failure_stops("test")
 
