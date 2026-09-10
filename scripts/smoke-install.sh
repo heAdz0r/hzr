@@ -369,6 +369,17 @@ for HZR_HOOK_PERMISSION in absent default bypassPermissions; do
       PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" \
       "${HZR_INSTALLED_BIN}/hzr" hooks dispatch
   ) >"${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json"
+  # 0.9.4: in a prompting mode with no Claude allow rule for the command, the hook stays silent so
+  # the host prompts for the operator's own command and its answer can become a durable rule. A
+  # managed rewrite here would make the host evaluate its allowlist against a script no rule matches.
+  if [[ "${HZR_HOOK_PERMISSION}" == "default" ]]; then
+    if [[ -s "${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json" ]]; then
+      echo "hook rewrote an unmatched command in default mode instead of leaving the prompt to the host" >&2
+      cat "${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json" >&2
+      exit 1
+    fi
+    continue
+  fi
   "${HZR_INSTALLED_ROOT}/engines/node" - \
     "${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json" "${HZR_HOOK_PERMISSION}" <<'NODE'
 const [file, mode] = process.argv.slice(2);
