@@ -16,4 +16,8 @@
 
 Contributed by aleksandr-podmoskovniy; PR commits are preserved, with maintainer review corrections.
 
+Upgrade with `hzr update`. Existing HZR data and billing selections are preserved.
+Agent monitoring remains opt-in; launching `hzr agents board` explicitly creates an
+agtx store when needed, and enrollment is a separate command.
+
 No billing savings are inferred without host delivery evidence. Operating a board still requires upstream runtime prerequisites such as tmux and the selected coding agent; neither is needed merely to verify the bundled observer.
