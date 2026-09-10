@@ -49,6 +49,11 @@ pub struct EconomicsReport {
     /// Why no row could be priced. Present exactly when `pricing` is absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<String>,
+    /// Present when rows are priced but the reduced output was not confirmed delivered to the
+    /// host: the estimate prices producer-side reductions only, not a measured saving in the
+    /// model's context. Mirrors the daemon's `delivery_qualifier`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_qualifier: Option<String>,
     /// Steps that would make pricing available, rendered verbatim next to the reason.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub enable_steps: Vec<&'static str>,
@@ -367,31 +372,26 @@ pub async fn collect(
         },
     );
     report.explicit_delivery = snapshot.explicit_delivery;
-    let catalog = if !report.explicit_delivery.complete {
-        report.raw_public_estimate_unavailable_reason = Some(
-            "producer reductions cannot be priced without linked, complete host delivery evidence"
-                .into(),
-        );
+    // 0.9.1 removed the "withhold pricing whenever host delivery is unconfirmed" early return
+    // from the daemon's session ROI, because no host ever acknowledges deliveries and the money
+    // view stayed unreachable even with an exact, loaded catalog row. The CLI block kept the
+    // early return — plus a second gate on host-visible output caps that prices input tokens —
+    // so the same unreachable block reproduced here. Price the estimate and label what is
+    // missing, matching the daemon: a delivery qualifier, never a withheld number.
+    let delivery_qualifier = (!report.explicit_delivery.complete).then(|| {
+        "Host delivery is unconfirmed: this prices producer-side reductions only, not a measured saving in the model's context.".to_owned()
+    });
+    let catalog = if !config.billing.public_estimate_enabled {
+        report.raw_public_estimate_unavailable_reason = Some(PRICING_OPT_IN_REASON.to_owned());
         None
-    } else if report.host_visible_savings.complete {
-        if config.billing.public_estimate_enabled {
-            match load_pricing_catalog(config.billing.pricing_file.as_deref()) {
-                Ok(catalog) => Some(catalog),
-                Err(error) => {
-                    report.raw_public_estimate_unavailable_reason = Some(error.to_string());
-                    None
-                }
-            }
-        } else {
-            report.raw_public_estimate_unavailable_reason = Some(PRICING_OPT_IN_REASON.to_owned());
-            None
-        }
     } else {
-        report.raw_public_estimate_unavailable_reason = Some(
-            "potential pricing is disabled because one or more operation hosts have no validated visible-output cap; raw byte estimates are upper bounds"
-                .to_owned(),
-        );
-        None
+        match load_pricing_catalog(config.billing.pricing_file.as_deref()) {
+            Ok(catalog) => Some(catalog),
+            Err(error) => {
+                report.raw_public_estimate_unavailable_reason = Some(error.to_string());
+                None
+            }
+        }
     };
     if let Some(catalog) = catalog.as_ref() {
         match price_scope(
@@ -414,6 +414,7 @@ pub async fn collect(
             global_receipts: snapshot_global_economics,
         },
         report.raw_public_estimate_unavailable_reason.clone(),
+        delivery_qualifier,
     );
     Ok(report)
 }
@@ -479,6 +480,7 @@ fn build_economics(
     catalog: Option<&PricingCatalog>,
     inputs: EconomicsInputs,
     unavailable_reason: Option<String>,
+    delivery_qualifier: Option<String>,
 ) -> EconomicsReport {
     let mut pricing = None;
     let mut price = |avoided: i64| -> Option<MoneyAmount> {
@@ -523,6 +525,7 @@ fn build_economics(
         pricing,
         unavailable_reason: (!priced)
             .then(|| unavailable_reason.unwrap_or_else(|| "no exact pricing evidence".to_owned())),
+        delivery_qualifier: priced.then_some(delivery_qualifier).flatten(),
         enable_steps: if priced || billing_selection_configured(config) {
             Vec::new()
         } else {
@@ -834,6 +837,7 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
             rows: Vec::new(),
             pricing: None,
             unavailable_reason: None,
+            delivery_qualifier: None,
             enable_steps: Vec::new(),
         },
         zero_reduction_cause,
@@ -1092,12 +1096,12 @@ mod tests {
 
         // Nothing configured: the checklist is the remedy and must be shown.
         let unconfigured = hzr_core::Config::default();
-        let economics = build_economics(&unconfigured, None, inputs(), None);
+        let economics = build_economics(&unconfigured, None, inputs(), None, None);
         assert_eq!(economics.enable_steps.len(), 3);
 
         // A configured selection: the checklist would send the operator to redo
         // configuration that already exists, while the reason names the actual
-        // gap (here: missing host delivery evidence). Only the reason may remain.
+        // gap (e.g. a catalog row that cannot be priced). Only the reason may remain.
         let mut configured = hzr_core::Config::default();
         configured.billing.public_estimate_enabled = true;
         configured.billing.harness = "claude_code".into();
@@ -1108,10 +1112,8 @@ mod tests {
             &configured,
             None,
             inputs(),
-            Some(
-                "producer reductions cannot be priced without linked, complete host delivery evidence"
-                    .into(),
-            ),
+            Some("no exact pricing evidence".into()),
+            None,
         );
         assert!(
             economics.enable_steps.is_empty(),

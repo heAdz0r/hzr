@@ -172,6 +172,9 @@ fn write_economics(
     if let Some(reason) = &economics.unavailable_reason {
         writeln!(output, "   potential value unavailable: {reason}")?;
     }
+    if let Some(qualifier) = &economics.delivery_qualifier {
+        writeln!(output, "   {}", style(qualifier, "2;37", color))?;
+    }
     for step in &economics.enable_steps {
         writeln!(output, "   {}", style(step, "2;37", color))?;
     }
@@ -1460,6 +1463,7 @@ mod tests {
                 ],
                 pricing: None,
                 unavailable_reason: Some("opt-in disabled".into()),
+                delivery_qualifier: None,
                 enable_steps: Vec::new(),
             },
             stage_exclusion: StageExclusion {
@@ -2210,6 +2214,7 @@ mod tests {
                 retrieved_at: "2026-09-05".into(),
             }),
             unavailable_reason: None,
+            delivery_qualifier: None,
             enable_steps: Vec::new(),
         };
 

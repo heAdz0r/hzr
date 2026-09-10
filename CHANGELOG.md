@@ -4,6 +4,12 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.7] - 2026-09-10
+
+### Fixed
+
+- `hzr stats` no longer withholds the money block when host delivery is unconfirmed. The CLI kept the early return the daemon removed in 0.9.1, so the `ECONOMICS` table always showed `unavailable` even with an exact, loaded catalog row and configured billing. The estimate is now priced and carries a delivery qualifier stating what evidence is missing.
+
 ## [0.9.6] - 2026-09-10
 
 ### Fixed
