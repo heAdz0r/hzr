@@ -29,6 +29,17 @@ pub enum AccountingGapSurface {
     ForkProducer,
 }
 
+/// 0.9.8: the surfaces whose gap means "the daemon was unreachable, so this operation was never
+/// recorded". Unlike `ForkProducer` — whose receipts the daemon can still drain once it runs —
+/// these can only be reconciled after the daemon is reachable again, and recovery is not
+/// session-scoped: daemon unavailability is a global condition.
+pub const DAEMON_UNREACHABLE_SURFACES: [AccountingGapSurface; 4] = [
+    AccountingGapSurface::Hook,
+    AccountingGapSurface::RewriteDaemon,
+    AccountingGapSurface::Cli,
+    AccountingGapSurface::Mcp,
+];
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AccountingGapEvent {
     pub surface: AccountingGapSurface,
@@ -452,14 +463,15 @@ impl AccountingCoverageStore {
         Ok(recovered)
     }
 
-    /// 0.9.8: recover every open interval of one surface regardless of workspace, session and
-    /// operation family. Daemon unavailability is a global condition, so once the daemon is
+    /// 0.9.8: recover every open interval of the given surfaces regardless of workspace, session
+    /// and operation family. Daemon unavailability is a global condition, so once the daemon is
     /// reachable again the per-session gaps it opened are all stale and must close together.
     /// [`Self::recover`] cannot express this: there a `None` identity is the concrete
-    /// "unattributed" value, not a wildcard.
-    pub fn recover_surface(
+    /// "unattributed" value, not a wildcard. Several surfaces are recovered in one pass so the
+    /// caller does not pay a lock/read cycle per surface.
+    pub fn recover_surfaces(
         &self,
-        surface: AccountingGapSurface,
+        surfaces: &[AccountingGapSurface],
         recovered_at_unix: u64,
     ) -> Result<usize, AccountingCoverageError> {
         if !self.exists() {
@@ -468,7 +480,8 @@ impl AccountingCoverageStore {
         let mut recovered = 0;
         self.with_exclusive_state(|state| {
             state.intervals.retain_mut(|interval| {
-                let matches = interval.recovered_at_unix.is_none() && interval.surface == surface;
+                let matches =
+                    interval.recovered_at_unix.is_none() && surfaces.contains(&interval.surface);
                 if !matches {
                     return true;
                 }
@@ -485,6 +498,27 @@ impl AccountingCoverageStore {
             Ok(recovered > 0)
         })?;
         Ok(recovered)
+    }
+
+    /// 0.9.8: count the open intervals whose surface is daemon-unreachable. These are the gaps a
+    /// doctor repair can close; `ForkProducer` gaps are the daemon sweeper's to reconcile and are
+    /// excluded. Read-only, so a doctor run without `--fix` never mutates the store.
+    pub fn open_daemon_unreachable_intervals(&self) -> Result<usize, AccountingCoverageError> {
+        if !self.exists() {
+            return Ok(0);
+        }
+        let lock = self.open_lock()?;
+        FileExt::lock_shared(&lock).map_err(|source| self.io(source))?;
+        let state = self.read_state()?;
+        FileExt::unlock(&lock).map_err(|source| self.io(source))?;
+        Ok(state
+            .intervals
+            .iter()
+            .filter(|interval| {
+                interval.recovered_at_unix.is_none()
+                    && DAEMON_UNREACHABLE_SURFACES.contains(&interval.surface)
+            })
+            .count())
     }
 
     pub fn import_legacy(
@@ -1187,13 +1221,13 @@ mod tests {
 
         assert_eq!(
             store
-                .recover_surface(AccountingGapSurface::Hook, 20)
+                .recover_surfaces(&[AccountingGapSurface::Hook], 20)
                 .expect("surface recovery"),
             3
         );
         assert_eq!(
             store
-                .recover_surface(AccountingGapSurface::Hook, 21)
+                .recover_surfaces(&[AccountingGapSurface::Hook], 21)
                 .expect("idempotent surface recovery"),
             0
         );
@@ -1206,6 +1240,42 @@ mod tests {
         assert_eq!(snapshot.rewrite_missing_operations, 1);
         assert_eq!(snapshot.open_intervals, 1);
         assert_eq!(snapshot.closed_intervals, 3);
+    }
+
+    // 0.9.8: the read-only count of open daemon-unreachable intervals excludes ForkProducer
+    // (the daemon sweeper's job) and closed intervals.
+    #[test]
+    fn open_daemon_unreachable_intervals_excludes_fork_producer_and_closed() {
+        let directory = tempdir().expect("coverage root");
+        let store = AccountingCoverageStore::new(directory.path());
+        let hook = AccountingGapEvent {
+            surface: AccountingGapSurface::Hook,
+            workspace_hash: Some("w".into()),
+            session_hash: Some("s".into()),
+            operation_family: Some("policy".into()),
+            at_unix: 10,
+        };
+        let fork = AccountingGapEvent {
+            surface: AccountingGapSurface::ForkProducer,
+            workspace_hash: Some("w".into()),
+            session_hash: Some("s".into()),
+            operation_family: None,
+            at_unix: 12,
+        };
+        store.record_missing(hook.clone()).expect("hook");
+        store.record_missing(fork.clone()).expect("fork");
+        assert_eq!(
+            store.open_daemon_unreachable_intervals().expect("count"),
+            1,
+            "the fork gap is the daemon sweeper's, not a doctor repair"
+        );
+
+        store.recover(hook).expect("recover hook");
+        assert_eq!(
+            store.open_daemon_unreachable_intervals().expect("count"),
+            0,
+            "a closed interval is no longer open"
+        );
     }
 }
 

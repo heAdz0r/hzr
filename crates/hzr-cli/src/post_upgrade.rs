@@ -469,6 +469,7 @@ mod tests {
             fidelity_reconcile: None,
             fleet_reconcile: None,
             orphan_cleanup: None,
+            accounting_gap_repair: None,
         };
         record_completion(&config, &report).expect("record");
         let check = reference_state_check(&config);
@@ -519,6 +520,7 @@ mod tests {
             fidelity_reconcile: None,
             fleet_reconcile: None,
             orphan_cleanup: None,
+            accounting_gap_repair: None,
         };
         // No MARKER_ENV in the test process: the manual path must record on its own.
         record_completion_for_manual_pass(&config, &report);
@@ -551,6 +553,7 @@ mod tests {
             fidelity_reconcile: None,
             fleet_reconcile: None,
             orphan_cleanup: None,
+            accounting_gap_repair: None,
         };
         record_completion(&config, &report).expect("record");
         let check = reference_state_check(&config);
@@ -582,6 +585,7 @@ mod tests {
             fidelity_reconcile: None,
             fleet_reconcile: None,
             orphan_cleanup: None,
+            accounting_gap_repair: None,
         };
         record_completion_for_marker(&config, &foreign, &report);
         assert!(!foreign.exists());

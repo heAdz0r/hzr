@@ -109,6 +109,9 @@ pub struct DoctorReport {
     // 0.8.1: `--fix` reports every orphaned HZR-launched engine it signalled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orphan_cleanup: Option<Vec<foreign::OrphanStopOutcome>>,
+    // 0.9.8: `--fix` closed this many stale open daemon-unreachable accounting gaps.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accounting_gap_repair: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -151,6 +154,19 @@ pub async fn repair_legacy_index(
     )
     .await
     .map(Some)
+}
+
+/// 0.9.8: `hzr doctor --fix` closes every stale open daemon-unreachable gap — Hook, RewriteDaemon,
+/// Cli and Mcp — that an earlier outage left open. Returns how many intervals were closed.
+/// `ForkProducer` gaps are the daemon sweeper's to reconcile and are left alone.
+pub fn repair_accounting_gaps(config: &Config) -> Result<usize, hzr_core::AccountingCoverageError> {
+    let recovered_at_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .max(1);
+    hzr_core::AccountingCoverageStore::new(&config.data_dir)
+        .recover_surfaces(&hzr_core::DAEMON_UNREACHABLE_SURFACES, recovered_at_unix)
 }
 
 fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
@@ -1835,6 +1851,11 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     }
     // 0.8.1: the post-upgrade reference-state reconciliation must have run for this version.
     checks.push(crate::post_upgrade::reference_state_check(config));
+    // 0.9.8: stale open daemon-unreachable gaps (hook/rewrite/cli/mcp) are repairable without
+    // waiting for the exact session that opened them to reappear; `hzr doctor --fix` closes them.
+    let open_daemon_unreachable = hzr_core::AccountingCoverageStore::new(&config.data_dir)
+        .open_daemon_unreachable_intervals()
+        .unwrap_or(0);
     match hook_runner::degraded_rewrite_coverage(config) {
         // 0.8.1: readiness describes the current state. Journals still waiting for the daemon
         // and open gaps degrade accounting; closed intervals are history and stay visible in
@@ -1859,6 +1880,14 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 ),
             ));
         }
+        Ok(coverage) if open_daemon_unreachable > 0 => checks.push(check(
+            "degraded_rewrites",
+            CheckStatus::Warning,
+            format!(
+                "{} open gap interval(s) are stale daemon-unreachable gaps (hook/rewrite/cli/mcp); run `hzr doctor --fix` to reconcile them",
+                open_daemon_unreachable
+            ),
+        )),
         Ok(coverage) if coverage.unreconciled_rewrites > 0 => checks.push(check(
             "degraded_rewrites",
             CheckStatus::Warning,
@@ -2175,7 +2204,8 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         repair: None,
         fidelity_reconcile: None,
         fleet_reconcile: None,
-        orphan_cleanup: None, // 0.8.1
+        orphan_cleanup: None,        // 0.8.1
+        accounting_gap_repair: None, // 0.9.8
     }
 }
 
@@ -3103,8 +3133,8 @@ mod tests {
         fleet_instruction_health_checks, hook_ownership_check,
         host_permission_grant_propagation_check, index_readiness_check, install_transaction_check,
         instruction_health_check, instruction_health_check_with_exemptions, integration_layout,
-        reconcile_fleet_contracts, repair_legacy_index, response_codec_coverage,
-        workspace_binding_check, workspace_instruction_health_check,
+        reconcile_fleet_contracts, repair_accounting_gaps, repair_legacy_index,
+        response_codec_coverage, workspace_binding_check, workspace_instruction_health_check,
     };
 
     #[test]
@@ -3210,6 +3240,46 @@ mod tests {
                 .detail
                 .contains("blocks new fidelity execution")
         );
+    }
+
+    // 0.9.8: `--fix` closes stale open daemon-unreachable gaps and leaves fork-producer gaps to
+    // the daemon sweeper.
+    #[test]
+    fn repair_accounting_gaps_closes_daemon_unreachable_and_keeps_fork_producer() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config = Config {
+            data_dir: directory.path().to_path_buf(),
+            ..Config::default()
+        };
+        let store = hzr_core::AccountingCoverageStore::new(&config.data_dir);
+        let hook = hzr_core::AccountingGapEvent {
+            surface: hzr_core::AccountingGapSurface::Hook,
+            workspace_hash: Some("w".into()),
+            session_hash: Some("s".into()),
+            operation_family: Some("policy".into()),
+            at_unix: 1,
+        };
+        let fork = hzr_core::AccountingGapEvent {
+            surface: hzr_core::AccountingGapSurface::ForkProducer,
+            workspace_hash: Some("w".into()),
+            session_hash: Some("s".into()),
+            operation_family: None,
+            at_unix: 1,
+        };
+        store.record_missing(hook).expect("hook");
+        store.record_missing(fork).expect("fork");
+
+        let closed = repair_accounting_gaps(&config).expect("repair");
+        assert_eq!(closed, 1, "only the hook gap is a doctor repair");
+        assert_eq!(store.open_daemon_unreachable_intervals().expect("count"), 0);
+
+        let settled = 1 + hzr_core::FORK_PRODUCER_PENDING_GRACE_SECS;
+        let snapshot = store.snapshot(settled).expect("snapshot");
+        assert_eq!(
+            snapshot.open_intervals, 1,
+            "the fork gap is the daemon sweeper's, not erased"
+        );
+        assert_eq!(snapshot.fork_producer_missing_operations, 1);
     }
 
     #[cfg(unix)]

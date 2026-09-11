@@ -305,9 +305,11 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     // 0.9.4: the host-rule verdict for the operator's command rides along with the decision.
     let (decision, accounting_notice, managed_evasion, host_permission) = match managed {
         Some(outcome) => {
-            let notice = recover_accounting_for_input(config, input)
-                .ok()
-                .and_then(|()| accounting_transition(config, input, false));
+            // 0.9.8: every confirmed daemon success closes stale daemon-unreachable gaps
+            // surface-wide, independent of the session-local transition below. A fresh session
+            // (never degraded) therefore still reconciles the gaps an abandoned session left open.
+            recover_daemon_gaps_surface_wide(config);
+            let notice = accounting_transition(config, input, false);
             (
                 outcome.decision,
                 notice,
@@ -410,18 +412,6 @@ fn accounting_transition_at(
     .ok()?;
     if !changed {
         return None;
-    }
-    // 0.9.8: daemon unavailability is a global condition, not a per-session one. The first
-    // healthy transition therefore closes every open Hook and RewriteDaemon gap — including the
-    // ones an earlier session opened and will never re-issue its exact workspace/session identity.
-    if !degraded {
-        let store = AccountingCoverageStore::new(&config.data_dir);
-        for surface in [
-            AccountingGapSurface::Hook,
-            AccountingGapSurface::RewriteDaemon,
-        ] {
-            let _ = store.recover_surface(surface, now_unix);
-        }
     }
     Some(if degraded {
         "HZR ACCOUNTING DEGRADED: the ledger is no longer recording this session's operations; coverage is unknown. Check `hzr daemon service status`.".into()
@@ -2436,18 +2426,12 @@ fn close_open_accounting_gaps(config: &Config) -> Result<()> {
         .map_err(anyhow::Error::from)
 }
 
-fn recover_accounting_for_input(config: &Config, input: &Value) -> Result<()> {
-    let workspace = hook_workspace_root(config, input);
-    AccountingCoverageStore::new(&config.data_dir)
-        .recover(accounting_gap_event(
-            AccountingGapSurface::RewriteDaemon,
-            workspace.as_deref().and_then(Path::to_str),
-            input.get("session_id").and_then(Value::as_str),
-            Some("rewrite"),
-            unix_now(),
-        ))
-        .map(|_| ())
-        .map_err(anyhow::Error::from)
+/// 0.9.8: recover every open daemon-unreachable gap on a confirmed daemon success. Decoupled
+/// from the session-local transition so a fresh session still closes gaps an abandoned session
+/// opened during an outage. Best-effort: a failure here must not fail the rewrite.
+fn recover_daemon_gaps_surface_wide(config: &Config) {
+    let _ = AccountingCoverageStore::new(&config.data_dir)
+        .recover_surfaces(&hzr_core::DAEMON_UNREACHABLE_SURFACES, unix_now());
 }
 
 fn read_degraded_log(config: &Config) -> Result<Vec<u64>> {
@@ -2607,8 +2591,8 @@ mod tests {
         honor_host_permission_mode, hook_fidelity_preflight, host_rule_allows,
         native_observation_policy, read_session, reconcile_host_grant,
         reconcile_host_permission_rules, record_accounting_gap_now, record_degraded_rewrite_at,
-        remember_observed_model, render_command, run_statusline_upstream, scorecard_message,
-        steer_to_first_class, update_session,
+        recover_daemon_gaps_surface_wide, remember_observed_model, render_command,
+        run_statusline_upstream, scorecard_message, steer_to_first_class, update_session,
     };
 
     #[cfg(unix)]
@@ -3540,37 +3524,46 @@ mod tests {
         assert_eq!(accounting_statusline(None), "ACCOUNTING: UNKNOWN");
     }
 
-    // 0.9.8: the first healthy transition closes stale Hook/RewriteDaemon gaps left by earlier
-    // sessions, so "LIVE DEGRADED" does not outlive the outage that caused it.
+    // 0.9.8: a fresh session (never degraded) must still close an abandoned session's
+    // daemon-unreachable gaps on its first daemon success, because gap recovery is decoupled from
+    // the session-local transition. This is the case a transition-triggered recovery would miss.
     #[test]
-    fn recovery_transition_closes_stale_session_scoped_gaps() {
+    fn fresh_session_daemon_success_closes_abandoned_session_gaps() {
         let directory = tempdir().expect("temporary directory");
         let config = config(directory.path());
-        record_accounting_gap_now(
-            &config,
-            AccountingGapSurface::Hook,
-            directory.path().to_str(),
-            Some("stale-session"),
-            Some("policy"),
-        )
-        .expect("hook gap");
-        record_accounting_gap_now(
-            &config,
-            AccountingGapSurface::RewriteDaemon,
-            directory.path().to_str(),
-            Some("stale-session"),
-            Some("rewrite"),
-        )
-        .expect("rewrite gap");
-
-        // A later session observes the daemon coming back; the transition, not the session
-        // identity, is what closes the gap.
-        let other = serde_json::json!({
-            "session_id": "new-session",
+        let stale = serde_json::json!({
+            "session_id": "stale-session",
             "cwd": directory.path(),
         });
-        assert!(accounting_transition_at(&config, &other, true, 1_000).is_some());
-        assert!(accounting_transition_at(&config, &other, false, 1_060).is_some());
+        for (surface, family) in [
+            (AccountingGapSurface::Hook, "policy"),
+            (AccountingGapSurface::RewriteDaemon, "rewrite"),
+            (AccountingGapSurface::Cli, "search"),
+            (AccountingGapSurface::Mcp, "read"),
+        ] {
+            record_accounting_gap_now(
+                &config,
+                surface,
+                directory.path().to_str(),
+                Some("stale-session"),
+                Some(family),
+            )
+            .expect("gap");
+        }
+        assert!(accounting_transition_at(&config, &stale, true, 1_000).is_some());
+
+        // The abandoned session ends; a fresh session (never degraded) is the first to reach the
+        // daemon again. Its local transition is a no-op, so the surface-wide recovery must run
+        // regardless.
+        let fresh = serde_json::json!({
+            "session_id": "fresh-session",
+            "cwd": directory.path(),
+        });
+        recover_daemon_gaps_surface_wide(&config);
+        assert!(
+            accounting_transition_at(&config, &fresh, false, 1_060).is_none(),
+            "a never-degraded session has no local transition"
+        );
 
         let snapshot = AccountingCoverageStore::new(&config.data_dir)
             .snapshot(1_120)
@@ -3582,6 +3575,8 @@ mod tests {
         );
         assert_eq!(snapshot.hook_missing_operations, 1);
         assert_eq!(snapshot.rewrite_missing_operations, 1);
+        assert_eq!(snapshot.cli_missing_operations, 1);
+        assert_eq!(snapshot.mcp_missing_operations, 1);
     }
 
     #[test]

@@ -6,7 +6,7 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ### Fixed
 
-- Accounting coverage no longer stays `▲ LIVE DEGRADED` after the daemon returns. Hook and daemon-free-rewrite gaps were recorded with session-scoped identity but only recovered when the same session re-issued that exact identity, so an outage left open intervals that never closed. The first healthy transition now closes every open `hook` and `rewrite_daemon` interval surface-wide, because daemon unavailability is a global condition.
+- Accounting coverage no longer stays `▲ LIVE DEGRADED` after the daemon returns. Hook, daemon-free-rewrite, CLI and MCP gaps were recorded with session-scoped identity but only recovered when the same session re-issued that exact identity, so an outage left open intervals that never closed. Every confirmed daemon success now closes these daemon-unreachable gaps surface-wide (decoupled from the session-local transition, so a fresh session reconciles an abandoned session's gaps), because daemon unavailability is a global condition. `hzr doctor --fix` now performs the same reconciliation on demand, so an operator can clear the warning without waiting for a managed rewrite.
 
 ### Added
 
