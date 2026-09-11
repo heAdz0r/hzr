@@ -4,6 +4,10 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Fixed
+
+- Completing an accounting context now also closes the fork-producer gap its registration opened, instead of leaving that gap open until the abandon TTL. The Bash hook also completes a correlation it no longer runs after steering to a first-class route (`hzr read`) or falling back to raw, so a command that registered a producer but never wrote a drainable receipt no longer keeps `hzr stats` reporting `▲ LIVE DEGRADED`.
+
 ## [0.9.9] - 2026-09-11
 
 ### Fixed

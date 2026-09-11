@@ -303,50 +303,56 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     };
     let daemon_recorded_policy = managed.is_some();
     // 0.9.4: the host-rule verdict for the operator's command rides along with the decision.
-    let (decision, accounting_notice, managed_evasion, host_permission) = match managed {
-        Some(outcome) => {
-            // 0.9.8: every confirmed daemon success closes stale daemon-unreachable gaps
-            // surface-wide, independent of the session-local transition below. A fresh session
-            // (never degraded) therefore still reconciles the gaps an abandoned session left open.
-            recover_daemon_gaps_surface_wide(config);
-            let notice = accounting_transition(config, input, false);
-            (
-                outcome.decision,
-                notice,
-                outcome.evasion,
-                outcome.host_permission, // 0.9.4
-            )
-        }
-        None => {
-            let _ = record_degraded_rewrite_for_input(config, input);
-            let notice = accounting_transition(config, input, true);
-            let outcome = fallback_decision(config, raw, &cwd).await;
-            // 0.8.1: a daemon-free rewrite still makes fork-core write receipts under a local
-            // correlation. Without a context file those receipts stayed undrained forever, so
-            // register the same context the daemon would have; the sweeper drains it later.
-            if let Some(correlation_id) = outcome.accounting_correlation_id.as_deref() {
-                if let Err(error) = AccountingReceiptContextStore::new(&config.data_dir)
-                    .register_with_command(
-                        correlation_id,
-                        &cwd,
-                        Some(&agent_attribution(input)),
-                        input.get("session_id").and_then(Value::as_str),
-                        AccountingChannel::HookCli,
-                        outcome.evasion, // 0.8.3: classification travels with the registration
-                        hzr_core::command_summary(raw), // 0.9.1
-                    )
-                {
-                    eprintln!("HZR daemon-free accounting context was not registered: {error}");
-                }
+    // 0.9.11: `accounting_correlation_id` is the registration this rewrite opened; if the final
+    // decision no longer runs the command that carries it, the hook completes the orphan below so
+    // its gap does not linger until the abandon TTL.
+    let (decision, accounting_notice, managed_evasion, host_permission, accounting_correlation_id) =
+        match managed {
+            Some(outcome) => {
+                // 0.9.8: every confirmed daemon success closes stale daemon-unreachable gaps
+                // surface-wide, independent of the session-local transition below. A fresh session
+                // (never degraded) therefore still reconciles the gaps an abandoned session left open.
+                recover_daemon_gaps_surface_wide(config);
+                let notice = accounting_transition(config, input, false);
+                (
+                    outcome.decision,
+                    notice,
+                    outcome.evasion,
+                    outcome.host_permission, // 0.9.4
+                    outcome.accounting_correlation_id,
+                )
             }
-            (
-                outcome.decision,
-                notice,
-                outcome.evasion,
-                outcome.host_permission, // 0.9.4
-            )
-        }
-    };
+            None => {
+                let _ = record_degraded_rewrite_for_input(config, input);
+                let notice = accounting_transition(config, input, true);
+                let outcome = fallback_decision(config, raw, &cwd).await;
+                // 0.8.1: a daemon-free rewrite still makes fork-core write receipts under a local
+                // correlation. Without a context file those receipts stayed undrained forever, so
+                // register the same context the daemon would have; the sweeper drains it later.
+                if let Some(correlation_id) = outcome.accounting_correlation_id.as_deref() {
+                    if let Err(error) = AccountingReceiptContextStore::new(&config.data_dir)
+                        .register_with_command(
+                            correlation_id,
+                            &cwd,
+                            Some(&agent_attribution(input)),
+                            input.get("session_id").and_then(Value::as_str),
+                            AccountingChannel::HookCli,
+                            outcome.evasion, // 0.8.3: classification travels with the registration
+                            hzr_core::command_summary(raw), // 0.9.1
+                        )
+                    {
+                        eprintln!("HZR daemon-free accounting context was not registered: {error}");
+                    }
+                }
+                (
+                    outcome.decision,
+                    notice,
+                    outcome.evasion,
+                    outcome.host_permission, // 0.9.4
+                    outcome.accounting_correlation_id,
+                )
+            }
+        };
     let decision = steer_to_first_class(raw, decision);
     // Fidelity attribution is authoritative when present; otherwise the daemon's classification
     // of this exact command is what the recording process needs.
@@ -364,6 +370,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     // After the session, because the grant names a digest of it and the reader validates the two
     // together: a grant without its session in the same environment is refused, by design.
     let decision = attach_host_grant(input, decision);
+    complete_discarded_correlation(config, accounting_correlation_id.as_deref(), &decision);
     if !daemon_recorded_policy {
         let _ = record_local_policy_decision(config, input, &decision, None).await;
     }
@@ -373,6 +380,43 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
         accounting_notice.as_deref(),
         host_rule_allows,
     ) // 0.9.4
+}
+
+/// 0.9.11: a registration this rewrite opened but no longer uses must not linger.
+///
+/// `exec_rewrite` registers a producer the moment it approves the proxy command, but this hook can
+/// still steer that command to a first-class route (`hzr read`) or fall back to raw, which never
+/// writes the receipt the correlation expects. Completing the orphan here closes its gap
+/// immediately instead of leaving it open until the abandon TTL surfaces a LIVE DEGRADED.
+fn complete_discarded_correlation(
+    config: &Config,
+    correlation_id: Option<&str>,
+    decision: &RewriteDecision,
+) {
+    let Some(correlation_id) = correlation_id else {
+        return;
+    };
+    if decision_carries_correlation(decision, correlation_id) {
+        return;
+    }
+    if let Err(error) =
+        AccountingReceiptContextStore::new(&config.data_dir).complete(correlation_id)
+    {
+        eprintln!("HZR accounting context could not be completed: {error}");
+    }
+}
+
+/// Whether the final decision still runs the command the correlation was minted for.
+///
+/// The managed command embeds the correlation as an environment export, so a decision that still
+/// carries it names the correlation in its rendered text. A first-class or raw fallback does not.
+fn decision_carries_correlation(decision: &RewriteDecision, correlation_id: &str) -> bool {
+    match decision {
+        RewriteDecision::AllowRewrite { command, .. } => {
+            render_command(command).is_ok_and(|rendered| rendered.contains(correlation_id))
+        }
+        _ => false,
+    }
 }
 
 /// Is the daemon accepting connections right now? A bounded TCP probe, no request. // 0.9.1
@@ -2535,9 +2579,10 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use hzr_core::{
-        AccountingCoverageStore, AccountingGapSurface, Config, EconomicAmount, FidelityAllowance,
-        Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
-        ReceiptProvenance, SessionEconomicSummary, SessionEfficiencySummary, SessionEvasionSummary,
+        AccountingCoverageStore, AccountingGapSurface, AccountingReceiptContextStore, Config,
+        EconomicAmount, FidelityAllowance, Ledger, OperationAttribution, OperationChannel,
+        OperationMeasurement, OperationRoute, ReceiptProvenance, SessionEconomicSummary,
+        SessionEfficiencySummary, SessionEvasionSummary,
     };
     use hzr_protocol::{
         EnforcementTier, EvasionAttribution, EvasionClass, EvasionPathForm, FidelityValidation,
@@ -2556,13 +2601,14 @@ mod tests {
         HookFidelityPreflight, SessionFeedback, accounting_statusline, accounting_transition,
         accounting_transition_at, agent_attribution, agent_identity, apply_filter_placement,
         attach_hook_evasion, attach_host_grant, attach_policy_feedback, attach_session_attribution,
-        close_open_accounting_gaps, context_brief, deepest_registered_root,
-        degraded_rewrite_coverage, degraded_rewrite_coverage_at, fallback_decision,
-        honor_host_permission_mode, hook_fidelity_preflight, host_rule_allows,
-        native_observation_policy, read_session, reconcile_host_grant,
-        reconcile_host_permission_rules, record_accounting_gap_now, record_degraded_rewrite_at,
-        recover_daemon_gaps_surface_wide, remember_observed_model, render_command,
-        run_statusline_upstream, scorecard_message, steer_to_first_class, update_session,
+        close_open_accounting_gaps, complete_discarded_correlation, context_brief,
+        decision_carries_correlation, deepest_registered_root, degraded_rewrite_coverage,
+        degraded_rewrite_coverage_at, fallback_decision, honor_host_permission_mode,
+        hook_fidelity_preflight, host_rule_allows, native_observation_policy, read_session,
+        reconcile_host_grant, reconcile_host_permission_rules, record_accounting_gap_now,
+        record_degraded_rewrite_at, recover_daemon_gaps_surface_wide, remember_observed_model,
+        render_command, run_statusline_upstream, scorecard_message, steer_to_first_class,
+        update_session,
     };
 
     #[cfg(unix)]
@@ -4364,6 +4410,76 @@ exit 64
             data_dir: root.to_path_buf(),
             ..Config::default()
         }
+    }
+
+    // 0.9.11: only a decision that still runs the managed command carries its correlation.
+    #[test]
+    fn a_decision_names_the_correlation_only_when_it_still_carries_it() {
+        let correlation = "0123456789abcdef0123456789abcdef";
+        let carrying = RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell(format!(
+                "HZR_INTERNAL_ACCOUNTING_CORRELATION='{correlation}'\necho ok"
+            )),
+            source: RewriteSource::HzrPolicy,
+            reason: "managed route".into(),
+        };
+        assert!(decision_carries_correlation(&carrying, correlation));
+
+        let steered = RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("hzr read foo.txt"),
+            source: RewriteSource::HzrPolicy,
+            reason: "first-class route".into(),
+        };
+        assert!(!decision_carries_correlation(&steered, correlation));
+
+        assert!(!decision_carries_correlation(
+            &RewriteDecision::Ask {
+                proposed: None,
+                reason: "no".into(),
+            },
+            correlation,
+        ));
+    }
+
+    // 0.9.11: a discarded correlation is completed, closing the gap the registration opened.
+    #[test]
+    fn a_discarded_correlation_is_completed_and_its_gap_closed() {
+        let directory = tempdir().expect("temp directory");
+        let config = config(directory.path());
+        let correlation = "0123456789abcdef0123456789abcdef";
+        AccountingReceiptContextStore::new(&config.data_dir)
+            .register_with_channel(
+                correlation,
+                directory.path(),
+                Some("claude-code"),
+                Some("s1"),
+                hzr_protocol::AccountingChannel::HookCli,
+            )
+            .expect("registration");
+        let coverage = AccountingCoverageStore::new(&config.data_dir);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        assert_eq!(
+            coverage
+                .snapshot(now)
+                .expect("snapshot")
+                .pending_producer_operations,
+            1
+        );
+
+        let discarded = RewriteDecision::AllowRewrite {
+            command: CanonicalCommand::shell("hzr read foo.txt"),
+            source: RewriteSource::HzrPolicy,
+            reason: "first-class route".into(),
+        };
+        complete_discarded_correlation(&config, Some(correlation), &discarded);
+
+        let closed = coverage.snapshot(now).expect("snapshot");
+        assert!(closed.live_complete);
+        assert_eq!(closed.pending_producer_operations, 0);
+        assert_eq!(closed.closed_intervals, 0);
     }
 
     #[test]

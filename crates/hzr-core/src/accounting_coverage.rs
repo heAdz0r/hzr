@@ -303,7 +303,14 @@ impl AccountingReceiptContextStore {
         let path = self.context_path(correlation_id);
         let mut context = self.read(&path)?;
         context.completed_at_unix = Some(unix_now());
-        write_context(&path, &context) // 0.8.3: one atomic writer for every context update
+        write_context(&path, &context)?; // 0.8.3: one atomic writer for every context update
+        // 0.9.11: completion is the definitive signal that the producer is done, so the gap its
+        // registration opened is settled here instead of waiting for the abandon TTL. A producer
+        // that finished inside the grace was in flight the whole time and is removed as a settled
+        // registration; one that outlived the grace closes as a historical gap. This is what lets
+        // a read command that never produced a drainable receipt stop reporting LIVE DEGRADED.
+        AccountingCoverageStore::new(&self.data_root).recover(context.gap_event())?;
+        Ok(())
     }
 
     #[must_use]
@@ -1402,7 +1409,7 @@ mod attribution_tests {
         FidelityValidation,
     };
 
-    use super::AccountingReceiptContextStore;
+    use super::{AccountingCoverageStore, AccountingReceiptContextStore};
 
     fn classification() -> EvasionAttribution {
         EvasionAttribution {
@@ -1470,5 +1477,41 @@ mod attribution_tests {
             !plain.contains("evasion"),
             "an unclassified registration does not serialize the field: {plain}"
         );
+    }
+
+    // 0.9.11: completing a producer is the definitive "done" signal, so it must close the gap the
+    // registration opened — a read command that never writes a receipt must not stay LIVE DEGRADED
+    // until the abandon TTL.
+    #[test]
+    fn completion_closes_the_registration_gap_without_an_abandon_ttl() {
+        let directory = tempfile::tempdir().expect("directory");
+        let store = AccountingReceiptContextStore::new(directory.path());
+        let coverage = AccountingCoverageStore::new(directory.path());
+        let project = directory.path().join("project");
+        let correlation_id = "0123456789abcdef0123456789abcdef";
+        store
+            .register_with_channel(
+                correlation_id,
+                &project,
+                Some("claude-code"),
+                Some("s1"),
+                AccountingChannel::HookCli,
+            )
+            .expect("registration");
+        let pending = coverage.snapshot(super::unix_now()).expect("snapshot");
+        assert_eq!(pending.pending_producer_operations, 1);
+        assert!(pending.live_complete);
+
+        store.complete(correlation_id).expect("completion");
+
+        let closed = coverage.snapshot(super::unix_now()).expect("snapshot");
+        assert!(closed.live_complete);
+        assert!(closed.historical_complete);
+        assert_eq!(
+            closed.closed_intervals, 0,
+            "a producer completed inside the grace was in flight, never a gap"
+        );
+        assert_eq!(closed.lifetime_missing_operations, 0);
+        assert_eq!(closed.pending_producer_operations, 0);
     }
 }
