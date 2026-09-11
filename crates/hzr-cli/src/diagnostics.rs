@@ -158,8 +158,9 @@ pub async fn repair_legacy_index(
 
 /// 0.9.8: `hzr doctor --fix` closes every stale open daemon-unreachable gap — Hook, RewriteDaemon,
 /// Cli and Mcp — that an earlier outage left open. Returns how many intervals were closed.
-/// 0.9.9: it also closes abandoned fork-producer registrations (no receipt within the abandon
-/// TTL) left open by earlier versions; the daemon sweeper closes those going forward.
+/// 0.9.10: it also closes stale fork-producer registrations once the pending grace has elapsed
+/// (no receipt within the grace), so a transient `LIVE DEGRADED` from a daemon-free command that
+/// never drained does not linger until the day-long abandon TTL.
 pub async fn repair_accounting_gaps(
     config: &Config,
 ) -> Result<Option<usize>, hzr_core::AccountingCoverageError> {
@@ -182,11 +183,11 @@ pub async fn repair_accounting_gaps(
     let store = hzr_core::AccountingCoverageStore::new(&config.data_dir);
     let daemon_unreachable =
         store.recover_surfaces(&hzr_core::DAEMON_UNREACHABLE_SURFACES, recovered_at_unix)?;
-    let abandoned = store.recover_abandoned_fork_producer_gaps(
-        recovered_at_unix.saturating_sub(hzr_core::FORK_PRODUCER_ABANDONED_TTL_SECS),
+    let stale = store.recover_stale_fork_producer_gaps(
+        recovered_at_unix.saturating_sub(hzr_core::FORK_PRODUCER_PENDING_GRACE_SECS),
         recovered_at_unix,
     )?;
-    Ok(Some(daemon_unreachable + abandoned))
+    Ok(Some(daemon_unreachable + stale))
 }
 
 fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
@@ -1876,16 +1877,16 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     let open_daemon_unreachable = hzr_core::AccountingCoverageStore::new(&config.data_dir)
         .open_daemon_unreachable_intervals()
         .unwrap_or(0);
-    // 0.9.9: abandoned fork-producer registrations left open by earlier versions are repairable
-    // the same way once no receipt can still arrive.
+    // 0.9.10: stale fork-producer registrations (no receipt within the pending grace) are
+    // repairable the same way, so a transient gap does not linger until the day-long abandon TTL.
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
         .max(1);
-    let open_abandoned_fork = hzr_core::AccountingCoverageStore::new(&config.data_dir)
-        .open_abandoned_fork_producer_intervals(
-            now_unix.saturating_sub(hzr_core::FORK_PRODUCER_ABANDONED_TTL_SECS),
+    let open_stale_fork = hzr_core::AccountingCoverageStore::new(&config.data_dir)
+        .open_stale_fork_producer_intervals(
+            now_unix.saturating_sub(hzr_core::FORK_PRODUCER_PENDING_GRACE_SECS),
         )
         .unwrap_or(0);
     match hook_runner::degraded_rewrite_coverage(config) {
@@ -1920,12 +1921,12 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 open_daemon_unreachable
             ),
         )),
-        Ok(coverage) if open_abandoned_fork > 0 => checks.push(check(
+        Ok(coverage) if open_stale_fork > 0 => checks.push(check(
             "degraded_rewrites",
             CheckStatus::Warning,
             format!(
-                "{} open gap interval(s) are abandoned fork-producer registrations (no receipt within a day); run `hzr doctor --fix` to reconcile them",
-                open_abandoned_fork
+                "{} open gap interval(s) are stale fork-producer registrations (no receipt within the pending grace); run `hzr doctor --fix` to reconcile them",
+                open_stale_fork
             ),
         )),
         Ok(coverage) if coverage.unreconciled_rewrites > 0 => checks.push(check(
@@ -3282,10 +3283,10 @@ mod tests {
         );
     }
 
-    // 0.9.8: `--fix` closes stale open daemon-unreachable gaps. 0.9.9: it also closes abandoned
-    // fork-producer registrations whose receipts can no longer arrive.
+    // 0.9.8: `--fix` closes stale open daemon-unreachable gaps. 0.9.10: it also closes stale
+    // fork-producer registrations past the pending grace, whose receipts will not arrive.
     #[tokio::test]
-    async fn repair_accounting_gaps_closes_daemon_unreachable_and_abandoned_fork_gaps() {
+    async fn repair_accounting_gaps_closes_daemon_unreachable_and_stale_fork_gaps() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = Config {
