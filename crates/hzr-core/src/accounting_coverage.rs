@@ -452,6 +452,41 @@ impl AccountingCoverageStore {
         Ok(recovered)
     }
 
+    /// 0.9.8: recover every open interval of one surface regardless of workspace, session and
+    /// operation family. Daemon unavailability is a global condition, so once the daemon is
+    /// reachable again the per-session gaps it opened are all stale and must close together.
+    /// [`Self::recover`] cannot express this: there a `None` identity is the concrete
+    /// "unattributed" value, not a wildcard.
+    pub fn recover_surface(
+        &self,
+        surface: AccountingGapSurface,
+        recovered_at_unix: u64,
+    ) -> Result<usize, AccountingCoverageError> {
+        if !self.exists() {
+            return Ok(0);
+        }
+        let mut recovered = 0;
+        self.with_exclusive_state(|state| {
+            state.intervals.retain_mut(|interval| {
+                let matches = interval.recovered_at_unix.is_none() && interval.surface == surface;
+                if !matches {
+                    return true;
+                }
+                recovered += 1;
+                // A producer registration inside its grace was in flight, not a gap; keep that
+                // guarantee for ForkProducer even under a surface-wide recovery.
+                if is_settled_registration(interval, recovered_at_unix) {
+                    return false;
+                }
+                interval.recovered_at_unix =
+                    Some(recovered_at_unix.max(interval.last_failure_at_unix));
+                true
+            });
+            Ok(recovered > 0)
+        })?;
+        Ok(recovered)
+    }
+
     pub fn import_legacy(
         &self,
         legacy_missing_operations: u64,
@@ -1110,6 +1145,67 @@ mod tests {
         assert_eq!(snapshot.open_intervals, 1);
         assert_eq!(snapshot.fork_producer_missing_operations, 1);
         assert_eq!(snapshot.mcp_missing_operations, 1);
+    }
+
+    // 0.9.8: a surface-wide recovery closes every open interval of that surface across all
+    // workspaces, sessions and operation families, and leaves other surfaces alone.
+    #[test]
+    fn surface_recovery_closes_all_matching_intervals_across_identity() {
+        let directory = tempdir().expect("coverage root");
+        let store = AccountingCoverageStore::new(directory.path());
+        let hook_policy_a = AccountingGapEvent {
+            surface: AccountingGapSurface::Hook,
+            workspace_hash: Some("workspace-a".into()),
+            session_hash: Some("session-a".into()),
+            operation_family: Some("policy".into()),
+            at_unix: 10,
+        };
+        let hook_policy_b = AccountingGapEvent {
+            surface: AccountingGapSurface::Hook,
+            workspace_hash: Some("workspace-b".into()),
+            session_hash: Some("session-b".into()),
+            operation_family: Some("policy".into()),
+            at_unix: 12,
+        };
+        let hook_write = AccountingGapEvent {
+            surface: AccountingGapSurface::Hook,
+            workspace_hash: Some("workspace-a".into()),
+            session_hash: Some("session-a".into()),
+            operation_family: Some("write".into()),
+            at_unix: 14,
+        };
+        let rewrite = AccountingGapEvent {
+            surface: AccountingGapSurface::RewriteDaemon,
+            workspace_hash: Some("workspace-a".into()),
+            session_hash: Some("session-a".into()),
+            operation_family: Some("rewrite".into()),
+            at_unix: 16,
+        };
+        for event in [&hook_policy_a, &hook_policy_b, &hook_write, &rewrite] {
+            store.record_missing(event.clone()).expect("gap");
+        }
+
+        assert_eq!(
+            store
+                .recover_surface(AccountingGapSurface::Hook, 20)
+                .expect("surface recovery"),
+            3
+        );
+        assert_eq!(
+            store
+                .recover_surface(AccountingGapSurface::Hook, 21)
+                .expect("idempotent surface recovery"),
+            0
+        );
+        let snapshot = store.snapshot(20).expect("snapshot");
+        assert!(
+            !snapshot.live_complete,
+            "the untouched rewrite gap keeps the coverage open"
+        );
+        assert_eq!(snapshot.hook_missing_operations, 3);
+        assert_eq!(snapshot.rewrite_missing_operations, 1);
+        assert_eq!(snapshot.open_intervals, 1);
+        assert_eq!(snapshot.closed_intervals, 3);
     }
 }
 

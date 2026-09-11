@@ -411,6 +411,18 @@ fn accounting_transition_at(
     if !changed {
         return None;
     }
+    // 0.9.8: daemon unavailability is a global condition, not a per-session one. The first
+    // healthy transition therefore closes every open Hook and RewriteDaemon gap — including the
+    // ones an earlier session opened and will never re-issue its exact workspace/session identity.
+    if !degraded {
+        let store = AccountingCoverageStore::new(&config.data_dir);
+        for surface in [
+            AccountingGapSurface::Hook,
+            AccountingGapSurface::RewriteDaemon,
+        ] {
+            let _ = store.recover_surface(surface, now_unix);
+        }
+    }
     Some(if degraded {
         "HZR ACCOUNTING DEGRADED: the ledger is no longer recording this session's operations; coverage is unknown. Check `hzr daemon service status`.".into()
     } else {
@@ -2569,8 +2581,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use hzr_core::{
-        AccountingGapSurface, Config, EconomicAmount, FidelityAllowance, Ledger,
-        OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
+        AccountingCoverageStore, AccountingGapSurface, Config, EconomicAmount, FidelityAllowance,
+        Ledger, OperationAttribution, OperationChannel, OperationMeasurement, OperationRoute,
         ReceiptProvenance, SessionEconomicSummary, SessionEfficiencySummary, SessionEvasionSummary,
     };
     use hzr_protocol::{
@@ -3526,6 +3538,50 @@ mod tests {
             "ACCOUNTING: RECOVERED (SESSION PARTIAL)"
         );
         assert_eq!(accounting_statusline(None), "ACCOUNTING: UNKNOWN");
+    }
+
+    // 0.9.8: the first healthy transition closes stale Hook/RewriteDaemon gaps left by earlier
+    // sessions, so "LIVE DEGRADED" does not outlive the outage that caused it.
+    #[test]
+    fn recovery_transition_closes_stale_session_scoped_gaps() {
+        let directory = tempdir().expect("temporary directory");
+        let config = config(directory.path());
+        record_accounting_gap_now(
+            &config,
+            AccountingGapSurface::Hook,
+            directory.path().to_str(),
+            Some("stale-session"),
+            Some("policy"),
+        )
+        .expect("hook gap");
+        record_accounting_gap_now(
+            &config,
+            AccountingGapSurface::RewriteDaemon,
+            directory.path().to_str(),
+            Some("stale-session"),
+            Some("rewrite"),
+        )
+        .expect("rewrite gap");
+
+        // A later session observes the daemon coming back; the transition, not the session
+        // identity, is what closes the gap.
+        let other = serde_json::json!({
+            "session_id": "new-session",
+            "cwd": directory.path(),
+        });
+        assert!(accounting_transition_at(&config, &other, true, 1_000).is_some());
+        assert!(accounting_transition_at(&config, &other, false, 1_060).is_some());
+
+        let snapshot = AccountingCoverageStore::new(&config.data_dir)
+            .snapshot(1_120)
+            .expect("snapshot");
+        assert_eq!(snapshot.open_intervals, 0);
+        assert!(
+            !snapshot.historical_complete,
+            "the closed gaps stay as history"
+        );
+        assert_eq!(snapshot.hook_missing_operations, 1);
+        assert_eq!(snapshot.rewrite_missing_operations, 1);
     }
 
     #[test]

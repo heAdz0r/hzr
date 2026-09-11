@@ -4,6 +4,10 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Fixed
+
+- Accounting coverage no longer stays `▲ LIVE DEGRADED` after the daemon returns. Hook and daemon-free-rewrite gaps were recorded with session-scoped identity but only recovered when the same session re-issued that exact identity, so an outage left open intervals that never closed. The first healthy transition now closes every open `hook` and `rewrite_daemon` interval surface-wide, because daemon unavailability is a global condition.
+
 ### Added
 
 - `hzr agents onboard --project <worktree> --agtx-data-dir <store-root>` folds component verification/installation and enrollment into one opt-in command. The bundled observer is verified in place automatically; only a source checkout builds. A brand-new board still needs one explicit `hzr agents board` first, because HZR never creates the agtx store or launches its runtime implicitly.
