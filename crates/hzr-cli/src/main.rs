@@ -493,7 +493,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             // earlier outage, so `hzr stats` stops reporting `▲ LIVE DEGRADED` for a condition
             // the operator has already fixed by restoring the daemon.
             let accounting_gap_repair = if fix {
-                Some(diagnostics::repair_accounting_gaps(&config)?)
+                diagnostics::repair_accounting_gaps(&config).await?
             } else {
                 None
             };

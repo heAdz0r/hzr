@@ -159,7 +159,20 @@ pub async fn repair_legacy_index(
 /// 0.9.8: `hzr doctor --fix` closes every stale open daemon-unreachable gap — Hook, RewriteDaemon,
 /// Cli and Mcp — that an earlier outage left open. Returns how many intervals were closed.
 /// `ForkProducer` gaps are the daemon sweeper's to reconcile and are left alone.
-pub fn repair_accounting_gaps(config: &Config) -> Result<usize, hzr_core::AccountingCoverageError> {
+pub async fn repair_accounting_gaps(
+    config: &Config,
+) -> Result<Option<usize>, hzr_core::AccountingCoverageError> {
+    // An operator requesting repair is not evidence that the outage has ended.
+    let health = match DaemonClient::from_config(config) {
+        Ok(client) => client.health().await.ok(),
+        Err(_) => None,
+    };
+    if !health.is_some_and(|health| {
+        health.protocol_version == PROTOCOL_VERSION
+            && health.hzr_version == env!("CARGO_PKG_VERSION")
+    }) {
+        return Ok(None);
+    }
     let recovered_at_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -167,6 +180,7 @@ pub fn repair_accounting_gaps(config: &Config) -> Result<usize, hzr_core::Accoun
         .max(1);
     hzr_core::AccountingCoverageStore::new(&config.data_dir)
         .recover_surfaces(&hzr_core::DAEMON_UNREACHABLE_SURFACES, recovered_at_unix)
+        .map(Some)
 }
 
 fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
@@ -3244,8 +3258,9 @@ mod tests {
 
     // 0.9.8: `--fix` closes stale open daemon-unreachable gaps and leaves fork-producer gaps to
     // the daemon sweeper.
-    #[test]
-    fn repair_accounting_gaps_closes_daemon_unreachable_and_keeps_fork_producer() {
+    #[tokio::test]
+    async fn repair_accounting_gaps_closes_daemon_unreachable_and_keeps_fork_producer() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = Config {
             data_dir: directory.path().to_path_buf(),
@@ -3269,8 +3284,60 @@ mod tests {
         store.record_missing(hook).expect("hook");
         store.record_missing(fork).expect("fork");
 
-        let closed = repair_accounting_gaps(&config).expect("repair");
-        assert_eq!(closed, 1, "only the hook gap is a doctor repair");
+        assert_eq!(
+            repair_accounting_gaps(&config).await.expect("offline"),
+            None
+        );
+        assert_eq!(store.open_daemon_unreachable_intervals().expect("count"), 1);
+
+        let runtime = config.data_dir.join("runtime");
+        std::fs::create_dir_all(&runtime).expect("runtime");
+        let token_path = runtime.join("hzrd.token");
+        std::fs::write(&token_path, "z".repeat(64)).expect("token");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600))
+                .expect("private token");
+        }
+        let mut config = config;
+        for version in ["incompatible", env!("CARGO_PKG_VERSION")] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("listener");
+            config.daemon.bind = listener.local_addr().expect("address");
+            let body = serde_json::to_vec(&hzr_protocol::HealthResponse {
+                protocol_version: hzr_protocol::PROTOCOL_VERSION,
+                hzr_version: version.into(),
+                state: hzr_protocol::EngineState::Ready,
+                workspace_root: None,
+                engines: vec![],
+                capabilities: vec![],
+            })
+            .expect("health");
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("request");
+                let mut request = [0; 8192];
+                let size = stream.read(&mut request).await.expect("read");
+                let request = String::from_utf8_lossy(&request[..size]).to_ascii_lowercase();
+                assert!(request.contains("get /v1/health http/1.1"));
+                assert!(request.contains(&format!("authorization: bearer {}", "z".repeat(64))));
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(header.as_bytes()).await.expect("headers");
+                stream.write_all(&body).await.expect("body");
+            });
+            let closed = repair_accounting_gaps(&config).await.expect("repair");
+            server.await.expect("server");
+            if version == "incompatible" {
+                assert_eq!(closed, None);
+                assert_eq!(store.open_daemon_unreachable_intervals().expect("count"), 1);
+            } else {
+                assert_eq!(closed, Some(1), "only the hook gap is a doctor repair");
+            }
+        }
         assert_eq!(store.open_daemon_unreachable_intervals().expect("count"), 0);
 
         let settled = 1 + hzr_core::FORK_PRODUCER_PENDING_GRACE_SECS;
