@@ -489,7 +489,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 None
             };
-            // 0.9.8: `--fix` closes stale open daemon-unreachable accounting gaps left by an
+            // 0.9.9: `--fix` closes stale open daemon-unreachable accounting gaps left by an
             // earlier outage, so `hzr stats` stops reporting `▲ LIVE DEGRADED` for a condition
             // the operator has already fixed by restoring the daemon.
             let accounting_gap_repair = if fix {
@@ -522,7 +522,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             report.fidelity_reconcile = fidelity_reconcile;
             report.fleet_reconcile = fleet_reconcile;
             report.orphan_cleanup = orphan_cleanup; // 0.8.3
-            report.accounting_gap_repair = accounting_gap_repair; // 0.9.8
+            report.accounting_gap_repair = accounting_gap_repair; // 0.9.9
             if let Some(fleet) = &report.fleet_reconcile {
                 let completion = fleet.completion_check();
                 if completion.status == diagnostics::CheckStatus::Error {
@@ -566,7 +566,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     output::print_orphan_cleanup(cleanup)?; // 0.8.3
                 }
                 if let Some(count) = report.accounting_gap_repair {
-                    output::print_accounting_gap_repair(count)?; // 0.9.8
+                    output::print_accounting_gap_repair(count)?; // 0.9.9
                 }
                 print_doctor(&report)?;
             }
