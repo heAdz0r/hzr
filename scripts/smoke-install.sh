@@ -354,7 +354,7 @@ if [[ -s "${HZR_SMOKE_TEMP}/hook.json" ]]; then
   echo "eventless hook payload was treated as a supported host event" >&2
   exit 1
 fi
-for HZR_HOOK_PERMISSION in absent default bypassPermissions; do
+for HZR_HOOK_PERMISSION in absent default auto acceptEdits plan future-mode bypassPermissions; do
   "${HZR_INSTALLED_ROOT}/engines/node" -e '
     const [cwd, mode] = process.argv.slice(1);
     const payload = {
@@ -369,21 +369,18 @@ for HZR_HOOK_PERMISSION in absent default bypassPermissions; do
       PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" \
       "${HZR_INSTALLED_BIN}/hzr" hooks dispatch
   ) >"${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json"
-  # 0.9.7: in a prompting mode with no Claude allow rule for the command, the hook stays silent so
-  # the host prompts for the operator's own command and its answer can become a durable rule. A
-  # managed rewrite here would make the host evaluate its allowlist against a script no rule matches.
-  if [[ "${HZR_HOOK_PERMISSION}" == "default" ]]; then
-    if [[ -s "${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json" ]]; then
-      echo "hook rewrote an unmatched command in default mode instead of leaving the prompt to the host" >&2
-      cat "${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json" >&2
-      exit 1
-    fi
-    continue
-  fi
+  # Without a confirmed allow rule, preserve the command the host evaluates in every mode.
   "${HZR_INSTALLED_ROOT}/engines/node" - \
     "${HZR_SMOKE_TEMP}/hook-${HZR_HOOK_PERMISSION}.json" "${HZR_HOOK_PERMISSION}" <<'NODE'
 const [file, mode] = process.argv.slice(2);
-const output = JSON.parse(require("fs").readFileSync(file, "utf8")).hookSpecificOutput;
+const content = require("fs").readFileSync(file, "utf8").trim();
+const output = (content ? JSON.parse(content) : {}).hookSpecificOutput;
+if (mode !== "bypassPermissions") {
+  if (output?.updatedInput !== undefined || output?.permissionDecision !== undefined) {
+    throw new Error("unapproved hook changed the original permission surface: " + mode);
+  }
+  process.exit(0);
+}
 const rewritten = output?.updatedInput?.command;
 if (output?.hookEventName !== "PreToolUse" ||
     typeof rewritten !== "string" || rewritten === "cat main.rs" ||
@@ -392,9 +389,7 @@ if (output?.hookEventName !== "PreToolUse" ||
   throw new Error("supported hook did not preserve metadata and provide a managed rewrite: " + mode);
 }
 const decision = output.permissionDecision;
-const preservesPermission = mode === "bypassPermissions"
-  ? decision === "allow"
-  : decision === undefined || decision === "ask";
+const preservesPermission = decision === "allow";
 if (!preservesPermission) {
   throw new Error("hook did not preserve the host permission boundary: " +
     mode + " returned " + JSON.stringify(decision));
