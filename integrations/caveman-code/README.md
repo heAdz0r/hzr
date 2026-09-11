@@ -25,8 +25,9 @@ from `undici` in the exact lock. The upper bound is fail-closed because
 [caveman-code issue #46](https://github.com/JuliusBrussee/caveman-code/issues/46)
 reports a Node 26 installation failure in the upstream `better-sqlite3` 11.10.0
 chain. Node 25 remains supported by preflight. The npm override pins
-`adm-zip` 0.6.0 to remove the `<0.6.0` high-severity DoS advisory; the production
-dependency audit is expected to report zero vulnerabilities.
+`adm-zip` 0.6.1 to remove the `<0.6.0` high-severity DoS advisory and the
+`<=0.6.0` moderate symlink-following advisory (GHSA-vwc7-r8mq-g2x9); the
+production dependency audit is expected to report zero vulnerabilities.
 
 Managed mode disables Caveman's RTK hook, cave output/tool/ML compression,
 telemetry, hooks, repo map, memory, automatic checkpoints, sessions, extensions,

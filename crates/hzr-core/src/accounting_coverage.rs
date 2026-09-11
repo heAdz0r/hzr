@@ -521,6 +521,65 @@ impl AccountingCoverageStore {
             .count())
     }
 
+    /// 0.9.9: recover open fork-producer registration gaps older than `older_than_unix`. The daemon
+    /// sweeper closes these precisely when it retires an abandoned context; `hzr doctor --fix` uses
+    /// this to clear gaps left open by earlier versions once no receipt can still arrive. Only
+    /// registration gaps (`operation_family == None`) are closed; a still-running producer inside
+    /// the pending grace is left alone because its `last_failure_at_unix` is recent.
+    pub fn recover_abandoned_fork_producer_gaps(
+        &self,
+        older_than_unix: u64,
+        recovered_at_unix: u64,
+    ) -> Result<usize, AccountingCoverageError> {
+        if !self.exists() {
+            return Ok(0);
+        }
+        let mut recovered = 0;
+        self.with_exclusive_state(|state| {
+            state.intervals.retain_mut(|interval| {
+                let matches = interval.recovered_at_unix.is_none()
+                    && interval.surface == AccountingGapSurface::ForkProducer
+                    && interval.operation_family.is_none()
+                    && interval.last_failure_at_unix <= older_than_unix;
+                if !matches {
+                    return true;
+                }
+                recovered += 1;
+                interval.recovered_at_unix =
+                    Some(recovered_at_unix.max(interval.last_failure_at_unix));
+                true
+            });
+            Ok(recovered > 0)
+        })?;
+        Ok(recovered)
+    }
+
+    /// 0.9.9: count open fork-producer registration gaps older than `older_than_unix`. Read-only
+    /// counterpart of [`Self::recover_abandoned_fork_producer_gaps`], used by doctor to report the
+    /// repairable set without mutating the store.
+    pub fn open_abandoned_fork_producer_intervals(
+        &self,
+        older_than_unix: u64,
+    ) -> Result<usize, AccountingCoverageError> {
+        if !self.exists() {
+            return Ok(0);
+        }
+        let lock = self.open_lock()?;
+        FileExt::lock_shared(&lock).map_err(|source| self.io(source))?;
+        let state = self.read_state()?;
+        FileExt::unlock(&lock).map_err(|source| self.io(source))?;
+        Ok(state
+            .intervals
+            .iter()
+            .filter(|interval| {
+                interval.recovered_at_unix.is_none()
+                    && interval.surface == AccountingGapSurface::ForkProducer
+                    && interval.operation_family.is_none()
+                    && interval.last_failure_at_unix <= older_than_unix
+            })
+            .count())
+    }
+
     pub fn import_legacy(
         &self,
         legacy_missing_operations: u64,
@@ -533,7 +592,6 @@ impl AccountingCoverageStore {
             Ok(true) // 0.8.3: the closure reports whether the state changed
         })
     }
-
     pub fn snapshot(
         &self,
         now_unix: u64,
@@ -747,6 +805,11 @@ fn validate_state(state: &AccountingCoverageState) -> Result<(), AccountingCover
 /// How long a fork-producer registration may wait for its receipts before it counts as a gap.
 /// Matches the daemon sweeper's orphan-journal grace so the two views agree.
 pub const FORK_PRODUCER_PENDING_GRACE_SECS: u64 = 600;
+
+/// 0.9.9: how long a fork-producer registration may wait for its receipts before it is treated
+/// as abandoned and its gap closed as a confirmed historical loss. Matches the daemon sweeper's
+/// context-retirement TTL so `hzr doctor --fix` and the sweeper agree on what "abandoned" means.
+pub const FORK_PRODUCER_ABANDONED_TTL_SECS: u64 = 24 * 60 * 60;
 
 /// 0.8.3: a fork-producer registration whose receipts drained inside the pending grace. It was
 /// in flight the whole time and is removed on recovery instead of being kept as a closed gap.
@@ -1276,6 +1339,58 @@ mod tests {
             0,
             "a closed interval is no longer open"
         );
+    }
+
+    // 0.9.9: abandoned fork-producer gaps close once no receipt can still arrive, while a
+    // still-recent registration is left alone.
+    #[test]
+    fn abandoned_fork_producer_gaps_close_but_recent_registrations_stay_open() {
+        let directory = tempdir().expect("coverage root");
+        let store = AccountingCoverageStore::new(directory.path());
+        let old = AccountingGapEvent {
+            surface: AccountingGapSurface::ForkProducer,
+            workspace_hash: Some("w".into()),
+            session_hash: Some("s".into()),
+            operation_family: None,
+            at_unix: 1_000,
+        };
+        let recent = AccountingGapEvent {
+            surface: AccountingGapSurface::ForkProducer,
+            workspace_hash: Some("w2".into()),
+            session_hash: Some("s2".into()),
+            operation_family: None,
+            at_unix: 90_000,
+        };
+        store.record_missing(old).expect("old fork");
+        store.record_missing(recent).expect("recent fork");
+
+        assert_eq!(
+            store
+                .open_abandoned_fork_producer_intervals(50_000)
+                .expect("count"),
+            1,
+            "only the gap older than the threshold is abandoned"
+        );
+        assert_eq!(
+            store
+                .recover_abandoned_fork_producer_gaps(50_000, 100_000)
+                .expect("recover"),
+            1
+        );
+        assert_eq!(
+            store
+                .open_abandoned_fork_producer_intervals(50_000)
+                .expect("count"),
+            0
+        );
+
+        let snapshot = store.snapshot(100_000).expect("snapshot");
+        assert_eq!(
+            snapshot.open_intervals, 1,
+            "the recent registration stays open"
+        );
+        assert_eq!(snapshot.closed_intervals, 1, "the abandoned gap is closed");
+        assert_eq!(snapshot.fork_producer_missing_operations, 2);
     }
 }
 

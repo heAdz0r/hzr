@@ -158,7 +158,8 @@ pub async fn repair_legacy_index(
 
 /// 0.9.8: `hzr doctor --fix` closes every stale open daemon-unreachable gap — Hook, RewriteDaemon,
 /// Cli and Mcp — that an earlier outage left open. Returns how many intervals were closed.
-/// `ForkProducer` gaps are the daemon sweeper's to reconcile and are left alone.
+/// 0.9.9: it also closes abandoned fork-producer registrations (no receipt within the abandon
+/// TTL) left open by earlier versions; the daemon sweeper closes those going forward.
 pub async fn repair_accounting_gaps(
     config: &Config,
 ) -> Result<Option<usize>, hzr_core::AccountingCoverageError> {
@@ -178,9 +179,14 @@ pub async fn repair_accounting_gaps(
         .unwrap_or_default()
         .as_secs()
         .max(1);
-    hzr_core::AccountingCoverageStore::new(&config.data_dir)
-        .recover_surfaces(&hzr_core::DAEMON_UNREACHABLE_SURFACES, recovered_at_unix)
-        .map(Some)
+    let store = hzr_core::AccountingCoverageStore::new(&config.data_dir);
+    let daemon_unreachable =
+        store.recover_surfaces(&hzr_core::DAEMON_UNREACHABLE_SURFACES, recovered_at_unix)?;
+    let abandoned = store.recover_abandoned_fork_producer_gaps(
+        recovered_at_unix.saturating_sub(hzr_core::FORK_PRODUCER_ABANDONED_TTL_SECS),
+        recovered_at_unix,
+    )?;
+    Ok(Some(daemon_unreachable + abandoned))
 }
 
 fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
@@ -1870,6 +1876,18 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     let open_daemon_unreachable = hzr_core::AccountingCoverageStore::new(&config.data_dir)
         .open_daemon_unreachable_intervals()
         .unwrap_or(0);
+    // 0.9.9: abandoned fork-producer registrations left open by earlier versions are repairable
+    // the same way once no receipt can still arrive.
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .max(1);
+    let open_abandoned_fork = hzr_core::AccountingCoverageStore::new(&config.data_dir)
+        .open_abandoned_fork_producer_intervals(
+            now_unix.saturating_sub(hzr_core::FORK_PRODUCER_ABANDONED_TTL_SECS),
+        )
+        .unwrap_or(0);
     match hook_runner::degraded_rewrite_coverage(config) {
         // 0.8.1: readiness describes the current state. Journals still waiting for the daemon
         // and open gaps degrade accounting; closed intervals are history and stay visible in
@@ -1900,6 +1918,14 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             format!(
                 "{} open gap interval(s) are stale daemon-unreachable gaps (hook/rewrite/cli/mcp); run `hzr doctor --fix` to reconcile them",
                 open_daemon_unreachable
+            ),
+        )),
+        Ok(coverage) if open_abandoned_fork > 0 => checks.push(check(
+            "degraded_rewrites",
+            CheckStatus::Warning,
+            format!(
+                "{} open gap interval(s) are abandoned fork-producer registrations (no receipt within a day); run `hzr doctor --fix` to reconcile them",
+                open_abandoned_fork
             ),
         )),
         Ok(coverage) if coverage.unreconciled_rewrites > 0 => checks.push(check(
@@ -3256,10 +3282,10 @@ mod tests {
         );
     }
 
-    // 0.9.8: `--fix` closes stale open daemon-unreachable gaps and leaves fork-producer gaps to
-    // the daemon sweeper.
+    // 0.9.8: `--fix` closes stale open daemon-unreachable gaps. 0.9.9: it also closes abandoned
+    // fork-producer registrations whose receipts can no longer arrive.
     #[tokio::test]
-    async fn repair_accounting_gaps_closes_daemon_unreachable_and_keeps_fork_producer() {
+    async fn repair_accounting_gaps_closes_daemon_unreachable_and_abandoned_fork_gaps() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = Config {
@@ -3335,7 +3361,7 @@ mod tests {
                 assert_eq!(closed, None);
                 assert_eq!(store.open_daemon_unreachable_intervals().expect("count"), 1);
             } else {
-                assert_eq!(closed, Some(1), "only the hook gap is a doctor repair");
+                assert_eq!(closed, Some(2), "hook and abandoned fork gaps are closed");
             }
         }
         assert_eq!(store.open_daemon_unreachable_intervals().expect("count"), 0);
@@ -3343,8 +3369,8 @@ mod tests {
         let settled = 1 + hzr_core::FORK_PRODUCER_PENDING_GRACE_SECS;
         let snapshot = store.snapshot(settled).expect("snapshot");
         assert_eq!(
-            snapshot.open_intervals, 1,
-            "the fork gap is the daemon sweeper's, not erased"
+            snapshot.open_intervals, 0,
+            "the abandoned fork gap is closed as historical loss"
         );
         assert_eq!(snapshot.fork_producer_missing_operations, 1);
     }
