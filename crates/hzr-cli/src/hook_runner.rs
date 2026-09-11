@@ -409,14 +409,24 @@ fn complete_discarded_correlation(
 /// Whether the final decision still runs the command the correlation was minted for.
 ///
 /// The managed command embeds the correlation as an environment export, so a decision that still
-/// carries it names the correlation in its rendered text. A first-class or raw fallback does not.
+/// carries it names the correlation in its rendered text. An `Ask` that proposes the managed
+/// command carries it too: the host may approve and run that command, so completing its
+/// correlation here would retire a context whose receipts can still arrive. A first-class or raw
+/// fallback (and an `Ask` with no proposed command) does not.
 fn decision_carries_correlation(decision: &RewriteDecision, correlation_id: &str) -> bool {
-    match decision {
-        RewriteDecision::AllowRewrite { command, .. } => {
-            render_command(command).is_ok_and(|rendered| rendered.contains(correlation_id))
-        }
-        _ => false,
-    }
+    let command = match decision {
+        RewriteDecision::AllowRewrite { command, .. } => Some(command),
+        RewriteDecision::Ask {
+            proposed: Some(command),
+            ..
+        } => Some(command),
+        RewriteDecision::Ask { proposed: None, .. }
+        | RewriteDecision::AllowRaw { .. }
+        | RewriteDecision::Deny { .. } => None,
+    };
+    command.is_some_and(|command| {
+        render_command(command).is_ok_and(|rendered| rendered.contains(correlation_id))
+    })
 }
 
 /// Is the daemon accepting connections right now? A bounded TCP probe, no request. // 0.9.1
@@ -4431,6 +4441,17 @@ exit 64
             reason: "first-class route".into(),
         };
         assert!(!decision_carries_correlation(&steered, correlation));
+
+        // 0.9.11: an Ask that proposes the managed command still carries the correlation, because
+        // the host may approve and run it; completing it would retire a context whose receipts can
+        // still arrive. An Ask with no proposed command carries nothing.
+        let pending = RewriteDecision::Ask {
+            proposed: Some(CanonicalCommand::shell(format!(
+                "HZR_INTERNAL_ACCOUNTING_CORRELATION='{correlation}'\necho ok"
+            ))),
+            reason: "approval required".into(),
+        };
+        assert!(decision_carries_correlation(&pending, correlation));
 
         assert!(!decision_carries_correlation(
             &RewriteDecision::Ask {
