@@ -14,10 +14,10 @@ use hzr_protocol::{AccountingChannel, EngineAccountingReceipt, EvasionAttributio
 use crate::AppState;
 
 /// 0.8.3: a registration that neither completed nor produced receipts within a day is retired.
-/// The gap it opened stays in the coverage state (nothing recovers it), so retiring the file does
-/// not fake a recovery; keeping it only made every sweep slower and the directory grow until the
+/// 0.9.9: retiring it also closes the gap it opened, because no receipt can still arrive after a
+/// day; keeping the context only made every sweep slower and the directory grow until the
 /// 20 000-context registration cap rejected new commands.
-const ABANDONED_CONTEXT_TTL_SECS: u64 = 24 * 60 * 60;
+const ABANDONED_CONTEXT_TTL_SECS: u64 = hzr_core::FORK_PRODUCER_ABANDONED_TTL_SECS;
 /// 0.8.3: producers registered this recently keep the sweeper on its one-second cadence.
 const ACTIVE_CONTEXT_WINDOW_SECS: u64 = 120;
 /// 0.8.3: sweep cadence while no producer is active and nothing drained.
@@ -188,9 +188,21 @@ pub(crate) async fn sweep(state: &AppState) -> Result<SweepOutcome, String> {
             {
                 tracing::info!(
                     correlation_id = %context.correlation_id,
-                    "abandoned accounting context retired; its gap stays recorded"
+                    "abandoned accounting context retired; its gap is closed as historical loss"
                 );
                 retire_context(state, path, &context.correlation_id);
+                // 0.9.9: a registration that produced no receipt in a day is confirmed lost, not
+                // still in flight. Close the gap so coverage does not report a permanent
+                // LIVE DEGRADED for operations that will never arrive.
+                if let Err(error) = AccountingCoverageStore::new(&state.config.data_dir)
+                    .recover(context.gap_event())
+                {
+                    tracing::warn!(
+                        %error,
+                        correlation_id = %context.correlation_id,
+                        "abandoned accounting gap recovery failed"
+                    );
+                }
             }
             Ok(context) => {
                 if now_unix.saturating_sub(context.registered_at_unix) < ACTIVE_CONTEXT_WINDOW_SECS
@@ -715,8 +727,9 @@ exit 64
 
     #[cfg(unix)]
     #[tokio::test]
-    // 0.8.3: age retires the registration file, never the gap it opened.
-    async fn abandoned_registration_is_retired_with_its_locks_without_faking_recovery() {
+    // 0.9.9: age retires the registration file AND closes the gap it opened, because a
+    // registration that produced no receipt in a day is confirmed lost, not still in flight.
+    async fn abandoned_registration_is_retired_and_its_gap_is_closed() {
         use std::os::unix::fs::PermissionsExt;
 
         let directory = tempdir().expect("temporary directory");
@@ -811,14 +824,14 @@ exit 64
             !journal_lock.exists() && !drain_lock.exists(),
             "its lock files go with it"
         );
-        // Retirement records nothing and recovers nothing: the gap the registration opened is
-        // still open once the pending grace has elapsed.
+        // Retirement closes the gap the registration opened: no receipt can still arrive, so
+        // coverage is live-complete again instead of reporting a permanent LIVE DEGRADED.
         assert!(
-            !AccountingCoverageStore::new(&state.config.data_dir)
+            AccountingCoverageStore::new(&state.config.data_dir)
                 .snapshot(settled)
                 .expect("coverage")
                 .live_complete,
-            "retiring the file does not fake a recovery"
+            "an abandoned registration no longer leaves an open gap"
         );
     }
 

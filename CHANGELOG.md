@@ -4,6 +4,11 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Fixed
+
+- A fork-producer registration that produced no receipt within a day no longer leaves `▲ LIVE DEGRADED` permanently. The daemon sweeper now closes the gap it opened when it retires the abandoned context, since no receipt can still arrive; `hzr doctor --fix` reconciles the same abandoned registrations left open by earlier versions. Historical missing-operation counts are retained.
+- Bump the Caveman bridge's `adm-zip` to 0.6.1, closing the moderate symlink-following advisory (GHSA-vwc7-r8mq-g2x9).
+
 ## [0.9.8] - 2026-09-11
 
 ### Fixed

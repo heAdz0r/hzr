@@ -9,7 +9,7 @@
   "dependencies": {
     "@juliusbrussee/caveman-code": "0.65.2",
     "@sinclair/typebox": "0.34.49",
-    "adm-zip": "0.6.0",
+    "adm-zip": "0.6.1",
     "extract-zip": "file:vendor/extract-zip"
   },
   "overrides": {
