@@ -807,39 +807,9 @@ fn hook_host_is_claude(input: &Value) -> bool {
     input["_hzr_host"].as_str() != Some("codex")
 }
 
-/// Whether the host is in a mode that prompts the operator for a Bash call it has no rule for.
-///
-/// `default`, `acceptEdits` and `plan` all prompt for Bash; `bypassPermissions` never does. A
-/// mode this build does not know is left to the managed route exactly as before, because
-/// guessing that it prompts would trade filtering for nothing. // 0.9.4
-fn host_prompts_for_unmatched_bash(input: &Value) -> bool {
-    ["permission_mode", "permissionMode"]
-        .into_iter()
-        .find_map(|key| input.get(key).and_then(Value::as_str))
-        .and_then(HostPermissionMode::parse)
-        .is_some_and(|mode| {
-            matches!(
-                mode,
-                HostPermissionMode::Default
-                    | HostPermissionMode::AcceptEdits
-                    | HostPermissionMode::Plan
-            )
-        })
-}
-
-/// Let the host's own Bash rules, evaluated on the operator's command, decide what the operator
-/// sees. // 0.9.4
-///
-/// The managed form of a command is a multi-line environment prelude that carries a per-run
-/// correlation id, so no `Bash(...)` rule the operator has written — or could write from the
-/// prompt — will ever match it. Returning it without a decision therefore turned every
-/// unmatched command into a Yes/No prompt over a script, with no way to stop being asked.
-///
-/// When fork-core reports that no rule matched and the host is in a prompting mode, the command
-/// is left as the operator wrote it: the host prompts for that command, a "don't ask again"
-/// answer becomes a durable rule, and the next call arrives with an allow verdict and takes the
-/// managed route silently. Explicit ask and deny rules, `bypassPermissions`, Codex, and HZR's
-/// own policy answers are untouched.
+// A rewritten command carries accounting environment statements that the host cannot
+// match against rules for the original command. Only rewrite when that command's
+// permission is known; otherwise let the host evaluate its original input, including Auto.
 fn reconcile_host_permission_rules(
     input: &Value,
     host_permission: Option<HostPermissionVerdict>,
@@ -848,16 +818,16 @@ fn reconcile_host_permission_rules(
     if host_grants_execution(input) || !hook_host_is_claude(input) {
         return decision;
     }
-    if host_permission != Some(HostPermissionVerdict::Default)
-        || !host_prompts_for_unmatched_bash(input)
+    if input["tool_input"]["command"]
+        .as_str()
+        .is_some_and(|raw| host_rule_allows(input, raw, host_permission))
     {
         return decision;
     }
     match decision {
         RewriteDecision::AllowRewrite { .. } => RewriteDecision::allow_raw(
-            "no Claude permission rule matched this command, so the host prompts for the command \
-             as written and its answer can become a durable rule; this run is unfiltered and \
-             earns no savings credit",
+            "Claude permission for the original command is not confirmed; leave its input \
+             unchanged for the host to evaluate; this run is unfiltered and earns no savings credit",
         ),
         other => other,
     }
@@ -2903,7 +2873,10 @@ mod tests {
     /// every call with no way to stop being asked. // 0.9.4
     #[test]
     fn acceptance_gate_host_rules_are_applied_to_the_operators_command() {
-        let default_mode = serde_json::json!({"permission_mode": "default", "_hzr_host": "claude"});
+        let default_mode = serde_json::json!({
+            "permission_mode": "default", "_hzr_host": "claude",
+            "tool_input": {"command": "cat f"}
+        });
         let managed = || RewriteDecision::AllowRewrite {
             command: CanonicalCommand::shell("# HZR managed route\nrtk read f"),
             source: RewriteSource::HzrPolicy,
@@ -2953,34 +2926,53 @@ mod tests {
             Some(HostPermissionVerdict::Allow)
         ));
 
-        // Bypass, an unknown mode, a missing mode, Codex and an engine without the verdict all
-        // keep the managed route exactly as before.
-        for (input, verdict) in [
-            (
-                serde_json::json!({"permission_mode": "bypassPermissions", "_hzr_host": "claude"}),
-                Some(HostPermissionVerdict::Default),
-            ),
-            (
-                serde_json::json!({"permission_mode": "auto", "_hzr_host": "claude"}),
-                Some(HostPermissionVerdict::Default),
-            ),
-            (
-                serde_json::json!({"_hzr_host": "claude"}),
-                Some(HostPermissionVerdict::Default),
-            ),
-            (
-                serde_json::json!({"permission_mode": "default", "_hzr_host": "codex"}),
-                Some(HostPermissionVerdict::Default),
-            ),
-            (default_mode.clone(), None),
+        // Every mode must leave the original input to the host without a verified grant.
+        for mode in [
+            None,
+            Some("auto"),
+            Some("default"),
+            Some("acceptEdits"),
+            Some("plan"),
+            Some("future-mode"),
         ] {
-            assert!(
-                matches!(
-                    reconcile_host_permission_rules(&input, verdict, managed()),
-                    RewriteDecision::AllowRewrite { .. }
+            for verdict in [None, Some(HostPermissionVerdict::Default)] {
+                let mut input = default_mode.clone();
+                input
+                    .as_object_mut()
+                    .expect("input")
+                    .remove("permission_mode");
+                if let Some(mode) = mode {
+                    input["permission_mode"] = serde_json::json!(mode);
+                }
+                assert!(
+                    matches!(
+                        reconcile_host_permission_rules(&input, verdict, managed()),
+                        RewriteDecision::AllowRaw { .. }
+                    ),
+                    "{input} {verdict:?}"
+                );
+            }
+        }
+        for raw in ["cat $(f)", "cat `f`", "cat f\nrm g"] {
+            let mut input = default_mode.clone();
+            input["tool_input"]["command"] = serde_json::json!(raw);
+            assert!(matches!(
+                reconcile_host_permission_rules(
+                    &input,
+                    Some(HostPermissionVerdict::Allow),
+                    managed()
                 ),
-                "{input}"
-            );
+                RewriteDecision::AllowRaw { .. }
+            ));
+        }
+        for input in [
+            serde_json::json!({"permission_mode": "bypassPermissions"}),
+            serde_json::json!({"permission_mode": "default", "_hzr_host": "codex"}),
+        ] {
+            assert!(matches!(
+                reconcile_host_permission_rules(&input, None, managed()),
+                RewriteDecision::AllowRewrite { .. }
+            ));
         }
 
         // Explicit ask and deny rules are rules, not absent ones.

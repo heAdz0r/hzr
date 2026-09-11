@@ -361,6 +361,12 @@ finished prose back through the codec cannot refund tokens already emitted. `hzr
 explicit-request and `shadow` evaluation tool, and global-response coverage receives zero credit
 until a trusted host confirms replacement. Provider-billed `$` is never inferred from it.
 
+Claude Bash hooks rewrite commands only when an allow rule for the original command is
+confirmed or the host explicitly reports `bypassPermissions`. Otherwise, including Auto mode
+without a confirmed allow rule, HZR leaves the command unchanged for Claude to evaluate. Such
+calls are unfiltered and receive no savings credit. No broad shell-wrapper allowlist is needed;
+explicit ask and deny decisions remain enforced.
+
 ## Keeping a fleet of projects current
 
 Every registered workspace carries a managed contract block. When the contract moves, those

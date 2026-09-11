@@ -47,10 +47,7 @@ pub fn capabilities(host: HookHost, probe: bool) -> Value {
         result["fixture_probe"] = json!({
             "supported_shape": supports_pre_tool(host, &input),
             "unsupported_shape_passes_through": !supports_pre_tool(host, &json!({"tool_name":"Bash"})),
-            "preserves_permission_boundary": match host {
-                HookHost::Claude => transformed.as_ref().is_some_and(|v| v["hookSpecificOutput"].get("permissionDecision").is_none()),
-                HookHost::Codex => transformed.is_none(),
-            },
+            "preserves_permission_boundary": transformed.is_none(),
             "explicit_host_grant_rewrite": adapt_response(host, &input, rewrite, true).is_some(),
             "scope": "local_adapter_fixture_only"
         });
@@ -72,8 +69,8 @@ pub fn supports_pre_tool(host: HookHost, input: &Value) -> bool {
 }
 
 /// Unsupported optimization emits nothing; the host retains its normal permissions.
-/// Claude accepts argument updates without auto-approval. Codex requires allow, so
-/// its adapter only rewrites when the host explicitly reports bypassPermissions.
+/// Rewriting without a confirmed grant changes the command the host checks against
+/// its permission rules. Leave the original input intact instead.
 pub fn adapt_response(
     host: HookHost,
     input: &Value,
@@ -90,13 +87,15 @@ pub fn adapt_response(
         return (host == HookHost::Claude).then_some(output);
     };
     match hook.get("permissionDecision").and_then(Value::as_str) {
-        Some("allow") if !host_granted => match host {
-            HookHost::Claude => {
-                hook.remove("permissionDecision");
-                hook.remove("permissionDecisionReason");
-            }
-            HookHost::Codex => return None,
-        },
+        Some("allow") if !host_granted => {
+            return if host == HookHost::Claude {
+                output
+                    .get("systemMessage")
+                    .map(|notice| json!({"systemMessage": notice}))
+            } else {
+                None
+            };
+        }
         Some("ask") if host == HookHost::Codex => {
             // Codex ignores "ask": retain a real policy boundary instead of emitting it.
             hook.insert("permissionDecision".into(), json!("deny"));
@@ -120,19 +119,15 @@ mod tests {
     }
 
     #[test]
-    fn claude_argument_rewrite_does_not_grant_permissions() {
-        let output = json!({"hookSpecificOutput":{"hookEventName":"PreToolUse",
-            "permissionDecision":"allow","updatedInput": input()["tool_input"]}});
-        let adapted = adapt_response(HookHost::Claude, &input(), output, false)
-            .expect("supported host response fixture");
-        assert!(
-            adapted["hookSpecificOutput"]
-                .get("permissionDecision")
-                .is_none()
-        );
+    fn claude_unapproved_rewrite_preserves_original_permission_surface() {
+        let mut output = json!({"hookSpecificOutput":{"hookEventName":"PreToolUse",
+            "permissionDecision":"allow","updatedInput": {"command":
+                "# HZR managed route\nunset RTK_DB_PATH\nRTK_TEE=0\nrtk find ."}}});
+        assert!(adapt_response(HookHost::Claude, &input(), output.clone(), false).is_none());
+        output["systemMessage"] = json!("accounting degraded");
         assert_eq!(
-            adapted["hookSpecificOutput"]["updatedInput"]["timeout"],
-            1000
+            adapt_response(HookHost::Claude, &input(), output, false),
+            Some(json!({"systemMessage": "accounting degraded"}))
         );
     }
 
@@ -145,6 +140,10 @@ mod tests {
         let adapted = adapt_response(HookHost::Claude, &input(), output, true)
             .expect("supported host response fixture");
         assert_eq!(adapted["hookSpecificOutput"]["permissionDecision"], "allow");
+        assert_eq!(
+            adapted["hookSpecificOutput"]["updatedInput"],
+            input()["tool_input"]
+        );
     }
 
     #[test]

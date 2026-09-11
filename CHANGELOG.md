@@ -4,6 +4,10 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Fixed
+
+- Claude Bash hooks leave the original command unchanged when its permission is not confirmed, including Auto mode, missing/unknown permission modes, and unavailable engine verdicts. This prevents accounting environment statements from replacing the command checked by the host. Confirmed allow rules and explicit bypass mode retain managed execution; unfiltered fallback earns no savings credit.
+
 ### Added
 
 - `hzr agents onboard --project <worktree> --agtx-data-dir <store-root>` folds component verification/installation and enrollment into one opt-in command. The bundled observer is verified in place automatically; only a source checkout builds. A brand-new board still needs one explicit `hzr agents board` first, because HZR never creates the agtx store or launches its runtime implicitly.
