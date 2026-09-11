@@ -4,6 +4,8 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.8] - 2026-09-11
+
 ### Fixed
 
 - Claude Bash hooks leave the original command unchanged when its permission is not confirmed, including Auto mode, missing/unknown permission modes, and unavailable engine verdicts. This prevents accounting environment statements from replacing the command checked by the host. Confirmed allow rules and explicit bypass mode retain managed execution; unfiltered fallback earns no savings credit.
@@ -1868,3 +1870,4 @@ First public HZR release.
 [0.9.5]: https://github.com/heAdz0r/hzr/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/heAdz0r/hzr/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/heAdz0r/hzr/compare/v0.9.2...v0.9.3
+[0.9.8]: https://github.com/heAdz0r/hzr/compare/v0.9.7...v0.9.8
