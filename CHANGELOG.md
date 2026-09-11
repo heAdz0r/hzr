@@ -7,6 +7,7 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 ### Fixed
 
 - Claude Bash hooks leave the original command unchanged when its permission is not confirmed, including Auto mode, missing/unknown permission modes, and unavailable engine verdicts. This prevents accounting environment statements from replacing the command checked by the host. Confirmed allow rules and explicit bypass mode retain managed execution; unfiltered fallback earns no savings credit.
+- Accounting coverage no longer stays `▲ LIVE DEGRADED` after the daemon returns. Hook, daemon-free-rewrite, CLI and MCP gaps were recorded with session-scoped identity but only recovered when the same session re-issued that exact identity, so an outage left open intervals that never closed. Every confirmed daemon success now closes these daemon-unreachable gaps surface-wide (decoupled from the session-local transition, so a fresh session reconciles an abandoned session's gaps), because daemon unavailability is a global condition. `hzr doctor --fix` now performs the same reconciliation on demand, so an operator can clear the warning without waiting for a managed rewrite.
 
 ### Added
 

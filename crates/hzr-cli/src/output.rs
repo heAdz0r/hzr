@@ -540,6 +540,20 @@ pub fn print_orphan_cleanup(outcomes: &[crate::foreign::OrphanStopOutcome]) -> i
     Ok(())
 }
 
+/// 0.9.8: one line for the accounting gap repair `--fix` performed.
+pub fn print_accounting_gap_repair(count: usize) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    if count == 0 {
+        return writeln!(output, "accounting gaps: none to reconcile");
+    }
+    writeln!(
+        output,
+        "accounting gaps: {} stale daemon-unreachable interval(s) closed",
+        count
+    )
+}
+
 pub fn print_doctor(report: &DoctorReport) -> io::Result<()> {
     let stdout = io::stdout();
     let mut output = stdout.lock();
@@ -823,6 +837,7 @@ mod tests {
             fidelity_reconcile: None,
             fleet_reconcile: None,
             orphan_cleanup: None,
+            accounting_gap_repair: None,
         }
     }
 
