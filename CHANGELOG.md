@@ -6,6 +6,7 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ### Fixed
 
+- `hzr doctor --fix` now reconciles stale fork-producer registrations once the pending grace has elapsed, not only after the day-long abandon TTL. A daemon-free command that registered a context but never drained a receipt (for example during a daemon restart) no longer keeps `hzr stats` reporting `▲ LIVE DEGRADED` until the next day; the operator clears it immediately with `hzr doctor --fix`.
 - Completing an accounting context now also closes the fork-producer gap its registration opened, instead of leaving that gap open until the abandon TTL. The Bash hook also completes a correlation it no longer runs after steering to a first-class route (`hzr read`) or falling back to raw, so a command that registered a producer but never wrote a drainable receipt no longer keeps `hzr stats` reporting `▲ LIVE DEGRADED`.
 
 ## [0.9.9] - 2026-09-11

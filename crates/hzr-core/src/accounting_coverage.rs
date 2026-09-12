@@ -528,12 +528,13 @@ impl AccountingCoverageStore {
             .count())
     }
 
-    /// 0.9.9: recover open fork-producer registration gaps older than `older_than_unix`. The daemon
-    /// sweeper closes these precisely when it retires an abandoned context; `hzr doctor --fix` uses
-    /// this to clear gaps left open by earlier versions once no receipt can still arrive. Only
+    /// 0.9.10: recover open fork-producer registration gaps older than `older_than_unix`. The
+    /// daemon sweeper closes these automatically when it retires an abandoned context (a day
+    /// without a receipt); `hzr doctor --fix` closes them once the pending grace has elapsed,
+    /// because the operator is explicitly reconciling and the gap is overdue, not in flight. Only
     /// registration gaps (`operation_family == None`) are closed; a still-running producer inside
     /// the pending grace is left alone because its `last_failure_at_unix` is recent.
-    pub fn recover_abandoned_fork_producer_gaps(
+    pub fn recover_stale_fork_producer_gaps(
         &self,
         older_than_unix: u64,
         recovered_at_unix: u64,
@@ -561,10 +562,10 @@ impl AccountingCoverageStore {
         Ok(recovered)
     }
 
-    /// 0.9.9: count open fork-producer registration gaps older than `older_than_unix`. Read-only
-    /// counterpart of [`Self::recover_abandoned_fork_producer_gaps`], used by doctor to report the
+    /// 0.9.10: count open fork-producer registration gaps older than `older_than_unix`. Read-only
+    /// counterpart of [`Self::recover_stale_fork_producer_gaps`], used by doctor to report the
     /// repairable set without mutating the store.
-    pub fn open_abandoned_fork_producer_intervals(
+    pub fn open_stale_fork_producer_intervals(
         &self,
         older_than_unix: u64,
     ) -> Result<usize, AccountingCoverageError> {
@@ -1373,20 +1374,20 @@ mod tests {
 
         assert_eq!(
             store
-                .open_abandoned_fork_producer_intervals(50_000)
+                .open_stale_fork_producer_intervals(50_000)
                 .expect("count"),
             1,
             "only the gap older than the threshold is abandoned"
         );
         assert_eq!(
             store
-                .recover_abandoned_fork_producer_gaps(50_000, 100_000)
+                .recover_stale_fork_producer_gaps(50_000, 100_000)
                 .expect("recover"),
             1
         );
         assert_eq!(
             store
-                .open_abandoned_fork_producer_intervals(50_000)
+                .open_stale_fork_producer_intervals(50_000)
                 .expect("count"),
             0
         );
