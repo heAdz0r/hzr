@@ -10,6 +10,8 @@ use toml_edit::{Array, DocumentMut, Item, Table, value};
 use crate::adoption::{atomic_write, commit_with_lock, read_optional, sha256};
 
 mod opencode;
+mod repair;
+pub use repair::{ClientOwnershipRepair, repair_opencode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]

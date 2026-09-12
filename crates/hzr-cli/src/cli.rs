@@ -240,14 +240,14 @@ pub enum Command {
         /// Workspace root to diagnose (defaults to the current directory)
         #[arg(long, value_name = "DIR")]
         workspace: Option<PathBuf>,
-        /// Safely migrate one unambiguous legacy .grepai and stop orphaned HZR-launched engines before diagnosing
+        /// Repair duplicate OpenCode ICM registrations, stale accounting, legacy indexes and orphaned HZR engines
         #[arg(long)]
         fix: bool,
         /// Refresh the managed contract block in every registered workspace reporting a stale one
         #[arg(long)]
         reconcile_fleet: bool,
-        /// Show what --reconcile-fleet would rewrite, without writing
-        #[arg(long, requires = "reconcile_fleet")]
+        /// Preview doctor repairs without changing files or processes
+        #[arg(long, conflicts_with = "resolve_fidelity")]
         dry_run: bool,
         /// Transactionally migrate each registered workspace with one unambiguous root legacy index
         #[arg(long, requires = "reconcile_fleet")]

@@ -477,22 +477,30 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 None
             };
-            let repair = if fix {
+            let client_ownership_repair = if fix {
+                Some(client_config::repair_opencode(&workspace, dry_run)?)
+            } else {
+                None
+            };
+            if fix && !dry_run {
+                service::ensure_running_if_installed()?;
+            }
+            let repair = if fix && !dry_run {
                 repair_legacy_index(&config, &workspace).await?
             } else {
                 None
             };
             // 0.8.3: `--fix` also stops engine children whose HZR installation is gone. They are
-            // re-verified by PID and argv before any signal; foreign processes are never touched.
-            let orphan_cleanup = if fix {
+            // re-verified by PID and argv before any signal; other external processes are left alone.
+            let orphan_cleanup = if fix && !dry_run {
                 Some(foreign::stop_orphaned(&foreign::scan(&config.data_dir)?))
             } else {
                 None
             };
-            // 0.9.10: `--fix` closes stale open daemon-unreachable accounting gaps left by an
+            // 0.9.11: `--fix` closes stale open daemon-unreachable accounting gaps left by an
             // earlier outage, so `hzr stats` stops reporting `▲ LIVE DEGRADED` for a condition
             // the operator has already fixed by restoring the daemon.
-            let accounting_gap_repair = if fix {
+            let accounting_gap_repair = if fix && !dry_run {
                 diagnostics::repair_accounting_gaps(&config).await?
             } else {
                 None
@@ -518,11 +526,12 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 None => None,
             };
             let mut report = doctor(&config_path, &config, &workspace).await;
+            report.client_ownership_repair = client_ownership_repair;
             report.repair = repair;
             report.fidelity_reconcile = fidelity_reconcile;
             report.fleet_reconcile = fleet_reconcile;
             report.orphan_cleanup = orphan_cleanup; // 0.8.3
-            report.accounting_gap_repair = accounting_gap_repair; // 0.9.10
+            report.accounting_gap_repair = accounting_gap_repair; // 0.9.11
             if let Some(fleet) = &report.fleet_reconcile {
                 let completion = fleet.completion_check();
                 if completion.status == diagnostics::CheckStatus::Error {
@@ -539,7 +548,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             // too: the `reference_state` remedy must be able to clear the warning it prescribes.
             if reconcile_fleet && fix && !dry_run {
                 post_upgrade::record_completion_for_manual_pass(&config, &report);
-            } else {
+            } else if !dry_run {
                 post_upgrade::record_completion_from_env(&config, &report);
             }
             if let Some(check) = report
@@ -566,7 +575,19 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     output::print_orphan_cleanup(cleanup)?; // 0.8.3
                 }
                 if let Some(count) = report.accounting_gap_repair {
-                    output::print_accounting_gap_repair(count)?; // 0.9.10
+                    output::print_accounting_gap_repair(count)?; // 0.9.11
+                }
+                if let Some(repairs) = &report.client_ownership_repair {
+                    for repair in repairs {
+                        println!(
+                            "client ownership {}: disabled={} stopped={:?} dry_run={} backup={:?}",
+                            repair.path.display(),
+                            repair.disabled_registrations,
+                            repair.stopped_processes,
+                            repair.dry_run,
+                            repair.backup_path
+                        );
+                    }
                 }
                 print_doctor(&report)?;
             }

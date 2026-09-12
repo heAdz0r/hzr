@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use super::{Registration, command_launches_icm};
 
-pub(super) const REMEDIATION: &str = "HZR audits opencode but does not rewrite its config: remove or disable the direct ICM \
-     entry in the named file, then restart opencode; to use HZR, register a local MCP command \
+pub(super) const REMEDIATION: &str = "Run `hzr doctor --fix --dry-run` to preview and `hzr doctor --fix` to disable the direct ICM \
+     entry and stop its verified opencode child; to use HZR, register a local MCP command \
      [\"hzr\", \"mcp\", \"serve\", \"--workspace\", \"<dir>\"] in that project's config";
 
 pub(super) fn global_paths(home: &Path) -> Vec<PathBuf> {
@@ -141,7 +141,7 @@ mod tests {
                 .expect("ownership findings");
         assert_eq!(findings.len(), 1);
         assert!(findings[0].contains(path.to_string_lossy().as_ref()));
-        assert!(findings[0].contains("restart opencode"));
+        assert!(findings[0].contains("doctor --fix"));
         assert!(report.registered);
         assert_eq!(report.pinned_workspace.as_deref(), Some("/project"));
         assert!(

@@ -112,6 +112,8 @@ pub struct DoctorReport {
     // 0.9.8: `--fix` closed this many stale open daemon-unreachable accounting gaps.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accounting_gap_repair: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_ownership_repair: Option<Vec<client_config::ClientOwnershipRepair>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1801,7 +1803,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                     CheckStatus::Error,
                     format!(
                         "{} unmanaged engine process(es) ({detail}) duplicate HZR ownership; \
-                         inspect client_mcp_ownership for the launching config, remove its direct engine registration, then restart that client; HZR never kills external processes",
+                         run doctor --fix for verified OpenCode registrations; inspect client_mcp_ownership for other launching configs; unrelated external processes are never stopped",
                         report.unmanaged_active_total()
                     ),
                 ));
@@ -2245,7 +2247,8 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         repair: None,
         fidelity_reconcile: None,
         fleet_reconcile: None,
-        orphan_cleanup: None,        // 0.8.1
+        orphan_cleanup: None, // 0.8.1
+        client_ownership_repair: None,
         accounting_gap_repair: None, // 0.9.8
     }
 }

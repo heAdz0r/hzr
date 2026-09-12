@@ -469,6 +469,7 @@ mod tests {
             fidelity_reconcile: None,
             fleet_reconcile: None,
             orphan_cleanup: None,
+            client_ownership_repair: None,
             accounting_gap_repair: None,
         };
         record_completion(&config, &report).expect("record");
@@ -520,6 +521,7 @@ mod tests {
             fidelity_reconcile: None,
             fleet_reconcile: None,
             orphan_cleanup: None,
+            client_ownership_repair: None,
             accounting_gap_repair: None,
         };
         // No MARKER_ENV in the test process: the manual path must record on its own.
@@ -553,6 +555,7 @@ mod tests {
             fidelity_reconcile: None,
             fleet_reconcile: None,
             orphan_cleanup: None,
+            client_ownership_repair: None,
             accounting_gap_repair: None,
         };
         record_completion(&config, &report).expect("record");
@@ -585,6 +588,7 @@ mod tests {
             fidelity_reconcile: None,
             fleet_reconcile: None,
             orphan_cleanup: None,
+            client_ownership_repair: None,
             accounting_gap_repair: None,
         };
         record_completion_for_marker(&config, &foreign, &report);

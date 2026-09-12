@@ -4,11 +4,15 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.11] - 2026-09-12
+
 ### Fixed
+
+- Doctor repair starts an installed but inactive daemon before reconciling accounting gaps. Dry-run skips every repair mutation; recovery never erases historical missing-operation evidence or claims health without an authenticated compatible daemon.
 
 - Keep the managed execution path through current so a running adapter and runner follow an atomic upgrade after the previous release is pruned (#19).
 - A planner spawn failure after successful capability validation now uses unfiltered execution without savings credit instead of a policy denial. Errors identify the binary; planner timeouts and output-collection failures require approval. Explicit policy denials, malformed plans and failed identity probes remain closed (#20).
-- Audit OpenCode global, ancestor and project opencode.json/opencode.jsonc files, including .opencode, XDG and explicit config overrides. Detect active direct ICM registrations in V1 and V2 command arrays and report the source file with manual remediation. OpenCode configuration remains audit-only; the installer does not rewrite it or stop external processes (#21).
+- Audit OpenCode global, ancestor and project opencode.json/opencode.jsonc files, including .opencode, XDG and explicit config overrides. Detect active direct ICM registrations in V1 and V2 command arrays and report the source file with manual remediation. The installer leaves OpenCode alone; doctor --fix now disables direct ICM entries transactionally with a backup and stops only matching OpenCode child processes. Preview with doctor --fix --dry-run (#21).
 
 ## [0.9.10] - 2026-09-12
 
@@ -1890,6 +1894,7 @@ First public HZR release.
 [0.9.5]: https://github.com/heAdz0r/hzr/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/heAdz0r/hzr/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/heAdz0r/hzr/compare/v0.9.2...v0.9.3
+[0.9.11]: https://github.com/heAdz0r/hzr/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/heAdz0r/hzr/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/heAdz0r/hzr/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/heAdz0r/hzr/compare/v0.9.7...v0.9.8

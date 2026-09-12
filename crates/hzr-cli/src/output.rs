@@ -837,6 +837,7 @@ mod tests {
             fidelity_reconcile: None,
             fleet_reconcile: None,
             orphan_cleanup: None,
+            client_ownership_repair: None,
             accounting_gap_repair: None,
         }
     }

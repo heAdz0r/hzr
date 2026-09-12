@@ -4,6 +4,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+
+mod opencode;
+pub use opencode::stop_disabled_opencode;
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
