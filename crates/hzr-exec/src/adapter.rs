@@ -777,9 +777,21 @@ impl PinnedRtkAdapter {
         .await;
         let output = match output {
             Ok(output) => output,
-            Err(reason) => {
-                return outcome_without_evasion(RewriteDecision::Deny {
-                    reason: format!("managed fork-core rewrite failed: {reason}"),
+            Err(PlannerRunError::Spawn(error)) => {
+                return outcome_without_evasion(RewriteDecision::AllowRaw {
+                    reason: format!(
+                        "managed fork-core {} could not start: {error}; tracked raw fallback, no savings credit",
+                        self.config.binary.display()
+                    ),
+                });
+            }
+            Err(error) => {
+                return outcome_without_evasion(RewriteDecision::Ask {
+                    proposed: None,
+                    reason: format!(
+                        "managed fork-core {} rewrite infrastructure failure: {error}; policy could not be evaluated",
+                        self.config.binary.display()
+                    ),
                 });
             }
         };
@@ -1154,7 +1166,9 @@ async fn run_probe(
     runtime_paths
         .apply_to_command(&mut command, binary)
         .map_err(|error| error.to_string())?;
-    run_with_timeout(&mut command, Duration::from_millis(config.probe_timeout_ms)).await
+    run_with_timeout(&mut command, Duration::from_millis(config.probe_timeout_ms))
+        .await
+        .map_err(|error| format!("{}: {error}", binary.display()))
 }
 
 fn unavailable(binary: PathBuf, detected_version: Option<String>, reason: &str) -> RtkCapabilities {
@@ -1184,9 +1198,13 @@ fn resolve_binary(binary: &Path) -> Result<PathBuf, String> {
     candidates
         .into_iter()
         .find_map(|candidate| {
-            is_executable(&candidate)
-                .then(|| fs::canonicalize(&candidate).ok())
-                .flatten()
+            let resolved = fs::canonicalize(&candidate).ok()?;
+            if !is_executable(&resolved) {
+                return None;
+            }
+            // Preserve upgrade indirection, but anchor relative PATH entries before a
+            // command-specific cwd is applied.
+            std::path::absolute(&candidate).ok()
         })
         .ok_or_else(|| format!("binary {} was not found or executable", binary.display()))
 }
@@ -1318,12 +1336,30 @@ fn output_text(output: &Output) -> String {
     text
 }
 
-async fn run_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output, String> {
-    command.kill_on_drop(true);
-    match tokio::time::timeout(timeout, command.output()).await {
+#[derive(Debug, thiserror::Error)]
+enum PlannerRunError {
+    #[error("could not start: {0}")]
+    Spawn(std::io::Error),
+    #[error("could not collect planner output: {0}")]
+    Wait(std::io::Error),
+    #[error("timed out after {0} ms")]
+    Timeout(u128),
+}
+
+async fn run_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+) -> Result<Output, PlannerRunError> {
+    command
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = command.spawn().map_err(PlannerRunError::Spawn)?;
+    match tokio::time::timeout(timeout, child.wait_with_output()).await {
         Ok(Ok(output)) => Ok(output),
-        Ok(Err(error)) => Err(format!("could not start: {error}")),
-        Err(_) => Err(format!("timed out after {} ms", timeout.as_millis())),
+        Ok(Err(error)) => Err(PlannerRunError::Wait(error)),
+        Err(_) => Err(PlannerRunError::Timeout(timeout.as_millis())),
     }
 }
 

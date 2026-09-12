@@ -2571,6 +2571,7 @@ pub(crate) async fn execute_command(
     complete_accounting_context(&state, plan.accounting_correlation_id.as_deref());
     let fidelity_execution_unknown =
         fidelity_reservation.is_some() && process_started && outcome.is_err();
+    let record_raw_completion = route == "raw" && fidelity_reservation.is_none();
     let fidelity_accounting_error = match fidelity_reservation {
         Some(reservation) => match &outcome {
             Ok(execution) => match plan.evasion.and_then(|evasion| {
@@ -2653,10 +2654,63 @@ pub(crate) async fn execute_command(
             ApiError::service("execution_failed", error.to_string(), true)
         }
     })?;
+    if record_raw_completion {
+        if let Some(record) = raw_execution_record(&request, &cwd, &outcome) {
+            if let Err(error) = state.ledger.record_operation(record).await {
+                return Ok(Json(match outcome {
+                    ExecutionOutcome::Completed { result } => {
+                        ExecutionOutcome::ExecutedAccountingIncomplete {
+                            result,
+                            accounting: AccountingIncomplete {
+                                code: "raw_execution_accounting_incomplete".into(),
+                                retryable: false,
+                                incident_persisted: error.incident_persisted(),
+                            },
+                        }
+                    }
+                    other => other,
+                }));
+            }
+        }
+    }
     Ok(Json(mark_accounting_incomplete(
         outcome,
         fidelity_accounting_error.as_ref(),
     )))
+}
+
+fn raw_execution_record(
+    request: &ExecApiRequest,
+    cwd: &Path,
+    outcome: &ExecutionOutcome,
+) -> Option<crate::ledger_writer::OperationRecord> {
+    let ExecutionOutcome::Completed { result } = outcome else {
+        return None;
+    };
+    let tokens = result
+        .stdout
+        .total_bytes
+        .saturating_add(result.stderr.total_bytes)
+        .div_ceil(4);
+    Some(with_exec_channel(
+        crate::ledger_writer::OperationRecord {
+            original_command: "hzr exec raw".into(),
+            recorded_command: "hzr exec raw".into(),
+            input_tokens: tokens,
+            output_tokens: tokens,
+            execution_ms: result.duration_ms,
+            project_path: cwd.to_string_lossy().into_owned(),
+            channel: hzr_core::OperationChannel::HookCli,
+            measurement: hzr_core::OperationMeasurement::Estimated,
+            route: hzr_core::OperationRoute::Bypassed,
+            agent: request.agent.clone(),
+            session_id: request.session_id.clone(),
+            attribution: None,
+            evasion: None,
+            host_grant_applied: false,
+        },
+        request.channel,
+    ))
 }
 
 fn fidelity_operation_record(
@@ -5257,6 +5311,47 @@ exit 64
         };
         assert_eq!(bytes, b"caller-path");
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn raw_execution_completion_records_no_savings_credit() {
+        let directory = tempfile::tempdir().expect("fixture");
+        let ledger_path = directory.path().join("ledger.sqlite");
+        let writer = LedgerWriter::open(&ledger_path).expect("writer");
+        let outcome = ExecutionPipeline
+            .execute(ExecutionEnvelope::allow_raw(CanonicalCommand::shell(
+                "printf exact-output",
+            )))
+            .await
+            .expect("execution");
+        let request = ExecApiRequest {
+            command: "printf exact-output".into(),
+            cwd: directory.path().to_string_lossy().into_owned(),
+            channel: Some(hzr_protocol::AccountingChannel::Mcp),
+            agent: Some("test".into()),
+            session_id: Some("raw-session".into()),
+            timeout_ms: None,
+            caller_path: None,
+            fidelity_requested: false,
+            fidelity_reason: None,
+            host_execution_grant: None,
+        };
+        let record =
+            super::raw_execution_record(&request, directory.path(), &outcome).expect("record");
+        assert_eq!(record.input_tokens, 3);
+        assert_eq!(record.output_tokens, 3);
+        assert_eq!(record.route, OperationRoute::Bypassed);
+        assert_eq!(record.channel, OperationChannel::Mcp);
+        assert!(record.evasion.is_none());
+        writer
+            .record_operation(record)
+            .await
+            .expect("raw accounting");
+        let summary = Ledger::open(&ledger_path)
+            .expect("ledger")
+            .efficiency_summary()
+            .expect("summary");
+        assert_eq!(summary.operations, 1);
     }
 
     #[tokio::test]

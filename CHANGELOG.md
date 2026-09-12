@@ -4,6 +4,12 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep the managed execution path through current so a running adapter and runner follow an atomic upgrade after the previous release is pruned (#19).
+- A planner spawn failure after successful capability validation now uses unfiltered execution without savings credit instead of a policy denial. Errors identify the binary; planner timeouts and output-collection failures require approval. Explicit policy denials, malformed plans and failed identity probes remain closed (#20).
+- Audit OpenCode global, ancestor and project opencode.json/opencode.jsonc files, including .opencode, XDG and explicit config overrides. Detect active direct ICM registrations in V1 and V2 command arrays and report the source file with manual remediation. OpenCode configuration remains audit-only; the installer does not rewrite it or stop external processes (#21).
+
 ## [0.9.10] - 2026-09-12
 
 ### Fixed

@@ -400,6 +400,87 @@ async fn test_adapter_rejects_matching_help_and_version_with_wrong_contract_iden
 }
 
 #[tokio::test]
+async fn test_adapter_and_runner_follow_atomic_upgrade_after_old_release_is_removed() -> Result<()>
+{
+    let _guard = TEST_LOCK.lock().await;
+    let old = FakeFork::new(
+        PINNED_RTK_VERSION,
+        r#"printf '{"decision":"rewrite","proposed":"rtk first"}'"#,
+    )?;
+    let new = FakeFork::new(
+        PINNED_RTK_VERSION,
+        r#"printf '{"decision":"rewrite","proposed":"rtk second"}'"#,
+    )?;
+    let root = TempDir::new()?;
+    let current = root.path().join("current");
+    std::os::unix::fs::symlink(old.binary.parent().expect("old engine directory"), &current)?;
+    let mut config = old.config();
+    config.binary = current.join("rtk");
+    config.runtime_paths = Some(ForkRuntimePaths::from_data_root(&root.path().join("data")));
+    let adapter = PinnedRtkAdapter::detect(config).await;
+    let runner = adapter.runner()?;
+    let requested = CanonicalCommand::shell("git status");
+    let first = execute_decision(requested.clone(), adapter.decide(&requested).await).await?;
+    assert_eq!(inline(first.stdout.content)?, b"A");
+
+    let replacement = root.path().join("replacement");
+    std::os::unix::fs::symlink(
+        new.binary.parent().expect("new engine directory"),
+        &replacement,
+    )?;
+    fs::rename(replacement, &current)?;
+    drop(old);
+
+    let second = execute_decision(requested.clone(), adapter.decide(&requested).await).await?;
+    assert_eq!(inline(second.stdout.content)?, b"B");
+    let result = completed(
+        runner
+            .execute(ForkCoreInvocation::new(vec!["filtered".into()]))
+            .await?,
+    )?;
+    assert_eq!(inline(result.stdout.content)?, b"fork-core");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_adapter_spawn_failure_executes_raw_without_fork_credit_and_recovers() -> Result<()> {
+    let _guard = TEST_LOCK.lock().await;
+    let fork = FakeFork::new(
+        PINNED_RTK_VERSION,
+        r#"printf '{"decision":"rewrite","proposed":"rtk filtered"}'"#,
+    )?;
+    let adapter = PinnedRtkAdapter::detect(fork.config()).await;
+    let saved = fork.binary.with_extension("saved");
+    fs::rename(&fork.binary, &saved)?;
+    let requested = CanonicalCommand::shell("printf 'exact raw bytes'");
+    let plan = adapter.decide_with_plan_in(&requested, None).await;
+    assert!(
+        matches!(&plan.decision, RewriteDecision::AllowRaw { reason }
+        if reason.contains(fork.binary.to_string_lossy().as_ref())
+            && reason.contains("could not start"))
+    );
+    assert!(plan.accounting_correlation_id.is_none());
+    assert!(plan.evasion.is_none());
+    assert!(plan.host_permission.is_none());
+    let result = execute_decision(requested.clone(), plan.decision).await?;
+    assert_eq!(inline(result.stdout.content)?, b"exact raw bytes");
+    assert_eq!(result.executed, requested);
+
+    fs::rename(saved, &fork.binary)?;
+    assert!(matches!(
+        adapter.decide(&requested).await,
+        RewriteDecision::AllowRewrite { .. }
+    ));
+
+    fs::set_permissions(&fork.binary, fs::Permissions::from_mode(0o600))?;
+    assert!(matches!(
+        adapter.decide(&requested).await,
+        RewriteDecision::AllowRaw { .. }
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_adapter_missing_binary_fails_closed() -> Result<()> {
     let _guard = TEST_LOCK.lock().await;
     let directory = TempDir::new()?;
@@ -420,7 +501,7 @@ async fn test_adapter_missing_binary_fails_closed() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_adapter_rewrite_timeout_fails_closed() -> Result<()> {
+async fn test_adapter_rewrite_timeout_requires_approval() -> Result<()> {
     let _guard = TEST_LOCK.lock().await;
     let fork = FakeFork::new(PINNED_RTK_VERSION, "while :; do :; done")?;
     let mut config = fork.config();
@@ -429,7 +510,9 @@ async fn test_adapter_rewrite_timeout_fails_closed() -> Result<()> {
 
     assert!(matches!(
         adapter.decide(&CanonicalCommand::shell("printf raw")).await,
-        RewriteDecision::Deny { .. }
+        RewriteDecision::Ask { proposed: None, reason }
+            if reason.contains("timed out after 10 ms")
+                && reason.contains(fork.binary.to_string_lossy().as_ref())
     ));
     Ok(())
 }
@@ -477,7 +560,7 @@ async fn test_runner_executes_exact_argv_with_centralized_runtime_and_stdin() ->
     assert!(matches!(
         result.executed,
         CanonicalCommand::Argv { ref program, ref args }
-            if Path::new(program) == fs::canonicalize(&fork.binary)?
+            if Path::new(program) == fork.binary
                 && args == &["stdin".to_owned()]
     ));
     assert_eq!(inline(result.stdout.content)?, b"exact bytes");
@@ -545,7 +628,7 @@ async fn test_std_command_uses_exact_binary_and_centralized_environment() -> Res
     let runner = adapter.runner()?;
     let command = runner.std_command(&["--version".to_owned()])?;
 
-    assert_eq!(command.get_program(), fs::canonicalize(&fork.binary)?);
+    assert_eq!(command.get_program(), fork.binary);
     assert!(command.get_envs().any(|(key, value)| {
         key == OsStr::new("RTK_MEM_DB_PATH")
             && value == Some(fork.runtime_paths.memory_db.as_os_str())

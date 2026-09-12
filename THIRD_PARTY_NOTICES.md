@@ -1,5 +1,10 @@
 # Third-party notices
 
+The CLI uses [jsonc-parser 0.32.4](https://github.com/dprint/jsonc-parser) (MIT)
+to audit OpenCode JSONC configuration without rewriting user files. Its exact
+registry checksum is recorded in Cargo.lock; it is a Rust library, not an engine
+or a separately launched process.
+
 HZR 0.4.1 preserves the complete heAdz0r RTK fork baseline as its runtime execution lineage and composes
 additional pinned engines plus a private Node.js runtime without removing their provenance.
 

@@ -1691,7 +1691,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
     checks.extend(fleet_instruction_health_checks(config, workspace));
     // Direct client ICM registration is a second memory writer regardless of what the
     // instruction files say, so it is audited separately from the text.
-    match client_config::direct_icm_registrations() {
+    match client_config::direct_icm_registrations(workspace) {
         Ok(found) if found.is_empty() => checks.push(check(
             "client_mcp_ownership",
             CheckStatus::Pass,
@@ -1801,7 +1801,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                     CheckStatus::Error,
                     format!(
                         "{} unmanaged engine process(es) ({detail}) duplicate HZR ownership; \
-                         stop them yourself — HZR never kills external processes",
+                         inspect client_mcp_ownership for the launching config, remove its direct engine registration, then restart that client; HZR never kills external processes",
                         report.unmanaged_active_total()
                     ),
                 ));

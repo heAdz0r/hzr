@@ -9,6 +9,8 @@ use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 use crate::adoption::{atomic_write, commit_with_lock, read_optional, sha256};
 
+mod opencode;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Client {
@@ -18,6 +20,7 @@ pub enum Client {
     /// far more than MCP registrations, so rewriting it would put HZR in charge of the
     /// user's session state.
     ClaudeCode,
+    Opencode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -90,6 +93,7 @@ impl Client {
                  `hzr install --force` to replace it; or write a pinned entry with \
                  `hzr mcp config --client <client> --workspace <dir> --apply`"
             }
+            Self::Opencode => opencode::REMEDIATION,
             Self::ClaudeCode => {
                 "HZR never writes this file: remove the server with `claude mcp remove icm`, \
                  then add HZR to this worktree with `claude mcp add -s project hzr -- \
@@ -102,6 +106,7 @@ impl Client {
 impl Client {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Opencode => "opencode",
             Self::Codex => "codex",
             Self::ClaudeDesktop => "claude-desktop",
             Self::ClaudeCode => "claude-code",
@@ -110,14 +115,16 @@ impl Client {
 
     pub const fn workspace_binding_capability(self) -> WorkspaceBindingCapability {
         match self {
-            Self::Codex | Self::ClaudeCode => WorkspaceBindingCapability::ProjectScoped,
+            Self::Codex | Self::ClaudeCode | Self::Opencode => {
+                WorkspaceBindingCapability::ProjectScoped
+            }
             Self::ClaudeDesktop => WorkspaceBindingCapability::SingletonSelectedWorkspace,
         }
     }
 
     /// Whether `hzr install` may rewrite this client's configuration.
     fn is_writable(self) -> bool {
-        !matches!(self, Self::ClaudeCode)
+        !matches!(self, Self::ClaudeCode | Self::Opencode)
     }
 }
 
@@ -194,6 +201,14 @@ pub fn evaluate_workspace_binding(
         WorkspaceAvailability::MismatchedProjectScope
     };
     let action = match availability {
+        _ if status.client == Client::Opencode
+            && availability != WorkspaceAvailability::Available =>
+        {
+            format!(
+                "{}; use the HZR CLI until the workspace-pinned MCP registration is verified",
+                opencode::REMEDIATION
+            )
+        }
         WorkspaceAvailability::Available => "none".to_owned(),
         WorkspaceAvailability::UnavailableForThisWorkspace if selected_workspace_is_missing => {
             format!(
@@ -347,6 +362,11 @@ pub fn audit_paths() -> Result<Vec<(Client, PathBuf)>> {
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".claude.json")),
     ));
+    paths.extend(
+        opencode::global_paths(home)
+            .into_iter()
+            .map(|path| (Client::Opencode, path)),
+    );
     Ok(paths)
 }
 
@@ -371,7 +391,7 @@ pub fn install_all(
                 dry_run,
                 confirmed,
             ),
-            Client::ClaudeCode => unreachable!("Claude Code is not a writable client"),
+            Client::ClaudeCode | Client::Opencode => unreachable!("audit-only client"),
         })
         .collect()
 }
@@ -493,7 +513,9 @@ fn uninstall(
     let after = match client {
         Client::Codex => remove_codex_hzr(path, &before)?,
         Client::ClaudeDesktop => remove_json_hzr(path, &before)?,
-        Client::ClaudeCode => anyhow::bail!("Claude Code MCP state is audited, never written"),
+        Client::ClaudeCode | Client::Opencode => {
+            anyhow::bail!("{} MCP state is audited, never written", client.as_str())
+        }
     };
     let changed = before != after.as_bytes();
     let state = (changed && !before.is_empty())
@@ -534,6 +556,7 @@ fn uninstall(
 pub fn status_all() -> Result<Vec<ClientMcpStatus>> {
     audit_paths()?
         .into_iter()
+        .filter(|(client, path)| *client != Client::Opencode || path.exists())
         .map(|(client, path)| status(client, &path))
         .collect()
 }
@@ -555,6 +578,7 @@ pub fn status_all_for_workspace(workspace: &Path) -> Result<Vec<ClientMcpStatus>
         Client::Codex => 0,
         Client::ClaudeDesktop => 1,
         Client::ClaudeCode => 2,
+        Client::Opencode => 3,
     });
     Ok(statuses)
 }
@@ -571,6 +595,7 @@ fn status_with_scope(
     let config_exists = path.is_file();
     let bytes = read_optional(path)?;
     let (registration, direct_icm_registrations) = match client {
+        Client::Opencode => opencode::registration_status(path, &bytes)?,
         Client::Codex => {
             let text = if bytes.is_empty() {
                 ""
@@ -641,14 +666,27 @@ pub fn project_codex_status(workspace: &Path) -> Result<ClientMcpStatus> {
     )
 }
 
-pub fn direct_icm_registrations() -> Result<Vec<String>> {
+pub fn direct_icm_registrations(workspace: &Path) -> Result<Vec<String>> {
+    let mut paths = audit_paths()?;
+    paths.extend(
+        opencode::project_paths(workspace)
+            .into_iter()
+            .map(|path| (Client::Opencode, path)),
+    );
+    paths.sort_by(|a, b| a.1.cmp(&b.1));
+    paths.dedup();
+    direct_icm_registrations_at(paths)
+}
+
+fn direct_icm_registrations_at(paths: Vec<(Client, PathBuf)>) -> Result<Vec<String>> {
     let mut found = Vec::new();
-    for (client, path) in audit_paths()? {
+    for (client, path) in paths {
         let bytes = read_optional(&path)?;
         if bytes.is_empty() {
             continue;
         }
         let count = match client {
+            Client::Opencode => opencode::registration_status(&path, &bytes)?.1,
             Client::Codex => {
                 let text = std::str::from_utf8(&bytes)
                     .with_context(|| format!("{} is not UTF-8", path.display()))?;
@@ -714,6 +752,7 @@ fn install_with_workspace(
             workspace.context("Claude Desktop requires a selected workspace")?,
             preserve_desktop_selection,
         )?,
+        Client::Opencode => bail!("{}", opencode::REMEDIATION),
         // Claude Code's state file is audit-only. Refusing here rather than silently
         // skipping keeps the "HZR owns its own files" rule a checked invariant instead of a
         // convention that a future caller can quietly break.
