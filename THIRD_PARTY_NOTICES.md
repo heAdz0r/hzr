@@ -1,6 +1,6 @@
 # Third-party notices
 
-The CLI uses [jsonc-parser 0.32.4](https://github.com/dprint/jsonc-parser) (MIT)
+The CLI uses [jsonc-parser 0.26.3](https://github.com/dprint/jsonc-parser) (MIT)
 to audit OpenCode JSONC configuration without rewriting user files. Its exact
 registry checksum is recorded in Cargo.lock; it is a Rust library, not an engine
 or a separately launched process.

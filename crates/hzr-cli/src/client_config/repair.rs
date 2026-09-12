@@ -88,7 +88,8 @@ fn disable_direct_icm(path: &Path, before: &[u8]) -> Result<(String, Vec<Vec<Str
             continue;
         };
         let value: Value =
-            jsonc_parser::parse_to_serde_value(&server.to_string(), &Default::default())?;
+            jsonc_parser::parse_to_serde_value(&server.to_string(), &Default::default())?
+                .context("MCP server must contain an object")?;
         if value.get("type").and_then(Value::as_str) != Some("local") {
             continue;
         }

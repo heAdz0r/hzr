@@ -43,6 +43,42 @@ pub(super) fn project_paths(workspace: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn parse_jsonc(text: &str) -> Result<Value> {
+    use jsonc_parser::tokens::{Token, TokenAndRange};
+
+    let parsed = jsonc_parser::parse_to_ast(
+        text,
+        &jsonc_parser::CollectOptions {
+            comments: jsonc_parser::CommentCollectionStrategy::AsTokens,
+            tokens: true,
+        },
+        &jsonc_parser::ParseOptions {
+            allow_comments: true,
+            allow_trailing_commas: true,
+            allow_loose_object_property_names: false,
+        },
+    )?;
+    // The MSRV-compatible parser also accepts JSON5 syntax and missing commas.
+    // Remove only tokenized JSONC extensions, then let serde enforce strict JSON.
+    let mut json = text.as_bytes().to_vec();
+    let mut previous: Option<TokenAndRange<'_>> = None;
+    for token in parsed.tokens.context("JSONC token collection missing")? {
+        if matches!(token.token, Token::CommentLine(_) | Token::CommentBlock(_)) {
+            json[token.range.start..token.range.end].fill(b' ');
+            continue;
+        }
+        if matches!(token.token, Token::CloseBrace | Token::CloseBracket) {
+            if let Some(previous) = &previous {
+                if previous.token == Token::Comma {
+                    json[previous.range.start..previous.range.end].fill(b' ');
+                }
+            }
+        }
+        previous = Some(token);
+    }
+    Ok(serde_json::from_slice(&json)?)
+}
+
 pub(super) fn registration_status(
     path: &Path,
     bytes: &[u8],
@@ -52,19 +88,8 @@ pub(super) fn registration_status(
     }
     let text =
         std::str::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
-    let document: Value = jsonc_parser::parse_to_serde_value(
-        text,
-        &jsonc_parser::ParseOptions {
-            allow_comments: true,
-            allow_trailing_commas: true,
-            allow_loose_object_property_names: false,
-            allow_missing_commas: false,
-            allow_single_quoted_strings: false,
-            allow_hexadecimal_numbers: false,
-            allow_unary_plus_numbers: false,
-        },
-    )
-    .with_context(|| format!("failed to parse opencode config {}", path.display()))?;
+    let document = parse_jsonc(text)
+        .with_context(|| format!("failed to parse opencode config {}", path.display()))?;
     let document = document
         .as_object()
         .with_context(|| format!("opencode config {} must be an object", path.display()))?;
@@ -199,11 +224,22 @@ mod tests {
     fn malformed_opencode_config_is_not_a_clean_audit() {
         for bytes in [
             b"{broken".as_slice(),
+            b"  ",
+            b"{'mcp':{}}",
+            b"{\"value\":0xff}",
+            b"{\"value\":+1}",
+            b"{\"first\":1 \"second\":2}",
             b"[]",
+            b"{,}",
+            b"[,]",
+            b"{\"value\":1,,}",
             b"{\"mcp\":[]}",
             b"{\"mcp\":{\"servers\":false}}",
         ] {
-            assert!(registration_status(Path::new("opencode.jsonc"), bytes).is_err());
+            assert!(
+                registration_status(Path::new("opencode.jsonc"), bytes).is_err(),
+                "accepted malformed input: {bytes:?}"
+            );
         }
     }
 }
