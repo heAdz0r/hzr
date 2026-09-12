@@ -4,6 +4,8 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.10] - 2026-09-12
+
 ### Fixed
 
 - `hzr doctor --fix` now reconciles stale fork-producer registrations once the pending grace has elapsed, not only after the day-long abandon TTL. A daemon-free command that registered a context but never drained a receipt (for example during a daemon restart) no longer keeps `hzr stats` reporting `▲ LIVE DEGRADED` until the next day; the operator clears it immediately with `hzr doctor --fix`.
@@ -1882,5 +1884,6 @@ First public HZR release.
 [0.9.5]: https://github.com/heAdz0r/hzr/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/heAdz0r/hzr/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/heAdz0r/hzr/compare/v0.9.2...v0.9.3
+[0.9.10]: https://github.com/heAdz0r/hzr/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/heAdz0r/hzr/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/heAdz0r/hzr/compare/v0.9.7...v0.9.8

@@ -924,7 +924,7 @@ mod tests {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
         let release = versioned_bundle(root, "v0.4.6-darwin-arm64");
-        let other = versioned_bundle(root, "v0.9.9-other");
+        let other = versioned_bundle(root, "v0.9.10-other");
 
         // `current` pointing at a different release must not capture this one.
         point_current_at(root, &other);

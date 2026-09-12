@@ -303,7 +303,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     };
     let daemon_recorded_policy = managed.is_some();
     // 0.9.4: the host-rule verdict for the operator's command rides along with the decision.
-    // 0.9.11: `accounting_correlation_id` is the registration this rewrite opened; if the final
+    // 0.9.10: `accounting_correlation_id` is the registration this rewrite opened; if the final
     // decision no longer runs the command that carries it, the hook completes the orphan below so
     // its gap does not linger until the abandon TTL.
     let (decision, accounting_notice, managed_evasion, host_permission, accounting_correlation_id) =
@@ -382,7 +382,7 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     ) // 0.9.4
 }
 
-/// 0.9.11: a registration this rewrite opened but no longer uses must not linger.
+/// 0.9.10: a registration this rewrite opened but no longer uses must not linger.
 ///
 /// `exec_rewrite` registers a producer the moment it approves the proxy command, but this hook can
 /// still steer that command to a first-class route (`hzr read`) or fall back to raw, which never
@@ -4422,7 +4422,7 @@ exit 64
         }
     }
 
-    // 0.9.11: only a decision that still runs the managed command carries its correlation.
+    // 0.9.10: only a decision that still runs the managed command carries its correlation.
     #[test]
     fn a_decision_names_the_correlation_only_when_it_still_carries_it() {
         let correlation = "0123456789abcdef0123456789abcdef";
@@ -4442,7 +4442,7 @@ exit 64
         };
         assert!(!decision_carries_correlation(&steered, correlation));
 
-        // 0.9.11: an Ask that proposes the managed command still carries the correlation, because
+        // 0.9.10: an Ask that proposes the managed command still carries the correlation, because
         // the host may approve and run it; completing it would retire a context whose receipts can
         // still arrive. An Ask with no proposed command carries nothing.
         let pending = RewriteDecision::Ask {
@@ -4462,7 +4462,7 @@ exit 64
         ));
     }
 
-    // 0.9.11: a discarded correlation is completed, closing the gap the registration opened.
+    // 0.9.10: a discarded correlation is completed, closing the gap the registration opened.
     #[test]
     fn a_discarded_correlation_is_completed_and_its_gap_closed() {
         let directory = tempdir().expect("temp directory");

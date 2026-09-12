@@ -304,7 +304,7 @@ impl AccountingReceiptContextStore {
         let mut context = self.read(&path)?;
         context.completed_at_unix = Some(unix_now());
         write_context(&path, &context)?; // 0.8.3: one atomic writer for every context update
-        // 0.9.11: completion is the definitive signal that the producer is done, so the gap its
+        // 0.9.10: completion is the definitive signal that the producer is done, so the gap its
         // registration opened is settled here instead of waiting for the abandon TTL. A producer
         // that finished inside the grace was in flight the whole time and is removed as a settled
         // registration; one that outlived the grace closes as a historical gap. This is what lets
@@ -1480,7 +1480,7 @@ mod attribution_tests {
         );
     }
 
-    // 0.9.11: completing a producer is the definitive "done" signal, so it must close the gap the
+    // 0.9.10: completing a producer is the definitive "done" signal, so it must close the gap the
     // registration opened — a read command that never writes a receipt must not stay LIVE DEGRADED
     // until the abandon TTL.
     #[test]
