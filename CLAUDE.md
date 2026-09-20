@@ -90,6 +90,8 @@ stores no content and grants no savings credit. Missing accounting stays visible
 Run `hzr hooks capabilities --host claude --probe` for local adapter checks; these
 checks do not prove installation, trusted activation or model-visible delivery.
 
+If enabled in `hzr settings`, use `hzr delegate` for scoped tasks; review results.
+
 ## Response density
 
 Write concisely by default: lead with the result, omit greetings, request restatement

@@ -3,6 +3,7 @@
 /fork-core/rtk/.grepai/
 /.build/
 /dist/
+/dist-release/
 /visualizer/dist/
 /visualizer/node_modules/
 /.hzr/

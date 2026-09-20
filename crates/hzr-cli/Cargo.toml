@@ -20,6 +20,7 @@ hzr-exec = { path = "../hzr-exec" }
 hzr-index = { path = "../hzr-index" }
 hzr-memory = { path = "../hzr-memory" }
 hzr-protocol = { path = "../hzr-protocol" }
+rpassword = "=7.4.0"
 reqwest.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

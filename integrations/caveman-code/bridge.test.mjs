@@ -3,8 +3,12 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { createDelegationProgress } from "./delegation-progress.mjs";
+import { chmod, symlink } from "node:fs/promises";
 
 import {
+  createWorkerOptions,
+  workerFetch,
   formatPrefetchedContext,
   isDirectExecution,
   persistUsageOutbox,
@@ -30,6 +34,62 @@ const MANAGED_TOOLS = [
 const BRIDGE_MANIFEST = JSON.parse(
   await readFile(new URL("./package.json", import.meta.url), "utf8"),
 );
+
+
+test("worker provider redirects fail closed without changing local daemon transport", async () => {
+  const seen = [];
+  const fetch = workerFetch(async (input, init) => { seen.push({ input, init }); }, "https://opencode.ai/zen/go/v1");
+  await fetch("https://opencode.ai/zen/go/v1/chat/completions", { redirect: "follow", method: "POST" });
+  await fetch("http://127.0.0.1:1234/v1/health", { method: "GET" });
+  assert.equal(seen[0].init.redirect, "error");
+  assert.equal(seen[1].init.redirect, undefined);
+});
+
+test("explicit worker uses only selected provider and private in-memory credential", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hzr-worker-selection-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const credential = join(root, "worker.secret");
+  await writeFile(credential, "fixture-key-never-a-real-secret", { mode: 0o600 });
+  for (const provider of ["opencode-go", "openrouter", "deepseek"]) {
+    const options = await createWorkerOptions({ provider, model: "chosen-model", credential_file: credential }, "stable-session", BRIDGE_MANIFEST.version);
+    assert.equal(options.model.provider, provider);
+    assert.equal(options.model.id, "chosen-model");
+    assert.equal((await options.modelRegistry.getApiKeyAndHeaders(options.model)).apiKey, "fixture-key-never-a-real-secret");
+    assert.equal(options.authStorage.getAll()[provider], undefined);
+    const auth = await options.modelRegistry.getApiKeyAndHeaders(options.model);
+    assert.equal(auth.headers["User-Agent"], `hzr-managed-agent/${BRIDGE_MANIFEST.version}`);
+    assert.equal(auth.headers["x-opencode-session"], provider === "opencode-go" ? "stable-session" : undefined);
+  }
+  await assert.rejects(createWorkerOptions({ provider: "untrusted", model: "x", credential_file: credential }), /Invalid explicit/);
+  if (process.platform !== "win32") {
+    await symlink(credential, join(root, "link"));
+    await assert.rejects(createWorkerOptions({ provider: "opencode-go", model: "x", credential_file: join(root, "link") }));
+    await chmod(credential, 0o644);
+    await assert.rejects(createWorkerOptions({ provider: "opencode-go", model: "x", credential_file: credential }), /private regular/);
+  }
+});
+
+test("delegation status records real progress and usage without task contents", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hzr-worker-progress-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const progress = createDelegationProgress(root, { provider: "opencode-go", model: "deepseek-v4.1-flash" }, "/workspace", "run-id");
+  t.after(() => progress.close());
+  progress.observe("ready", {});
+  progress.observe("agent_event", { type: "tool_execution_start", toolName: "hzr_read", args: { key: "forbidden-secret" } });
+  progress.observe("agent_event", { type: "message_end", message: { role: "assistant", content: "forbidden-transcript", usage: { input: 12, output: 4, cacheRead: 2 } } });
+  progress.observe("result", { text: "forbidden-result" });
+  progress.observe("ready", {});
+  progress.observe("agent_event", { type: "tool_execution_start", toolName: "hzr_write" });
+  const raw = await readFile(join(root, "delegation.json"), "utf8");
+  const status = JSON.parse(raw);
+  assert.equal(status.status, "completed");
+  assert.equal(status.tool_calls, 1);
+  assert.equal(status.actual_input_tokens, 12);
+  assert.equal(status.actual_output_tokens, 4);
+  assert.equal(status.actual_cache_read_tokens, 2);
+  assert.equal(status.parent_acceptance, "not_recorded");
+  assert.equal(raw.includes("forbidden-"), false);
+});
 
 test("bridge import is side-effect free", () => {
   assert.equal(isDirectExecution(), false);

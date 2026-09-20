@@ -4,6 +4,7 @@ mod agent_observer;
 mod api;
 mod approval;
 mod auth;
+mod delegation;
 mod error;
 mod exec_jobs;
 mod ledger_writer;

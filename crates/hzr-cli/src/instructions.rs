@@ -337,6 +337,8 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
             MANAGED_PROSE_WIDTH,
         ),
     );
+    let delegation_guidance =
+        "If enabled in `hzr settings`, use `hzr delegate` for scoped tasks; review results.\n\n";
     let contract_pointer = format!(
         "{}\n",
         wrap_prose(
@@ -396,7 +398,7 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
          success and no fallback store. Recall before retrying an ambiguously completed write.\n\
          Never register {engines} as separate MCP servers.\n\n\
          {harness_guidance}\n\
-         {codec_guidance}\
+         {delegation_guidance}{codec_guidance}\
          {END}",
         control_plane = capabilities.control_plane,
         product = capabilities.product,

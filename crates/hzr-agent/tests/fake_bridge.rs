@@ -30,7 +30,7 @@ async fn test_managed_agent_runs_pinned_local_bridge_and_captures_jsonl() {
     let (integration, workspace) = prepare_integration(&temp);
     let fake_node = write_fake_node(
         &temp,
-        r#"IFS= read -r request
+        r#"request=$(cat)
 request_id=$(printf '%s' "$request" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
 printf '{"seq":0,"request_id":"%s","kind":"ready","data":{}}\n' "$request_id"
 printf '{"seq":1,"request_id":"%s","kind":"result","data":{"text":"ok"}}\n' "$request_id"
@@ -72,6 +72,7 @@ sleep 30
     // Leave enough scheduling headroom for a loaded workspace-wide test run while
     // remaining far below the fixture's 30-second sleep.
     config.timeout = Duration::from_millis(500);
+    config.worker = Some(fixture_worker());
     let prompt = "x".repeat(2 * 1024 * 1024);
 
     let error = ManagedAgent::new(config)
@@ -79,6 +80,7 @@ sleep 30
         .await
         .expect_err("bridge must time out");
 
+    assert_eq!(outcome_status(&temp), "timed_out");
     assert!(
         matches!(error, hzr_agent::RunError::Timeout),
         "expected timeout, received {error:?}"
@@ -107,7 +109,8 @@ printf '%s' "$!" > "$HZR_AGENT_DIR/descendant-pid"
 while :; do sleep 30; done
 "#,
     );
-    let config = managed_config(&temp, fake_node, integration, workspace);
+    let mut config = managed_config(&temp, fake_node, integration, workspace);
+    config.worker = Some(fixture_worker());
     let agent_data = temp.path().join("agent-data");
     let run = tokio::spawn(async move {
         ManagedAgent::new(config)
@@ -120,6 +123,7 @@ while :; do sleep 30; done
     run.abort();
     let join = run.await.expect_err("run task must be cancelled");
     assert!(join.is_cancelled());
+    assert_eq!(outcome_status(&temp), "cancelled");
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     let first = fs::metadata(agent_data.join("heartbeat"))
@@ -155,6 +159,11 @@ fn prepare_integration(temp: &TempDir) -> (IntegrationLayout, PathBuf) {
     fs::create_dir_all(&workspace).expect("workspace directory");
     fs::write(integration.join("bridge.mjs"), BUNDLED_BRIDGE).expect("bridge fixture");
     fs::write(
+        integration.join("delegation-progress.mjs"),
+        include_bytes!("../../../integrations/caveman-code/delegation-progress.mjs"),
+    )
+    .expect("progress fixture");
+    fs::write(
         integration.join("agent-capabilities.json"),
         BUNDLED_AGENT_CAPABILITIES,
     )
@@ -181,6 +190,24 @@ fn write_fake_node(temp: &TempDir, body: &str) -> PathBuf {
     fs::write(&fake_node, script).expect("fake Node fixture");
     fs::set_permissions(&fake_node, fs::Permissions::from_mode(0o700)).expect("executable fixture");
     fake_node
+}
+
+fn fixture_worker() -> hzr_agent::WorkerConfig {
+    hzr_agent::WorkerConfig {
+        provider: "opencode-go".into(),
+        model: "fixture".into(),
+        credential_file: PathBuf::from("/unused-by-fake-bridge"),
+    }
+}
+
+fn outcome_status(temp: &TempDir) -> String {
+    let data =
+        fs::read(temp.path().join("agent-data/delegation-outcome.json")).expect("terminal receipt");
+    let receipt: serde_json::Value = serde_json::from_slice(&data).expect("receipt JSON");
+    receipt["status"]
+        .as_str()
+        .expect("terminal status")
+        .to_owned()
 }
 
 fn managed_config(

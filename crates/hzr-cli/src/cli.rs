@@ -97,6 +97,23 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(about = "Inspect or configure per-user delegation and credentials")]
+    Settings {
+        #[command(subcommand)]
+        command: Option<crate::settings::SettingsCommand>,
+    },
+    #[command(about = "Delegate one bounded task to the configured worker")]
+    Delegate {
+        /// Bounded task text; reads stdin when omitted
+        #[arg(value_name = "PROMPT", conflicts_with = "file")]
+        prompt: Option<String>,
+        /// Read the bounded task from a file
+        #[arg(long, conflicts_with = "prompt")]
+        file: Option<PathBuf>,
+        /// Workspace to bind the worker to
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+    },
     #[command(
         about = "Register workspace data and refresh agent instructions",
         long_about = "Initialize the workspace registry, private data layout, visualizer service, and the current managed agent contract for the configured activation scope."

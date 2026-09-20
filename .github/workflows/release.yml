@@ -33,6 +33,9 @@ jobs:
           test "${GITHUB_REF_NAME}" = "v${version}"
           git rev-parse --verify 'refs/tags/v0.1.0^{commit}' >/dev/null
           grep -F "HZR_VERSION=\"\${HZR_VERSION:-${version}}\"" install.sh >/dev/null
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
       - name: Run the complete source release gate
         run: scripts/complete-gate.sh
       - name: Enforce stable Latest release policy
@@ -49,6 +52,10 @@ jobs:
           if "--latest" not in workflow:
               raise SystemExit("release workflow must explicitly mark a stable tag Latest")
           PY
+      - name: Verify managed worker routing and progress regressions
+        run: |
+          npm ci --omit=dev --omit=optional --prefix integrations/caveman-code
+          node --test integrations/caveman-code/bridge.test.mjs
       - name: Audit the production Caveman dependency graph once
         run: npm audit --package-lock-only --omit=dev --omit=optional --audit-level=high --prefix integrations/caveman-code
 

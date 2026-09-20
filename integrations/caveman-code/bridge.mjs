@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, readdir, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   createAgentSession,
+  AuthStorage,
+  ModelRegistry,
   DefaultResourceLoader,
   SessionManager,
   SettingsManager,
 } from "@juliusbrussee/caveman-code";
 import { Type } from "@sinclair/typebox";
+import { createDelegationProgress } from "./delegation-progress.mjs";
 
 const EXPECTED_PROTOCOL_VERSION = 1;
 const CUSTOM_TOOL_NAMES = [
@@ -41,8 +45,11 @@ const JSON_RESPONSE_CONTRACT =
 
 let sequence = 0;
 let activeRequestId = "unknown";
+let workerSecret = "";
+let delegationProgress = null;
 
 function emit(kind, data) {
+  delegationProgress?.observe(kind, data);
   const event = {
     seq: sequence,
     request_id: activeRequestId,
@@ -56,6 +63,7 @@ function emit(kind, data) {
 function toJsonValue(value) {
   const visited = new WeakSet();
   const encoded = JSON.stringify(value, (_key, nested) => {
+    if (typeof nested === "string" && workerSecret) return nested.split(workerSecret).join("[REDACTED]");
     if (typeof nested === "bigint") return nested.toString();
     if (nested && typeof nested === "object") {
       if (visited.has(nested)) return "[Circular]";
@@ -63,7 +71,7 @@ function toJsonValue(value) {
     }
     return nested;
   });
-  return encoded === undefined ? null : JSON.parse(encoded);
+  return encoded === undefined ? null : JSON.parse(workerSecret ? encoded.split(workerSecret).join("[REDACTED]") : encoded);
 }
 
 function assertFunction(owner, name) {
@@ -105,7 +113,7 @@ async function assertRuntimeVersion() {
   ) {
     throw new Error("HZR managed-agent capability contract does not match bridge tools");
   }
-  return { hzrVersion: bridgeManifest.version, capabilityContract };
+  return { hzrVersion: bridgeManifest.version, cavemanVersion: expectedRuntimeVersion, capabilityContract };
 }
 
 async function readCapabilityContract() {
@@ -127,6 +135,7 @@ function renderManagedHarnessContract(contract) {
     `\`${contract.control_plane}\` is the only control plane. Do not invoke separately installed ${engines} binaries.`,
     `This harness exposes only these HZR-owned tools: ${tools}.`,
     "Repository-specific instructions are loaded from AGENTS.md and CLAUDE.md, but their generated HZR managed blocks are omitted because this harness contract supersedes them.",
+    "Complete only the bounded task. Do not delegate, spawn agents, change provider settings, read credentials, or expand the requested file scope. The parent performs final acceptance.",
     "</hzr_harness_contract>",
   ].join("\n");
 }
@@ -770,6 +779,9 @@ function createHzrTools(callHzr, workspace) {
 
 function assistantText(messages) {
   const message = messages.findLast((entry) => entry.role === "assistant");
+  if (message?.stopReason === "error" || message?.stopReason === "aborted") {
+    throw new Error(`Worker request failed: ${String(message.errorMessage ?? message.stopReason).slice(0, 512)}`);
+  }
   if (!message || !Array.isArray(message.content)) return "";
   return message.content
     .filter((part) => part.type === "text")
@@ -983,6 +995,70 @@ async function recordUsage(
   }
 }
 
+const WORKER_ENDPOINTS = Object.freeze({
+  "opencode-go": "https://opencode.ai/zen/go/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+  deepseek: "https://api.deepseek.com",
+});
+
+// This process owns one worker. Redirects must never forward its credential
+// to a different endpoint, even if an SDK changes its default redirect policy.
+export function workerFetch(fetchImpl, endpoint) {
+  const origin = new URL(endpoint).origin;
+  return (input, init) => {
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    return fetchImpl(input, url.origin === origin ? { ...init, redirect: "error" } : init);
+  };
+}
+
+export async function createWorkerOptions(worker, sessionId = randomUUID(), version = "1") {
+  if (!worker) return {};
+  if (!Object.hasOwn(WORKER_ENDPOINTS, worker.provider)
+      || typeof worker.model !== "string"
+      || !/^[a-zA-Z0-9_./:-]{1,160}$/.test(worker.model)
+      || typeof worker.credential_file !== "string"
+      || !worker.credential_file.startsWith("/") && !/^[A-Za-z]:[\\\\/]/.test(worker.credential_file)) {
+    throw new Error("Invalid explicit worker selection");
+  }
+  const handle = await open(worker.credential_file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  let key;
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.size > 4096
+        || process.platform !== "win32" && (metadata.mode & 0o077) !== 0
+        || typeof process.getuid === "function" && metadata.uid !== process.getuid()) {
+      throw new Error("Worker credential must be a private regular file owned by this user");
+    }
+    key = (await handle.readFile("utf8")).trim();
+    if (!key || /\s/.test(key)) throw new Error("Invalid worker credential");
+  } finally {
+    await handle.close();
+  }
+  workerSecret = key;
+  const authStorage = AuthStorage.inMemory();
+  authStorage.setRuntimeApiKey(worker.provider, key);
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  // No config expressions, shell credential resolvers, disk model catalogs or
+  // ambient provider selection are involved in this explicit route.
+  modelRegistry.registerProvider(worker.provider, {
+    baseUrl: WORKER_ENDPOINTS[worker.provider],
+    apiKey: "runtime-only", // SDK requires a descriptor; AuthStorage runtime override owns the actual key.
+    api: "openai-completions",
+    headers: { "User-Agent": `hzr-managed-agent/${version}`,
+      ...(worker.provider === "opencode-go" ? { "x-opencode-session": sessionId } : {}) },
+    models: [{
+      id: worker.model, name: worker.model, reasoning: true, input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 65536, maxTokens: 8192,
+      compat: { supportsStore: false, supportsDeveloperRole: false,
+        supportsReasoningEffort: false, maxTokensField: "max_tokens" },
+    }],
+  });
+  const model = modelRegistry.find(worker.provider, worker.model);
+  if (!model) throw new Error("Selected worker model is unavailable");
+  return { authStorage, modelRegistry, model, thinkingLevel: "medium" };
+}
+
 export async function prepareManagedRuntime({
   request,
   environment,
@@ -1034,7 +1110,9 @@ export async function prepareManagedRuntime({
     },
     AbortSignal.timeout(30_000),
   ));
+  const workerOptions = await createWorkerOptions(request.worker, request.request_id, runtime.hzrVersion);
   const { session, modelFallbackMessage } = await createSession({
+    ...workerOptions,
     cwd: workspace,
     agentDir: environment.agentDir,
     settingsManager: settings,
@@ -1045,6 +1123,11 @@ export async function prepareManagedRuntime({
     maxTurns: request.max_turns,
   });
   onSessionCreated(session);
+  if (request.worker && (modelFallbackMessage
+      || session.model?.provider !== request.worker.provider
+      || session.model?.id !== request.worker.model)) {
+    throw new Error("Selected worker identity changed; fallback is forbidden");
+  }
   configureSessionState(session);
   assertFunction(session, "abort");
   const toolGuard = installManagedToolGuard(
@@ -1062,6 +1145,7 @@ export async function prepareManagedRuntime({
   );
 
   return {
+    runtime,
     health,
     settings,
     resourceLoader,
@@ -1095,9 +1179,13 @@ async function run() {
   const line = input.split(/\r?\n/, 1)[0];
   const request = readRequest(line);
   activeRequestId = request.request_id;
+  if (request.worker && Object.hasOwn(WORKER_ENDPOINTS, request.worker.provider)) {
+    globalThis.fetch = workerFetch(globalThis.fetch, WORKER_ENDPOINTS[request.worker.provider]);
+  }
   const environment = readEnvironment();
   const callHzr = createHzrClient(environment.endpoint, environment.token);
   const workspace = process.cwd();
+  delegationProgress = createDelegationProgress(environment.agentDir, request.worker, workspace, request.request_id);
   let session = null;
   let unsubscribe;
   let invariantFailure = null;
@@ -1130,7 +1218,7 @@ async function run() {
     } = prepared;
     preflightWarnings = health.warnings;
     emit("ready", {
-      caveman_code: EXPECTED_VERSION,
+      caveman_code: prepared.runtime.cavemanVersion,
       control_plane: "hzr",
       active_tools: ACTIVE_TOOL_NAMES,
       native_file_io: [],

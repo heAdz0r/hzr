@@ -1,6 +1,19 @@
 schema_version = 1
 
 [[engine]]
+name = "astra-flash-orchestrator"
+version = "1.2.0"
+tag = "source-snapshot"
+commit = "c751f6fcc3c59054de7e0ab51c44d326f1a5a9d5"
+repository = "https://github.com/ethanplusai/astra-flash-orchestrator"
+license = "MIT"
+binary = ""
+runtime = false
+source_kind = "vendored-workflow"
+source_path = "integrations/astra-flash-orchestrator/upstream"
+
+
+[[engine]]
 name = "nodejs"
 version = "22.17.1"
 tag = "v22.17.1"

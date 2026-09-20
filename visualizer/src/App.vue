@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { version as uiVersion } from "../package.json";
 import AgentsWorkspace from "./components/AgentsWorkspace.vue";
+import DelegationWorkspace from "./components/DelegationWorkspace.vue";
 import CommandCard from "./components/CommandCard.vue";
 import AppIcon from "./components/AppIcon.vue";
 import BrandMark from "./components/BrandMark.vue";
@@ -45,12 +46,13 @@ const manualRefreshing = ref(false);
 const loadingProjects = ref(false);
 const query = ref("");
 const projectPageError = ref<string | null>(null);
-const section = ref<"overview" | "projects" | "knowledge" | "agents" | "system">("overview");
+const section = ref<"overview" | "projects" | "knowledge" | "agents" | "delegation" | "system">(new URLSearchParams(window.location.search).get("view") === "delegation" ? "delegation" : "overview");
 const navigation = [
   { id: "overview", label: "Overview" },
   { id: "projects", label: "Projects" },
   { id: "knowledge", label: "Memory & index" },
   { id: "agents", label: "Agents" },
+  { id: "delegation", label: "Delegation" },
   { id: "system", label: "System" },
 ] as const;
 const selectedProjectLabel = computed(() =>
@@ -402,14 +404,15 @@ onBeforeUnmount(() => {
         </a>
         <div v-if="snapshot" class="dashboard-status">
           <span class="version-pill">Daemon v{{ snapshot.hzr_version }}</span>
-          <StatusChip v-if="projectSnapshotCurrent" :state="snapshot.overall_state" :label="postureLabel" />
+          <span v-if="section === 'delegation'" class="version-pill">All workspaces</span>
+          <StatusChip v-else-if="projectSnapshotCurrent" :state="snapshot.overall_state" :label="postureLabel" />
           <span v-else class="loading-scope">Switching project…</span>
           <button class="refresh-action" type="button" :disabled="manualRefreshing" :aria-busy="manualRefreshing" @click="refresh(true)">
             <AppIcon name="refresh" :size="16" /><span>{{ manualRefreshing ? "Refreshing…" : "Refresh" }}</span>
           </button>
         </div>
       </div>
-      <div class="workspace-toolbar">
+      <div v-if="section !== 'delegation'" class="workspace-toolbar">
         <div><span class="eyebrow">Workspace intelligence</span><h1>{{ selectedProjectLabel }}</h1><p>Useful output. Visible gaps. Evidence before savings claims.</p></div>
         <label v-if="snapshot" class="workspace-select">
           <span>Project scope</span>
@@ -457,6 +460,7 @@ onBeforeUnmount(() => {
       </section>
 
       <template v-else-if="snapshot">
+        <DelegationWorkspace v-if="section === 'delegation'" />
         <AgentsWorkspace v-if="section === 'agents'" />
 
         <section v-if="projectSnapshotCurrent && section === 'system'" class="section-block system-section" aria-labelledby="system-title">

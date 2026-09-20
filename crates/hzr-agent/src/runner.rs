@@ -57,6 +57,24 @@ impl ManagedAgent {
         response_format: ResponseFormat,
         max_turns: u32,
     ) -> Result<AgentRun, RunError> {
+        let mut outcome = self
+            .config
+            .worker
+            .as_ref()
+            .map(|_| crate::delegation::DelegationOutcome::new(&self.config.agent_data_dir));
+        let result = self.run_inner(prompt, response_format, max_turns).await;
+        if let Some(outcome) = &mut outcome {
+            outcome.finish(&result);
+        }
+        result
+    }
+
+    async fn run_inner(
+        &self,
+        prompt: &str,
+        response_format: ResponseFormat,
+        max_turns: u32,
+    ) -> Result<AgentRun, RunError> {
         if prompt.trim().is_empty() {
             return Err(RunError::InvalidRequest("prompt must not be empty".into()));
         }
@@ -84,6 +102,7 @@ impl ManagedAgent {
             prompt,
             response_format,
             max_turns,
+            worker: self.config.worker.as_ref(),
         };
         let payload = serde_json::to_vec(&request).map_err(RunError::Encode)?;
         if payload.len() > 4 * 1024 * 1024 {
@@ -128,6 +147,8 @@ impl ManagedAgent {
             stdin.write_all(&payload).await.map_err(RunError::Io)?;
             stdin.write_all(b"\n").await.map_err(RunError::Io)?;
             stdin.shutdown().await.map_err(RunError::Io)?;
+            // ChildStdin shutdown does not close the pipe. The bridge waits for EOF.
+            drop(stdin);
             child.wait().await.map_err(RunError::Io)
         })
         .await;
@@ -234,6 +255,8 @@ struct BridgeRequest<'a> {
     prompt: &'a str,
     response_format: ResponseFormat,
     max_turns: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker: Option<&'a crate::config::WorkerConfig>,
 }
 
 struct Capture {

@@ -124,6 +124,52 @@ global installation preserves a valid selection rather than retargeting it to th
 Automatic `init --if-needed` and fleet reconciliation preserve Git-tracked shared instruction
 contracts; changing instruction scope explicitly remains authoritative.
 
+## Optional delegation
+
+`hzr settings` shows the machine-local provider, exact worker model, enablement,
+turn limit and deadline. New installations default to disabled. Configure and
+authenticate explicitly:
+
+```sh
+hzr settings login --provider opencode-go
+hzr settings delegation --provider opencode-go --model deepseek-v4.1-flash --enabled true
+hzr delegate --workspace /absolute/workspace --file task.md
+hzr settings delegation --enabled false
+```
+
+OpenRouter and direct DeepSeek are also presets; use their own credentials and
+model identifiers. Keys are stored in private files under HZR's data directory,
+outside project instructions. Never put a key in task text or command arguments.
+The hidden login prompt requires Python 3; automation can import an existing
+private file with `--key-file`. Configuration contains no key.
+
+Any user-selected Codex or Claude parent can orchestrate. Delegate bounded routine
+tasks with explicit workspace, allowed files and acceptance criteria. The parent
+retains architecture, security decisions, review and final acceptance. Workers use
+the existing managed HZR runtime; no separate index or memory engine is started.
+There is no automatic fallback to another model/provider. One delegated worker per
+HZR data directory is allowed at a time; workers must not delegate recursively.
+
+Tool reads/writes are workspace-confined by the daemon. Shell commands retain
+HZR's execution policy; this is not an additional operating-system sandbox.
+A task's allowed-file list is an instruction to the worker, not a filesystem ACL.
+Do not treat delegation as a permission escalation or use it to bypass a host
+restriction.
+
+Open the existing local visualizer with `?view=delegation` to see managed runs.
+The read-only panel shows the exact provider/model, actual observed tool calls,
+status and provider usage, with no prompts, file contents or credentials.
+Worker completion is distinct from parent acceptance. No savings claim is made
+without an equivalent accepted baseline. HZR-managed workers are distinct from
+Codex's native subagent tree.
+
+The upstream orchestration pattern is adapted to the existing bundled runtime.
+No external Router, Python, npm, pip or additional runtime download is needed.
+The immutable upstream source is shipped as provenance, not as a second installer.
+A terminal receipt distinguishes completed, failed, timed-out and cancelled runs;
+an abrupt process or machine loss becomes "No heartbeat" after 30 seconds.
+Usage observed before forced termination can be partial; it is not a billing total.
+
 ## Update notices
 
 HZR checks published GitHub releases without auto-installing them. A negative result is cached for

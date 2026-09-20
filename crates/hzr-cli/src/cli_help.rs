@@ -27,6 +27,7 @@ Options:\n{options}\
 /// Сгруппированный каталог top-level команд (короткие about).
 pub const HZR_COMMAND_GROUPS: &str = "\
 Setup:
+  settings   Configure delegation provider, model and private credentials
   init       Register workspace data layout and service
   enable     Enable HZR for one workspace
   disable    Disable HZR for one workspace; keep data
@@ -53,6 +54,7 @@ Agent tools:
   write      Write files atomically through HZR
   exec       Rewrite or run a command through policy
   codec      Compile protected response-density transforms
+  delegate   Run a bounded task with the configured worker
   agent      Run the managed caveman-code agent
   agents     Observe an enrolled agtx agent board (opt-in)
   mcp        Serve HZR tools over stdio MCP

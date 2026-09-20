@@ -111,6 +111,13 @@ impl HzrApi {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkerConfig {
+    pub provider: String,
+    pub model: String,
+    pub credential_file: PathBuf,
+}
+
 #[derive(Clone)]
 pub struct ManagedAgentConfig {
     pub node: PathBuf,
@@ -120,6 +127,7 @@ pub struct ManagedAgentConfig {
     pub hzr_api: HzrApi,
     pub timeout: Duration,
     pub max_capture_bytes: usize,
+    pub worker: Option<WorkerConfig>,
 }
 
 impl ManagedAgentConfig {
@@ -139,6 +147,7 @@ impl ManagedAgentConfig {
             hzr_api,
             timeout: Duration::from_secs(30 * 60),
             max_capture_bytes: 8 * 1024 * 1024,
+            worker: None,
         }
     }
 }

@@ -21,6 +21,7 @@ pub struct Config {
     pub billing: BillingConfig,
     // 0.9.1: opt-in monitoring integrations live in the one configuration loader.
     pub integrations: IntegrationsConfig,
+    pub delegation: DelegationConfig,
 }
 
 impl Default for Config {
@@ -37,7 +38,43 @@ impl Default for Config {
             instructions: InstructionConfig::default(),
             billing: BillingConfig::default(),
             integrations: IntegrationsConfig::default(), // 0.9.1
+            delegation: DelegationConfig::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod delegation_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_and_legacy_config_do_not_enable_inference() {
+        let config: Config = toml::from_str("schema_version = 1").expect("test fixture");
+        assert!(!config.delegation.enabled);
+        config.validate().expect("test fixture");
+        let encoded = toml::to_string(&config).expect("test fixture");
+        let decoded: Config = toml::from_str(&encoded).expect("test fixture");
+        assert_eq!(decoded.delegation.model, "deepseek-v4.1-flash");
+    }
+
+    #[test]
+    fn rejects_unsafe_worker_selection_and_unbounded_limits() {
+        let mut selection = DelegationConfig {
+            provider: "https://untrusted.invalid".into(),
+            ..DelegationConfig::default()
+        };
+        assert!(selection.validate().is_err());
+        selection.provider = "openrouter".into();
+        selection.model = "deepseek/deepseek-v4.1-flash".into();
+        assert!(selection.validate().is_ok());
+        selection.model = "model\\nkey".into();
+        assert!(selection.validate().is_err());
+        selection.model = "custom-model".into();
+        selection.max_turns = 0;
+        assert!(selection.validate().is_err());
+        selection.max_turns = 12;
+        selection.timeout_ms = 1_800_001;
+        assert!(selection.validate().is_err());
     }
 }
 
@@ -247,7 +284,51 @@ impl Config {
                 return Err(ConfigError::InvalidBilling);
             }
         }
+        self.delegation.validate()?;
         self.integrations.agtx.validate()?; // 0.9.1
+        Ok(())
+    }
+}
+
+/// User-owned worker selection. Credentials never belong in serializable configuration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DelegationConfig {
+    pub enabled: bool,
+    pub provider: String,
+    pub model: String,
+    pub max_turns: u32,
+    pub timeout_ms: u64,
+}
+
+impl Default for DelegationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: "opencode-go".into(),
+            model: "deepseek-v4.1-flash".into(),
+            max_turns: 12,
+            timeout_ms: 600_000,
+        }
+    }
+}
+
+impl DelegationConfig {
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if !matches!(
+            self.provider.as_str(),
+            "opencode-go" | "openrouter" | "deepseek"
+        ) || self.model.is_empty()
+            || self.model.len() > 160
+            || !self
+                .model
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_./:".contains(&b))
+            || !(1..=100).contains(&self.max_turns)
+            || !(1_000..=1_800_000).contains(&self.timeout_ms)
+        {
+            return Err(ConfigError::InvalidDelegation);
+        }
         Ok(())
     }
 }
@@ -732,6 +813,10 @@ pub enum ConfigError {
         "[integrations.agtx] requires a 1000-300000 ms poll interval, stale_after_ms at or above it, 1-365 retention days, and at most 64 distinct absolute project enrollments"
     )]
     InvalidAgtxIntegration,
+    #[error(
+        "delegation requires a supported provider, a bounded model ID, 1-100 turns, and a 1000-1800000 ms timeout"
+    )]
+    InvalidDelegation,
 }
 
 #[cfg(unix)]
@@ -924,7 +1009,7 @@ mod tests {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
         let release = versioned_bundle(root, "v0.4.6-darwin-arm64");
-        let other = versioned_bundle(root, "v0.9.11-other");
+        let other = versioned_bundle(root, "v0.9.12-other");
 
         // `current` pointing at a different release must not capture this one.
         point_current_at(root, &other);

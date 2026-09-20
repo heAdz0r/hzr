@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "repository": "https://github.com/ethanplusai/astra-flash-orchestrator",
+  "commit": "c751f6fcc3c59054de7e0ab51c44d326f1a5a9d5",
+  "version": "1.2.0",
+  "license": "MIT",
+  "manifest_sha256": "cfe89d3cdd53513ee29d713fd37b1a8bc28f4cf8718d61f30baaeefc614f0514",
+  "adaptation": "Parent scopes and reviews; configurable worker executes through HZR's bundled managed runtime. No external Router or end-user dependency installation."
+}

@@ -26,6 +26,7 @@ mod prefix;
 mod read_cli;
 mod release_version;
 mod service;
+mod settings;
 mod stats;
 mod stats_output;
 mod tdd;
@@ -399,6 +400,38 @@ async fn run(cli: Cli) -> Result<ExitCode> {
     let config = Config::load_or_default(&config_path)
         .with_context(|| format!("failed to load {}", config_path.display()))?;
     match cli.command {
+        Command::Settings { command } => settings::execute(config, &config_path, command, cli.json),
+        Command::Delegate {
+            prompt,
+            file,
+            workspace,
+        } => {
+            if !config.delegation.enabled {
+                bail!(
+                    "delegation is disabled; configure it with hzr settings delegation --enabled true"
+                );
+            }
+            settings::require_credential(&config)?;
+            let d = &config.delegation;
+            eprintln!(
+                "HZR delegation: {} / {} (managed worker; parent retains acceptance)",
+                d.provider, d.model
+            );
+            execute_agent(
+                &config,
+                AgentCommand::Run {
+                    prompt,
+                    file,
+                    workspace,
+                    max_turns: d.max_turns,
+                    response_format: crate::cli::ResponseFormatArg::Text,
+                    timeout_ms: d.timeout_ms,
+                },
+                cli.json,
+                true,
+            )
+            .await
+        }
         Command::Init { .. } => bail!("init command entered configured execution path"),
         Command::Install { .. }
         | Command::Uninstall { .. }
@@ -497,7 +530,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 None
             };
-            // 0.9.11: `--fix` closes stale open daemon-unreachable accounting gaps left by an
+            // 0.9.12: `--fix` closes stale open daemon-unreachable accounting gaps left by an
             // earlier outage, so `hzr stats` stops reporting `▲ LIVE DEGRADED` for a condition
             // the operator has already fixed by restoring the daemon.
             let accounting_gap_repair = if fix && !dry_run {
@@ -531,7 +564,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             report.fidelity_reconcile = fidelity_reconcile;
             report.fleet_reconcile = fleet_reconcile;
             report.orphan_cleanup = orphan_cleanup; // 0.8.3
-            report.accounting_gap_repair = accounting_gap_repair; // 0.9.11
+            report.accounting_gap_repair = accounting_gap_repair; // 0.9.12
             if let Some(fleet) = &report.fleet_reconcile {
                 let completion = fleet.completion_check();
                 if completion.status == diagnostics::CheckStatus::Error {
@@ -575,7 +608,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     output::print_orphan_cleanup(cleanup)?; // 0.8.3
                 }
                 if let Some(count) = report.accounting_gap_repair {
-                    output::print_accounting_gap_repair(count)?; // 0.9.11
+                    output::print_accounting_gap_repair(count)?; // 0.9.12
                 }
                 if let Some(repairs) = &report.client_ownership_repair {
                     for repair in repairs {
@@ -652,7 +685,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             agents::execute(&config, &config_path, command, cli.json).await
         }
         Command::Billing { command } => execute_billing(&config, command, cli.json).await,
-        Command::Agent { command } => execute_agent(&config, command, cli.json).await,
+        Command::Agent { command } => execute_agent(&config, command, cli.json, false).await,
         Command::Mcp { command } => match command {
             McpCommand::Serve { workspace } => {
                 let workspace = workspace
@@ -4508,7 +4541,12 @@ fn format_pricing_entry(entry: &PricingEntry) -> String {
     )
 }
 
-async fn execute_agent(config: &Config, command: AgentCommand, json: bool) -> Result<ExitCode> {
+async fn execute_agent(
+    config: &Config,
+    command: AgentCommand,
+    json: bool,
+    delegated: bool,
+) -> Result<ExitCode> {
     let AgentCommand::Run {
         prompt,
         file,
@@ -4520,6 +4558,9 @@ async fn execute_agent(config: &Config, command: AgentCommand, json: bool) -> Re
     if timeout_ms == 0 {
         bail!("agent timeout must be positive");
     }
+    let _delegation_slot = delegated
+        .then(|| settings::acquire_delegation_slot(config))
+        .transpose()?;
     let prompt = read_text(prompt, file.as_deref(), 4 * 1024 * 1024)?;
     let workspace = canonical_directory(workspace.as_deref())?;
     let client = DaemonClient::from_config(config)?;
@@ -4543,6 +4584,13 @@ async fn execute_agent(config: &Config, command: AgentCommand, json: bool) -> Re
     let mut agent_config =
         ManagedAgentConfig::new(node, integration_layout(config), workspace, agent_data, api);
     agent_config.timeout = Duration::from_millis(timeout_ms);
+    if delegated {
+        agent_config.worker = Some(hzr_agent::WorkerConfig {
+            provider: config.delegation.provider.clone(),
+            model: config.delegation.model.clone(),
+            credential_file: settings::require_credential(config)?,
+        });
+    }
     let agent = ManagedAgent::new(agent_config);
     let running = agent.run(&prompt, response_format.into(), max_turns);
     tokio::pin!(running);
@@ -4553,6 +4601,10 @@ async fn execute_agent(config: &Config, command: AgentCommand, json: bool) -> Re
     let run = loop {
         tokio::select! {
             result = &mut running => break result?,
+            signal = tokio::signal::ctrl_c() => {
+                signal.context("cannot listen for cancellation")?;
+                bail!("managed agent cancelled");
+            },
             _ = heartbeat.tick() => eprintln!("hzr agent is still working"),
         }
     };

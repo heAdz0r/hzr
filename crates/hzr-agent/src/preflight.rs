@@ -125,6 +125,12 @@ pub async fn preflight(
     let bridge = canonical_file(&integration.bridge())?;
     let bridge_bytes = read_file(&bridge)?;
     let bridge_sha256 = verify_embedded_artifact(&bridge, &bridge_bytes, BUNDLED_BRIDGE)?;
+    let progress_path = canonical_file(&integration.root().join("delegation-progress.mjs"))?;
+    verify_embedded_artifact(
+        &progress_path,
+        &read_file(&progress_path)?,
+        include_bytes!("../../../integrations/caveman-code/delegation-progress.mjs"),
+    )?;
     let agent_capabilities = canonical_file(&integration.agent_capabilities())?;
     let agent_capabilities_bytes = read_file(&agent_capabilities)?;
     let agent_capabilities_sha256 = verify_embedded_artifact(

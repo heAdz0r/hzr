@@ -76,6 +76,10 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
             "/v1/dashboard/memory/topics/{topic_id}",
             get(api::dashboard_memory_topic),
         )
+        .route(
+            "/v1/dashboard/delegations",
+            get(crate::delegation::dashboard),
+        )
         .route("/v1/dashboard/agents", get(api::agents::dashboard_agents))
         .route(
             "/v1/dashboard/agents/tasks/{task_id}",

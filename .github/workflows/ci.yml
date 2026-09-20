@@ -22,6 +22,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.92.0
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
       - run: scripts/complete-gate.sh
 
   assembled-bundle:

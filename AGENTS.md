@@ -107,6 +107,8 @@ requires an explicit host bypassPermissions grant before rewriting arguments.
 Unsupported shapes retain normal host permissions. Native operations not routed
 through HZR lack HZR accounting; local probes do not verify host delivery.
 
+If enabled in `hzr settings`, use `hzr delegate` for scoped tasks; review results.
+
 ## Response density
 
 Write concisely by default: lead with the result, omit greetings, request restatement

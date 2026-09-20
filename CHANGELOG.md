@@ -4,6 +4,21 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.12] - 2026-09-20
+
+### Added
+
+- Configure opt-in worker delegation through `hzr settings`, with per-user private credentials, exact provider/model selection, turn limits and timeouts. Any selected Codex or Claude parent can call `hzr delegate` and retain final acceptance.
+- Adapt the pinned Astra Flash orchestration pattern to HZR's bundled managed runtime. No external Router or runtime download is required.
+- Add the live Delegation visualizer view with provider/model, tool activity, observed usage and explicit worker outcomes.
+
+### Fixed
+
+- Close managed bridge stdin before waiting for completion, preventing EOF deadlock.
+- Serialize delegation settings updates and reload under lock to preserve concurrent field changes.
+- Record timeout/cancellation separately from heartbeat state and terminate worker process groups.
+- Reject unsafe credential files and provider redirects; retain last observed run cards when the dashboard connection fails.
+
 ## [0.9.11] - 2026-09-12
 
 ### Fixed
@@ -1894,6 +1909,7 @@ First public HZR release.
 [0.9.5]: https://github.com/heAdz0r/hzr/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/heAdz0r/hzr/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/heAdz0r/hzr/compare/v0.9.2...v0.9.3
+[0.9.12]: https://github.com/heAdz0r/hzr/compare/v0.9.11...v0.9.12
 [0.9.11]: https://github.com/heAdz0r/hzr/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/heAdz0r/hzr/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/heAdz0r/hzr/compare/v0.9.8...v0.9.9

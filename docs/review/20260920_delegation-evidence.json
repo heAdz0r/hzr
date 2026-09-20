@@ -1,0 +1,73 @@
+{
+  "date": "2026-09-20",
+  "provider": "opencode-go",
+  "worker_model": "deepseek-v4.1-flash",
+  "managed": {
+    "outcome": "completed",
+    "independent_acceptance_tests": 6,
+    "passed": 6,
+    "tool_calls": 3,
+    "turns": 4,
+    "provider_usage": {
+      "uncached_input": 6647,
+      "output": 311,
+      "cache_read": 12032
+    },
+    "runtime_ms": 6700
+  },
+  "managed_repeat": {
+    "outcome": "completed",
+    "independent_tests_passed": 6,
+    "tool_calls": 3,
+    "turns": 4,
+    "runtime_ms": 8554,
+    "provider_usage": {"uncached_input": 6574, "output": 815, "cache_read": 12160},
+    "browser_observed_working_and_completed": true,
+    "browser_503_retains_cards_and_recovers": true
+  },
+  "installed_bundle": {
+    "version": "0.9.12",
+    "router_running": false,
+    "outcome": "completed",
+    "independent_tests_passed": 6,
+    "tool_calls": 4,
+    "turns": 4,
+    "provider_usage": {"uncached_input": 8136, "output": 1067, "cache_read": 16256},
+    "bundle_files_scanned_for_supplied_key": 16513,
+    "secret_scan_matches": 0,
+    "clean_install_smoke": "passed",
+    "external_tool_path_smoke": "passed"
+  },
+  "native_codex": {
+    "product_runtime": false,
+    "local_experiment_configuration_undone": true,
+    "local_experiment_service_removed": true,
+    "outcome": "accepted",
+    "parent_model": "gpt-6-astra",
+    "observed_child_model": "opencode-go/deepseek-v4.1-flash",
+    "identity_evidence": "Codex child rollout turn_context, linked to parent through session_meta.source.subagent.thread_spawn",
+    "independent_acceptance_tests": 6,
+    "passed": 6
+  },
+  "claude": {
+    "cli_installed": true,
+    "logged_in": false,
+    "live_host_test": "not_run"
+  },
+  "savings": {
+    "measured": false,
+    "reason": "no accepted parent-only baseline"
+  },
+  "api_probe": {
+    "basic": true,
+    "streaming": true,
+    "tool_call": true,
+    "compaction": true,
+    "real_tool_history_replay": true,
+    "upstream_synthetic_history": {
+      "passed": false,
+      "http_status": 400,
+      "reason": "fixture fabricates a thinking assistant without its reasoning"
+    }
+  }
+}

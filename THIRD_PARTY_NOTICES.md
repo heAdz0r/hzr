@@ -1,5 +1,18 @@
 # Third-party notices
 
+HZR includes Astra Flash Orchestrator 1.2.0 (MIT), pinned to
+`c751f6fcc3c59054de7e0ab51c44d326f1a5a9d5` from
+https://github.com/ethanplusai/astra-flash-orchestrator. The unchanged source and
+license are in `integrations/astra-flash-orchestrator/upstream/`; HZR's
+adaptation and provenance are described in the parent directory. Its upstream
+benchmark claims are historical upstream material, not HZR measurements.
+HZR implements the pattern in its bundled managed runtime; Codex Router is not
+a runtime dependency.
+
+The CLI statically links rpassword 7.4.0 (Apache-2.0) for hidden terminal credential
+entry. Its registry checksum and transitive Rust dependencies are in Cargo.lock.
+
+
 The CLI uses [jsonc-parser 0.26.3](https://github.com/dprint/jsonc-parser) (MIT)
 to audit OpenCode JSONC configuration without rewriting user files. Its exact
 registry checksum is recorded in Cargo.lock; it is a Rust library, not an engine

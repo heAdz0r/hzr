@@ -1,10 +1,12 @@
 mod config;
+mod delegation;
 mod preflight;
 mod process;
 mod runner;
 
 pub use config::{
     BearerToken, ConfigError, HzrApi, IntegrationLayout, ManagedAgentConfig, ResponseFormat,
+    WorkerConfig,
 };
 pub use preflight::{
     CAVEMAN_CODE_NPM_INTEGRITY, CAVEMAN_CODE_NPM_VERSION, NODE_MAXIMUM_VERSION_EXCLUSIVE,

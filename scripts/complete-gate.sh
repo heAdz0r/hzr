@@ -18,6 +18,8 @@ case "${HZR_GATE_MODE}" in
     scripts/target-hygiene.sh # 0.8.3: bound target/debug before the locked builds add to it
     python3 scripts/verify-release-gates.py --self-test
     bash -n scripts/*.sh
+    python3 -B integrations/astra-flash-orchestrator/verify.py
+    python3 -B -m unittest discover -s integrations/astra-flash-orchestrator/upstream/tests
     cargo fmt --all --check
     cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
     cargo test --locked --workspace --all-targets --all-features

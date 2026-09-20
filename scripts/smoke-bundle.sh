@@ -59,6 +59,7 @@ fi
 
 for HZR_RUNTIME_FILE in \
   bridge.mjs \
+  delegation-progress.mjs \
   agent-capabilities.json \
   package.json \
   package-lock.json \
@@ -85,6 +86,8 @@ for HZR_PROVENANCE_FILE in \
   install.sh \
   skills/hzr-tdd/SKILL.md \
   skills/hzr-tdd/references/testing-patterns.md \
+  integrations/astra-flash-orchestrator/PROVENANCE.json \
+  integrations/astra-flash-orchestrator/upstream/MANIFEST.sha256 \
   integrations/agtx/PROVENANCE.json \
   integrations/agtx/NOTICE.txt \
   patches/agtx/1.0.4-apache-license.patch \
@@ -122,6 +125,8 @@ done
         process.exit(1);
       }
     '
+
+"${HZR_NODE_BINARY}" "${HZR_REPOSITORY_ROOT}/scripts/verify-delegation-bundle.mjs" "${HZR_BUNDLE_ROOT}"
 
 verify_sha256() {
   local HZR_EXPECTED_SHA256="$1"
@@ -262,7 +267,7 @@ verify_matches_repository \
   '
 )
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.9.11" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.9.12" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
@@ -430,7 +435,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-if (report.protocol_version !== 1 || report.hzr_version !== "0.9.11") {
+if (report.protocol_version !== 1 || report.hzr_version !== "0.9.12") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -470,7 +475,7 @@ if (report.protocol_version !== 1 || report.hzr_version !== "0.9.11") {
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
       const ids = new Set(report.services.map((service) => service.id));
-if (response.status !== 200 || report.hzr_version !== "0.9.11" ||
+if (response.status !== 200 || report.hzr_version !== "0.9.12" ||
           !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
         throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
       }

@@ -409,6 +409,8 @@ verify_sha256 \
 mkdir -p "${HZR_CAVEMAN_STAGE}"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/bridge.mjs" \
   "${HZR_CAVEMAN_STAGE}/bridge.mjs"
+install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/delegation-progress.mjs" \
+  "${HZR_CAVEMAN_STAGE}/delegation-progress.mjs"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/caveman-code/package.json" \
   "${HZR_CAVEMAN_STAGE}/package.json"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/contracts/agent-capabilities.json" \
@@ -573,6 +575,16 @@ install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/agtx/PROVENANCE.json" \
   "${HZR_PROVENANCE_OUTPUT}/integrations/agtx/PROVENANCE.json"
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/agtx/README.md" \
   "${HZR_PROVENANCE_OUTPUT}/integrations/agtx/README.md"
+
+# Pinned upstream provenance. Execution uses HZR's bundled managed runtime.
+python3 -B "${HZR_REPOSITORY_ROOT}/integrations/astra-flash-orchestrator/verify.py"
+mkdir -p "${HZR_PROVENANCE_OUTPUT}/integrations/astra-flash-orchestrator"
+cp -R "${HZR_REPOSITORY_ROOT}/integrations/astra-flash-orchestrator/upstream" \
+  "${HZR_PROVENANCE_OUTPUT}/integrations/astra-flash-orchestrator/upstream"
+for HZR_FRONTIER_FILE in README.md PROVENANCE.json; do
+  install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/astra-flash-orchestrator/${HZR_FRONTIER_FILE}" \
+    "${HZR_PROVENANCE_OUTPUT}/integrations/astra-flash-orchestrator/${HZR_FRONTIER_FILE}"
+done
 
 hzr_build_stage "Generating the manifest and smoke-testing the bundle"
 "${HZR_REPOSITORY_ROOT}/scripts/generate-bundle-manifest.sh" "${HZR_OUTPUT_ROOT}"
