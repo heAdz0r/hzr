@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use hzr_agent::{IntegrationLayout, preflight};
+use hzr_agent::{IntegrationLayout, PROJECT_INSTRUCTIONS_BUDGET_BYTES, PreflightError, preflight};
 use hzr_codec::ResponseCodecCoverageState;
 use hzr_core::{
     Config, DEFAULT_FIDELITY_OPERATION_ALLOWANCE, DEFAULT_FIDELITY_TOKEN_ALLOWANCE, Ledger,
@@ -26,6 +26,7 @@ use crate::client::DaemonClient;
 use crate::fleet_exemption;
 use crate::{
     activation, adoption, client_config, foreign, hook_runner, instructions, prefix, service,
+    settings,
 };
 
 const INSTRUCTION_AUDIT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -2055,8 +2056,17 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 report.runtime.installed_package.display()
             ),
         )),
-        Err(error) => checks.push(check("caveman_code", strict_status(config), error)),
+        Err(error) => {
+            let remediation = caveman_remediation(&error);
+            checks.push(check(
+                "caveman_code",
+                strict_status(config),
+                format!("{error}; {remediation}"),
+            ));
+        }
     }
+    checks.push(delegation_check(config));
+    checks.push(delegation_instructions_check(workspace));
 
     let deadlines = Deadlines::default();
     match Workspace::discover_managed(
@@ -2558,6 +2568,132 @@ fn install_transaction_check(config_path: &Path, config: &Config, workspace: &Pa
             path.display(),
             shell_quote_diagnostic(&owner_config.to_string_lossy()),
             shell_quote_diagnostic(&owner_workspace.to_string_lossy())
+        ),
+    )
+}
+
+// A managed-agent preflight failure names the artifact, never the way out of it. The
+// operator reading `hzr doctor` needs the command, and the command differs by cause:
+// a stale bundled engine is reinstalled, an unsupported Node is replaced by the operator.
+fn caveman_remediation(error: &PreflightError) -> &'static str {
+    match error {
+        PreflightError::DigestMismatch { .. }
+        | PreflightError::BridgeVersionMismatch { .. }
+        | PreflightError::MissingLockEntry
+        | PreflightError::PinMismatch { .. } => {
+            "the installed engine does not match this binary; run `hzr update`, or `hzr install --force` to re-materialize the bundle"
+        }
+        PreflightError::NodeTooOld { .. } | PreflightError::NodeTooNew { .. } => {
+            "install a supported Node (>=20.18.1, <26) or point HZR_NODE at one"
+        }
+        PreflightError::Io { .. } | PreflightError::Json { .. } => {
+            "the engine directory is incomplete; run `hzr install --force`"
+        }
+        PreflightError::NodeCommand(_)
+        | PreflightError::NodeTimeout
+        | PreflightError::NodeStatus(_)
+        | PreflightError::InvalidNodeVersion(_) => {
+            "the bundled Node did not answer `--version`; run `hzr install --force`"
+        }
+    }
+}
+
+fn delegation_check(config: &Config) -> DoctorCheck {
+    let delegation = &config.delegation;
+    if !delegation.enabled {
+        return check(
+            "delegation",
+            CheckStatus::Pass,
+            "disabled; enable it with `hzr settings delegation --enabled true`",
+        );
+    }
+    if let Err(error) = delegation.validate() {
+        return check(
+            "delegation",
+            CheckStatus::Error,
+            format!("{error}; repair it with `hzr settings delegation`"),
+        );
+    }
+    match settings::require_credential(config) {
+        Ok(_) => check(
+            "delegation",
+            CheckStatus::Pass,
+            format!(
+                "{} / {}; {} turns, {} ms",
+                delegation.provider, delegation.model, delegation.max_turns, delegation.timeout_ms
+            ),
+        ),
+        Err(_) => check(
+            "delegation",
+            CheckStatus::Error,
+            format!(
+                "no worker credential for {}; run `hzr settings login --provider {}`",
+                delegation.provider, delegation.provider
+            ),
+        ),
+    }
+}
+
+// What the delegated worker will actually be given in this workspace. Oversized rules are a
+// warning, not a fault: the bridge preloads the head of each file and names the sections it
+// left out, and the worker reads them with hzr_read. A symlinked or unreadable file is a
+// fault, because the bridge refuses to run at all rather than follow rules from another tree.
+fn delegation_instructions_check(workspace: &Path) -> DoctorCheck {
+    let mut preloaded: Vec<(&str, String)> = Vec::new();
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        match instructions::delegated_instructions(&workspace.join(name)) {
+            Ok(instructions::DelegatedInstructions::Absent) => {}
+            Ok(instructions::DelegatedInstructions::Rejected(reason)) => {
+                return check(
+                    "delegation_instructions",
+                    CheckStatus::Error,
+                    format!(
+                        "{} is {reason}; `hzr delegate` refuses to run here until it is a regular file in the workspace",
+                        workspace.join(name).display()
+                    ),
+                );
+            }
+            Ok(instructions::DelegatedInstructions::Preloadable(text)) => {
+                // The bridge skips an empty file and a second copy of the same rules.
+                if text.is_empty() || preloaded.iter().any(|(_, seen)| *seen == text) {
+                    continue;
+                }
+                preloaded.push((name, text));
+            }
+            Err(error) => {
+                return check(
+                    "delegation_instructions",
+                    CheckStatus::Warning,
+                    error.to_string(),
+                );
+            }
+        }
+    }
+    if preloaded.is_empty() {
+        return check(
+            "delegation_instructions",
+            CheckStatus::Pass,
+            "no repository instructions; the delegated worker runs on the HZR contract alone",
+        );
+    }
+    let inventory = preloaded
+        .iter()
+        .map(|(name, text)| format!("{name} {} B", text.len()))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let total: usize = preloaded.iter().map(|(_, text)| text.len()).sum();
+    if total <= PROJECT_INSTRUCTIONS_BUDGET_BYTES {
+        return check(
+            "delegation_instructions",
+            CheckStatus::Pass,
+            format!("{inventory} preloaded whole, within {PROJECT_INSTRUCTIONS_BUDGET_BYTES} B"),
+        );
+    }
+    check(
+        "delegation_instructions",
+        CheckStatus::Warning,
+        format!(
+            "{inventory} exceed the {PROJECT_INSTRUCTIONS_BUDGET_BYTES} B preload budget; the worker preloads the head of each file, is told which sections were left out, and reads them with hzr_read"
         ),
     )
 }
@@ -3172,14 +3308,103 @@ mod tests {
     use super::{
         CheckStatus, CodecInstructionSurfaces, attest_active_bundle,
         audited_codec_instruction_surfaces, billing_pricing_check, bounded, claude_code_mcp_check,
-        contract_is_portable, direct_icm_registration_detail, effective_workspace_mcp_statuses,
-        fidelity_allowance_check, fidelity_durability_status_check,
-        fleet_instruction_health_checks, hook_ownership_check,
+        contract_is_portable, delegation_check, delegation_instructions_check,
+        direct_icm_registration_detail, effective_workspace_mcp_statuses, fidelity_allowance_check,
+        fidelity_durability_status_check, fleet_instruction_health_checks, hook_ownership_check,
         host_permission_grant_propagation_check, index_readiness_check, install_transaction_check,
         instruction_health_check, instruction_health_check_with_exemptions, integration_layout,
         reconcile_fleet_contracts, repair_accounting_gaps, repair_legacy_index,
         response_codec_coverage, workspace_binding_check, workspace_instruction_health_check,
     };
+
+    #[test]
+    fn oversized_repository_rules_are_a_delegation_warning_not_a_failure() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        fs::write(
+            workspace.path().join("AGENTS.md"),
+            "# Shared\nBranch from main.\n",
+        )
+        .expect("shared rules");
+        fs::write(
+            workspace.path().join("CLAUDE.md"),
+            "# Rules\n".to_owned() + &"Repeat one paragraph.\n".repeat(4_000),
+        )
+        .expect("project rules");
+
+        let report = delegation_instructions_check(workspace.path());
+
+        assert_eq!(report.status, CheckStatus::Warning);
+        assert!(report.detail.contains("AGENTS.md 26 B + CLAUDE.md 88007 B"));
+        assert!(report.detail.contains("24576 B preload budget"));
+        assert!(report.detail.contains("hzr_read"));
+    }
+
+    #[test]
+    fn rules_within_the_budget_and_an_empty_workspace_both_pass() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        assert_eq!(
+            delegation_instructions_check(workspace.path()).status,
+            CheckStatus::Pass
+        );
+
+        fs::write(
+            workspace.path().join("CLAUDE.md"),
+            "# Rules\nPreserve errors.\n",
+        )
+        .expect("project rules");
+        // The same rules in both files are one preload, exactly as the bridge loads them.
+        fs::write(
+            workspace.path().join("AGENTS.md"),
+            "# Rules\nPreserve errors.\n",
+        )
+        .expect("shared rules");
+
+        let report = delegation_instructions_check(workspace.path());
+
+        assert_eq!(report.status, CheckStatus::Pass);
+        assert_eq!(
+            report.detail,
+            "AGENTS.md 24 B preloaded whole, within 24576 B"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_instruction_file_is_a_delegation_failure_with_its_cause() {
+        let root = tempfile::tempdir().expect("root");
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&workspace).expect("workspace");
+        fs::write(root.path().join("elsewhere.md"), "# Rules\n").expect("outside rules");
+        std::os::unix::fs::symlink(
+            root.path().join("elsewhere.md"),
+            workspace.join("CLAUDE.md"),
+        )
+        .expect("symlink");
+
+        let report = delegation_instructions_check(&workspace);
+
+        assert_eq!(report.status, CheckStatus::Error);
+        assert!(report.detail.contains("CLAUDE.md is a symlink"));
+        assert!(report.detail.contains("refuses to run here"));
+    }
+
+    #[test]
+    fn delegation_reports_the_missing_credential_and_the_command_that_supplies_it() {
+        let mut config = Config::default();
+        assert_eq!(delegation_check(&config).status, CheckStatus::Pass);
+
+        config.delegation.enabled = true;
+        config.data_dir = tempfile::tempdir().expect("data dir").keep();
+
+        let report = delegation_check(&config);
+
+        assert_eq!(report.status, CheckStatus::Error);
+        assert!(
+            report
+                .detail
+                .contains("hzr settings login --provider opencode-go")
+        );
+    }
 
     #[test]
     fn instruction_audit_deadline_returns_an_actionable_error() {

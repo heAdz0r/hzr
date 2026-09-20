@@ -530,7 +530,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 None
             };
-            // 0.9.12: `--fix` closes stale open daemon-unreachable accounting gaps left by an
+            // 0.9.13: `--fix` closes stale open daemon-unreachable accounting gaps left by an
             // earlier outage, so `hzr stats` stops reporting `▲ LIVE DEGRADED` for a condition
             // the operator has already fixed by restoring the daemon.
             let accounting_gap_repair = if fix && !dry_run {
@@ -564,7 +564,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             report.fidelity_reconcile = fidelity_reconcile;
             report.fleet_reconcile = fleet_reconcile;
             report.orphan_cleanup = orphan_cleanup; // 0.8.3
-            report.accounting_gap_repair = accounting_gap_repair; // 0.9.12
+            report.accounting_gap_repair = accounting_gap_repair; // 0.9.13
             if let Some(fleet) = &report.fleet_reconcile {
                 let completion = fleet.completion_check();
                 if completion.status == diagnostics::CheckStatus::Error {
@@ -608,7 +608,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     output::print_orphan_cleanup(cleanup)?; // 0.8.3
                 }
                 if let Some(count) = report.accounting_gap_repair {
-                    output::print_accounting_gap_repair(count)?; // 0.9.12
+                    output::print_accounting_gap_repair(count)?; // 0.9.13
                 }
                 if let Some(repairs) = &report.client_ownership_repair {
                     for repair in repairs {
@@ -4600,7 +4600,16 @@ async fn execute_agent(
     );
     let run = loop {
         tokio::select! {
-            result = &mut running => break result?,
+            // A delegated run fails on the operator's machine, not in their code: the worker
+            // credential, the engine bundle and the repository rules it is given are all
+            // conditions `hzr doctor` names one by one. Say so instead of ending at the symptom.
+            result = &mut running => break match result {
+                Ok(run) => run,
+                Err(error) if delegated => bail!(
+                    "{error}; run `hzr doctor` for the worker credential, the engine bundle and the repository rules this workspace hands the worker"
+                ),
+                Err(error) => return Err(error.into()),
+            },
             signal = tokio::signal::ctrl_c() => {
                 signal.context("cannot listen for cancellation")?;
                 bail!("managed agent cancelled");

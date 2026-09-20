@@ -425,6 +425,45 @@ fn strip_managed_block(text: &str) -> String {
     out
 }
 
+/// One repository instruction file as the delegated worker reads it.
+///
+/// `hzr delegate` runs the worker against `AGENTS.md` and `CLAUDE.md` of the target
+/// workspace with HZR's own managed block removed — the worker already carries that
+/// contract. Doctor reports what the worker will get; the bridge applies the same rules.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DelegatedInstructions {
+    /// The file does not exist. The worker simply runs without it.
+    Absent,
+    /// The bridge refuses to run at all rather than follow rules from outside the workspace.
+    Rejected(&'static str),
+    /// Repository rules the worker preloads, managed block already removed.
+    Preloadable(String),
+}
+
+/// Read one instruction file the way the managed worker's bridge does.
+pub fn delegated_instructions(path: &Path) -> Result<DelegatedInstructions> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DelegatedInstructions::Absent);
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok(DelegatedInstructions::Rejected("a symlink"));
+    }
+    if !metadata.is_file() {
+        return Ok(DelegatedInstructions::Rejected("not a regular file"));
+    }
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(DelegatedInstructions::Preloadable(
+        strip_managed_block(&text).trim().to_owned(),
+    ))
+}
+
 fn strip_local_codex_bridge(text: &str) -> String {
     let Some(start) = text.find(LOCAL_CODEX_BRIDGE_BEGIN) else {
         return text.to_owned();

@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-<a href="Cargo.toml"><img alt="Version 0.9.12" src="https://img.shields.io/badge/version-0.9.12-e64a19"></a>
+<a href="Cargo.toml"><img alt="Version 0.9.13" src="https://img.shields.io/badge/version-0.9.13-e64a19"></a>
   <a href="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/heAdz0r/hzr/releases"><img alt="Release" src="https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/control_plane-Apache--2.0-37474f"></a>
@@ -109,7 +109,7 @@ and [recorded run](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RES
 
 ## Install
 
-HZR 0.9.12 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
+HZR 0.9.13 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
 Apple Silicon. Intel macOS is no longer supported. System Git is the only engine prerequisite; Node.js, RTK,
 grepai, and ICM are bundled. Windows is not currently published.
 
@@ -117,7 +117,7 @@ Download, inspect, then run the installer:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.9.12/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.9.13/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -427,7 +427,7 @@ policy: no repository file can buy an exception to a bypass HZR could replace at
 
 ## Honest boundaries
 
-| Guarantee | 0.9.12 posture |
+| Guarantee | 0.9.13 posture |
 |---|---|
 | one versioned control plane and pinned engine bundle | implemented |
 | one canonical index owner per worktree | implemented |
@@ -479,6 +479,11 @@ Delegation is off by default. Each user supplies their own protected key; settin
 contain no credentials. OpenRouter and direct DeepSeek are also available, with
 an explicit model, turn limit and timeout. Disable with
 `hzr settings delegation --enabled false`. The parent model is unchanged.
+
+Workers run under the repository's own `AGENTS.md` and `CLAUDE.md`. Rules larger than the
+24 KiB preload budget are preloaded head-first and read on demand, so delegation works in
+every repository rather than only in small ones. `hzr doctor` reports both the worker
+credential and that split.
 
 The visualizer's **Delegation** tab shows real worker activity, exact provider/model,
 and observed token usage. Open its local URL with `?view=delegation` inside Codex.

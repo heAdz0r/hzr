@@ -15,6 +15,16 @@ pub use preflight::{
 };
 pub use runner::{AgentEvent, AgentRun, ManagedAgent, RunError};
 
+/// How many bytes of `AGENTS.md` plus `CLAUDE.md` the managed worker preloads.
+///
+/// A preload budget, not an admission rule. A repository whose rules exceed it still
+/// delegates: the bridge preloads the head of each file, tells the worker which sections
+/// it did not preload, and the worker reads the rest with `hzr_read`. Refusing to run at
+/// all left `hzr delegate` unusable in exactly the repositories whose rules matter most.
+/// The bridge constant `PROJECT_INSTRUCTIONS_BUDGET_BYTES` must carry the same value;
+/// `test_bridge_budgets_project_instructions_instead_of_refusing_them` asserts it.
+pub const PROJECT_INSTRUCTIONS_BUDGET_BYTES: usize = 24 * 1024;
+
 #[cfg(test)]
 mod tests {
     const BRIDGE: &str = include_str!("../../../integrations/caveman-code/bridge.mjs");
@@ -59,6 +69,32 @@ mod tests {
             .expect("usage accounting invocation");
         assert!(prompt < validation);
         assert!(validation < accounting);
+    }
+
+    #[test]
+    fn test_bridge_budgets_project_instructions_instead_of_refusing_them() {
+        assert!(
+            BRIDGE.contains(&format!(
+                "const PROJECT_INSTRUCTIONS_BUDGET_BYTES = {} * 1024;",
+                super::PROJECT_INSTRUCTIONS_BUDGET_BYTES / 1024
+            )),
+            "the bridge budget must equal PROJECT_INSTRUCTIONS_BUDGET_BYTES"
+        );
+        for required in [
+            "export function fitProjectInstructions(",
+            "hzr_instructions_truncated",
+            "health.warnings.push(...projectInstructions.warnings)",
+            "must not be a symlink",
+        ] {
+            assert!(
+                BRIDGE.contains(required),
+                "missing instruction budget invariant: {required}"
+            );
+        }
+        assert!(
+            !BRIDGE.contains("project instructions exceed"),
+            "oversized repository rules must be budgeted, never a refusal to run"
+        );
     }
 
     #[test]

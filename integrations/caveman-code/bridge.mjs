@@ -31,7 +31,12 @@ const CUSTOM_TOOL_NAMES = [
 const ACTIVE_TOOL_NAMES = [...CUSTOM_TOOL_NAMES];
 const ACTIVE_TOOL_NAME_SET = new Set(ACTIVE_TOOL_NAMES);
 const MAX_HZR_RESPONSE_BYTES = 512 * 1024;
-const MAX_PROJECT_INSTRUCTIONS_BYTES = 24 * 1024;
+// Project instructions are a preload budget, not a wall: a repository whose rules exceed it
+// still delegates, and the worker reads the remainder with hzr_read. Keep this value and
+// hzr_agent::PROJECT_INSTRUCTIONS_BUDGET_BYTES identical; a Rust test asserts it.
+const PROJECT_INSTRUCTIONS_BUDGET_BYTES = 24 * 1024;
+const TRUNCATION_NOTICE_RESERVE_BYTES = 768;
+const INSTRUCTION_FILE_NAMES = ["AGENTS.md", "CLAUDE.md"];
 const MAX_MANAGED_PROMPT_BYTES = 64 * 1024;
 const MAX_USAGE_WARNING_LENGTH = 512;
 const MAX_USAGE_OUTBOX_ENTRY_BYTES = 64 * 1024;
@@ -278,11 +283,124 @@ export function stripManagedHzrContract(content, name) {
   return output;
 }
 
-async function loadProjectInstructions(workspace) {
+// Longest prefix of `text` whose UTF-8 encoding fits `limit`, never splitting a code point.
+function utf8Prefix(text, limit) {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= limit) return text;
+  let end = Math.max(0, limit);
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString("utf8");
+}
+
+// The same prefix cut back to the last complete line, so a rule is never half-quoted.
+export function instructionHead(text, limit) {
+  const prefix = utf8Prefix(text, limit);
+  if (prefix.length === text.length) return prefix;
+  const lastNewline = prefix.lastIndexOf("\n");
+  return lastNewline > 0 ? prefix.slice(0, lastNewline) : prefix;
+}
+
+function escapeInstructionMarkup(text) {
+  return text
+    .replaceAll("</hzr_project_instructions>", "&lt;/hzr_project_instructions&gt;")
+    .replaceAll("</hzr_instructions_truncated>", "&lt;/hzr_instructions_truncated&gt;");
+}
+
+// Headings of the part that was not preloaded: a map of the missing rules is what tells the
+// worker when reading the rest is required, and it costs a fraction of the rules themselves.
+export function omittedSectionTitles(tail) {
+  const titles = [];
+  for (const line of tail.split("\n")) {
+    const heading = /^#{1,3}\s+(\S.*?)\s*$/u.exec(line);
+    if (heading) titles.push(heading[1]);
+  }
+  return titles;
+}
+
+function truncationNotice(name, preloadedBytes, totalBytes, titles, reserve) {
+  const open = `<hzr_instructions_truncated file="${name}" preloaded_bytes="${preloadedBytes}" total_bytes="${totalBytes}">`;
+  const close = "</hzr_instructions_truncated>";
+  const guidance =
+    `The rest of ${name} was not preloaded. Read it with hzr_read before acting on any rule below the preloaded part.`;
+  const fixed = `${open}\n${guidance}\n${close}`;
+  let notice = fixed;
+  let listed = "";
+  for (const title of titles.map((title) => escapeInstructionMarkup(title))) {
+    const grown = listed.length === 0 ? title : `${listed}; ${title}`;
+    const candidate = `${open}\n${guidance}\nSections not preloaded: ${grown}\n${close}`;
+    if (Buffer.byteLength(candidate) > reserve) {
+      if (listed.length === 0) break;
+      const elided = `${open}\n${guidance}\nSections not preloaded: ${listed}; ...\n${close}`;
+      if (Buffer.byteLength(elided) <= reserve) notice = elided;
+      return notice;
+    }
+    listed = grown;
+    notice = candidate;
+  }
+  return notice;
+}
+
+// Equal shares first, then every byte a small file does not need goes to the files that do.
+export function allocateInstructionBudget(sizes, budget) {
+  const allocation = sizes.map(() => 0);
+  const ascending = sizes
+    .map((size, index) => index)
+    .sort((left, right) => sizes[left] - sizes[right] || left - right);
+  let remaining = Math.max(0, budget);
+  let open = ascending.length;
+  for (const index of ascending) {
+    const share = Math.floor(remaining / open);
+    const taken = Math.min(sizes[index], share);
+    allocation[index] = taken;
+    remaining -= taken;
+    open -= 1;
+  }
+  return allocation;
+}
+
+export function fitProjectInstructions(entries, budget = PROJECT_INSTRUCTIONS_BUDGET_BYTES) {
+  const sizes = entries.map(({ content }) => Buffer.byteLength(content));
+  const allocation = allocateInstructionBudget(sizes, budget);
+  const sections = [];
+  const warnings = [];
+  for (const [index, { name, content }] of entries.entries()) {
+    if (allocation[index] >= sizes[index]) {
+      sections.push(`## ${name}\n${escapeInstructionMarkup(content.trimEnd())}`);
+      continue;
+    }
+    const head = instructionHead(
+      content,
+      Math.max(0, allocation[index] - TRUNCATION_NOTICE_RESERVE_BYTES),
+    );
+    const preloadedBytes = Buffer.byteLength(head);
+    const notice = truncationNotice(
+      name,
+      preloadedBytes,
+      sizes[index],
+      omittedSectionTitles(content.slice(head.length)),
+      TRUNCATION_NOTICE_RESERVE_BYTES,
+    );
+    const body = head.trim().length === 0 ? notice : `${escapeInstructionMarkup(head.trimEnd())}\n\n${notice}`;
+    sections.push(`## ${name}\n${body}`);
+    warnings.push(
+      `project instructions: ${name} preloaded ${preloadedBytes} of ${sizes[index]} bytes; the worker reads the rest with hzr_read`.slice(
+        0,
+        MAX_USAGE_WARNING_LENGTH,
+      ),
+    );
+  }
+  return { sections, warnings };
+}
+
+// Oversized repository rules are budgeted, never a refusal to run: a worker under partial rules
+// that is told what is missing and can read it beats no worker at all, and the parent is warned.
+export async function loadProjectInstructions(
+  workspace,
+  budget = PROJECT_INSTRUCTIONS_BUDGET_BYTES,
+) {
   const entries = [];
   const uniqueContents = new Set();
-  let totalBytes = 0;
-  for (const name of ["AGENTS.md", "CLAUDE.md"]) {
+  for (const name of INSTRUCTION_FILE_NAMES) {
     const path = resolve(workspace, name);
     let metadata;
     try {
@@ -298,27 +416,20 @@ async function loadProjectInstructions(workspace) {
     const rawContent = await readFile(path, "utf8");
     const content = stripManagedHzrContract(rawContent, name).trim();
     if (content.length === 0 || uniqueContents.has(content)) continue;
-    totalBytes += Buffer.byteLength(content);
-    if (totalBytes > MAX_PROJECT_INSTRUCTIONS_BYTES) {
-      throw new Error(
-        `project instructions exceed ${MAX_PROJECT_INSTRUCTIONS_BYTES} bytes`,
-      );
-    }
     uniqueContents.add(content);
     entries.push({ name, content });
   }
-  if (entries.length === 0) return null;
-  const sections = entries.map(
-    ({ name, content }) => `## ${name}\n${content.trimEnd()}`,
-  );
-  return [
-    '<hzr_project_instructions trust="trusted-repository-control">',
-    "Follow these repository instructions. Discover and apply any more specific nested AGENTS.md before changing files below it.",
-    ...sections.map((section) =>
-      section.replaceAll("</hzr_project_instructions>", "&lt;/hzr_project_instructions&gt;"),
-    ),
-    "</hzr_project_instructions>",
-  ].join("\n\n");
+  if (entries.length === 0) return { prompt: null, warnings: [] };
+  const { sections, warnings } = fitProjectInstructions(entries, budget);
+  return {
+    prompt: [
+      '<hzr_project_instructions trust="trusted-repository-control">',
+      "Follow these repository instructions. Discover and apply any more specific nested AGENTS.md before changing files below it.",
+      ...sections,
+      "</hzr_project_instructions>",
+    ].join("\n\n"),
+    warnings,
+  };
 }
 
 function finiteNumber(value) {
@@ -1079,8 +1190,9 @@ export async function prepareManagedRuntime({
     request.response_format === "json" ? JSON_RESPONSE_CONTRACT : TEXT_RESPONSE_CONTRACT;
   const responseContract = `${renderManagedHarnessContract(runtime.capabilityContract)}\n\n${formatContract}`;
   const projectInstructions = await loadProjectInstructions(workspace);
-  const appendedPrompts = projectInstructions
-    ? [projectInstructions, responseContract]
+  health.warnings.push(...projectInstructions.warnings);
+  const appendedPrompts = projectInstructions.prompt
+    ? [projectInstructions.prompt, responseContract]
     : [responseContract];
   const resourceLoader = new DefaultResourceLoader({
     cwd: workspace,

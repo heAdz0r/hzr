@@ -4,6 +4,17 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.9.13] - 2026-09-20
+
+### Fixed
+
+- `hzr delegate` now runs in every repository. Repository rules larger than the 24 KiB preload budget are preloaded head-first instead of refusing the run: the worker is told which sections were left out and reads them with `hzr_read`, and the parent gets a preflight warning naming the exact split. Before this, one `AGENTS.md` plus `CLAUDE.md` over 24576 bytes made every delegated run in that workspace exit 1 with `project instructions exceed 24576 bytes`, with no setting, flag or workspace override to get past it.
+
+### Added
+
+- `hzr doctor` reports delegation readiness: `delegation` names the worker, its limits and the missing credential with the command that supplies it; `delegation_instructions` names the bytes this workspace hands the worker, warns when they exceed the preload budget, and fails on an instruction file the bridge refuses (a symlink or a non-regular file).
+- A managed-agent preflight failure now carries its remediation: a stale or hand-edited engine bundle says to run `hzr update` or `hzr install --force`, an unsupported Node says to replace it. A failed `hzr delegate` points at `hzr doctor` instead of ending at the bridge symptom.
+
 ## [0.9.12] - 2026-09-20
 
 ### Added

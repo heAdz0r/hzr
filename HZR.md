@@ -150,6 +150,14 @@ the existing managed HZR runtime; no separate index or memory engine is started.
 There is no automatic fallback to another model/provider. One delegated worker per
 HZR data directory is allowed at a time; workers must not delegate recursively.
 
+The worker inherits the target workspace's own `AGENTS.md` and `CLAUDE.md` with HZR's
+managed block removed, up to a 24 KiB preload budget shared between them. A repository
+whose rules are larger still delegates: each file is preloaded head-first, the worker is
+told which sections were not preloaded, and it reads them with `hzr_read`. An instruction
+file that is a symlink is refused — a worker never follows rules from outside the
+workspace. `hzr doctor` reports the worker credential as `delegation` and this workspace's
+preload split as `delegation_instructions`.
+
 Tool reads/writes are workspace-confined by the daemon. Shell commands retain
 HZR's execution policy; this is not an additional operating-system sandbox.
 A task's allowed-file list is an instruction to the worker, not a filesystem ACL.

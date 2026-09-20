@@ -11,6 +11,9 @@ import {
   workerFetch,
   formatPrefetchedContext,
   isDirectExecution,
+  allocateInstructionBudget,
+  instructionHead,
+  loadProjectInstructions,
   persistUsageOutbox,
   prepareManagedRuntime,
   replayUsageOutbox,
@@ -389,4 +392,59 @@ test("bridge manifest version tracks the workspace version", async () => {
     workspaceVersion,
     "bump integrations/caveman-code/package.json (and its lock) with the workspace version",
   );
+});
+
+test("oversized repository rules are budgeted rather than refused", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "hzr-instructions-"));
+  t.after(async () => rm(workspace, { recursive: true, force: true }));
+  const early = "# Early rules\nPreserve exact errors.\n";
+  const filler = "Repeat the same paragraph until the budget is gone.\n".repeat(2_000);
+  await writeFile(join(workspace, "AGENTS.md"), "# Shared rules\nBranch from main.\n");
+  await writeFile(
+    join(workspace, "CLAUDE.md"),
+    `${early}${filler}## Deployment\nWire the service into four places.\n`,
+  );
+
+  const loaded = await loadProjectInstructions(workspace);
+
+  assert.match(loaded.prompt, /Branch from main\./);
+  assert.match(loaded.prompt, /Preserve exact errors\./);
+  assert.equal(loaded.prompt.includes("Wire the service into four places."), false);
+  assert.match(loaded.prompt, /<hzr_instructions_truncated file="CLAUDE.md"/);
+  assert.match(loaded.prompt, /Sections not preloaded: Deployment/);
+  assert.equal(loaded.warnings.length, 1);
+  assert.match(
+    loaded.warnings[0],
+    /^project instructions: CLAUDE\.md preloaded \d+ of \d+ bytes; the worker reads the rest with hzr_read$/,
+  );
+});
+
+test("a symlinked instruction file is still refused", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "hzr-instructions-link-"));
+  const workspace = join(root, "workspace");
+  await mkdir(workspace);
+  t.after(async () => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, "elsewhere.md"), "# Rules\nOwned by another tree.\n");
+  await symlink(join(root, "elsewhere.md"), join(workspace, "CLAUDE.md"));
+
+  await assert.rejects(
+    () => loadProjectInstructions(workspace),
+    /must not be a symlink: CLAUDE\.md/,
+  );
+});
+
+test("the instruction budget keeps small files whole and spends the rest on large ones", () => {
+  assert.deepEqual(allocateInstructionBudget([3_927, 64_644], 24_576), [3_927, 20_649]);
+  assert.deepEqual(allocateInstructionBudget([64_644], 24_576), [24_576]);
+  assert.deepEqual(allocateInstructionBudget([100, 200], 24_576), [100, 200]);
+  assert.deepEqual(allocateInstructionBudget([40_000, 40_000], 24_576), [12_288, 12_288]);
+});
+
+test("an instruction head cuts on a line boundary and never splits a code point", () => {
+  assert.equal(instructionHead("first\nsecond\nthird\n", 9), "first");
+  assert.equal(instructionHead("short\n", 4_096), "short\n");
+  const multibyte = "界".repeat(10);
+  const head = instructionHead(multibyte, 8);
+  assert.equal(head, "界".repeat(2));
+  assert.equal(Buffer.byteLength(head), 6);
 });
