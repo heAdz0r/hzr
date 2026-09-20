@@ -1,5 +1,20 @@
 {
   "date": "2026-09-20",
+  "release": {
+    "version": "0.9.12",
+    "commit": "266d4cd957382cdd1df53771abda3589c5cd4921",
+    "url": "https://github.com/heAdz0r/hzr/releases/tag/v0.9.12",
+    "workflow": "https://github.com/heAdz0r/hzr/actions/runs/35509165382",
+    "ci": "https://github.com/heAdz0r/hzr/actions/runs/35509165467",
+    "all_required_jobs": "passed",
+    "stable_latest": true,
+    "downloaded_archives_sha256_verified": 3,
+    "published_macos_clean_install_smoke": "passed",
+    "published_macos_user_install": "passed",
+    "daemon_version": "0.9.12",
+    "private_settings_preserved": true,
+    "panel_after_activation": "passed"
+  },
   "provider": "opencode-go",
   "worker_model": "deepseek-v4.1-flash",
   "managed": {

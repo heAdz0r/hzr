@@ -107,8 +107,34 @@ removed, a third managed task passed six independently repeated tests through
 the user's normal settings and production HZR daemon. The installed panel was
 inspected inside Codex.
 
-Pending: public multi-platform CI, release assets and published checksums.
-Do not bypass a failed publication gate.
+Public release verification passed on 2026-09-20. Release commit:
+`266d4cd957382cdd1df53771abda3589c5cd4921`; immutable tag `v0.9.12`.
+[Release workflow](https://github.com/heAdz0r/hzr/actions/runs/35509165382)
+and [CI](https://github.com/heAdz0r/hzr/actions/runs/35509165467) succeeded.
+All three native bundles passed their configured install smoke. All downloaded
+archives matched published SHA256SUMS. The published macOS archive also passed
+a separate local clean-install smoke and was installed for the user; CLI and
+authenticated daemon report 0.9.12, private settings remained enabled, and the
+Codex panel remained available. The installer service restart interrupted its
+own managed execution; direct service installation recovered it, then the
+installer completed with service restart disabled. No gate was bypassed.
+[Stable Latest release](https://github.com/heAdz0r/hzr/releases/tag/v0.9.12).
+
+## Local host diagnostics after installation
+
+The published bundle and daemon checks passed, but the machine-wide doctor is
+not fully green. It reports one grepai ownership error; process inspection showed
+that watcher parent was the active HZR daemon. This discrepancy remains
+unresolved and the post-upgrade reference marker therefore records errors.
+No unrelated watcher was terminated. The isolated test daemon and UI proxy
+created for this review were stopped.
+
+Other warnings are explicit integration boundaries: Claude Desktop is selected
+for a different workspace, and global response replacement/billing credit is
+not confirmed for Codex or Claude. The fleet preview covered 118 workspaces,
+with no workspace errors, owner conflicts or unresolved indexes. Reconciliation
+did not clear the grepai diagnostic. These host diagnostics are not evidence of
+failed release CI, nor grounds for claiming complete machine health.
 
 ## Reviewer assessment
 

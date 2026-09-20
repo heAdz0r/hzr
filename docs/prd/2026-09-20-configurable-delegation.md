@@ -1,6 +1,6 @@
 # Configurable delegation in HZR
 
-Status: implemented; local acceptance passed; public release verification pending. Owner: HZR. Date: 2026-09-20.
+Status: released as 0.9.12; local, CI and public artifact verification passed. Owner: HZR. Date: 2026-09-20.
 Target: next release after 0.9.11; publish only after acceptance gates pass.
 
 ## Problem and desired result
@@ -233,9 +233,9 @@ Release:
 | G10 | Explicit SDK registry/auth/model; fallback rejected | None |
 | G11 | Working/completed states and failure/recovery tested; installed 0.9.12 panel inspected in Codex | None |
 | G12 | Provider counters only; no baseline savings claim | None |
-| G13 | Canonical bundle assets, manifest and isolated install smoke passed | Public platform matrix |
+| G13 | All three public native bundles passed CI install smoke and downloaded SHA-256 verification | None |
 | G14 | Fresh config, disabled/missing-key, limits, persistence and private login; bundle smoke passed with no external tools | None |
-| G15 | Version target 0.9.12 and release notes prepared | Full final source/bundle/CI/assets verification |
+| G15 | 0.9.12 stable Latest published; full gates passed; published macOS bundle installed and daemon verified | None |
 | G16 | Router setup removed; hidden input compiled into Rust; empty-PATH bundle smoke passed | None |
 | G17 | Settings reload/modify/write under private lock | None |
 | G18 | Parent terminal receipt overrides heartbeat; timeout/cancel tests terminate descendants | None |
