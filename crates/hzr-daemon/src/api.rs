@@ -2281,7 +2281,7 @@ pub(crate) async fn execute_command(
     let trace = state
         .observability
         .begin_trace(&cwd.to_string_lossy(), request.session_id.as_deref());
-    let command = CanonicalCommand::shell(request.command.clone());
+    let command = CanonicalCommand::host_shell(request.command.clone()); // 0.10.0: host shell
     let policy_started = Instant::now();
     let (preflight, fidelity_reservation) =
         daemon_fidelity_preflight_for_run(&state.ledger, &request, &cwd).await;
@@ -2297,7 +2297,7 @@ pub(crate) async fn execute_command(
         },
         FidelityPreflight::NotRequested | FidelityPreflight::Allow { .. } => {
             if request.fidelity_requested {
-                let command = CanonicalCommand::shell(request.command.clone());
+                let command = CanonicalCommand::host_shell(request.command.clone()); // 0.10.0: host shell
                 state
                     .rtk
                     .decide_byte_fidelity_with_plan_in(&command, Some(&cwd))
@@ -3586,7 +3586,7 @@ pub async fn exec_rewrite(
     let mut outcome = match &preflight {
         FidelityPreflight::Ask { evasion, reason } => RtkRewriteOutcome {
             decision: RewriteDecision::Ask {
-                proposed: Some(CanonicalCommand::shell(request.command.clone())),
+                proposed: Some(CanonicalCommand::host_shell(request.command.clone())), // 0.10.0
                 reason: reason.clone(),
             },
             evasion: Some(*evasion),
@@ -3857,7 +3857,8 @@ async fn fork_outcome_with_managed_unwrap(
         }
     };
     let authorized = matches!(fidelity, RawFidelityRequest::Authorized { .. });
-    let canonical = CanonicalCommand::shell(command);
+    // 0.10.0: a proxied compound command runs in bash/zsh, never POSIX sh (`<(…)`, `[[`)
+    let canonical = CanonicalCommand::host_shell(command);
     let mut outcome = if authorized {
         rtk.decide_byte_fidelity_with_plan_in(&canonical, Some(cwd))
             .await

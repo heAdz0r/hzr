@@ -461,7 +461,7 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
                             "type": "integer",
                             "minimum": 1,
                             "maximum": 50,
-                            "default": 10,
+                            "default": 5,
                             "description": "Maximum memories returned.",
                         },
                         "scope": {
@@ -469,6 +469,11 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
                             "enum": ["project", "global", "project_and_global"],
                             "default": "project_and_global",
                             "description": "project_and_global returns this repository plus explicit user-wide memory. Use project or global to restrict the lookup.",
+                        },
+                        "full": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Return complete memory bodies. By default each body is cut at 700 characters and names the hzr_memory_get call for the rest.",
                         },
                     },
                     "required": ["query"],

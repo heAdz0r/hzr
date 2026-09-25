@@ -34,11 +34,9 @@ const MANAGED_PROSE_WIDTH: usize = 88;
 #[derive(Debug, Deserialize)]
 struct AgentCapabilities {
     schema_version: u32,
-    product: String,
     control_plane: String,
     internal_engines: Vec<String>,
     routes: Vec<AgentRoute>,
-    mcp_tools: Vec<AgentTool>,
     harnesses: AgentHarnesses,
 }
 
@@ -47,28 +45,13 @@ struct AgentRoute {
     instead_of: String,
     command: String,
     guidance: String,
+    /// Whether the route earns a row in the per-turn managed block. (0.10.0)
+    #[serde(default = "projected_by_default")]
+    managed_block: bool,
 }
 
-#[derive(Debug, Deserialize)]
-struct AgentTool {
-    name: String,
-    #[serde(default)]
-    tier: ToolTier,
-    purpose: String,
-}
-
-/// How prominently a tool is projected into every session's instruction prefix.
-///
-/// Every line of the managed block is loaded into every turn of every session, so a tool that
-/// is used once per week must not cost the same instruction bytes as one used every task. Core
-/// tools keep a table row; specialist tools are named once, in one line, and their full
-/// contract stays in the MCP schema the host loads on demand. (W12, PRD 2026-09-04)
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "snake_case")]
-enum ToolTier {
-    #[default]
-    Core,
-    Specialist,
+fn projected_by_default() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,7 +71,6 @@ struct AgentHarness {
 struct ResponseCodecCapability {
     global_replacement: bool,
     coverage: String,
-    mechanism: String,
     economic_credit: bool,
     /// What the agent is told to do about answer length by default. The only supported value
     /// is concise generation without a post-hoc transform: a codec applied after the model has
@@ -108,44 +90,15 @@ fn agent_capabilities() -> AgentCapabilities {
 }
 
 fn route_table(contract: &AgentCapabilities) -> String {
-    let mut table = String::from("| Instead of | Use |\n|---|---|\n");
-    for route in &contract.routes {
+    // 0.10.0: "Need | Use" — native tools stay the default; rows name when HZR adds value
+    let mut table = String::from("| Need | Use |\n|---|---|\n");
+    for route in contract.routes.iter().filter(|route| route.managed_block) {
         table.push_str(&format!(
             "| {} | `{}`; {} |\n",
             route.instead_of.replace('|', "\\|"),
             route.command.replace('|', "\\|"),
             route.guidance.replace('|', "\\|")
         ));
-    }
-    table
-}
-
-fn mcp_table(contract: &AgentCapabilities) -> String {
-    let mut table = String::from("| Tool | Use it for |\n|---|---|\n");
-    for tool in contract
-        .mcp_tools
-        .iter()
-        .filter(|tool| tool.tier == ToolTier::Core)
-    {
-        table.push_str(&format!("| `{}` | {} |\n", tool.name, tool.purpose));
-    }
-    let specialist = contract
-        .mcp_tools
-        .iter()
-        .filter(|tool| tool.tier == ToolTier::Specialist)
-        .map(|tool| format!("`{}`", tool.name))
-        .collect::<Vec<_>>();
-    if !specialist.is_empty() {
-        table.push('\n');
-        table.push_str(&wrap_prose(
-            &format!(
-                "Specialist tools, called only when the task needs them; their full contracts \
-                 live in the MCP schema, not here: {}.",
-                specialist.join(", ")
-            ),
-            MANAGED_PROSE_WIDTH,
-        ));
-        table.push('\n');
     }
     table
 }
@@ -275,34 +228,6 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
         Some(expected_instruction_file),
         "agent contract harness file must match the installation surface"
     );
-    let route_table = route_table(&capabilities);
-    let mcp_table = mcp_table(&capabilities);
-    let engines = capabilities
-        .internal_engines
-        .iter()
-        .map(|engine| format!("`{engine}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let harness_guidance = if harness.native_hook_routing {
-        concat!(
-            "Claude Code hooks route supported Bash calls through HZR without granting new\n",
-            "permissions. Native Read/Grep/Glob/Edit/Write retain exact host semantics in all\n",
-            "legacy modes; no optimization-only deny/retry is emitted. Native Explore workers\n",
-            "also pass through unchanged, with host permissions preserved. The PostToolUse observer\n",
-            "stores no content and grants no savings credit. Missing accounting stays visible.\n",
-            "Run `hzr hooks capabilities --host claude --probe` for local adapter checks; these\n",
-            "checks do not prove installation, trusted activation or model-visible delivery.\n"
-        )
-    } else {
-        concat!(
-            "Codex supports hooks, but HZR does not install Codex hooks automatically. Use the\n",
-            "routes above and registered HZR MCP tools explicitly. The optional\n",
-            "`hzr hooks dispatch --host codex` adapter accepts canonical Bash inputs only and\n",
-            "requires an explicit host bypassPermissions grant before rewriting arguments.\n",
-            "Unsupported shapes retain normal host permissions. Native operations not routed\n",
-            "through HZR lack HZR accounting; local probes do not verify host delivery.\n"
-        )
-    };
     let codec = harness
         .response_codec
         .as_ref()
@@ -315,93 +240,60 @@ fn managed_block(surface: Surface, contract_path: &Path) -> String {
         Some("concise_generation_no_post_hoc_transform"),
         "the only supported default prose policy is concise generation"
     );
-    // Concise generation is an instruction, not a transform: the cheapest long answer is the one
-    // that was never emitted. Asking every agent to send finished prose back through a codec
-    // spends the answer's tokens once to write it, again as tool arguments, again as the returned
-    // payload and again in the final message, to remove only exact duplicate paragraphs.
-    let codec_guidance = format!(
-        "## Response density\n\n{}\n",
-        wrap_prose(
-            &format!(
-                "Write concisely by default: lead with the result, omit greetings, request \
-                 restatement and tool recaps, and keep code, commands, paths, identifiers, \
-                 errors and numbers exact. Do not route generated prose through `hzr_codec`: a \
-                 transform applied after generation cannot refund tokens already emitted, and \
-                 it only removes exact duplicate paragraphs. Call `hzr_codec` only when the user \
-                 asks for it or to shadow-measure a counterfactual with `profile: \"shadow\"`. \
-                 Response coverage is `{coverage}` via `{mechanism}`; HZR grants no economic \
-                 credit unless a trusted host confirms replacement.",
-                coverage = codec.coverage,
-                mechanism = codec.mechanism,
-            ),
-            MANAGED_PROSE_WIDTH,
+
+    // 0.10.0: this block is read on every turn of every session, so it carries routing only.
+    // Tool schemas already describe the MCP tools, codec economics live in HZR.md, and native
+    // Read/Edit/Write stay the default: routing them through a shell saves no tokens and
+    // collides with repositories that forbid shell file writes. 6,593 bytes before, ≤2,500 now.
+    let route_table = route_table(&capabilities);
+    let engines = capabilities
+        .internal_engines
+        .iter()
+        .map(|engine| format!("`{engine}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let routing = if harness.native_hook_routing {
+        "Hooks already route supported Bash commands; native Read, Grep, Glob, Edit and Write stay \
+         the default."
+    } else {
+        "HZR installs no Codex hooks, so run shell commands as `hzr exec run '<cmd>'` to get \
+         filtered output; native file tools stay the default."
+    };
+    let intro = wrap_prose(
+        &format!(
+            "`{control_plane}` filters command output and owns {engines}; never call those \
+             binaries directly. {routing}",
+            control_plane = capabilities.control_plane,
         ),
+        MANAGED_PROSE_WIDTH,
     );
-    let delegation_guidance =
-        "If enabled in `hzr settings`, use `hzr delegate` for scoped tasks; review results.\n\n";
-    let contract_pointer = format!(
-        "{}\n",
-        wrap_prose(
-            &format!(
-                "Read the full contract at `{0}` only when a bounded lookup cannot resolve \
-                 HZR-policy ambiguity. Ordinary tasks must not import or read it in full. \
-                 Start with `hzr read {0} --outline`, then read only the relevant \
-                 `--from`/`--to` range.",
-                contract_path.display(),
-            ),
-            MANAGED_PROSE_WIDTH,
+    let rules = wrap_prose(
+        &format!(
+            "Filtered or bounded output always names its recovery command; never treat it as \
+             complete. Use MCP `hzr_*` tools only when the server reports this worktree. If \
+             enabled in `hzr settings`, `hzr delegate` runs scoped tasks; review its results. \
+             Policy details: `{}` (read with `--outline` first).",
+            contract_path.display()
         ),
+        MANAGED_PROSE_WIDTH,
+    );
+    let density = wrap_prose(
+        "Write concisely: lead with the result, skip restatement and tool recaps, keep code, \
+         paths, errors and numbers exact.",
+        MANAGED_PROSE_WIDTH,
     );
 
     format!(
         "{BEGIN}\n\n\
-         # HZR tool contract (managed)\n\n\
-         `{control_plane}` — {product}'s Zero-Redundancy control plane — is the only control plane. Do not\n\
-         invoke separately installed {engines} binaries: HZR owns those\n\
-         engines internally, and a direct call creates the duplicate scan, duplicate\n\
-         store and unaccounted usage this engine exists to remove.\n\n\
-         This managed region defines tool routing only. Keep repository-specific roles,\n\
-         source paths and test commands in that repository's root instruction file, not\n\
-         in a user-global instruction file.\n\n\
-         {contract_pointer}\
+         # HZR (managed)\n\n\
+         {intro}\n\n\
          {route_table}\n\
-         ## Execution invariants\n\n\
-         For agent-originated shell work, `hzr exec run` is the default. If\n\
-         `hzr exec rewrite '<shell command>'` returns `allow_rewrite`, `raw` is forbidden.\n\
-         When no filter exists, it performs a tracked fallback; policy ambiguity returns `Ask`.\n\
-         For plain argv commands with known output intent,\n\
-         `hzr rtk -- test`, `err`, `summary` and `log` routes provide bounded\n\
-         filtering. Keep pipes, redirects and other shell grammar on `hzr exec run`.\n\n\
-         Choose reads by total task cost: exact full content is appropriate when repeated\n\
-         fragments would cost more or the whole file is needed. Use `hzr --json read <file>`\n\
-         for exact content with completeness and hashes; `--batch --max-tokens N` shares a\n\
-         budget across files. Continue from `next_line` with `--expected-sha256` to detect\n\
-         changes. Use `--outline` for structure and `--from`/`--to` for focused evidence\n\
-         when that reduces total work. Never treat a truncated response as complete.\n\
-         For repeated typed reads, `--context-epoch` and `--session-id` enable scoped\n\
-         cost advice. Change epoch after compaction/fork/resume; advice never hides text.\n\n\
-         TDD is opt-in, not the default. When token or time efficiency matters, skip it\n\
-         and use proportionate verification; repository-required quality gates still apply.\n\n\
-         ## Memory scopes\n\n\
-         One store, two namespaces. `--scope project` (the store default) is for facts about\n\
-         *this repository*. `--scope global` is for facts about the **user** — a preference or\n\
-         standing rule that applies in every repository. Recall may combine project and global;\n\
-         another repository's memory is never reachable.\n\n\
-         ## MCP tools\n\n\
-         Use a registered `hzr` MCP server only after its initialize result reports\n\
-         `serverInfo.workspace.bound = true` and `serverInfo.workspace.project` exactly matches\n\
-         the canonical current worktree. Otherwise use the CLI routes and repair the project pin;\n\
-         never recommend or use an MCP session bound to another workspace:\n\n\
-         {mcp_table}\n\
-         MCP is client-managed stdio; `hzr init` writes the trusted-project Codex registration\n\
-         but never starts it. `isError: true` confirms no\n\
-         success and no fallback store. Recall before retrying an ambiguously completed write.\n\
-         Never register {engines} as separate MCP servers.\n\n\
-         {harness_guidance}\n\
-         {delegation_guidance}{codec_guidance}\
+         {rules}\n\n\
+         {density}\n\n\
          {END}",
-        control_plane = capabilities.control_plane,
-        product = capabilities.product,
+        intro = intro.trim_end(),
+        rules = rules.trim_end(),
+        density = density.trim_end(),
     )
 }
 
@@ -866,7 +758,11 @@ fn referenced_contract(block: &str) -> Option<PathBuf> {
     }
     // The markers deliberately stop before the opening backtick: the wrapper may place the line
     // break in exactly that gap, so the phrase and the quoted path can end up on separate lines.
-    for marker in ["Bootstrap by reading", "Read the full contract at"] {
+    for marker in [
+        "Policy details:",
+        "Bootstrap by reading",
+        "Read the full contract at",
+    ] {
         if let Some(path) = quoted_after(block, marker) {
             return Some(path);
         }
@@ -893,7 +789,105 @@ fn quoted_after(block: &str, marker: &str) -> Option<PathBuf> {
     (!value.is_empty()).then(|| PathBuf::from(value))
 }
 
+/// Where a managed block for `path` is actually written. (0.10.0)
+///
+/// A repository that keeps `CLAUDE.md -> AGENTS.md`, or a user whose `~/.claude/CLAUDE.md`
+/// lives in a dotfiles checkout, used to get "lifecycle target contains a symlink component"
+/// and a failed install. A link is followed only where following it cannot escape: to a file
+/// in the link's own directory, or — for a user-global file — to a regular file the user owns.
+/// Anything else still returns `path`, which the lifecycle validator rejects as before.
+pub(crate) fn resolve_instruction_path(path: &Path) -> PathBuf {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return path.to_path_buf();
+    };
+    if !metadata.file_type().is_symlink() && !has_symlink_parent(path) {
+        return path.to_path_buf();
+    }
+    let Ok(resolved) = std::fs::canonicalize(path) else {
+        return path.to_path_buf();
+    };
+    if !resolved.is_file() {
+        return path.to_path_buf();
+    }
+    let same_directory = path
+        .parent()
+        .and_then(|parent| std::fs::canonicalize(parent).ok())
+        .zip(resolved.parent())
+        .is_some_and(|(link_dir, target_dir)| link_dir == target_dir);
+    if same_directory || (is_user_global_instruction(path) && owned_by_current_user(&resolved)) {
+        resolved
+    } else {
+        path.to_path_buf()
+    }
+}
+
+fn has_symlink_parent(path: &Path) -> bool {
+    path.ancestors().skip(1).any(|ancestor| {
+        std::fs::symlink_metadata(ancestor).is_ok_and(|metadata| metadata.file_type().is_symlink())
+    })
+}
+
+fn is_user_global_instruction(path: &Path) -> bool {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return false;
+    };
+    [".claude", ".codex"]
+        .iter()
+        .any(|directory| path.starts_with(home.join(directory)))
+}
+
+#[cfg(unix)]
+fn owned_by_current_user(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    match (std::fs::metadata(path), std::fs::metadata(home)) {
+        (Ok(target), Ok(home)) => target.uid() == home.uid(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn owned_by_current_user(_path: &Path) -> bool {
+    false
+}
+
+fn other_surface(surface: Surface) -> Surface {
+    match surface {
+        Surface::Claude => Surface::Codex,
+        Surface::Codex => Surface::Claude,
+    }
+}
+
+/// The managed region of `text`, markers included.
+fn managed_region_of(text: &str) -> Option<&str> {
+    let start = text.find(BEGIN)?;
+    let region = &text[start..];
+    region
+        .find(END)
+        .map(|end| &region[..end.saturating_add(END.len())])
+}
+
+/// Whether a file shared by both surfaces (`CLAUDE.md -> AGENTS.md`) already carries the other
+/// surface's current block. Writing ours would replace it, the other surface would write its
+/// own back on the next session, and the two would alternate forever.
+fn shared_file_has_current_block(
+    surface: Surface,
+    original: &Path,
+    resolved: &Path,
+    existing: &str,
+    contract_path: &Path,
+) -> bool {
+    original != resolved
+        && managed_region_of(existing)
+            .is_some_and(|region| region == managed_block(other_surface(surface), contract_path))
+}
+
 pub fn audit(surface: Surface, path: &Path) -> Result<InstructionAudit> {
+    let original = path;
+    let resolved = resolve_instruction_path(path); // 0.10.0: follow safe symlinks
+    let path = resolved.as_path();
     let bytes = read_optional(path)?;
     let text = String::from_utf8_lossy(&bytes).to_string();
     let installed = text.contains(BEGIN);
@@ -917,7 +911,10 @@ pub fn audit(surface: Surface, path: &Path) -> Result<InstructionAudit> {
         .unwrap_or(false);
     let current = managed_region
         .zip(contract_path.as_deref())
-        .map(|(actual, contract)| actual == managed_block(surface, contract))
+        .map(|(actual, contract)| {
+            actual == managed_block(surface, contract)
+                || shared_file_has_current_block(surface, original, path, &text, contract)
+        })
         .unwrap_or(false);
 
     Ok(InstructionAudit {
@@ -1006,11 +1003,18 @@ fn install_inner(
     dry_run: bool,
     confirmed: bool,
 ) -> Result<InstructionReport> {
+    let original = path;
+    let resolved = resolve_instruction_path(path); // 0.10.0: follow safe symlinks
+    let path = resolved.as_path();
     let before = read_optional(path)?;
     let existing = String::from_utf8(before.clone())
         .with_context(|| format!("{} is not UTF-8; HZR will not rewrite it", path.display()))?;
     let (after, legacy_removed, legacy_blocks_removed, directives_migrated) =
-        compose(&existing, surface, contract_path);
+        if shared_file_has_current_block(surface, original, path, &existing, contract_path) {
+            (existing.clone(), 0, 0, 0)
+        } else {
+            compose(&existing, surface, contract_path)
+        };
     let after = local_codex_bridge(after, local_codex);
     apply(
         surface,
@@ -1043,6 +1047,33 @@ pub fn uninstall(
     dry_run: bool,
     confirmed: bool,
 ) -> Result<InstructionReport> {
+    let resolved = resolve_instruction_path(path); // 0.10.0: follow safe symlinks
+    // 0.10.0: an obsolete target that carries nothing HZR manages is left alone, symlink or
+    // not. The cleanup used to validate every candidate for writing first, so a repository
+    // with `CLAUDE.md -> AGENTS.md` failed a global install it had no part in.
+    let unmanaged = std::fs::read(&resolved).map_or(true, |bytes| {
+        let text = String::from_utf8_lossy(&bytes);
+        !text.contains(BEGIN)
+            && !text.contains(LOCAL_CODEX_BRIDGE_BEGIN)
+            && !text.contains(LEGACY_RTK_BEGIN)
+            && !LEGACY_IMPORTS.iter().any(|import| text.contains(import))
+    });
+    if unmanaged {
+        let before = std::fs::read(&resolved).unwrap_or_default();
+        return Ok(InstructionReport {
+            surface,
+            path: resolved,
+            changed: false,
+            installed: false,
+            legacy_rtk_imports_removed: 0,
+            legacy_rtk_blocks_removed: 0,
+            legacy_directives_migrated: 0,
+            before_sha256: sha256(&before),
+            after_sha256: sha256(&before),
+            backup_path: None,
+        });
+    }
+    let path = resolved.as_path();
     let before = read_optional(path)?;
     if before.is_empty() {
         return Ok(InstructionReport {
@@ -1167,7 +1198,7 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        BEGIN, END, MANAGED_PROSE_WIDTH, Surface, ToolTier, compose, managed_block,
+        BEGIN, END, MANAGED_PROSE_WIDTH, Surface, compose, managed_block,
         migrate_legacy_directives, prose_words, strip_legacy_imports, strip_managed_block,
     };
 
@@ -1301,7 +1332,9 @@ mod tests {
         assert!(out.contains("`hzr read <file>`"));
         assert!(out.contains("`hzr rgai \"<query>\"`"));
         assert!(out.contains("`hzr_memory_recall`"));
-        assert_eq!(out.matches("`hzr read <file>`").count(), 2);
+        // 0.10.0: the block's read row is `hzr read <file> --outline`; the migrated line is
+        // the only bare one.
+        assert_eq!(out.matches("`hzr read <file>`").count(), 1);
         assert_eq!(compose(&out, Surface::Claude, contract()).0, out);
     }
 
@@ -1330,6 +1363,89 @@ mod tests {
         assert_eq!(compose(&out, Surface::Codex, contract()).0, out);
     }
 
+    // 0.10.0: `CLAUDE.md -> AGENTS.md` in one directory is followed; a link leaving it is not
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_instruction_files_are_followed_only_within_their_directory() {
+        let repo = tempfile::tempdir().expect("repository");
+        let outside = tempfile::tempdir().expect("outside");
+        let agents = repo.path().join("AGENTS.md");
+        std::fs::write(&agents, "# Rules\n").expect("agents");
+        let claude = repo.path().join("CLAUDE.md");
+        std::os::unix::fs::symlink("AGENTS.md", &claude).expect("link");
+        assert_eq!(
+            super::resolve_instruction_path(&claude),
+            std::fs::canonicalize(&agents).expect("canonical")
+        );
+
+        let escape = repo.path().join("ESCAPE.md");
+        let foreign = outside.path().join("bashrc");
+        std::fs::write(&foreign, "export X=1\n").expect("foreign");
+        std::os::unix::fs::symlink(&foreign, &escape).expect("escape link");
+        assert_eq!(super::resolve_instruction_path(&escape), escape);
+        assert!(super::install(Surface::Claude, &escape, contract(), false, true).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&foreign).expect("foreign"),
+            "export X=1\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn obsolete_symlinked_target_without_a_block_is_left_untouched() {
+        let repo = tempfile::tempdir().expect("repository");
+        let outside = tempfile::tempdir().expect("outside");
+        let foreign = outside.path().join("notes.md");
+        std::fs::write(&foreign, "# Mine\n").expect("foreign");
+        let claude = repo.path().join("CLAUDE.md");
+        std::os::unix::fs::symlink(&foreign, &claude).expect("link");
+        let report = super::uninstall(Surface::Claude, &claude, false, true).expect("no-op");
+        assert!(!report.changed);
+        assert_eq!(
+            std::fs::read_to_string(&foreign).expect("foreign"),
+            "# Mine\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn surfaces_sharing_one_file_do_not_rewrite_each_other() {
+        let repo = tempfile::tempdir().expect("repository");
+        let agents = repo.path().join("AGENTS.md");
+        std::fs::write(&agents, "# Rules\n").expect("agents");
+        let claude = repo.path().join("CLAUDE.md");
+        std::os::unix::fs::symlink("AGENTS.md", &claude).expect("link");
+
+        assert!(
+            super::install(Surface::Codex, &agents, contract(), false, true)
+                .expect("codex")
+                .changed
+        );
+        let second =
+            super::install(Surface::Claude, &claude, contract(), false, true).expect("claude");
+        assert!(
+            !second.changed,
+            "the shared file already carries a current block"
+        );
+        assert!(
+            super::audit(Surface::Claude, &claude)
+                .expect("audit")
+                .current
+        );
+        assert!(
+            super::audit(Surface::Codex, &agents)
+                .expect("audit")
+                .current
+        );
+        assert_eq!(
+            std::fs::read_to_string(&agents)
+                .expect("agents")
+                .matches(BEGIN)
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn test_uninstall_restores_original_body() {
         let original = "# Mine\n\nKeep this.\n";
@@ -1345,29 +1461,28 @@ mod tests {
         // Managed prose is wrapped after interpolation, so assert the sentence, not the
         // line breaks it happens to land on.
         let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(flat.contains("Read the full contract at `/opt/hzr/share/hzr/HZR.md` only when"));
-        assert!(flat.contains("hzr read /opt/hzr/share/hzr/HZR.md --outline"));
-        assert!(flat.contains("relevant `--from`/`--to` range"));
+        assert!(
+            flat.contains(
+                "Policy details: `/opt/hzr/share/hzr/HZR.md` (read with `--outline` first)"
+            )
+        );
         assert!(!out.contains("\n@/opt/hzr"));
         assert!(!out.contains("Bootstrap by reading"));
         assert!(!out.contains("HZR.md --level none` before other tool use"));
     }
 
+    // 0.10.0: MCP tools are described by their schemas; the block keeps the one safety rule
     #[test]
     fn test_managed_block_describes_mcp_and_batch_semantics_exactly() {
         let out = compose("", Surface::Codex, contract()).0;
-        assert!(out.contains("`hzr_codec`"));
-        assert!(out.contains("`hzr_memory_update`"));
-        assert!(out.contains("`hzr_memory_forget`"));
-        assert!(out.contains("`hzr_memory_prune`"));
-        assert!(out.contains("| optional TDD | `hzr tdd`;"));
-        assert!(out.contains("TDD is opt-in, not the default"));
-        assert!(!out.contains("`hzr tdd` before production changes"));
-        assert!(out.contains("batch is not an all-files transaction"));
-        assert!(out.contains("MCP is client-managed stdio"));
-        assert!(out.contains("`serverInfo.workspace.bound = true`"));
-        assert!(out.contains("exactly matches\nthe canonical current worktree"));
-        assert!(out.contains("never recommend or use an MCP session bound to another workspace"));
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("Use MCP `hzr_*` tools only when the server reports this worktree"));
+        assert!(flat.contains("`hzr write batch ...`"));
+        assert!(flat.contains("native Edit/Write stay the default"));
+        assert!(
+            !out.contains("`hzr tdd`"),
+            "TDD guidance lives in the skill, not every turn"
+        );
         assert!(!out.contains("Register the server with `hzr mcp config"));
     }
 
@@ -1375,7 +1490,7 @@ mod tests {
     fn acceptance_gate_managed_contract_routes_project_builds_through_exec_policy() {
         let out = compose("", Surface::Codex, contract()).0;
 
-        assert!(out.contains("build this project | `hzr exec run '<project build command>'`"));
+        assert!(out.contains("`hzr exec run '<cmd>'`"));
         assert!(!out.contains("`hzr build <args>`"));
     }
 
@@ -1384,13 +1499,14 @@ mod tests {
         let capabilities = super::agent_capabilities();
         let canonical = include_str!("../../../HZR.md");
         let readme = include_str!("../../../README.md");
-        let claude_awareness = include_str!("../../../integrations/claude-code/hzr-awareness.md");
-        let codex_awareness =
-            include_str!("../../../integrations/claude-code/hzr-awareness-codex.md");
 
         for surface in [Surface::Claude, Surface::Codex] {
             let rendered = compose("", surface, contract()).0;
-            for route in &capabilities.routes {
+            for route in capabilities
+                .routes
+                .iter()
+                .filter(|route| route.managed_block)
+            {
                 let markdown_command = route.command.replace('|', "\\|");
                 assert!(
                     rendered.contains(&format!("`{markdown_command}`")),
@@ -1400,19 +1516,19 @@ mod tests {
                 );
             }
         }
-        for tool in &capabilities.mcp_tools {
-            for (name, document) in [
-                ("HZR.md", canonical),
-                ("README.md", readme),
-                ("Claude awareness", claude_awareness),
-                ("Codex awareness", codex_awareness),
-            ] {
-                assert!(
-                    document.contains(&format!("`{}`", tool.name)),
-                    "{name} is missing SSOT MCP tool {}",
-                    tool.name
-                );
-            }
+        // The full contract (every route, including the ones the block leaves out) lives in
+        // HZR.md.
+        for route in &capabilities.routes {
+            let program = route
+                .command
+                .split_whitespace()
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(
+                canonical.contains(&program),
+                "HZR.md is missing route {program}"
+            );
         }
         assert!(!canonical.contains("Project build -> hzr build <args>"));
         assert!(!readme.contains("hzr build <args>"));
@@ -1423,74 +1539,55 @@ mod tests {
         for surface in [Surface::Claude, Surface::Codex] {
             let rendered = compose("", surface, contract()).0;
             assert!(
-                rendered.len() < 8 * 1024,
+                rendered.len() <= 2_500,
                 "{} managed projection grew to {} bytes",
                 surface.as_str(),
                 rendered.len()
             );
             assert_eq!(rendered.matches(BEGIN).count(), 1);
             assert!(!rendered.contains("100,000 estimated delivered tokens"));
-            assert!(rendered.contains("HZR.md --outline"));
+            assert!(rendered.contains("--outline"));
         }
     }
 
     #[test]
     fn test_managed_block_forbids_raw_when_policy_can_rewrite() {
         let out = compose("", Surface::Codex, contract()).0;
+        let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
 
-        assert!(out.contains("shell command | `hzr exec run '<shell command>'`"));
-        assert!(out.contains("returns `allow_rewrite`, `raw` is forbidden"));
-        assert!(out.contains("When no filter exists, it performs a tracked fallback"));
-        assert!(out.contains("`hzr rtk -- test`, `err`, `summary` and `log`"));
-        assert!(out.contains("`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason>"));
-        assert!(out.contains("Allowed reasons: binary, checksum, machine_protocol"));
-        assert!(!out.contains("| exact/raw output |"));
+        assert!(flat.contains("`hzr exec run '<cmd>'`"));
+        assert!(flat.contains("`HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason>"));
+        assert!(flat.contains("binary, checksum, machine_protocol"));
+        assert!(flat.contains("names its recovery command"));
     }
 
     #[test]
     fn acceptance_gate_managed_contract_matches_native_observer_and_mcp_surface() {
-        let capabilities = super::agent_capabilities();
-        for surface in [Surface::Claude, Surface::Codex] {
-            let out = compose("", surface, contract()).0;
-
-            for tool in &capabilities.mcp_tools {
-                assert!(
-                    out.contains(&format!("`{}`", tool.name)),
-                    "missing MCP tool {}",
-                    tool.name
-                );
-            }
-            assert!(!out.contains("nothing records them"));
-            assert!(!out.contains("absent from `hzr stats` entirely"));
-        }
-
         let claude = compose("", Surface::Claude, contract()).0;
-        assert!(claude.contains("no optimization-only deny/retry"));
-        assert!(claude.contains("without granting new"));
-        assert!(claude.contains("grants no savings credit"));
+        let flat = claude.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("Hooks already route supported Bash commands"));
+        assert!(flat.contains("native Read, Grep, Glob, Edit and Write stay the default"));
 
         let codex = compose("", Surface::Codex, contract()).0;
-        assert!(codex.contains("Codex supports hooks"));
-        assert!(codex.contains("does not install Codex hooks automatically"));
-        assert!(codex.contains("local probes do not verify host delivery"));
+        let flat = codex.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("HZR installs no Codex hooks, so run shell commands as `hzr exec run")
+        );
+        assert!(!flat.contains("Hooks already route"));
     }
 
     #[test]
     fn acceptance_gate_no_unbounded_exact_defaults_in_managed_contract() {
         for surface in [Surface::Claude, Surface::Codex] {
             let out = compose("", surface, contract()).0;
+            let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
 
-            assert!(out.contains("`hzr search \"<intent>\" --mode auto`"));
-            assert!(out.contains("--mode exact only for a known literal"));
-            assert!(out.contains("exact full content is appropriate"));
-            assert!(out.contains("Never treat a truncated response as complete"));
-            assert!(out.contains("--expected-sha256"));
-            assert!(out.contains("`hzr --json read <file>`"));
-            assert!(out.contains("`--batch --max-tokens N`"));
-            assert!(!out.contains("Markdown defaults to a digest, `--level none` is exact"));
+            assert!(flat.contains("`hzr search \"<intent>\"`"));
+            assert!(flat.contains("`--mode exact` for a known literal"));
+            assert!(flat.contains("`hzr read <file> --outline`"));
+            assert!(flat.contains("never treat it as complete"));
             assert!(!out.contains("\n@/opt/hzr"));
             assert!(!out.contains("Bootstrap by reading"));
-            assert!(out.contains("HZR.md --outline"));
         }
     }
 
@@ -1518,7 +1615,7 @@ mod tests {
         std::fs::write(&contract, "contract").expect("contract fixture");
         let stale = compose("", Surface::Codex, &contract)
             .0
-            .replace("raw` is forbidden", "raw` is preferred");
+            .replace("never treat it as", "always treat it as");
         std::fs::write(&instructions, stale).expect("stale instruction fixture");
 
         let report = super::audit(Surface::Codex, &instructions).expect("instruction audit");
@@ -1643,44 +1740,50 @@ mod tests {
         }
     }
 
-    /// F15/W12 (PRD 2026-09-04): the managed block is loaded into every turn of every session,
-    /// so it must ask for concise generation rather than a post-generation codec round trip, and
-    /// it must spend table rows only on the tools a task uses routinely.
+    /// 0.10.0 (external evaluation, PRD 2026-09-25): the managed block is loaded into every
+    /// turn of every session. It carries routing only, keeps native file tools as the default,
+    /// asks for concise generation without a codec round trip, and stays within 2,500 bytes
+    /// (6,593 before).
     #[test]
-    fn acceptance_gate_managed_block_instructs_concise_generation_and_tiers_tools() {
-        let capabilities = super::agent_capabilities();
+    fn acceptance_gate_managed_block_is_compact_routing_only() {
         for surface in [Surface::Claude, Surface::Codex] {
             let out = compose("", surface, contract()).0;
             let flat = out.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(flat.contains("Write concisely by default"));
-            assert!(flat.contains("Do not route generated prose through `hzr_codec`"));
-            assert!(flat.contains("cannot refund tokens already emitted"));
+            assert!(flat.contains("Write concisely"), "{out}");
             assert!(
-                !flat.contains("call `hzr_codec` once"),
-                "{} still instructs a default codec round trip",
-                surface.as_str()
+                !flat.contains("hzr_codec"),
+                "codec economics belong in HZR.md: {out}"
             );
-            for tool in &capabilities.mcp_tools {
-                let row = format!("| `{}` |", tool.name);
-                match tool.tier {
-                    ToolTier::Core => assert!(
-                        out.contains(&row),
-                        "core tool {} must keep a table row",
-                        tool.name
-                    ),
-                    ToolTier::Specialist => assert!(
-                        !out.contains(&row) && out.contains(&format!("`{}`", tool.name)),
-                        "specialist tool {} must be named once, not given a row",
-                        tool.name
-                    ),
-                }
-            }
-            assert!(flat.contains("Specialist tools, called only when the task needs them"));
-            // Measured 2026-09-04: 6,904 bytes (Claude) and 6,325 bytes (Codex) before W12;
-            // 6,593 and 6,014 after. Hold the ceiling below the pre-W12 size.
             assert!(
-                out.len() <= 6_800,
-                "{} managed projection grew back to {} bytes",
+                flat.contains("native"),
+                "native tools stay the default: {out}"
+            );
+            assert!(
+                !out.contains("| Instead of |"),
+                "no replacement mandate: {out}"
+            );
+            assert!(
+                !out.contains("| `hzr_"),
+                "MCP tools are described by their schemas: {out}"
+            );
+            assert!(
+                !out.contains("\n## "),
+                "no H2 headings a repository linter could reject"
+            );
+            for route in super::agent_capabilities()
+                .routes
+                .iter()
+                .filter(|route| route.managed_block)
+            {
+                assert!(
+                    out.contains(&route.command.replace('|', "\\|")),
+                    "{}",
+                    route.command
+                );
+            }
+            assert!(
+                out.len() <= 2_500,
+                "{} managed projection is {} bytes",
                 surface.as_str(),
                 out.len()
             );

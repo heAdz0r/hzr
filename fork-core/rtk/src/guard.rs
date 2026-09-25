@@ -79,6 +79,40 @@ pub fn never_worse<'a>(raw: &'a str, filtered: &'a str) -> &'a str {
     never_worse_summary(raw, filtered)
 }
 
+/// Guard for outputs whose text IS the content: listings, file reads, diffs, commit logs.
+///
+/// There "error", "fail" or "panic" are file names (`error.rs`), code and commit subjects,
+/// not a failure signal; the exit code carries failure for these commands. Applying the
+/// failure-word check here threw away every capped `find` whose hidden tail held an
+/// `errors.go`, and every bounded read of a file mentioning `panic!` past the cut.
+pub fn never_worse_content<'a>(raw: &'a str, filtered: &'a str) -> &'a str {
+    // 0.10.0: content outputs keep the protocol, emptiness and bloat checks only
+    let loses_machine_protocol = exact_machine_protocol(raw)
+        && raw != filtered
+        && !preserves_machine_protocol(raw, filtered);
+    let loses_content = !raw.trim().is_empty() && filtered.trim().is_empty();
+    if loses_machine_protocol || loses_content || estimate_tokens(filtered) > estimate_tokens(raw) {
+        raw
+    } else {
+        filtered
+    }
+}
+
+/// Guard for a summary of a format rtk itself injected (`go test -json`,
+/// `golangci-lint --output.json.path stdout`).
+///
+/// The raw text is rtk's own choice, not the caller's protocol, and the exit verdict is
+/// enforced separately by [`guard_exit`]; only emptiness and bloat can make it worse.
+pub fn never_worse_rendered<'a>(raw: &'a str, filtered: &'a str) -> &'a str {
+    // 0.10.0: self-injected formats never trigger the protocol or failure-word fallback
+    let loses_content = !raw.trim().is_empty() && filtered.trim().is_empty();
+    if loses_content || estimate_tokens(filtered) > estimate_tokens(raw) {
+        raw
+    } else {
+        filtered
+    }
+}
+
 /// Guard for a rendering the caller asked for on purpose, such as `rtk json`.
 ///
 /// An explicit schema view is expected to drop values, so the machine-protocol
@@ -293,6 +327,21 @@ pub fn guard_exit(raw: &str, exit_code: i32, tool: &str, filtered: &str) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.10.0: a file named error.rs in a capped listing is content, not a failure
+    #[test]
+    fn content_guard_ignores_failure_words_in_listed_names() {
+        let raw = (0..80)
+            .map(|index| format!("src/module_{index}/mod.rs"))
+            .chain(["src/error.rs".to_owned(), "src/panic_hook.rs".to_owned()])
+            .collect::<Vec<_>>()
+            .join("\n");
+        let capped = "82F 81D:\n\nsrc/module_0/ mod.rs\n+81 more";
+        assert_eq!(never_worse(&raw, capped), raw, "legacy guard reverts");
+        assert_eq!(never_worse_content(&raw, capped), capped);
+        assert_eq!(never_worse_content(&raw, ""), raw);
+        assert_eq!(never_worse_content("ab", "abcdefghijkl"), "ab");
+    }
 
     #[test]
     fn keeps_filtered_when_smaller() {

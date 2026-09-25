@@ -312,7 +312,12 @@ fn probe_refusal(
     None
 }
 
-fn git_probe(root: &Path, args: &[&OsStr], capture: bool, operation: &str) -> Result<Output> {
+pub(crate) fn git_probe(
+    root: &Path,
+    args: &[&OsStr],
+    capture: bool,
+    operation: &str,
+) -> Result<Output> {
     // A poisoned lock must not stop the diagnosis: fall through and probe.
     if let Some(reason) = WEDGED_ROOTS
         .lock()

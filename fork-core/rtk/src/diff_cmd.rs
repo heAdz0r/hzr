@@ -23,7 +23,7 @@ pub fn run(file1: &Path, file2: &Path, verbose: u8) -> Result<()> {
 
     if diff.added == 0 && diff.removed == 0 {
         rtk.push_str("✅ Files are identical");
-        let shown = crate::guard::never_worse(&raw, &rtk);
+        let shown = crate::guard::never_worse_content(&raw, &rtk); // 0.10.0: content guard
         println!("{}", shown);
         timer.track(
             &format!("diff {} {}", file1.display(), file2.display()),
@@ -56,7 +56,7 @@ pub fn run(file1: &Path, file2: &Path, verbose: u8) -> Result<()> {
         rtk.push_str(&format!("... +{} more changes", diff.changes.len() - 50));
     }
 
-    let shown = crate::guard::never_worse(&raw, &rtk);
+    let shown = crate::guard::never_worse_content(&raw, &rtk); // 0.10.0: content guard
     print!("{}", shown);
     timer.track(
         &format!("diff {} {}", file1.display(), file2.display()),
@@ -77,7 +77,7 @@ pub fn run_stdin(_verbose: u8) -> Result<()> {
 
     // Parse unified diff format
     let condensed = condense_unified_diff(&input);
-    let shown = crate::guard::never_worse(&input, &condensed);
+    let shown = crate::guard::never_worse_content(&input, &condensed); // 0.10.0: content guard
     println!("{}", shown);
 
     timer.track("diff (stdin)", "rtk diff (stdin)", &input, shown);

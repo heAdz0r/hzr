@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 
 const MIN_BATCH_FILE_TOKENS: usize = 64;
 pub const DEFAULT_READ_MAX_LINES: usize = 400;
+/// A plain read of a file up to this size is returned whole: it fits the 30,000-character
+/// window a host shows, so a bound would only force a follow-up call. (0.10.0)
+pub const DEFAULT_READ_EXACT_BYTES: u64 = 24 * 1024;
 const BOUNDED_READ_MAX_OUTPUT_BYTES: usize = 44 * 1024;
 
 fn tracked_filter_level(level: FilterLevel) -> tracking::ReadFilterLevel {
@@ -77,6 +80,10 @@ fn shell_quote_path(path: &Path) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+/// Smallest file the special-format digest may replace; below it the exact text is cheaper
+/// than the round trip a digest invites. (0.10.0)
+const SPECIAL_DIGEST_MIN_BYTES: usize = 16 * 1024;
+
 #[allow(clippy::too_many_arguments)] // changed: file read params bundle naturally together
 pub fn run(
     file: &Path,
@@ -93,8 +100,16 @@ pub fn run(
     let preserve_special_digest = default_output_budget
         && level != FilterLevel::None
         && read_digest::has_special_digest(file);
-    let max_lines = max_lines
-        .or((default_output_budget && !preserve_special_digest).then_some(DEFAULT_READ_MAX_LINES));
+    // 0.10.0: the default budget bounds files too large to show whole, not line counts. A
+    // 500-line file of short lines fits the host's window, and cutting it at 400 lines cost a
+    // second call (and a second full re-read of the session context) for the last 100.
+    let fits_default_window = std::fs::metadata(file)
+        .map(|metadata| metadata.len() <= DEFAULT_READ_EXACT_BYTES)
+        .unwrap_or(false);
+    let max_lines = max_lines.or((default_output_budget
+        && !preserve_special_digest
+        && !fits_default_window)
+        .then_some(DEFAULT_READ_MAX_LINES));
     let run_start = std::time::Instant::now();
     let timer = tracking::TimedExecution::start();
     let attribution = read_attribution(
@@ -189,11 +204,9 @@ pub fn run(
     if let Some(end) = to {
         if let Some(total) = full_line_count {
             if end < total {
-                eprintln!(
-                    "Range ends at line {end} of {total}; recovery: `hzr rtk -- read {} --from {} --to {total} --level none`",
-                    shell_quote_path(file),
-                    end + 1
-                );
+                // 0.10.0: a raw `sed -n A,Bp` prints no banner; the rewrite may add only the
+                // total, not a ~130-byte recovery command on every ranged read.
+                eprintln!("[lines {}-{end} of {total}]", from.unwrap_or(1));
             }
         }
     }
@@ -214,11 +227,15 @@ pub fn run(
     }
 
     // ── Special format digest (lock files, package.json, etc.) ──
+    // 0.10.0: only a file large enough to be worth a follow-up read is digested. A digest of
+    // a 1.6 KB CLAUDE.md saved 900 bytes and cost a second tool call, and every extra turn
+    // re-reads the whole session context.
     if level != FilterLevel::None
         && from.is_none()
         && to.is_none()
         && max_lines.is_none()
         && !line_numbers
+        && content_bytes.len() > SPECIAL_DIGEST_MIN_BYTES
         && read_digest::has_special_digest(file)
     {
         let content_str = String::from_utf8_lossy(&content_bytes);
@@ -322,11 +339,9 @@ pub fn run(
         let shown = input_line_count.min(tail);
         let omitted = input_line_count.saturating_sub(shown);
         let notice = (omitted > 0).then(|| {
-            format!(
-                "[showing {shown} bounded lines from file of {file_line_count}; {omitted} omitted from requested range; recovery: `hzr rtk -- read {} --from {range_start} --to {} --level none`]",
-                shell_quote_path(file),
-                range_start.saturating_add(omitted).saturating_sub(1)
-            )
+            // 0.10.0: the caller asked for the tail; say where it sits, nothing more
+            let first = range_start.saturating_add(omitted);
+            format!("[lines {first}-{} of {file_line_count}]", first + shown - 1)
         });
         (
             std::borrow::Cow::Owned(keep_tail_lines(&content, tail)),
@@ -342,11 +357,20 @@ pub fn run(
             input_line_count.saturating_sub(shown)
         };
         let notice = (omitted > 0).then(|| {
-            format!(
-                "[showing {shown} bounded lines from file of {file_line_count}; {omitted} omitted from requested range; recovery: `hzr rtk -- read {} --from {} --to {range_end} --level none`]",
-                shell_quote_path(file),
-                range_start.saturating_add(shown)
-            )
+            if default_output_budget && from.is_none() && to.is_none() {
+                // rtk imposed this bound on a plain `cat`: the rest must stay one call away.
+                format!(
+                    "[showing {shown} bounded lines from file of {file_line_count}; {omitted} omitted from requested range; recovery: `hzr rtk -- read {} --from {} --to {range_end} --level none`]",
+                    shell_quote_path(file),
+                    range_start.saturating_add(shown)
+                )
+            } else {
+                // 0.10.0: the caller chose the bound (`head -N`); a raw head prints no banner
+                format!(
+                    "[lines {range_start}-{} of {file_line_count}]",
+                    range_start + shown - 1
+                )
+            }
         });
         (
             std::borrow::Cow::Owned(keep_head_lines(&content, max)),
@@ -409,7 +433,7 @@ pub fn run(
             std::borrow::Cow::Borrowed(filtered.as_str()),
         )
     };
-    let mut shown = crate::guard::never_worse(&raw, &rtk_output).to_string();
+    let mut shown = crate::guard::never_worse_content(&raw, &rtk_output).to_string(); // 0.10.0: content guard
     if (max_lines.is_some() || default_output_budget) && shown.len() > BOUNDED_READ_MAX_OUTPUT_BYTES
     {
         let boundary = shown
@@ -545,7 +569,7 @@ fn render_batch_file(file: &Path, bytes: &[u8], budget: usize) -> String {
     let mut rendered_lines = Vec::<String>::new();
     let mut next_line = 1usize;
     while next_line <= lines.len() {
-        let rendered = format!("{} │ {}\n", next_line, lines[next_line - 1]);
+        let rendered = format!("{}\t{}\n", next_line, lines[next_line - 1]);
         let following = next_line + 1;
         let recovery =
             (following <= lines.len()).then(|| batch_recovery(file, following, lines.len()));
@@ -646,7 +670,7 @@ pub fn run_changed(file: &Path, revision: Option<&str>, context: usize, verbose:
 fn changed_tracking_view<'a>(file_content: &'a str, rendered_hunks: &'a str) -> (&'a str, &'a str) {
     (
         file_content,
-        crate::guard::never_worse(file_content, rendered_hunks),
+        crate::guard::never_worse_content(file_content, rendered_hunks), // 0.10.0: content guard
     )
 }
 
@@ -828,7 +852,7 @@ pub fn run_stdin(
     } else {
         (content.clone(), filtered.clone())
     };
-    let shown = crate::guard::never_worse(&raw, &rtk_output);
+    let shown = crate::guard::never_worse_content(&raw, &rtk_output); // 0.10.0: content guard
     print!("{shown}");
 
     timer.track_attributed("read stdin", "rtk read -", &raw, shown, attribution);
@@ -973,9 +997,9 @@ fn main() {{
             output.find("== src/first.rs ==").unwrap()
                 < output.find("== src/second.rs ==").unwrap()
         );
-        assert!(first_output.contains("1 │ let value_1 = 1;"));
+        assert!(first_output.contains("1\tlet value_1 = 1;"));
         assert!(first_output.contains("recovery: `hzr read src/first.rs --from"));
-        assert!(second_output.contains("1 │ alpha\n2 │ beta"));
+        assert!(second_output.contains("1\talpha\n2\tbeta"));
         assert!(tracking::estimate_tokens(&first_output) <= 120);
         assert!(tracking::estimate_tokens(&second_output) <= 120);
     }

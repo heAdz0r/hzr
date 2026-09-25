@@ -57,6 +57,31 @@ pub fn tokenize_with_newlines(input: &str) -> Vec<ParsedToken> {
     tokenize_inner(input, true)
 }
 
+/// Source byte ranges of the shell words in `input`.
+///
+/// The tokenizer splits one word into several tokens around expansions: `$U/a.rs` is the
+/// tokens `$U` and `/a.rs`. A rewrite that copies "the last token" as the path therefore
+/// reads `/a.rs` instead of the caller's file. Adjacent argument tokens with no gap between
+/// them are one word; the range covers the word exactly as written, quotes included.
+pub fn shell_word_spans(input: &str) -> Vec<std::ops::Range<usize>> {
+    // 0.10.0: word-accurate spans so path rewrites never drop an expansion
+    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut previous_end: Option<usize> = None;
+    for token in tokenize(input) {
+        if !matches!(token.kind, TokenKind::Arg | TokenKind::Shellism) {
+            previous_end = None;
+            continue;
+        }
+        let end = token.offset + token.value.len();
+        match spans.last_mut() {
+            Some(span) if previous_end == Some(token.offset) => span.end = end,
+            _ => spans.push(token.offset..end),
+        }
+        previous_end = Some(end);
+    }
+    spans
+}
+
 pub fn parse_shell_command_wrapper(input: &str) -> ShellWrapperParse {
     let tokens = tokenize(input);
     let Some(program) = tokens.first() else {

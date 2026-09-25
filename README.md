@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-<a href="Cargo.toml"><img alt="Version 0.9.13" src="https://img.shields.io/badge/version-0.9.13-e64a19"></a>
+<a href="Cargo.toml"><img alt="Version 0.10.0" src="https://img.shields.io/badge/version-0.10.0-e64a19"></a>
   <a href="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/heAdz0r/hzr/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/heAdz0r/hzr/releases"><img alt="Release" src="https://img.shields.io/github/v/release/heAdz0r/hzr?color=ef6c00"></a>
   <a href="LICENSE"><img alt="Apache 2.0" src="https://img.shields.io/badge/control_plane-Apache--2.0-37474f"></a>
@@ -86,30 +86,36 @@ deduplicates evidence by identity, and supervises long-lived components centrall
 
 ## Evidence, not slogans
 
-The reproducible 2026-08-01 command-output benchmark ran 14 identical cases five times
-against RAW tools, upstream RTK `v0.44.1`, and HZR fork-core `0.44.1-fork.1`.
+The 2026-09-25 benchmark reruns the cases an external evaluation measured on a Go repository,
+against RAW commands, HZR 0.9.13, HZR 0.10.0 and upstream RTK `v0.50.0`. Each output is also
+capped at the 30,000 characters Claude Code shows the model, because savings above that window
+never reach the context.
 
-| Case | RAW | RTK upstream | HZR | HZR vs RTK |
+| 16 cases, host-visible bytes | RAW | HZR 0.9.13 | HZR 0.10.0 | RTK v0.50.0 |
 |---|---:|---:|---:|---:|
-| `read README.md` | 6,046 | 6,046 | **265** | **−95.6%** |
-| `git diff HEAD~5` | 185,931 | 10,325 | **5,540** | **−46.3%** |
-| `cargo check` | 18 | 25 | **9** | **−64.0%** |
-| `cargo test` with exit `101` | 47,075 | 252 | **168** | **−33.3%** |
-| **All 14 cases** | **284,996** | **58,107** | **44,400** | **−23.6%** |
+| total | 139,256 | 108,006 | **86,748** | 104,644 |
+| `go test` with a compile failure | 250 | 3,451 | 318 | 275 |
+| `git diff HEAD~5` | 30,000 | 30,000 | **21,187** | 30,000 |
+| `find crates -name '*.rs'` | 6,046 | 6,139 | 965 | 847 |
+| `grep -rn` (lossless) | 10,355 | 10,355 | **8,264** | 10,355 |
 
-HZR won eight cases and tied six in that pinned matrix. The deterministic
-[LLM utility contract](benchmarks/hzr-llm-utility-v0.3.1/README.md) passes 9/9
-observable gates for bounded reads, exact recovery, and safe writes.
+HZR 0.10.0 delivers 38% less than RAW and 17% less than upstream RTK v0.50.0 on that set, without
+dropping content silently: every bounded or truncated output names its exact recovery command.
+`git status` is deliberately larger than in 0.9.13, which hid files. Methodology, all cases and a
+reproduction script: [`benchmarks/hzr-vs-rtk-upstream-v0.50.0`](benchmarks/hzr-vs-rtk-upstream-v0.50.0/README.md).
 
-These values use `ceil(UTF-8 bytes / 4)`. They measure delivered command-output size,
-not provider billing, total-session savings, or generic semantic equivalence. HZR keeps
-provider receipts and public-list estimates separate. See the
-[methodology](benchmarks/hzr-vs-rtk-upstream-v0.44.1/README.md)
-and [recorded run](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RESULTS.md).
+The earlier 2026-08-01 run against RTK `v0.44.1` reported −23.6% versus upstream, but its largest
+win (`read README.md`, −95.6%) compared a Markdown outline with the full file — a different
+fidelity, not the same content in fewer bytes ([recorded run](benchmarks/hzr-vs-rtk-upstream-v0.44.1/runs/2026-08-01-v2/RESULTS.md)).
+
+These values use `ceil(UTF-8 bytes / 4)`. They measure delivered command-output size, not
+provider billing or total-session savings. In a session dominated by exact file reads
+(`sed -n`, `cat`), which no filter can shrink without loss, the effect on billed input is small;
+HZR's per-turn instruction overhead is 1.6 KB.
 
 ## Install
 
-HZR 0.9.13 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
+HZR 0.10.0 ships self-contained native bundles for Linux x86_64/ARM64 and macOS
 Apple Silicon. Intel macOS is no longer supported. System Git is the only engine prerequisite; Node.js, RTK,
 grepai, and ICM are bundled. Windows is not currently published.
 
@@ -117,7 +123,7 @@ Download, inspect, then run the installer:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -fL \
-  https://raw.githubusercontent.com/heAdz0r/hzr/v0.9.13/install.sh \
+  https://raw.githubusercontent.com/heAdz0r/hzr/v0.10.0/install.sh \
   -o /tmp/hzr-install.sh
 sh /tmp/hzr-install.sh
 ```
@@ -318,6 +324,14 @@ same path, HZR reports an explicit conflict and makes no mutation; an old manife
 Use `hzr install --project-only --dry-run` when global activation is undesirable; explicit
 `hzr enable` and `hzr disable` keep that scope visible.
 
+Semantic search needs a local embedding provider. The index is configured for
+[Ollama](https://ollama.com) at `http://localhost:11434` with `nomic-embed-text`
+(`ollama pull nomic-embed-text`); Ollama is not bundled. Without it every search still works
+through the lexical ripgrep fallback, and each result names the backend that produced it
+(`ForkRgaiGrepai` or `ForkRgaiRipgrep`). `hzr doctor` probes the provider and reports
+`embedding_provider` as a warning when semantic search is unavailable. Memory recall uses ICM's
+FTS5 lexical retrieval; embeddings for memory are disabled in this release.
+
 ## MCP without a second control plane
 
 Clients without hooks launch the stateless stdio gateway:
@@ -427,7 +441,7 @@ policy: no repository file can buy an exception to a bypass HZR could replace at
 
 ## Honest boundaries
 
-| Guarantee | 0.9.13 posture |
+| Guarantee | 0.10.0 posture |
 |---|---|
 | one versioned control plane and pinned engine bundle | implemented |
 | one canonical index owner per worktree | implemented |
@@ -476,7 +490,14 @@ hzr delegate --file task.md
 ```
 
 Delegation is off by default. Each user supplies their own protected key; settings
-contain no credentials. OpenRouter and direct DeepSeek are also available, with
+contain no credentials.
+
+**Delegation sends repository content to the selected provider.** The worker's system prompt
+carries the repository's `AGENTS.md` and `CLAUDE.md`, the pre-fetched context plan, and every
+`hzr_read`, `hzr_search` and `hzr_exec` result the worker requests travels to that provider's
+API (`opencode.ai`, `openrouter.ai` or `api.deepseek.com`). Enable it only for repositories whose
+content may leave the machine under that provider's terms. The allowed-file list is an
+instruction to the worker, not a filesystem sandbox. OpenRouter and direct DeepSeek are also available, with
 an explicit model, turn limit and timeout. Disable with
 `hzr settings delegation --enabled false`. The parent model is unchanged.
 

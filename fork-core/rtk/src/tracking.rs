@@ -1556,6 +1556,41 @@ pub fn estimate_tokens(text: &str) -> usize {
     (text.len() as f64 / 4.0).ceil() as usize
 }
 
+/// Default size, in characters, of the command output a host shows the model: Claude
+/// Code's `BASH_MAX_OUTPUT_LENGTH` default.
+pub const DEFAULT_HOST_OUTPUT_CEILING_CHARS: usize = 30_000;
+
+/// Host-visible output ceiling in characters, or `None` when disabled.
+///
+/// `HZR_HOST_OUTPUT_CEILING` wins (`0` disables the ceiling); otherwise the host's own
+/// `BASH_MAX_OUTPUT_LENGTH`; otherwise [`DEFAULT_HOST_OUTPUT_CEILING_CHARS`].
+pub fn host_output_ceiling_chars() -> Option<usize> {
+    // 0.10.0: savings are credited only up to what the host would have delivered
+    let configured = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.trim().parse::<usize>().ok())
+    };
+    match configured("HZR_HOST_OUTPUT_CEILING").or_else(|| configured("BASH_MAX_OUTPUT_LENGTH")) {
+        Some(0) => None,
+        Some(chars) => Some(chars),
+        None => Some(DEFAULT_HOST_OUTPUT_CEILING_CHARS),
+    }
+}
+
+/// [`estimate_tokens`] of the part of `text` a host would show under `ceiling` characters.
+pub fn host_visible_tokens_with(text: &str, ceiling: Option<usize>) -> usize {
+    let visible = match ceiling.and_then(|chars| text.char_indices().nth(chars)) {
+        Some((cut, _)) => &text[..cut],
+        None => text,
+    };
+    estimate_tokens(visible)
+}
+
+fn host_visible_tokens(text: &str) -> usize {
+    host_visible_tokens_with(text, host_output_ceiling_chars())
+}
+
 /// Helper struct for timing command execution
 /// Helper for timing command execution and tracking results.
 ///
@@ -1760,9 +1795,12 @@ impl TimedExecution {
             } else {
                 AccountingRoute::Optimized
             };
-        let baseline_tokens = estimate_tokens(input) as u64;
+        // 0.10.0: both sides are what the host could show the model. Claude Code cuts Bash
+        // output at BASH_MAX_OUTPUT_LENGTH (30 000 chars by default), so crediting a 625 KB
+        // diff as ~156k saved tokens claimed savings the session could never have spent.
+        let baseline_tokens = host_visible_tokens(input) as u64;
         let delivered_tokens = match route {
-            AccountingRoute::Optimized => estimate_tokens(output) as u64,
+            AccountingRoute::Optimized => host_visible_tokens(output) as u64,
             AccountingRoute::Bypassed | AccountingRoute::NativeUnaccounted => baseline_tokens,
         };
         let receipt = EngineAccountingReceipt {
@@ -1904,6 +1942,17 @@ pub fn args_display(args: &[OsString]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.10.0: a 625 KB raw diff delivered as 16 KB saves at most the 30 000-char window
+    #[test]
+    fn host_visible_tokens_cap_both_sides_at_the_ceiling() {
+        let raw = "x".repeat(625_000);
+        let delivered = "y".repeat(16_000);
+        assert_eq!(host_visible_tokens_with(&raw, Some(30_000)), 7_500);
+        assert_eq!(host_visible_tokens_with(&delivered, Some(30_000)), 4_000);
+        assert_eq!(host_visible_tokens_with(&raw, None), 156_250);
+        assert_eq!(host_visible_tokens_with("ééé", Some(2)), 1);
+    }
 
     // 1. estimate_tokens — verify ~4 chars/token ratio
     #[test]

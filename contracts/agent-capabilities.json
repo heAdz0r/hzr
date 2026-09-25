@@ -10,57 +10,66 @@
   "routes": [
     {
       "id": "read",
-      "instead_of": "Read",
-      "command": "hzr read <file>",
-      "guidance": "Choose exact full content or bounded ranges by total task cost; --json reports completeness, hashes and continuation."
+      "instead_of": "File outline or line range",
+      "command": "hzr read <file> --outline",
+      "guidance": "or `--from A --to B`; native Read stays the default for whole files.",
+      "managed_block": true
     },
     {
       "id": "search",
-      "instead_of": "Grep or repository search",
-      "command": "hzr search \"<intent>\" --mode auto",
-      "guidance": "Use --mode exact only for a known literal; hzr rgai is the semantic shorthand."
+      "instead_of": "Search by intent",
+      "command": "hzr search \"<intent>\"",
+      "guidance": "`--mode exact` for a known literal.",
+      "managed_block": true
     },
     {
       "id": "write",
-      "instead_of": "Edit or Write",
-      "command": "hzr write patch|replace|set|create|batch ...",
-      "guidance": "Writes are atomic and idempotent per file; a batch is not an all-files transaction."
+      "instead_of": "Atomic multi-file edit (optional)",
+      "command": "hzr write batch ...",
+      "guidance": "native Edit/Write stay the default.",
+      "managed_block": true
     },
     {
       "id": "memory",
-      "instead_of": "durable memory",
-      "command": "hzr memory recall|get|store|update|forget|prune",
-      "guidance": "Project is the default scope; global is only for durable user-wide facts."
+      "instead_of": "Durable decisions and fixes",
+      "command": "hzr memory recall|store",
+      "guidance": "project scope by default; `--scope global` only for user-wide preferences.",
+      "managed_block": true
     },
     {
       "id": "context",
-      "instead_of": "cross-cutting context discovery",
+      "instead_of": "Unfamiliar or cross-cutting area",
       "command": "hzr context plan \"<intent>\"",
-      "guidance": "Use --max-tokens to bound evidence and --no-memory when memory is irrelevant."
+      "guidance": "bound with `--max-tokens N`.",
+      "managed_block": true
     },
     {
       "id": "shell",
-      "instead_of": "shell command",
-      "command": "hzr exec run '<shell command>'",
-      "guidance": "Default policy route; preserves shell grammar and selects managed filtering or tracked fallback."
+      "instead_of": "Shell command outside the hook",
+      "command": "hzr exec run '<cmd>'",
+      "guidance": "hook-routed Bash is already managed.",
+      "managed_block": true
     },
     {
       "id": "project_build",
       "instead_of": "build this project",
       "command": "hzr exec run '<project build command>'",
-      "guidance": "Project builds are ordinary managed shell commands; hzr build is not a generic project-build wrapper."
+      "guidance": "Project builds are ordinary managed shell commands; hzr build is not a generic project-build wrapper.",
+      "managed_block": false
     },
     {
       "id": "tdd",
       "instead_of": "optional TDD",
       "command": "hzr tdd",
-      "guidance": "Use only when requested, repository-required, or justified by regression risk."
+      "guidance": "Use only when requested, repository-required, or justified by regression risk.",
+      "managed_block": false
     },
     {
       "id": "exact_raw",
-      "instead_of": "explicit unfiltered recovery",
+      "instead_of": "Exact unfiltered output",
       "command": "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'",
-      "guidance": "Allowed reasons: binary, checksum, machine_protocol, complete_log, full_patch, or verbatim_source."
+      "guidance": "reason: binary, checksum, machine_protocol, complete_log, full_patch or verbatim_source.",
+      "managed_block": true
     }
   ],
   "mcp_tools": [

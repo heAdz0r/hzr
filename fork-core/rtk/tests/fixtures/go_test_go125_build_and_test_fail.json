@@ -1,0 +1,31 @@
+{"ImportPath":"redmod/c","Action":"build-output","Output":"# redmod/c\n"}
+{"ImportPath":"redmod/c","Action":"build-output","Output":"c/c.go:4:9: cannot use \"not an int\" (untyped string constant) as int value in return statement\n"}
+{"ImportPath":"redmod/c","Action":"build-fail"}
+{"Time":"2026-09-25T23:00:01.908353+03:00","Action":"start","Package":"redmod/a"}
+{"Time":"2026-09-25T23:00:01.908431+03:00","Action":"start","Package":"redmod/b"}
+{"Time":"2026-09-25T23:00:01.908488+03:00","Action":"start","Package":"redmod/c"}
+{"Time":"2026-09-25T23:00:01.908505+03:00","Action":"output","Package":"redmod/c","Output":"FAIL\tredmod/c [build failed]\n"}
+{"Time":"2026-09-25T23:00:01.908516+03:00","Action":"fail","Package":"redmod/c","Elapsed":0,"FailedBuild":"redmod/c"}
+{"Time":"2026-09-25T23:00:02.368174+03:00","Action":"run","Package":"redmod/a","Test":"TestOK"}
+{"Time":"2026-09-25T23:00:02.36838+03:00","Action":"output","Package":"redmod/a","Test":"TestOK","Output":"=== RUN   TestOK\n"}
+{"Time":"2026-09-25T23:00:02.368409+03:00","Action":"output","Package":"redmod/a","Test":"TestOK","Output":"--- PASS: TestOK (0.00s)\n"}
+{"Time":"2026-09-25T23:00:02.368431+03:00","Action":"pass","Package":"redmod/a","Test":"TestOK","Elapsed":0}
+{"Time":"2026-09-25T23:00:02.368445+03:00","Action":"run","Package":"redmod/a","Test":"TestFail"}
+{"Time":"2026-09-25T23:00:02.368455+03:00","Action":"output","Package":"redmod/a","Test":"TestFail","Output":"=== RUN   TestFail\n"}
+{"Time":"2026-09-25T23:00:02.368464+03:00","Action":"output","Package":"redmod/a","Test":"TestFail","Output":"    a_test.go:10: expected 1, got 2\n"}
+{"Time":"2026-09-25T23:00:02.36848+03:00","Action":"output","Package":"redmod/a","Test":"TestFail","Output":"--- FAIL: TestFail (0.00s)\n"}
+{"Time":"2026-09-25T23:00:02.368489+03:00","Action":"fail","Package":"redmod/a","Test":"TestFail","Elapsed":0}
+{"Time":"2026-09-25T23:00:02.368496+03:00","Action":"output","Package":"redmod/a","Output":"FAIL\n"}
+{"Time":"2026-09-25T23:00:02.369098+03:00","Action":"output","Package":"redmod/a","Output":"FAIL\tredmod/a\t0.460s\n"}
+{"Time":"2026-09-25T23:00:02.36914+03:00","Action":"fail","Package":"redmod/a","Elapsed":0.461}
+{"Time":"2026-09-25T23:00:02.504347+03:00","Action":"run","Package":"redmod/b","Test":"TestB1"}
+{"Time":"2026-09-25T23:00:02.504436+03:00","Action":"output","Package":"redmod/b","Test":"TestB1","Output":"=== RUN   TestB1\n"}
+{"Time":"2026-09-25T23:00:02.504473+03:00","Action":"output","Package":"redmod/b","Test":"TestB1","Output":"--- PASS: TestB1 (0.00s)\n"}
+{"Time":"2026-09-25T23:00:02.504487+03:00","Action":"pass","Package":"redmod/b","Test":"TestB1","Elapsed":0}
+{"Time":"2026-09-25T23:00:02.5045+03:00","Action":"run","Package":"redmod/b","Test":"TestB2"}
+{"Time":"2026-09-25T23:00:02.504508+03:00","Action":"output","Package":"redmod/b","Test":"TestB2","Output":"=== RUN   TestB2\n"}
+{"Time":"2026-09-25T23:00:02.504519+03:00","Action":"output","Package":"redmod/b","Test":"TestB2","Output":"--- PASS: TestB2 (0.00s)\n"}
+{"Time":"2026-09-25T23:00:02.504527+03:00","Action":"pass","Package":"redmod/b","Test":"TestB2","Elapsed":0}
+{"Time":"2026-09-25T23:00:02.504536+03:00","Action":"output","Package":"redmod/b","Output":"PASS\n"}
+{"Time":"2026-09-25T23:00:02.505205+03:00","Action":"output","Package":"redmod/b","Output":"ok  \tredmod/b\t0.597s\n"}
+{"Time":"2026-09-25T23:00:02.505245+03:00","Action":"pass","Package":"redmod/b","Elapsed":0.597}

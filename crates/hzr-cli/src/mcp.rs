@@ -1005,7 +1005,7 @@ async fn recall(client: &DaemonClient, workspace: &str, arguments: &Value) -> Re
         workspace: workspace.to_owned(),
         query,
         topic: optional_string(arguments, "topic")?,
-        limit: bounded_usize(arguments, "limit", 10, 50)?,
+        limit: bounded_usize(arguments, "limit", RECALL_DEFAULT_LIMIT, 50)?,
         keyword: optional_string(arguments, "keyword")?,
         scope: optional_enum(
             arguments,
@@ -1015,7 +1015,51 @@ async fn recall(client: &DaemonClient, workspace: &str, arguments: &Value) -> Re
             "project, global, project_and_global",
         )?,
     };
-    Ok(serde_json::to_value(client.memory_recall(&request).await?)?)
+    let full = arguments
+        .get("full")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut value = serde_json::to_value(client.memory_recall(&request).await?)?;
+    if !full {
+        compact_recall_summaries(&mut value, RECALL_SUMMARY_CHARS);
+    }
+    Ok(value)
+}
+
+/// Memories a recall returns unless the caller asks for more. (0.10.0)
+const RECALL_DEFAULT_LIMIT: usize = 5;
+/// Characters of each memory body a default recall returns. (0.10.0)
+const RECALL_SUMMARY_CHARS: usize = 700;
+
+/// Shorten each recalled memory body to `limit` characters, naming how to fetch the rest.
+///
+/// 0.10.0: a default recall returned ten complete bodies — 34,000 characters for one query in
+/// real use, most of it context the agent never needed. Recall now answers "what do we know"
+/// and `hzr_memory_get` returns a complete record; every record keeps its schema fields.
+fn compact_recall_summaries(value: &mut Value, limit: usize) {
+    let Some(memories) = value.get_mut("memories").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for memory in memories {
+        let id = memory
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let Some(summary) = memory.get_mut("summary") else {
+            continue;
+        };
+        let Some(text) = summary.as_str() else {
+            continue;
+        };
+        if let Some((cut, _)) = text.char_indices().nth(limit) {
+            let omitted = text[cut..].chars().count();
+            *summary = Value::String(format!(
+                "{}… [{omitted} more chars: hzr_memory_get id={id}]",
+                text[..cut].trim_end()
+            ));
+        }
+    }
 }
 
 async fn store(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
@@ -1041,7 +1085,24 @@ async fn store(client: &DaemonClient, workspace: &str, arguments: &Value) -> Res
         )?,
     };
     let response = client.memory_store(&request).await?;
-    Ok(serde_json::to_value(response)?)
+    let mut value = serde_json::to_value(response)?;
+    compact_echoed_memory(&mut value); // 0.10.0
+    Ok(value)
+}
+
+/// Characters of a just-written memory body echoed back to the writer. (0.10.0)
+const WRITE_ECHO_CHARS: usize = 120;
+
+/// A store or update echoed the complete body the agent had just sent — 3 KB of its own text
+/// per write. The record keeps every schema field; the body is cut to a recognisable prefix.
+fn compact_echoed_memory(value: &mut Value) {
+    if let Some(memory) = value.get_mut("memory") {
+        let mut wrapper = serde_json::json!({ "memories": [memory.take()] });
+        compact_recall_summaries(&mut wrapper, WRITE_ECHO_CHARS);
+        if let Some(compacted) = wrapper["memories"].get_mut(0) {
+            *memory = compacted.take();
+        }
+    }
 }
 
 async fn forget(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
@@ -1090,7 +1151,9 @@ async fn update(client: &DaemonClient, workspace: &str, arguments: &Value) -> Re
             "project, global",
         )?,
     };
-    Ok(serde_json::to_value(client.memory_update(&request).await?)?)
+    let mut value = serde_json::to_value(client.memory_update(&request).await?)?;
+    compact_echoed_memory(&mut value); // 0.10.0
+    Ok(value)
 }
 
 async fn prune(client: &DaemonClient, workspace: &str, arguments: &Value) -> Result<Value> {
@@ -1644,4 +1707,26 @@ fn tool_success(value: &Value) -> Value {
 /// agent can read the remediation text and continue.
 fn tool_error(message: &str) -> Value {
     json!({"content": [{"type": "text", "text": message}], "isError": true})
+}
+
+#[cfg(test)]
+mod recall_compaction_tests {
+    use serde_json::json;
+
+    // 0.10.0: recall bodies are cut with a pointer to the complete record
+    #[test]
+    fn long_recall_bodies_are_cut_and_name_the_full_record() {
+        let mut value = json!({"count": 2, "total_matches": 2, "memories": [
+            {"id": "01ABC", "summary": "я".repeat(1_000)},
+            {"id": "01DEF", "summary": "short"},
+        ]});
+        super::compact_recall_summaries(&mut value, 700);
+        let first = value["memories"][0]["summary"].as_str().expect("summary");
+        assert!(first.starts_with(&"я".repeat(700)));
+        assert!(
+            first.ends_with("… [300 more chars: hzr_memory_get id=01ABC]"),
+            "{first}"
+        );
+        assert_eq!(value["memories"][1]["summary"], "short");
+    }
 }

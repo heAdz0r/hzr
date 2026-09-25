@@ -2142,6 +2142,13 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                 Ok(status) => checks.push(index_readiness_check(&status)),
                 Err(error) => checks.push(check("index_readiness", CheckStatus::Warning, error)),
             }
+            // 0.10.0: a complete index is not a working semantic search. Without the embedding
+            // provider every `hzr search` quietly fell back to lexical ripgrep while doctor
+            // reported semantic readiness from configuration alone.
+            if let Some(embedder) = read_embedder_config(&workspace.join(".grepai/config.yaml")) {
+                checks.push(embedding_provider_check(&embedder).await);
+            }
+            checks.push(workspace_hygiene_check(workspace));
         }
         Err(error) => checks.push(check("grepai_ownership", CheckStatus::Error, error)),
     }
@@ -2171,7 +2178,11 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                                 } else {
                                     CheckStatus::Warning
                                 },
-                                format!("memory engine state {:?}", engine.state),
+                                // 0.10.0: name the retrieval mode, not just the state
+                                match engine.detail.as_deref() {
+                                    Some(detail) => format!("{:?}: {detail}", engine.state),
+                                    None => format!("memory engine state {:?}", engine.state),
+                                },
                             ),
                             None => check(
                                 "memory_runtime",
@@ -2345,7 +2356,8 @@ fn response_codec_coverage(
         global_response_replacement_confirmed: false,
         global_response_token_credit_eligible: false,
         action: if active {
-            "call `hzr_codec` for eligible long prose and use the returned content; otherwise report instructed-only coverage".into()
+            // 0.10.0: matches the managed policy — concise generation, codec only on request
+            "write concisely; call `hzr_codec` only on explicit request or with `profile: \"shadow\"`; coverage stays instructed-only".into()
         } else if instructions.workspace_active {
             format!(
                 "run `hzr doctor --workspace {}` and `hzr init` from that workspace before claiming instructed codec coverage",
@@ -3090,6 +3102,162 @@ fn index_status_snapshot(workspace: &Workspace) -> Result<IndexStatus, String> {
 ///
 /// Совпадает с тем, что оператор видит в `hzr index status`, и даёт remediation до
 /// первого `context plan` warning о cold warm-up.
+/// Files earlier HZR versions left in the user's working tree. (0.10.0)
+///
+/// Before 0.10.0 every `hzr write` left a zero-byte `<file>.rtk-lock` beside the file it
+/// edited; locks now live in the user cache directory, but the old sidecars stay until
+/// removed. Only reported — deleting files in a repository is the user's call.
+fn workspace_hygiene_check(workspace: &Path) -> DoctorCheck {
+    use std::ffi::OsStr;
+    let listed = crate::activation::git_probe(
+        workspace,
+        &[
+            OsStr::new("ls-files"),
+            OsStr::new("--cached"),
+            OsStr::new("--others"),
+            OsStr::new("--"),
+            OsStr::new("*.rtk-lock"),
+        ],
+        true,
+        "legacy write-lock scan",
+    );
+    // Without --exclude-standard, --others also lists ignored files: one scan covers all.
+    let count = listed
+        .ok()
+        .filter(|output| output.status.success())
+        .map_or(0, |output| {
+            String::from_utf8_lossy(&output.stdout).lines().count()
+        });
+    if count == 0 {
+        check(
+            "workspace_hygiene",
+            CheckStatus::Pass,
+            "no legacy HZR write-lock files in the working tree",
+        )
+    } else {
+        check(
+            "workspace_hygiene",
+            CheckStatus::Warning,
+            format!(
+                "{count} legacy zero-byte `*.rtk-lock` files from HZR < 0.10.0 remain; remove \
+                 them with `find . -name '*.rtk-lock' -size 0 -delete` (and `git rm` any that \
+                 are tracked)"
+            ),
+        )
+    }
+}
+
+/// The `embedder:` section of a grepai `config.yaml`. (0.10.0)
+#[derive(Debug, Default, PartialEq, Eq)]
+struct EmbedderConfig {
+    provider: String,
+    model: String,
+    endpoint: String,
+}
+
+fn read_embedder_config(path: &Path) -> Option<EmbedderConfig> {
+    parse_embedder_config(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Reads the three scalar keys under the top-level `embedder:` mapping; grepai writes them
+/// unquoted, one per line.
+fn parse_embedder_config(text: &str) -> Option<EmbedderConfig> {
+    let mut config = EmbedderConfig::default();
+    let mut inside = false;
+    for line in text.lines() {
+        if !line.starts_with(' ') && !line.trim().is_empty() {
+            inside = line.trim_end() == "embedder:";
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        let Some((key, value)) = line.trim().split_once(':') else {
+            continue;
+        };
+        let value = value.trim().trim_matches(['"', '\'']).to_owned();
+        match key.trim() {
+            "provider" => config.provider = value,
+            "model" => config.model = value,
+            "endpoint" => config.endpoint = value,
+            _ => {}
+        }
+    }
+    (!config.provider.is_empty()).then_some(config)
+}
+
+/// Probe the embedding provider the workspace index is configured for. (0.10.0)
+async fn embedding_provider_check(embedder: &EmbedderConfig) -> DoctorCheck {
+    if embedder.provider != "ollama" {
+        return check(
+            "embedding_provider",
+            CheckStatus::Pass,
+            format!(
+                "{} model {} (remote provider; not probed)",
+                embedder.provider, embedder.model
+            ),
+        );
+    }
+    let endpoint = if embedder.endpoint.is_empty() {
+        "http://localhost:11434"
+    } else {
+        embedder.endpoint.trim_end_matches('/')
+    };
+    let fallback = "semantic search falls back to lexical ripgrep until it is fixed";
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(1_500))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => return check("embedding_provider", CheckStatus::Warning, error),
+    };
+    let tags = match client.get(format!("{endpoint}/api/tags")).send().await {
+        Ok(response) => response.json::<serde_json::Value>().await.ok(),
+        Err(_) => {
+            return check(
+                "embedding_provider",
+                CheckStatus::Warning,
+                format!(
+                    "Ollama is not reachable at {endpoint}; {fallback}. Install Ollama, run \
+                     `ollama serve` and `ollama pull {}`",
+                    embedder.model
+                ),
+            );
+        }
+    };
+    let pulled = tags
+        .as_ref()
+        .and_then(|tags| tags.get("models"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|models| {
+            models.iter().any(|model| {
+                model
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|name| {
+                        name == embedder.model
+                            || name.strip_suffix(":latest") == Some(embedder.model.as_str())
+                    })
+            })
+        });
+    if pulled {
+        check(
+            "embedding_provider",
+            CheckStatus::Pass,
+            format!("Ollama at {endpoint} serves {}", embedder.model),
+        )
+    } else {
+        check(
+            "embedding_provider",
+            CheckStatus::Warning,
+            format!(
+                "Ollama at {endpoint} has no {} model; {fallback}. Run `ollama pull {}`",
+                embedder.model, embedder.model
+            ),
+        )
+    }
+}
+
 fn index_readiness_check(status: &IndexStatus) -> DoctorCheck {
     if !status.initialized {
         return check(
@@ -3645,7 +3813,7 @@ mod tests {
             .expect("managed instruction fixture");
         let stale = fs::read_to_string(&target)
             .expect("managed instructions")
-            .replace("raw` is forbidden", "raw` is preferred");
+            .replace("never treat it as", "always treat it as"); // 0.10.0 block wording
         fs::write(&target, stale).expect("stale instructions");
 
         let result = instruction_health_check("codex_instructions", Surface::Codex, &target);
@@ -4784,5 +4952,46 @@ justification = "This repository measures upstream RTK as the explicit benchmark
             .expect("ICM attestation");
         assert_eq!(icm.status, CheckStatus::Error);
         assert!(icm.detail.contains("digest mismatch"));
+    }
+}
+
+#[cfg(test)]
+mod embedding_provider_tests {
+    use super::{CheckStatus, EmbedderConfig, embedding_provider_check, parse_embedder_config};
+
+    // 0.10.0: doctor reads the embedder section grepai wrote
+    #[test]
+    fn embedder_config_is_read_from_grepai_yaml() {
+        let yaml = "version: 1\nembedder:\n    provider: ollama\n    model: nomic-embed-text\n    endpoint: http://localhost:11434\n    dimensions: 768\nstore:\n    backend: gob\n";
+        assert_eq!(
+            parse_embedder_config(yaml),
+            Some(EmbedderConfig {
+                provider: "ollama".into(),
+                model: "nomic-embed-text".into(),
+                endpoint: "http://localhost:11434".into(),
+            })
+        );
+        assert_eq!(parse_embedder_config("store:\n    backend: gob\n"), None);
+    }
+
+    #[tokio::test]
+    async fn unreachable_ollama_is_a_warning_naming_the_fallback() {
+        let result = embedding_provider_check(&EmbedderConfig {
+            provider: "ollama".into(),
+            model: "nomic-embed-text".into(),
+            endpoint: "http://127.0.0.1:9".into(),
+        })
+        .await;
+        assert_eq!(result.status, CheckStatus::Warning);
+        assert!(
+            result.detail.contains("lexical ripgrep"),
+            "{}",
+            result.detail
+        );
+        assert!(
+            result.detail.contains("ollama pull nomic-embed-text"),
+            "{}",
+            result.detail
+        );
     }
 }

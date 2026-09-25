@@ -446,6 +446,89 @@ pub fn install_project_codex(
     install(Client::Codex, &path, binary, workspace, dry_run, confirmed)
 }
 
+/// SessionStart form of [`install_project_codex`]. (0.10.0)
+///
+/// Every Claude Code session used to write `<repo>/.codex/config.toml`, with or without Codex
+/// on the machine, and leave it untracked in the user's `git status`. The registration is now
+/// written only when Codex is present (or the file already exists), and a file HZR created is
+/// added to the repository's local `.git/info/exclude`.
+pub fn session_project_codex(
+    binary: &Path,
+    workspace: &Path,
+    dry_run: bool,
+) -> Result<ClientConfigReport> {
+    let path = project_codex_path(workspace);
+    if !path.exists() && !codex_available() {
+        return Ok(ClientConfigReport {
+            client: Client::Codex,
+            path,
+            changed: false,
+            direct_icm_removed: 0,
+            hzr_registered: false,
+            backup_path: None,
+            before_sha256: sha256(b""),
+            after_sha256: sha256(b""),
+        });
+    }
+    let created = !path.exists();
+    let report = install_project_codex(binary, workspace, dry_run, true)?;
+    if created && report.changed && !dry_run {
+        // Best effort: a failed exclude must not fail the session.
+        let _ = exclude_untracked_project_codex(workspace);
+    }
+    Ok(report)
+}
+
+fn codex_available() -> bool {
+    let home_config = BaseDirs::new().is_some_and(|dirs| dirs.home_dir().join(".codex").is_dir());
+    home_config
+        || std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|directory| directory.join("codex").is_file())
+        })
+}
+
+const PROJECT_CODEX_EXCLUDE: &str = "/.codex/config.toml";
+
+fn exclude_untracked_project_codex(workspace: &Path) -> Result<()> {
+    use std::ffi::OsStr;
+    let tracked = crate::activation::git_probe(
+        workspace,
+        &[
+            OsStr::new("ls-files"),
+            OsStr::new("--error-unmatch"),
+            OsStr::new(".codex/config.toml"),
+        ],
+        true,
+        "project Codex tracking probe",
+    )?;
+    if tracked.status.success() {
+        return Ok(());
+    }
+    let Some(exclude) = crate::activation::local_exclude_path(workspace)? else {
+        return Ok(());
+    };
+    let before = fs::read_to_string(&exclude).unwrap_or_default();
+    if before.lines().any(|line| {
+        matches!(
+            line.trim(),
+            "/.codex/" | "/.codex" | ".codex/" | PROJECT_CODEX_EXCLUDE
+        )
+    }) {
+        return Ok(());
+    }
+    let mut after = before;
+    if !after.is_empty() && !after.ends_with('\n') {
+        after.push('\n');
+    }
+    after.push_str("# HZR: Codex MCP registration for this worktree\n");
+    after.push_str(PROJECT_CODEX_EXCLUDE);
+    after.push('\n');
+    if let Some(parent) = exclude.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&exclude, after).with_context(|| format!("update {}", exclude.display()))
+}
+
 pub fn uninstall_project_codex(
     workspace: &Path,
     dry_run: bool,

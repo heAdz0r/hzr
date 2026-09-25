@@ -3,7 +3,7 @@ use fs2::FileExt;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
-/// File-level lock guard using sidecar `.rtk-lock` files.
+/// File-level lock guard using a per-user lock file keyed by the target's path.
 /// Lock is released automatically on Drop (fs2 unlocks when fd closes).
 pub struct FileLockGuard {
     _file: File, // held open to maintain flock
@@ -12,9 +12,8 @@ pub struct FileLockGuard {
 }
 
 impl FileLockGuard {
-    /// Acquire a blocking exclusive flock on the sidecar lock file for `target`.
-    /// Uses `<target>.rtk-lock` in the same directory (NOT the file itself —
-    /// atomic rename would destroy flock on the target).
+    /// Acquire a blocking exclusive flock on the lock file for `target`.
+    /// The lock is never the target itself — atomic rename would destroy flock on it.
     pub fn acquire(target: &Path) -> Result<Self> {
         let lock_path = lock_path_for(target);
 
@@ -48,11 +47,42 @@ impl FileLockGuard {
     }
 }
 
-/// Compute the sidecar lock path for a target file: `<target>.rtk-lock`
+/// Compute the lock path for a target file.
+///
+/// 0.10.0: locks live in a per-user directory, named by the SHA-256 of the target's
+/// canonical path. The old `<target>.rtk-lock` sidecar was never removed (removing a flock
+/// file races with the next locker), so every edited file left a zero-byte sibling in the
+/// caller's repository — 224 of them in HZR's own tree, two committed by accident.
 pub fn lock_path_for(target: &Path) -> PathBuf {
-    let mut lock = target.as_os_str().to_owned();
-    lock.push(".rtk-lock");
-    PathBuf::from(lock)
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(canonical_target(target).as_os_str().as_encoded_bytes());
+    let name: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    lock_dir().join(format!("{name}.lock"))
+}
+
+/// The target's path with its parent canonicalized, so `./a`, `a` and a symlinked parent
+/// all name one lock. The target itself may not exist yet (create).
+fn canonical_target(target: &Path) -> PathBuf {
+    if let Ok(path) = fs::canonicalize(target) {
+        return path;
+    }
+    let absolute = std::path::absolute(target).unwrap_or_else(|_| target.to_path_buf());
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(parent), Some(name)) => fs::canonicalize(parent)
+            .map(|parent| parent.join(name))
+            .unwrap_or(absolute),
+        _ => absolute,
+    }
+}
+
+/// `RTK_LOCK_DIR`, else the user cache directory, else the temp directory.
+fn lock_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("RTK_LOCK_DIR").filter(|dir| !dir.is_empty()) {
+        return PathBuf::from(dir);
+    }
+    dirs::cache_dir()
+        .map(|dir| dir.join("rtk").join("write-locks"))
+        .unwrap_or_else(|| std::env::temp_dir().join("rtk-write-locks"))
 }
 
 #[cfg(test)]
@@ -61,16 +91,34 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use tempfile::TempDir;
 
+    // 0.10.0: the lock never lands next to the target
     #[test]
-    fn lock_path_for_appends_suffix() {
-        let p = Path::new("/tmp/foo.txt");
-        assert_eq!(lock_path_for(p), PathBuf::from("/tmp/foo.txt.rtk-lock"));
+    fn lock_path_is_outside_the_target_directory() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("foo.txt");
+        let lock = lock_path_for(&target);
+        assert!(!lock.starts_with(tmp.path()), "{}", lock.display());
+        assert_eq!(lock.extension().and_then(|e| e.to_str()), Some("lock"));
     }
 
     #[test]
-    fn lock_path_for_nested() {
-        let p = Path::new("/a/b/c.json");
-        assert_eq!(lock_path_for(p), PathBuf::from("/a/b/c.json.rtk-lock"));
+    fn equivalent_spellings_share_one_lock() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+        let direct = tmp.path().join("sub/c.json");
+        let dotted = tmp.path().join("sub/../sub/./c.json");
+        assert_eq!(lock_path_for(&direct), lock_path_for(&dotted));
+        assert_ne!(lock_path_for(&direct), lock_path_for(&tmp.path().join("d.json")));
+    }
+
+    #[test]
+    fn acquire_leaves_no_file_beside_the_target() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("clean.txt");
+        fs::write(&target, "x").unwrap();
+        drop(FileLockGuard::acquire(&target).unwrap());
+        let entries: Vec<_> = fs::read_dir(tmp.path()).unwrap().collect();
+        assert_eq!(entries.len(), 1, "only the target remains");
     }
 
     #[test]

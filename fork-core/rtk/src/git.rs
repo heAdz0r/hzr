@@ -411,13 +411,14 @@ fn run_diff(
     }
     let diff_stdout = String::from_utf8_lossy(&diff_output.stdout);
     let printed = if !diff_stdout.is_empty() {
-        let compacted = compact_diff(&diff_stdout, max_lines.unwrap_or(100));
-        format!("{}\n\n--- Changes ---\n{}", stat_stdout.trim(), compacted)
+        let header = format!("{}\n\n--- Changes ---\n", stat_stdout.trim());
+        let compacted = compact_diff_within_host(&diff_stdout, max_lines, header.len()); // 0.10.0
+        format!("{header}{compacted}")
     } else {
         stat_stdout.trim().to_string()
     };
     let raw = format!("{}\n{}", stat_stdout, diff_stdout);
-    let shown = crate::guard::never_worse(&raw, &printed);
+    let shown = crate::guard::never_worse_content(&raw, &printed); // 0.10.0: content guard
     let stderr = if output.stderr == diff_output.stderr {
         diff_output.stderr
     } else {
@@ -564,12 +565,12 @@ fn run_show(
         if verbose > 0 {
             printed.push_str("\n\n--- Changes ---");
         }
-        let compacted = compact_diff(diff_text, max_lines.unwrap_or(100));
+        let compacted = compact_diff_within_host(diff_text, max_lines, printed.len()); // 0.10.0
         printed.push('\n');
         printed.push_str(&compacted);
     }
 
-    let shown = crate::guard::never_worse(&raw_output, &printed);
+    let shown = crate::guard::never_worse_content(&raw_output, &printed); // 0.10.0: content guard
     println!("{}", shown);
 
     timer.track(
@@ -587,75 +588,374 @@ fn is_blob_show_arg(arg: &str) -> bool {
     !arg.starts_with('-') && arg.contains(':')
 }
 
+/// Compact a diff so the whole rendering fits what the host shows the model. (0.10.0)
+///
+/// Claude Code cuts Bash output at `BASH_MAX_OUTPUT_LENGTH` (30 000 characters by default).
+/// A 500-line compaction of a large diff ran past it, and the host's cut removed exactly the
+/// recovery line at the end. An explicit `max_lines` from the caller is honoured as given.
+fn compact_diff_within_host(diff: &str, requested: Option<usize>, reserved: usize) -> String {
+    if let Some(lines) = requested {
+        return compact_diff(diff, lines);
+    }
+    let mut compacted = compact_diff(diff, 500);
+    let Some(ceiling) = crate::tracking::host_output_ceiling_chars() else {
+        return compacted;
+    };
+    let budget = ceiling.saturating_sub(reserved.saturating_add(512));
+    for lines in [350, 250, 160, 100, 60, 30] {
+        if compacted.chars().count() <= budget {
+            break;
+        }
+        compacted = compact_diff(diff, lines);
+    }
+    compacted
+}
+
+/// Printed after any truncated diff: the exact patch is one HZR route away.
+const DIFF_RECOVERY_HINT: &str = "[diff truncated; exact patch: HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=full_patch hzr exec run '<the same git command>']";
+
+/// Path a `diff --git a/x b/x` header names (the destination of a rename).
+fn diff_header_path(line: &str) -> String {
+    line.split(" b/")
+        .nth(1)
+        .map(str::to_string)
+        .or_else(|| line.splitn(3, ' ').nth(2).map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Line budget a hunk header declares, and how wide its body prefix is.
+struct HunkHeader {
+    /// Lines the hunk spans in each parent, in marker-column order. One entry
+    /// for a unified `@@`, one per parent for a combined `@@@`.
+    parents: Vec<usize>,
+    /// Lines the hunk spans in the result file.
+    new: usize,
+    /// Marker columns: 1 for `@@`, and one per parent for a combined `@@@`.
+    prefix_width: usize,
+}
+
+impl HunkHeader {
+    /// Whether every declared line has been accounted for, which is where the
+    /// hunk body ends. A combined hunk is not done until *every* parent's
+    /// budget is spent: a line removed from only the second parent spends that
+    /// parent's budget and neither the first's nor the result's.
+    fn exhausted(&self) -> bool {
+        self.new == 0 && self.parents.iter().all(|&remaining| remaining == 0)
+    }
+
+    /// Charge a body line against the budgets it occupies.
+    ///
+    /// Column `i` is the line's marker against parent `i + 1`. `-` there means
+    /// the line is in that parent and is being removed; a space on a line that
+    /// is not a removal means the line is in that parent unchanged. Both spend
+    /// one of that parent's lines. `+` there, or a space on a removal line,
+    /// means the line is not in that parent at all.
+    ///
+    /// Collapsing the columns into one add/delete pair, as an aggregate over
+    /// the whole prefix does, loses that distinction and leaves a combined
+    /// hunk's budget unable to converge.
+    fn consume(&mut self, markers: &[u8]) {
+        let is_add = markers.contains(&b'+');
+        let is_del = markers.contains(&b'-');
+        for (i, remaining) in self.parents.iter_mut().enumerate() {
+            let column = markers.get(i).copied();
+            let present = if is_del {
+                column == Some(b'-')
+            } else {
+                // A line shorter than the prefix reads as context, which is
+                // what a bare blank line in a unified diff body is.
+                column != Some(b'+')
+            };
+            if present {
+                *remaining = remaining.saturating_sub(1);
+            }
+        }
+        // In the result file unless the line is a pure deletion.
+        if is_add || !is_del {
+            self.new = self.new.saturating_sub(1);
+        }
+    }
+}
+
+/// Parse `@@ -a,b +c,d @@` and the combined `@@@ -a,b -c,d +e,f @@@`.
+///
+/// The counts bound the hunk body, which is what lets the body end where the
+/// hunk ends rather than running on until the next header. Anything after it —
+/// an mbox envelope, a `--` signature, trailing prose — is then outside every
+/// hunk and cannot be read as diff content. A count is 1 when the header omits
+/// it (`@@ -1 +1 @@`).
+fn parse_hunk_header(line: &str) -> Option<HunkHeader> {
+    let at_run = line.len() - line.trim_start_matches('@').len();
+    if at_run < 2 {
+        return None;
+    }
+    let body = line[at_run..].split('@').next()?;
+
+    let mut parents: Vec<usize> = Vec::new();
+    let mut new = None;
+    for group in body.split_whitespace() {
+        let Some(rest) = group.strip_prefix(['-', '+']) else {
+            continue;
+        };
+        let count = match rest.split_once(',') {
+            Some((_, c)) => c.parse::<usize>().ok()?,
+            None => 1,
+        };
+        if group.starts_with('-') {
+            // A combined header lists one range per parent, in the same order
+            // as the marker columns.
+            parents.push(count);
+        } else {
+            new = Some(count);
+        }
+    }
+
+    // `@@` has one marker column, `@@@` two, and so on for more parents.
+    let prefix_width = at_run - 1;
+    // A well-formed header lists exactly one range per marker column. When it
+    // does not, only the columns can be charged, so trust them: an untracked
+    // parent would otherwise sit at its declared count forever and the hunk
+    // would never close, while a parent with no column of its own would be
+    // charged against nothing. A missing range gets `usize::MAX`, which keeps
+    // the hunk open to the next header rather than dropping its body.
+    if parents.len() != prefix_width {
+        parents.resize(prefix_width, usize::MAX);
+    }
+
+    Some(HunkHeader {
+        parents,
+        new: new.unwrap_or(0),
+        prefix_width,
+    })
+}
+
+/// Render the note for change lines dropped past `max_hunk_lines`, split by
+/// sign so an anchored `^-` / `^+` audit can tell what it did not see.
+fn hunk_truncation_note(deletions: usize, additions: usize) -> Option<String> {
+    fn count(n: usize, noun: &str) -> String {
+        if n == 1 {
+            format!("{} {}", n, noun)
+        } else {
+            format!("{} {}s", n, noun)
+        }
+    }
+    match (deletions, additions) {
+        (0, 0) => None,
+        (0, a) => Some(format!("  ... ({} truncated)", count(a, "addition"))),
+        (d, 0) => Some(format!("  ... ({} truncated)", count(d, "deletion"))),
+        (d, a) => Some(format!(
+            "  ... ({}, {} truncated)",
+            count(d, "deletion"),
+            count(a, "addition")
+        )),
+    }
+}
+
+/// Emit the buffered leading context, charged against the diff-wide budget.
+///
+/// Keeps the lines closest to the change when the budget cannot take all of
+/// them. Called wherever a hunk closes as well as at its first change line:
+/// context buffered by a hunk that ends without one would otherwise be dropped,
+/// leaving a bare hunk header with nothing under it.
+fn flush_leading_context(
+    buffer: &mut Vec<String>,
+    result: &mut Vec<String>,
+    total: &mut usize,
+    cap: usize,
+) {
+    let room = cap.saturating_sub(*total);
+    let keep = buffer.len().min(room);
+    let skip = buffer.len() - keep;
+    for ctx in buffer.drain(..).skip(skip) {
+        result.push(ctx);
+    }
+    *total += keep;
+}
+
+/// Compact a unified diff for an agent.
+///
+/// 0.10.0: ported from upstream RTK v0.50.0. Hunks keep up to 100 lines and up to three
+/// lines of leading context with their full `@@ … @@ fn` header; every dropped change line
+/// is counted per hunk, and any truncation ends with an exact-recovery command. The 0.44
+/// version cut every hunk at 10 lines, dropped leading context and said only
+/// "(truncated)".
 pub(crate) fn compact_diff(diff: &str, max_lines: usize) -> String {
     let mut result = Vec::new();
     let mut current_file = String::new();
     let mut added = 0;
     let mut removed = 0;
-    let mut in_hunk = false;
-    let mut hunk_lines = 0;
-    let max_hunk_lines = 10;
+    let mut hunk: Option<HunkHeader> = None;
+    let mut hunk_shown = 0;
+    let mut skipped_add = 0usize;
+    let mut skipped_del = 0usize;
+    let mut leading_context: Vec<String> = Vec::new();
+    let mut leading_context_total = 0usize;
+    let max_hunk_lines = 100;
+    // Context before a hunk's first change, up to three lines per hunk and
+    // `max_lines / 10` across the diff. It does not count against `max_lines`,
+    // so it cannot displace change lines, and the diff-wide cap is what bounds
+    // the overrun that exemption would otherwise allow: a diff of many small
+    // hunks would otherwise spend three exempt lines on every one of them.
+    let max_leading_context = 3;
+    let leading_context_cap = max_lines / 10;
+    let mut was_truncated = false;
 
     for line in diff.lines() {
-        if line.starts_with("diff --git") {
-            // New file
+        // Every diff section header (`--git`, `--cc`, `--combined`) opens a new
+        // file and closes any open hunk, so the `---` / `+++` headers that
+        // follow it are never read as hunk content.
+        if line.starts_with("diff --") {
+            flush_leading_context(
+                &mut leading_context,
+                &mut result,
+                &mut leading_context_total,
+                leading_context_cap,
+            );
+            if let Some(note) = hunk_truncation_note(skipped_del, skipped_add) {
+                result.push(note);
+                was_truncated = true;
+                skipped_del = 0;
+                skipped_add = 0;
+            }
             if !current_file.is_empty() && (added > 0 || removed > 0) {
                 result.push(format!("  +{} -{}", added, removed));
             }
-            current_file = line.split(" b/").nth(1).unwrap_or("unknown").to_string();
-            result.push(format!("\n📄 {}", current_file));
+            current_file = diff_header_path(line);
+            result.push(format!("\n{}", current_file));
             added = 0;
             removed = 0;
-            in_hunk = false;
-        } else if line.starts_with("@@") {
-            // New hunk
-            in_hunk = true;
-            hunk_lines = 0;
-            let hunk_info = line.split("@@").nth(1).unwrap_or("").trim();
-            result.push(format!("  @@ {} @@", hunk_info));
-        } else if in_hunk {
-            if line.starts_with('+') && !line.starts_with("+++") {
-                added += 1;
-                if hunk_lines < max_hunk_lines {
-                    result.push(format!("  {}", line));
-                    hunk_lines += 1;
-                }
-            } else if line.starts_with('-') && !line.starts_with("---") {
-                removed += 1;
-                if hunk_lines < max_hunk_lines {
-                    result.push(format!("  {}", line));
-                    hunk_lines += 1;
-                }
-            } else if hunk_lines < max_hunk_lines && !line.starts_with("\\") {
-                // Context line
-                if hunk_lines > 0 {
-                    result.push(format!("  {}", line));
-                    hunk_lines += 1;
-                }
+            hunk = None;
+            hunk_shown = 0;
+        } else if let Some(header) = parse_hunk_header(line) {
+            flush_leading_context(
+                &mut leading_context,
+                &mut result,
+                &mut leading_context_total,
+                leading_context_cap,
+            );
+            if let Some(note) = hunk_truncation_note(skipped_del, skipped_add) {
+                result.push(note);
+                was_truncated = true;
+                skipped_del = 0;
+                skipped_add = 0;
+            }
+            hunk = Some(header);
+            hunk_shown = 0;
+            // Preserve the full unified diff hunk header, including trailing
+            // function / symbol context after the second @@ marker.
+            result.push(line.to_string());
+        } else if let Some(header) = hunk.as_mut() {
+            if header.exhausted() {
+                hunk = None;
+                continue;
+            }
+            if line.starts_with('\\') {
+                // "\ No newline at end of file" annotates the line above and
+                // occupies no line in either file.
+                continue;
             }
 
-            if hunk_lines == max_hunk_lines {
-                result.push("  ... (truncated)".to_string());
-                hunk_lines += 1;
+            // Slice the marker columns as bytes. `prefix_width` counts columns,
+            // and the markers are ASCII by construction, but the body content
+            // right after them is not: `--word-diff` emits body lines with no
+            // marker column at all, so a `char`-unaware `&line[..width]` splits
+            // a leading multi-byte character and panics.
+            let width = header.prefix_width.min(line.len());
+            let markers = &line.as_bytes()[..width];
+            let is_add = markers.contains(&b'+');
+            let is_del = markers.contains(&b'-');
+            header.consume(markers);
+
+            // Hunk bodies emit at column 0 in git's own unified shape, so
+            // `^+` / `^-` anchor. rtk's own annotations stay indented so those
+            // same anchors never match them. Inside a hunk every `+`/`-` line
+            // is content: the `---` / `+++` file headers only ever appear
+            // before the first hunk header.
+            if is_add || is_del {
+                if is_add {
+                    added += 1;
+                }
+                if is_del {
+                    removed += 1;
+                }
+                if hunk_shown < max_hunk_lines {
+                    // The context immediately preceding the change, so the body
+                    // reads as contiguous with it. The diff-wide budget is
+                    // charged on emit rather than on buffering, so a line the
+                    // ring evicted never costs anything.
+                    flush_leading_context(
+                        &mut leading_context,
+                        &mut result,
+                        &mut leading_context_total,
+                        leading_context_cap,
+                    );
+                    result.push(line.to_string());
+                    hunk_shown += 1;
+                } else if is_del {
+                    skipped_del += 1;
+                } else {
+                    skipped_add += 1;
+                }
+                leading_context.clear();
+            } else if hunk_shown > 0 {
+                if hunk_shown < max_hunk_lines {
+                    result.push(line.to_string());
+                    hunk_shown += 1;
+                }
+            } else if leading_context_total < leading_context_cap {
+                // Keep the last `max_leading_context` lines rather than the
+                // first: with `-U10` or `--function-context` the first ones sit
+                // ten lines above the change and would imply an adjacency the
+                // file does not have.
+                if leading_context.len() == max_leading_context {
+                    leading_context.remove(0);
+                }
+                leading_context.push(line.to_string());
+            }
+
+            if header.exhausted() {
+                hunk = None;
+                flush_leading_context(
+                    &mut leading_context,
+                    &mut result,
+                    &mut leading_context_total,
+                    leading_context_cap,
+                );
             }
         }
 
-        if result.len() >= max_lines {
+        if result.len().saturating_sub(leading_context_total) >= max_lines {
             result.push("\n... (more changes truncated)".to_string());
+            was_truncated = true;
             break;
         }
+    }
+
+    // Flush last hunk
+    flush_leading_context(
+        &mut leading_context,
+        &mut result,
+        &mut leading_context_total,
+        leading_context_cap,
+    );
+    if let Some(note) = hunk_truncation_note(skipped_del, skipped_add) {
+        result.push(note);
+        was_truncated = true;
     }
 
     if !current_file.is_empty() && (added > 0 || removed > 0) {
         result.push(format!("  +{} -{}", added, removed));
     }
 
-    // Nothing was ever pushed — no `diff --git`, no `@@` — so this is not a
-    // unified diff. Returning the empty join would drop the whole diff while the
-    // stat summary around it still reads as authoritative. Fall back to the raw
-    // text and let `never_worse` at the call site pick the cheaper of the two.
+    // Nothing was ever pushed — no `diff --git`, no `@@` — so this is not a unified diff.
+    // Returning the empty join would drop the whole diff while the stat summary around it
+    // still reads as authoritative; the call site's guard picks the cheaper of the two.
     if result.is_empty() && !diff.trim().is_empty() {
         return diff.to_string();
+    }
+
+    if was_truncated {
+        result.push(DIFF_RECOVERY_HINT.to_string()); // 0.10.0: HZR exact-recovery route
     }
 
     result.join("\n")
@@ -740,7 +1040,7 @@ fn run_log(
 
     // Post-process: truncate long messages, cap lines
     let filtered = filter_log_output(&stdout, limit);
-    let filtered = crate::guard::never_worse(&stdout, &filtered).to_string();
+    let filtered = crate::guard::never_worse_content(&stdout, &filtered).to_string(); // 0.10.0: content guard
     print!("{}", filtered);
 
     timer.track(
@@ -1009,99 +1309,33 @@ fn extract_state_header(raw: &str) -> Option<String> {
 }
 
 /// Format porcelain output into compact RTK status display
+///
+/// 0.10.0 (upstream v0.50.0): `* branch...upstream` followed by the porcelain lines as git
+/// wrote them. The 0.44 rendering spent more bytes than porcelain on emoji headers and
+/// silently hid every staged file past five and every untracked file past three.
 pub(crate) fn format_status_output(porcelain: &str) -> String {
-    let lines: Vec<&str> = porcelain.lines().collect();
+    let lines: Vec<&str> = porcelain
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
 
     if lines.is_empty() {
         return "Clean working tree".to_string();
     }
 
-    let mut output = String::new();
-
-    // Parse branch info
-    if let Some(branch_line) = lines.first() {
-        if branch_line.starts_with("##") {
-            let branch = branch_line.trim_start_matches("## ");
-            output.push_str(&format!("📌 {}\n", branch));
+    let mut output = Vec::with_capacity(lines.len() + 1);
+    match lines.first() {
+        Some(branch_line) if branch_line.starts_with("##") => {
+            output.push(format!("* {}", branch_line.trim_start_matches("## ")));
         }
+        Some(line) => output.push((*line).to_string()),
+        None => {}
     }
-
-    // Count changes by type
-    let mut staged = 0;
-    let mut modified = 0;
-    let mut untracked = 0;
-    let mut conflicts = 0;
-
-    let mut staged_files = Vec::new();
-    let mut modified_files = Vec::new();
-    let mut untracked_files = Vec::new();
-
-    for line in lines.iter().skip(1) {
-        if line.len() < 3 {
-            continue;
-        }
-        let status = line.get(0..2).unwrap_or("  ");
-        let file = line.get(3..).unwrap_or("");
-
-        match status.chars().next().unwrap_or(' ') {
-            'M' | 'A' | 'D' | 'R' | 'C' => {
-                staged += 1;
-                staged_files.push(file);
-            }
-            'U' => conflicts += 1,
-            _ => {}
-        }
-
-        match status.chars().nth(1).unwrap_or(' ') {
-            'M' | 'D' => {
-                modified += 1;
-                modified_files.push(file);
-            }
-            _ => {}
-        }
-
-        if status == "??" {
-            untracked += 1;
-            untracked_files.push(file);
-        }
+    output.extend(lines.iter().skip(1).map(|line| (*line).to_string()));
+    if lines.len() == 1 && lines[0].starts_with("##") {
+        output.push("clean — nothing to commit".to_string());
     }
-
-    // Build summary
-    if staged > 0 {
-        output.push_str(&format!("✅ Staged: {} files\n", staged));
-        for f in staged_files.iter().take(5) {
-            output.push_str(&format!("   {}\n", f));
-        }
-        if staged_files.len() > 5 {
-            output.push_str(&format!("   ... +{} more\n", staged_files.len() - 5));
-        }
-    }
-
-    if modified > 0 {
-        output.push_str(&format!("📝 Modified: {} files\n", modified));
-        for f in modified_files.iter().take(5) {
-            output.push_str(&format!("   {}\n", f));
-        }
-        if modified_files.len() > 5 {
-            output.push_str(&format!("   ... +{} more\n", modified_files.len() - 5));
-        }
-    }
-
-    if untracked > 0 {
-        output.push_str(&format!("❓ Untracked: {} files\n", untracked));
-        for f in untracked_files.iter().take(3) {
-            output.push_str(&format!("   {}\n", f));
-        }
-        if untracked_files.len() > 3 {
-            output.push_str(&format!("   ... +{} more\n", untracked_files.len() - 3));
-        }
-    }
-
-    if conflicts > 0 {
-        output.push_str(&format!("⚠️  Conflicts: {} files\n", conflicts));
-    }
-
-    output.trim_end().to_string()
+    output.join("\n")
 }
 
 /// Minimal filtering for git status with user-provided args
@@ -1171,7 +1405,7 @@ fn run_status(args: &[String], verbose: u8, global_args: &[String]) -> Result<()
 
         // Apply minimal filtering: strip ANSI, remove hints, empty lines
         let filtered = filter_status_with_args(&stdout);
-        let filtered = crate::guard::never_worse(&stdout, &filtered).to_string();
+        let filtered = crate::guard::never_worse_content(&stdout, &filtered).to_string(); // 0.10.0: content guard
         print!("{}", filtered);
 
         timer.track(
@@ -1220,7 +1454,7 @@ fn run_status(args: &[String], verbose: u8, global_args: &[String]) -> Result<()
         formatted = format!("{}\n{}", state, formatted);
     }
 
-    let shown = crate::guard::never_worse(&raw_output, &formatted);
+    let shown = crate::guard::never_worse_content(&raw_output, &formatted); // 0.10.0: content guard
     println!("{}", shown);
 
     // Track for statistics
@@ -2108,7 +2342,7 @@ fn run_blame(args: &[String], verbose: u8, global_args: &[String]) -> Result<()>
         if compact.is_empty() && !raw.trim().is_empty() {
             raw.clone()
         } else {
-            crate::guard::never_worse(&raw, &compact).to_string()
+            crate::guard::never_worse_content(&raw, &compact).to_string() // 0.10.0: content guard
         }
     };
     print!("{shown}");
@@ -2506,6 +2740,44 @@ mod tests {
         );
     }
 
+    // 0.10.0: a large diff is compacted under the host ceiling with its recovery line intact
+    #[test]
+    fn host_fitted_diff_stays_under_the_ceiling() {
+        let mut diff = String::new();
+        for file in 0..40 {
+            diff.push_str(&format!(
+                "diff --git a/f{file}.rs b/f{file}.rs\n--- a/f{file}.rs\n+++ b/f{file}.rs\n@@ -1,0 +1,120 @@\n"
+            ));
+            for line in 0..120 {
+                diff.push_str(&format!("+let value_{line} = compute_something_long({line});\n"));
+            }
+        }
+        let fitted = compact_diff_within_host(&diff, None, 2_000);
+        let ceiling = crate::tracking::host_output_ceiling_chars().unwrap_or(usize::MAX);
+        assert!(fitted.chars().count() + 2_000 <= ceiling, "{} chars", fitted.len());
+        assert!(fitted.ends_with(DIFF_RECOVERY_HINT));
+        assert_eq!(compact_diff_within_host(&diff, Some(40), 0), compact_diff(&diff, 40));
+    }
+
+    // 0.10.0: leading context survives and any truncation names the recovery route
+    #[test]
+    fn compact_diff_keeps_leading_context_and_names_recovery() {
+        let mut diff = String::from(
+            "diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -1,4 +1,5 @@ fn main()\n ctx one\n ctx two\n+added\n ctx three\n ctx four\n",
+        );
+        let small = compact_diff(&diff, 500);
+        assert!(small.contains(" ctx two\n+added"), "{small}");
+        assert!(small.contains("@@ -1,4 +1,5 @@ fn main()"), "{small}");
+        assert!(!small.contains("diff truncated"), "{small}");
+        diff.push_str("diff --git a/y.rs b/y.rs\n--- a/y.rs\n+++ b/y.rs\n@@ -1,0 +1,300 @@\n");
+        for index in 0..300 {
+            diff.push_str(&format!("+line {index}\n"));
+        }
+        let large = compact_diff(&diff, 500);
+        assert!(large.contains("200 additions truncated"), "{large}");
+        assert!(large.ends_with(DIFF_RECOVERY_HINT), "{large}");
+    }
+
     #[test]
     fn test_compact_diff() {
         let diff = r#"diff --git a/foo.rs b/foo.rs
@@ -2631,8 +2903,8 @@ To github.com:owner/repo.git\n\
     fn test_format_status_output_modified_files() {
         let porcelain = "## main...origin/main\n M src/main.rs\n M src/lib.rs\n";
         let result = format_status_output(porcelain);
-        assert!(result.contains("📌 main...origin/main"));
-        assert!(result.contains("📝 Modified: 2 files"));
+        assert!(result.contains("* main...origin/main"));
+        assert!(result.contains(" M src/main.rs"));
         assert!(result.contains("src/main.rs"));
         assert!(result.contains("src/lib.rs"));
         assert!(!result.contains("Staged"));
@@ -2643,8 +2915,8 @@ To github.com:owner/repo.git\n\
     fn test_format_status_output_untracked_files() {
         let porcelain = "## feature/new\n?? temp.txt\n?? debug.log\n?? test.sh\n";
         let result = format_status_output(porcelain);
-        assert!(result.contains("📌 feature/new"));
-        assert!(result.contains("❓ Untracked: 3 files"));
+        assert!(result.contains("* feature/new"));
+        assert!(result.contains("?? temp.txt"));
         assert!(result.contains("temp.txt"));
         assert!(result.contains("debug.log"));
         assert!(result.contains("test.sh"));
@@ -2660,19 +2932,17 @@ A  added.rs
 ?? untracked.txt
 "#;
         let result = format_status_output(porcelain);
-        assert!(result.contains("📌 main"));
-        assert!(result.contains("✅ Staged: 2 files"));
-        assert!(result.contains("staged.rs"));
-        assert!(result.contains("added.rs"));
-        assert!(result.contains("📝 Modified: 1 files"));
-        assert!(result.contains("modified.rs"));
-        assert!(result.contains("❓ Untracked: 1 files"));
+        assert!(result.contains("* main"));
+        assert!(result.contains("M  staged.rs"));
+        assert!(result.contains("A  added.rs"));
+        assert!(result.contains(" M modified.rs"));
+        assert!(result.contains("?? untracked.txt"));
         assert!(result.contains("untracked.txt"));
     }
 
     #[test]
     fn test_format_status_output_truncation() {
-        // Test that >5 staged files show "... +N more"
+        // 0.10.0: large status lists stay complete
         let porcelain = r#"## main
 M  file1.rs
 M  file2.rs
@@ -2683,12 +2953,10 @@ M  file6.rs
 M  file7.rs
 "#;
         let result = format_status_output(porcelain);
-        assert!(result.contains("✅ Staged: 7 files"));
-        assert!(result.contains("file1.rs"));
-        assert!(result.contains("file5.rs"));
-        assert!(result.contains("... +2 more"));
-        assert!(!result.contains("file6.rs"));
-        assert!(!result.contains("file7.rs"));
+        // 0.10.0: nothing is hidden — every porcelain line is kept
+        assert!(result.contains("M  file1.rs"));
+        assert!(result.contains("M  file7.rs"));
+        assert!(!result.contains("more"));
     }
 
     #[test]
@@ -2753,7 +3021,7 @@ no changes added to commit (use "git add" and/or "git commit -a")
         let porcelain = "## main\n M สวัสดี.txt\n?? ทดสอบ.rs\n";
         let result = format_status_output(porcelain);
         // Should not panic
-        assert!(result.contains("📌 main"));
+        assert!(result.contains("* main"));
         assert!(result.contains("สวัสดี.txt"));
         assert!(result.contains("ทดสอบ.rs"));
     }
@@ -2762,7 +3030,7 @@ no changes added to commit (use "git add" and/or "git commit -a")
     fn test_format_status_output_emoji_filename() {
         let porcelain = "## main\nA  🎉-party.txt\n M 日本語ファイル.rs\n";
         let result = format_status_output(porcelain);
-        assert!(result.contains("📌 main"));
+        assert!(result.contains("* main"));
     }
 
     // fix #248: is_blob_show_arg unit tests

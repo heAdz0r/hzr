@@ -4,6 +4,47 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-25
+
+An external evaluation measured HZR and upstream RTK v0.50.0 on a Go repository and concluded
+that HZR was not worth adopting. This release fixes every defect that evaluation confirmed, the
+correctness defects found while checking it, and the parts of HZR that cost tokens on every turn.
+The assessment and requirements are in `docs/PRD_HZR_0_10_0_EXTERNAL_EVALUATION.md`.
+
+### Fixed
+
+- Read rewrites no longer drop a shell expansion from the path. `sed -n 1,5p $DIR/a.rs`, `head -5 $HOME/a.rs` and `cat $DIR/a.rs | head -5` were rewritten to read `/a.rs` or the directory `$DIR`: the tokenizer split `$DIR/a.rs` into two tokens and the rewrite copied only one. Paths are now taken from whole shell words (`lexer::shell_word_spans`), and the `sqlite3` rewrite uses the same spans.
+- `cat a b` is no longer rewritten into a single-file `rtk read` that failed with "multiple files require --batch and --max-tokens".
+- Tracked proxy execution keeps the host's shell. Compound commands ran through `rtk proxy /bin/sh -c …`, where process substitution `<(…)` is a syntax error on macOS and `[[`/arrays fail under Debian's dash. The hook and `hzr exec run` now use `$SHELL` when it is bash or zsh, else `/bin/bash`.
+- `go test` on Go 1.24+ summarises compile failures. The parser ignored the `build-output`/`build-fail` events, and the output guard treated the NDJSON that rtk had injected with `-json` as the caller's machine protocol and printed all of it — 5.4 MB on the evaluated module, 3,450 bytes instead of 318 on a three-package repro. Package-level failures (timeouts, panics outside a test) are counted, and `-bench` runs keep their text output. Ported from upstream RTK v0.50.0.
+- `golangci-lint` v2 works. rtk passed the v1-only `--out-format=json` (and a duplicate `run`), so v2 printed nothing and the summary read "JSON parse failed: EOF" with the real error hidden. The major version is detected, v2 gets `--output.json.path stdout`, an unparsable report is shown as golangci printed it, and the first ten issues are listed as `path:line:col linter: text` instead of counts only.
+- The output guard no longer discards filtered listings that mention failure words. A capped `find` whose hidden tail held `error.rs`, or a bounded read of a file mentioning `panic!`, fell back to the complete raw output; `find crates -name '*.rs'` delivered 6,139 bytes for 6,046 raw and now delivers 965. Listings, reads, diffs and commit logs use a content guard; test and lint runners keep the failure-word guard.
+- `git diff` and `git show` no longer lose changes silently. Hunks were cut at 10 lines with leading context dropped and a bare "(truncated)". Hunks now keep up to 100 lines and three lines of leading context with the full `@@ … @@ fn` header, every dropped line is counted, the rendering fits the host's 30,000-character window, and any truncation ends with the exact-recovery command. Ported from upstream RTK v0.50.0.
+- `git status` renders `* branch...upstream` and the porcelain lines instead of emoji headers that were larger than porcelain and hid every staged file past five and untracked file past three.
+- `rtk read -n` numbers lines with a tab like `cat -n`; the ` │ ` separator made it 5% larger than the command it replaced.
+- `hzr write` no longer leaves `<file>.rtk-lock` beside every edited file. Locks live in the user cache directory, keyed by the target's canonical path. `hzr doctor` reports legacy lock files as `workspace_hygiene`.
+- Instruction files reached through a safe symlink are managed. `CLAUDE.md -> AGENTS.md` in one directory, or a user-global file owned by the user, is followed; a link that leaves its directory is still refused. An obsolete target that carries no HZR block is left alone, so such a repository no longer fails a global install, and two surfaces sharing one file no longer rewrite each other on every session.
+- SessionStart writes `<repo>/.codex/config.toml` only when Codex is installed or the file already exists, and adds a file it created to the repository's `.git/info/exclude`.
+
+### Changed
+
+- Savings are credited only up to what the host could show the model. Claude Code cuts Bash output at `BASH_MAX_OUTPUT_LENGTH` (30,000 characters by default); receipts used to credit a 625 KB diff as ~156k saved tokens. Baseline and delivered tokens are now capped at `HZR_HOST_OUTPUT_CEILING`, else `BASH_MAX_OUTPUT_LENGTH`, else 30,000 characters (`0` disables the cap). Savings recorded by earlier releases for outputs larger than that window were overstated.
+- The managed instruction block is 1,613 bytes instead of 6,734 and carries routing only. Native Read, Grep, Glob, Edit and Write stay the default — a whole-file read or an edit routed through a shell saves no tokens and collides with repositories that forbid shell file writes. MCP tools are described by their own schemas, codec economics live in `HZR.md`, and the SessionStart codec notice that repeated the block is gone.
+- A plain read of a Markdown, lock or manifest file under 16 KiB returns the exact content; the digest, which invites a second call, starts above that size.
+- A caller-chosen `head`/`tail`/`sed -n` range reports `[lines A-B of N]` instead of a ~130-byte recovery command; rtk-imposed bounds keep the recovery command.
+
+- `grep -rn` across several files prints ripgrep's `--heading` shape — each path once, then its `line:content` lines — instead of repeating the path on every line: the same content, 20% smaller on the benchmark.
+- A plain read of a file up to 24 KiB returns it whole. The 400-line default bound applies only to larger files, where it still names its recovery command; a 500-line file of short lines used to cost a second call for its last 100 lines.
+- Lines are shortened at 2,000 characters instead of 500 on the default read level, so ordinary Markdown paragraphs arrive intact and can be edited exactly.
+- MCP `hzr_memory_recall` returns five memories by default with each body cut at 700 characters and a pointer to `hzr_memory_get` for the rest (`full: true` returns complete bodies). One recall in real use had returned ten complete bodies, 34,000 characters. `hzr_memory_store` and `hzr_memory_update` echo 120 characters of the body instead of the whole text the agent just sent.
+- The Codex managed block tells the agent to run shell commands as `hzr exec run` — Codex has no HZR hook, so that is the only path to filtered output there.
+
+### Added
+
+- `hzr doctor` probes the embedding provider (`embedding_provider`): an unreachable Ollama or a missing model is a warning that names the lexical fallback and the command that fixes it. `memory_runtime` names the retrieval mode.
+- README and `HZR.md` state that semantic search needs Ollama with `nomic-embed-text` (not bundled) and that delegation sends repository instructions, the context plan and tool results to the selected provider.
+
+
 ## [0.9.13] - 2026-09-20
 
 ### Fixed
@@ -1917,6 +1958,8 @@ First public HZR release.
 [0.6.6]: https://github.com/heAdz0r/hzr/compare/v0.6.5...v0.6.6
 [0.8.603]: https://github.com/heAdz0r/hzr/compare/v0.8.602...v0.8.603
 [0.8.602]: https://github.com/heAdz0r/hzr/compare/v0.8.7...v0.8.602
+[0.10.0]: https://github.com/heAdz0r/hzr/compare/v0.9.13...v0.10.0
+[0.9.13]: https://github.com/heAdz0r/hzr/compare/v0.9.12...v0.9.13
 [0.9.5]: https://github.com/heAdz0r/hzr/compare/v0.9.4...v0.9.5
 [0.9.4]: https://github.com/heAdz0r/hzr/compare/v0.9.3...v0.9.4
 [0.9.3]: https://github.com/heAdz0r/hzr/compare/v0.9.2...v0.9.3

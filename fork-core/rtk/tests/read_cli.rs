@@ -205,9 +205,9 @@ fn read_line_numbers() {
 
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // format_with_line_numbers produces "N │ line" format
-    assert!(stdout.contains("1 │ alpha"), "line 1 numbered");
-    assert!(stdout.contains("2 │ beta"), "line 2 numbered");
+    // format_with_line_numbers produces "N<TAB>line" format
+    assert!(stdout.contains("1\talpha"), "line 1 numbered");
+    assert!(stdout.contains("2\tbeta"), "line 2 numbered");
 }
 
 #[test]
@@ -222,8 +222,8 @@ fn read_line_numbers_default_to_exact_source_lines() {
 
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("1 │ // source line one"));
-    assert!(stdout.contains("2 │ pub fn run() {}"));
+    assert!(stdout.contains("1\t// source line one"));
+    assert!(stdout.contains("2\tpub fn run() {}"));
 }
 
 #[test]
@@ -247,7 +247,7 @@ fn read_range_line_numbers_keep_source_coordinates() {
     assert!(out.status.success());
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "3 │ three\n4 │ four\n"
+        "3\tthree\n4\tfour\n"
     );
 }
 
@@ -316,8 +316,9 @@ fn read_csv_level_none_shows_raw() {
 
 #[test]
 fn read_markdown_digest_is_self_describing_and_recoverable() {
+    // 0.10.0: digests start above 16 KiB, so the fixture is ~23 KB
     let mut markdown = String::from("# Title\n\n");
-    for number in 1..=100 {
+    for number in 1..=300 {
         markdown.push_str(&format!(
             "Important body line {number} with enough detail for a realistic document.\n"
         ));
@@ -340,6 +341,21 @@ fn read_markdown_digest_is_self_describing_and_recoverable() {
     assert!(stdout.contains("Important body line 1"));
     assert!(stdout.contains("`--level none` for exact content"));
     assert!(stdout.contains("`--from N --to M` for an exact range"));
+}
+
+// 0.10.0: a small document is cheaper exact than as a digest plus a follow-up read
+#[test]
+fn read_small_markdown_is_exact_without_a_digest() {
+    let markdown = "# Title\n\nA short instruction file.\n\n## Rules\n\nKeep this.\n".repeat(20);
+    let f = write_temp(".md", markdown.as_bytes());
+
+    let out = rtk_bin()
+        .args(["read", f.path().to_str().unwrap()])
+        .output()
+        .expect("run rtk read small markdown");
+
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim_end(), markdown.trim_end());
 }
 
 #[test]
@@ -467,9 +483,9 @@ fn read_max_lines_truncates() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.starts_with("line1\nline2\nline3\n"));
-    assert!(stdout.contains("showing 3 bounded lines from file of 10"));
-    assert!(stdout.contains("7 omitted from requested range"));
-    assert!(stdout.contains("--from 4 --to 10 --level none"));
+    // 0.10.0: an explicit bound gets a position marker, not a recovery command
+    assert!(stdout.contains("[lines 1-3 of 10]"), "{stdout}");
+    assert!(!stdout.contains("recovery"), "{stdout}");
 }
 
 // ── Empty file ──────────────────────────────────────────────
@@ -764,7 +780,7 @@ fn read_batch_honors_total_and_per_file_budgets_with_recovery() {
     let second_header = format!("== {second_path} ==");
     let split = stdout.find(&second_header).expect("second file header");
     assert!(stdout.find(&first_header).unwrap() < split);
-    assert!(stdout.contains("1 │ let value_1 = 1;"));
+    assert!(stdout.contains("1\tlet value_1 = 1;"));
     assert_eq!(stdout.matches("recovery: `hzr read").count(), 2);
     assert!(stdout.len().div_ceil(4) <= 256);
     assert!(stdout[..split].len().div_ceil(4) <= 128);

@@ -1166,7 +1166,7 @@ async fn fallback_decision(config: &Config, raw: &str, cwd: &Path) -> RtkRewrite
         }
     };
     let authorized = matches!(fidelity, RawFidelityRequest::Authorized { .. });
-    let canonical = CanonicalCommand::shell(command);
+    let canonical = CanonicalCommand::host_shell(command); // 0.10.0: keep the host shell
     let mut outcome = if authorized {
         adapter
             .decide_byte_fidelity_with_plan_in(&canonical, Some(cwd))

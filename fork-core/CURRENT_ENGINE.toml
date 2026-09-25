@@ -1,12 +1,12 @@
 schema_version = 1
 engine_version = "0.44.1-fork.1"
-hzr_release_line = "0.8.x"
+hzr_release_line = "0.10.x"
 parent_snapshot_sha256 = "f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16"
 manifest = "CURRENT_ENGINE_V1.tsv"
-manifest_sha256 = "fce7fdbc68e162650042c291f13ef6690a7d534ee0475abf8cfeed527a41857d"
+manifest_sha256 = "f0514906388be77915c8643acaf37a462c8e2906432546e2ddeda500caadf24f"
 content_manifest = "CURRENT_SHA256SUMS"
-content_manifest_sha256 = "1814219db5f51884f19a07b28641983e9392f2c674b4edf37d8ad7c669f1010f"
+content_manifest_sha256 = "2c3d58cbd64faa522f960eeb8abcdd6ad49cc88534d23ecc7c5a8c837358277d"
 files = "CURRENT_FILES"
-included_file_count = 483
+included_file_count = 484
 selection = "HZR-owned current engine files, derived from immutable snapshot v2 and enumerated by CURRENT_FILES"
 ownership = "HZR-owned evolvable engine; changes live only in this repository"

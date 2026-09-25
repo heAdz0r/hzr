@@ -9,9 +9,10 @@ use regex::{Regex, RegexSet};
 use std::path::{Path, PathBuf};
 
 use super::lexer::{
-    has_stdout_file_redirect, parse_shell_command_wrapper, shell_split, split_on_operators,
-    tokenize, tokenize_with_newlines, ParsedToken, PipeKind, ShellWrapperParse, TokenKind,
-};
+    has_stdout_file_redirect, parse_shell_command_wrapper, shell_split, shell_word_spans,
+    split_on_operators, tokenize, tokenize_with_newlines, ParsedToken, PipeKind, ShellWrapperParse,
+    TokenKind,
+}; // 0.10.0: shell_word_spans keeps `$VAR/path` whole
 use super::rules::{IGNORED_EXACT, IGNORED_PREFIXES, RULES};
 
 #[cfg(test)]
@@ -1260,12 +1261,11 @@ fn rewrite_bounded_read_pipeline(command: &str) -> Option<String> {
     if producer_words.len() != 2 || producer_words[0] != "cat" || producer_words[1] == "-" {
         return None;
     }
-    let producer_tokens = tokenize(producer);
-    let file = producer_tokens
-        .iter()
-        .filter(|token| token.kind == TokenKind::Arg)
-        .nth(1)
-        .map(|token| &producer[token.offset..token.offset + token.value.len()])?;
+    // 0.10.0: the file is the second shell word, not the second token (`cat $U/a.rs`
+    // tokenizes as `cat`, `$U`, `/a.rs`, which read the directory `$U`).
+    let file = shell_word_spans(producer)
+        .get(1)
+        .map(|span| &producer[span.clone()])?;
 
     let consumer_normalized = strip_absolute_path(consumer);
     let words = shell_split(&consumer_normalized);
@@ -1531,9 +1531,9 @@ fn rewrite_line_range(cmd: &str) -> Option<String> {
     let tokens = tokenize(cmd);
     if tokens.iter().all(|token| token.kind == TokenKind::Arg) {
         let words = shell_split(cmd);
-        let path = tokens
-            .last()
-            .map(|token| &cmd[token.offset..token.offset + token.value.len()]);
+        // 0.10.0: the path is the last shell WORD; `$U/a.rs` is two tokens and the last
+        // token alone (`/a.rs`) named a different file.
+        let path = shell_word_spans(cmd).last().map(|span| &cmd[span.clone()]);
         match words.as_slice() {
             [tool, flag, file] if tool == "head" => {
                 let lines = flag
@@ -1937,6 +1937,15 @@ fn rewrite_segment_inner(
         if args.starts_with('-') && !args.starts_with("-n ") && !args.starts_with("-n\t") {
             return None;
         }
+        // 0.10.0: `rtk read` takes one file; `cat a b` used to become a command that
+        // failed with "multiple files require --batch". Concatenation stays with cat.
+        let operands = shell_word_spans(args)
+            .into_iter()
+            .filter(|span| &args[span.clone()] != "-n")
+            .count();
+        if operands != 1 {
+            return None;
+        }
     }
 
     // Use classify_command for correct ignore/prefix handling
@@ -2127,13 +2136,10 @@ fn rewrite_sqlite_select(command: &str) -> Option<String> {
     {
         return None;
     }
-    let tokens = tokenize(command);
-    let args: Vec<_> = tokens
-        .iter()
-        .filter(|token| token.kind == TokenKind::Arg)
-        .collect();
-    let database = raw_token(command, args.get(database_index)?)?;
-    let query = raw_token(command, args.get(database_index + 1)?)?;
+    // 0.10.0: index shell words, not tokens, so `$DIR/app.db` stays one argument
+    let spans = shell_word_spans(command);
+    let database = command.get(spans.get(database_index)?.clone())?;
+    let query = command.get(spans.get(database_index + 1)?.clone())?;
     Some(format!(
         "rtk sqlite3 {database} {query} --max-rows 50 --max-tokens 2048"
     ))
@@ -2224,10 +2230,6 @@ fn rewrite_remote_docker_logs(command: &str) -> Option<String> {
         rewritten.push_str(" --timestamps");
     }
     Some(rewritten)
-}
-
-fn raw_token<'a>(command: &'a str, token: &ParsedToken) -> Option<&'a str> {
-    command.get(token.offset..token.offset + token.value.len())
 }
 
 fn interpreter_reads_or_launches_children(command: &str) -> bool {
@@ -2421,6 +2423,56 @@ mod tests {
 
     fn rewrite_command_no_prefixes(cmd: &str, excluded: &[String]) -> Option<String> {
         super::rewrite_command(cmd, excluded, &[])
+    }
+
+    // 0.10.0: a read rewrite must name the caller's file, expansions included
+    #[test]
+    fn read_rewrites_keep_expanded_paths_whole() {
+        let cases = [
+            ("sed -n 1,5p $U/a.rs", "rtk read $U/a.rs --from 1 --to 5"),
+            (
+                "sed -n '1,5p' $HOME/a.rs",
+                "rtk read $HOME/a.rs --from 1 --to 5",
+            ),
+            ("head -5 $U/a.rs", "rtk read $U/a.rs --max-lines 5"),
+            ("tail -20 $U/log.txt", "rtk read $U/log.txt --tail-lines 20"),
+            ("cat $U/a.rs | head -5", "rtk read $U/a.rs --max-lines 5"),
+            (
+                "cat \"$U/a b.rs\" | tail -3",
+                "rtk read \"$U/a b.rs\" --tail-lines 3",
+            ),
+        ];
+        for (command, expected) in cases {
+            assert_eq!(
+                rewrite_command_no_prefixes(command, &[]).as_deref(),
+                Some(expected),
+                "{command}"
+            );
+        }
+    }
+
+    // 0.10.0: `rtk read` reads one file; concatenation is not a read
+    #[test]
+    fn multi_file_cat_is_not_rewritten_to_a_single_file_read() {
+        assert_eq!(rewrite_command_no_prefixes("cat a.md b.md", &[]), None);
+        assert_eq!(rewrite_command_no_prefixes("cat -n a.md b.md", &[]), None);
+        assert_eq!(
+            rewrite_command_no_prefixes("cat a.md", &[]).as_deref(),
+            Some("rtk read a.md")
+        );
+    }
+
+    #[test]
+    fn shell_word_spans_join_adjacent_expansion_tokens() {
+        let command = "sed -n 1,5p $U/a.rs \"$V/x y\" ${W}/z";
+        let words: Vec<&str> = super::shell_word_spans(command)
+            .into_iter()
+            .map(|span| &command[span])
+            .collect();
+        assert_eq!(
+            words,
+            ["sed", "-n", "1,5p", "$U/a.rs", "\"$V/x y\"", "${W}/z"]
+        );
     }
 
     #[test]

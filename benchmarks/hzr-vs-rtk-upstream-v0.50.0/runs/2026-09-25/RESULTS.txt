@@ -1,0 +1,17 @@
+case                  raw  old_fork  new_fork  upstream
+go_test_red           250      3451       318       275
+go_vet_red            111       113       113       112
+go_build_red          106       108       108       107
+golangci_red          165        81       166       133
+git_status           3098       382      1462      1462
+git_log_30          36071      3261      3261      5594
+git_diff_head1     289558    292890     26856     36226
+git_diff_head5     616793    625334     21187     40083
+git_show_head        5474      3143      5063      5063
+find_rs              6046      6139       965       847
+ls_la                4467      1390      1390      1341
+wc_l                  366       133       133       133
+grep_rn             10355     10355      8264     10355
+cat_n_code          16351     16810     14974     16810
+cat_md_small          886       886       886       886
+head_50              1581      1754      1602      1526

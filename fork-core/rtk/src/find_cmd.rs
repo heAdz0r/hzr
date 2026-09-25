@@ -389,7 +389,7 @@ fn run_display(
     } else {
         body.clone()
     };
-    let mut shown = crate::guard::never_worse(&raw_output, &shown).to_string();
+    let mut shown = crate::guard::never_worse_content(&raw_output, &shown).to_string(); // 0.10.0: content guard
 
     // rtk imposed this cap on its own initiative, so the hidden matches must stay
     // recoverable without re-running the search.

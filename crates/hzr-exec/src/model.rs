@@ -29,6 +29,18 @@ impl CanonicalCommand {
         }
     }
 
+    /// A shell command run by the shell an agent host uses, not `/bin/sh`.
+    ///
+    /// Claude Code runs Bash-tool commands in the user's bash or zsh. Proxying them through
+    /// `/bin/sh -c` changed their meaning: process substitution `<(…)` is a syntax error in
+    /// macOS's POSIX-mode sh, and Debian's dash rejects `[[` and arrays. (0.10.0)
+    pub fn host_shell(command: impl Into<String>) -> Self {
+        Self::Shell {
+            shell: host_shell_path(),
+            command: command.into(),
+        }
+    }
+
     pub fn with_shell(
         shell: impl Into<String>,
         command: impl Into<String>,
@@ -55,6 +67,37 @@ impl CanonicalCommand {
 #[cfg(unix)]
 const fn default_shell() -> &'static str {
     "/bin/sh"
+}
+
+/// `$SHELL` when it is an executable bash or zsh, else `/bin/bash`, else `/bin/sh`. (0.10.0)
+#[cfg(unix)]
+fn host_shell_path() -> String {
+    host_shell_from(std::env::var_os("SHELL").map(PathBuf::from), |path| {
+        std::path::Path::new(path).is_file()
+    })
+}
+
+#[cfg(unix)]
+fn host_shell_from(shell_env: Option<PathBuf>, exists: impl Fn(&str) -> bool) -> String {
+    if let Some(shell) = shell_env.filter(|shell| shell.is_absolute()) {
+        let supported = matches!(
+            shell.file_name().and_then(|name| name.to_str()),
+            Some("bash" | "zsh")
+        );
+        if let Some(path) = shell.to_str().filter(|path| supported && exists(path)) {
+            return path.to_owned();
+        }
+    }
+    ["/bin/bash", "/usr/bin/bash"]
+        .into_iter()
+        .find(|path| exists(path))
+        .unwrap_or(default_shell())
+        .to_owned()
+}
+
+#[cfg(windows)]
+fn host_shell_path() -> String {
+    default_shell().to_owned()
 }
 
 #[cfg(windows)]
@@ -389,4 +432,28 @@ pub enum ExecutionEvent {
 pub enum NeverWorseChoice {
     Raw,
     Candidate,
+}
+
+#[cfg(test)]
+mod tests {
+    // 0.10.0: the proxy shell follows the host, never a POSIX sh that rejects bash syntax
+    #[cfg(unix)]
+    #[test]
+    fn host_shell_prefers_the_users_bash_or_zsh() {
+        let all = |_: &str| true;
+        assert_eq!(
+            super::host_shell_from(Some("/bin/zsh".into()), all),
+            "/bin/zsh"
+        );
+        assert_eq!(
+            super::host_shell_from(Some("/usr/bin/fish".into()), all),
+            "/bin/bash"
+        );
+        assert_eq!(super::host_shell_from(Some("zsh".into()), all), "/bin/bash");
+        assert_eq!(
+            super::host_shell_from(None, |path| path == "/usr/bin/bash"),
+            "/usr/bin/bash"
+        );
+        assert_eq!(super::host_shell_from(None, |_| false), "/bin/sh");
+    }
 }

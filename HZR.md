@@ -114,6 +114,12 @@ Project build -> hzr exec run '<project build command>'
 HZR release   -> hzr release --force (rebuild and reinstall HZR itself)
 ```
 
+Native Read, Grep, Glob, Edit and Write stay the default in hosts that have them: routing a
+whole-file read or an edit through a shell saves no tokens (the content or the patch is the
+same) and collides with repositories that forbid shell file writes. The routes above add
+value where they bound output (`--outline`, line ranges, filtered shell output) or add a
+guarantee (atomic multi-file `hzr write batch`, exact recovery). (0.10.0)
+
 Managed execution forwards the caller's validated `PATH` to the daemon, including through an
 approval, but does not copy the rest of the caller environment. Commands that need explicit
 environment values must continue to declare them in the command itself.
@@ -136,6 +142,10 @@ hzr settings delegation --provider opencode-go --model deepseek-v4.1-flash --ena
 hzr delegate --workspace /absolute/workspace --file task.md
 hzr settings delegation --enabled false
 ```
+
+Delegation sends repository content off the machine: the repository's `AGENTS.md` and
+`CLAUDE.md`, the pre-fetched context plan and every tool result the worker requests go to
+the selected provider's API. Enable it only where that is acceptable.
 
 OpenRouter and direct DeepSeek are also presets; use their own credentials and
 model identifiers. Keys are stored in private files under HZR's data directory,
@@ -284,6 +294,11 @@ split on non-alphanumeric characters, stripped of stop words and stemmed, and th
 terms are ranked. Use it to *locate* code you cannot name exactly.
 
 `--path` accepts several directories: `--path crates fork-core/src`.
+
+Semantic ranking over the grepai index needs the configured embedding provider (Ollama with
+`nomic-embed-text` by default, not bundled). When it is unreachable, search falls back to
+lexical ripgrep and labels the results `ForkRgaiRipgrep`; `hzr doctor` reports the
+`embedding_provider` warning with the command that fixes it.
 
 ## Default shell routing
 

@@ -805,7 +805,9 @@ pub fn truncate_long_lines(content: &str, level: FilterLevel) -> String {
 
     let max_width = match level {
         FilterLevel::Aggressive => 200,
-        FilterLevel::Minimal => 500,
+        // 0.10.0: 500 cut ordinary Markdown paragraphs, so an exact Edit of the shown text
+        // failed and forced a re-read; only minified or encoded lines are this long.
+        FilterLevel::Minimal => 2_000,
         FilterLevel::None => unreachable!(),
     };
 
@@ -1125,25 +1127,25 @@ Plain explanation.
 
     #[test]
     fn truncate_long_lines_minimal_higher_threshold() {
-        let line = "y".repeat(400);
+        // 0.10.0: a 1,500-character Markdown paragraph is below the minimal threshold
+        let line = "y".repeat(1_500);
         let result = truncate_long_lines(&line, FilterLevel::Minimal);
-        // 400 < 500 (minimal threshold), so no truncation
         assert!(!result.contains('…'));
     }
 
     #[test]
     fn truncate_long_lines_minimal_above_threshold() {
-        let line = "z".repeat(600);
+        let line = "z".repeat(2_100);
         let result = truncate_long_lines(&line, FilterLevel::Minimal);
         assert!(
             result.contains('…'),
-            "line > 500 chars truncated in minimal"
+            "line > 2000 chars truncated in minimal"
         );
     }
 
     #[test]
     fn truncate_long_lines_unicode_safe() {
-        let line = "あ".repeat(600);
+        let line = "あ".repeat(2_100);
         let result = truncate_long_lines(&line, FilterLevel::Minimal);
         assert!(result.contains('…'));
     }

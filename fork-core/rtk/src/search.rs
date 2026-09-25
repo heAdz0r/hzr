@@ -656,6 +656,11 @@ pub fn run(
         let file_display = compact_path(file);
         let mut file_shown = 0;
         let mut prev_line: usize = 0;
+        // 0.10.0: `rg --heading` shape — the path once per file, not on every line
+        if show_file {
+            body.push_str(&file_display);
+            body.push('\n');
+        }
         for (line_num, is_match, content) in entries.iter().take(per_file) {
             if shown >= max_results {
                 break;
@@ -665,10 +670,6 @@ pub fn run(
             }
             prev_line = *line_num;
             let sep = if *is_match { ':' } else { '-' };
-            if show_file {
-                body.push_str(&file_display);
-                body.push(sep);
-            }
             if show_line {
                 body.push_str(&line_num.to_string());
                 body.push(sep);
@@ -719,13 +720,49 @@ pub fn run(
     let output = if capped && rtk_output.len() < plain.len() {
         rtk_output
     } else {
-        plain
+        // 0.10.0: an uncapped multi-file result in the `rg --heading` shape is the same
+        // content without the path repeated on every line.
+        let heading = show_file
+            .then(|| heading_output(&raw_output, show_line))
+            .filter(|heading| heading.len() < plain.len());
+        heading.unwrap_or(plain)
     };
 
     print!("{}", output);
     timer.track(&real_cmd, &rtk_label, &raw_output, &output);
 
     Ok(exit_code)
+}
+
+/// Render NUL-separated match lines in ripgrep's `--heading` shape: each file's path on its
+/// own line, then its `line:content` (or `line-content` context) lines, a blank line between
+/// files. Lossless: every path, line number and content byte is kept. (0.10.0)
+fn heading_output(raw_output: &str, show_line: bool) -> String {
+    let mut out = String::with_capacity(raw_output.len());
+    let mut current: Option<String> = None;
+    for line in raw_output.lines() {
+        let Some((file, line_num, is_match, content)) = parse_match_line(line) else {
+            if line == "--" {
+                out.push_str("--\n");
+            }
+            continue;
+        };
+        if current.as_deref() != Some(file.as_str()) {
+            if current.is_some() {
+                out.push('\n');
+            }
+            out.push_str(&file);
+            out.push('\n');
+            current = Some(file);
+        }
+        if show_line {
+            out.push_str(&line_num.to_string());
+            out.push(if is_match { ':' } else { '-' });
+        }
+        out.push_str(content);
+        out.push('\n');
+    }
+    out
 }
 
 /// Parses a single rg/grep match or context line of the form
@@ -857,6 +894,17 @@ fn compact_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.10.0: heading shape keeps every path, number and byte of content
+    #[test]
+    fn heading_output_groups_lines_under_their_file() {
+        let raw = "src/a.rs\x0010:let a = 1;\nsrc/a.rs\x0011-context\nsrc/a.rs\x0020:let b = 2;\nsrc/b.rs\x003:use a;\n";
+        assert_eq!(
+            heading_output(raw, true),
+            "src/a.rs\n10:let a = 1;\n11-context\n20:let b = 2;\n\nsrc/b.rs\n3:use a;\n"
+        );
+        assert_eq!(heading_output(raw, false), "src/a.rs\nlet a = 1;\ncontext\nlet b = 2;\n\nsrc/b.rs\nuse a;\n");
+    }
 
     #[test]
     fn test_clean_line() {

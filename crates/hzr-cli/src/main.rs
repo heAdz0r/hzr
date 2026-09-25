@@ -530,7 +530,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 None
             };
-            // 0.9.13: `--fix` closes stale open daemon-unreachable accounting gaps left by an
+            // 0.10.0: `--fix` closes stale open daemon-unreachable accounting gaps left by an
             // earlier outage, so `hzr stats` stops reporting `▲ LIVE DEGRADED` for a condition
             // the operator has already fixed by restoring the daemon.
             let accounting_gap_repair = if fix && !dry_run {
@@ -564,7 +564,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             report.fidelity_reconcile = fidelity_reconcile;
             report.fleet_reconcile = fleet_reconcile;
             report.orphan_cleanup = orphan_cleanup; // 0.8.3
-            report.accounting_gap_repair = accounting_gap_repair; // 0.9.13
+            report.accounting_gap_repair = accounting_gap_repair; // 0.10.0
             if let Some(fleet) = &report.fleet_reconcile {
                 let completion = fleet.completion_check();
                 if completion.status == diagnostics::CheckStatus::Error {
@@ -608,7 +608,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                     output::print_orphan_cleanup(cleanup)?; // 0.8.3
                 }
                 if let Some(count) = report.accounting_gap_repair {
-                    output::print_accounting_gap_repair(count)?; // 0.9.13
+                    output::print_accounting_gap_repair(count)?; // 0.10.0
                 }
                 if let Some(repairs) = &report.client_ownership_repair {
                     for repair in repairs {
@@ -1503,7 +1503,9 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             for root in roots {
                 let preview =
                     apply_agent_instruction_state(&config, &root, &contract, false, true, true)?;
-                for report in preview.reports {
+                // 0.10.0: only targets the install will write are validated and captured; an
+                // untouched obsolete target (a symlinked repository CLAUDE.md) is not ours.
+                for report in preview.reports.into_iter().filter(|report| report.changed) {
                     adoption::validate_lifecycle_target(&report.path)?;
                     transaction.capture(&report.path)?;
                     if let Some(backup) = report.backup_path {
@@ -2958,11 +2960,11 @@ async fn initialize_if_needed(
     if !json {
         let update_notice = update::startup_notice(&config.data_dir).await;
         if session_start_hook {
-            if let Some(payload) = session_start_payload(
-                instruction_alert.as_deref(),
-                update_notice.as_deref(),
-                Some(response_codec_session_notice()),
-            ) {
+            // 0.10.0: no per-session codec notice — the managed block already asks for
+            // concise answers, and a quiet session start adds nothing to the context.
+            if let Some(payload) =
+                session_start_payload(instruction_alert.as_deref(), update_notice.as_deref(), None)
+            {
                 print_json(&payload)?;
             }
         } else {
@@ -3066,16 +3068,6 @@ fn session_start_payload(
     }))
 }
 
-/// The SessionStart line about answer length.
-///
-/// Concise generation is an instruction, not a transform. The earlier notice told every agent to
-/// send long prose back through `hzr_codec`, which spends the answer's tokens to write it, again
-/// as tool arguments, again as the returned payload and again in the final message, to remove
-/// only exact duplicate paragraphs. (F15, PRD 2026-09-04)
-fn response_codec_session_notice() -> &'static str {
-    "HZR CODEC: write concisely by default and keep technical content exact. Do not route generated prose through `hzr_codec`; a post-generation transform cannot refund emitted tokens. Use `hzr_codec` only on explicit request or with `profile: \"shadow\"` to measure a counterfactual. Claude Code exposes no global final-response replacement hook, so coverage stays instructed-only with zero economic credit."
-}
-
 fn reconcile_session_surfaces(
     config_path: &Path,
     config: &Config,
@@ -3086,7 +3078,7 @@ fn reconcile_session_surfaces(
 )> {
     let instruction_plan = plan_agent_instructions(config, workspace_root)?;
     let binary = project_mcp_binary()?;
-    let mcp_plan = client_config::install_project_codex(&binary, workspace_root, true, true)?;
+    let mcp_plan = client_config::session_project_codex(&binary, workspace_root, true)?; // 0.10.0
     let mut transaction = InitTransaction::acquire(config_path, workspace_root, &config.data_dir)?;
     for report in &instruction_plan.reports {
         if let Some(parent) = report.path.parent() {
@@ -3129,7 +3121,7 @@ fn reconcile_session_surfaces(
             }
         }
         inject_init_failure("after_session_instructions")?;
-        let mcp = client_config::install_project_codex(&binary, workspace_root, false, true)?;
+        let mcp = client_config::session_project_codex(&binary, workspace_root, false)?; // 0.10.0
         if mcp.changed {
             transaction.mark_written(&mcp.path)?;
             if let Some(backup) = &mcp.backup_path {
@@ -4733,9 +4725,8 @@ mod tests {
         ReceiptImportCompatibility, canonical_directory, contract_asset_path,
         executable_source_directory, format_pricing_entry, forwarded_fork_args,
         instruction_drift_alert_for_targets, parse_provider_receipt_import, payload_limit,
-        reject_direct_fork_bypass, response_codec_session_notice, session_instruction_drift_alert,
-        session_start_payload, validate_activation_workspace,
-        validate_activation_workspace_against_home,
+        reject_direct_fork_bypass, session_instruction_drift_alert, session_start_payload,
+        validate_activation_workspace, validate_activation_workspace_against_home,
     };
 
     #[test]
@@ -4892,7 +4883,7 @@ mod tests {
         let payload = session_start_payload(
             Some("Run `hzr doctor` before continuing."),
             Some("HZR 0.6.3 is available."),
-            Some(response_codec_session_notice()),
+            None,
         )
         .expect("session payload");
         let rendered = payload.to_string();
@@ -4901,8 +4892,10 @@ mod tests {
         assert!(rendered.contains("HZR 0.6.3 is available."));
         assert!(rendered.contains("Inform the user once"));
         assert!(rendered.contains("Do not install it without explicit approval."));
-        assert!(rendered.contains("instructed-only"));
-        assert!(rendered.contains("zero economic credit"));
+        assert!(
+            !rendered.contains("HZR CODEC"),
+            "0.10.0: no per-session codec notice"
+        );
     }
 
     #[test]

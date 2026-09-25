@@ -1,7 +1,10 @@
 //! Rendering utilities for `read`: line numbers, truncation helpers.
 //! Extracted from read.rs (PR-2).
 
-/// Format text content with line numbers in "N │ line" format.
+/// Format text content with line numbers in "N<TAB>line" format.
+///
+/// 0.10.0: a tab, like `cat -n`, instead of ` │ ` (5 bytes: the box-drawing bar is 3 bytes of
+/// UTF-8), which made `rtk read -n` larger than the `cat -n` it replaced.
 pub fn format_with_line_numbers_from(content: &str, start_line: usize) -> String {
     let lines: Vec<&str> = content.lines().collect();
     let last_line = start_line.saturating_add(lines.len().saturating_sub(1));
@@ -9,7 +12,7 @@ pub fn format_with_line_numbers_from(content: &str, start_line: usize) -> String
     let mut out = String::new();
     for (i, line) in lines.iter().enumerate() {
         out.push_str(&format!(
-            "{:>width$} │ {}\n",
+            "{:>width$}\t{}\n",
             start_line.saturating_add(i),
             line,
             width = width
@@ -75,7 +78,7 @@ mod tests {
     #[test]
     fn line_numbers_single_digit() {
         let result = format_with_line_numbers_from("a\nb\nc", 1);
-        assert_eq!(result, "1 │ a\n2 │ b\n3 │ c\n");
+        assert_eq!(result, "1\ta\n2\tb\n3\tc\n");
     }
 
     #[test]
@@ -85,8 +88,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let result = format_with_line_numbers_from(&input, 1);
-        assert!(result.starts_with(" 1 │ line1\n"));
-        assert!(result.contains("12 │ line12\n"));
+        assert!(result.starts_with(" 1\tline1\n"));
+        assert!(result.contains("12\tline12\n"));
     }
 
     #[test]
@@ -98,7 +101,7 @@ mod tests {
     #[test]
     fn line_numbers_can_start_at_source_offset() {
         let result = format_with_line_numbers_from("c\nd", 120);
-        assert_eq!(result, "120 │ c\n121 │ d\n");
+        assert_eq!(result, "120\tc\n121\td\n");
     }
 
     // ── Dedup tests (PR-7) ──────────────────────────────────

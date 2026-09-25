@@ -1,106 +1,27 @@
 <!-- hzr:begin managed agent contract — do not edit inside -->
 
-# HZR tool contract (managed)
+# HZR (managed)
 
-`hzr` — HZR's Zero-Redundancy control plane — is the only control plane. Do not
-invoke separately installed `rtk`, `grepai`, `icm` binaries: HZR owns those
-engines internally, and a direct call creates the duplicate scan, duplicate
-store and unaccounted usage this engine exists to remove.
+`hzr` filters command output and owns `rtk`, `grepai`, `icm`; never call those binaries
+directly. Hooks already route supported Bash commands; native Read, Grep, Glob, Edit and
+Write stay the default.
 
-This managed region defines tool routing only. Keep repository-specific roles,
-source paths and test commands in that repository's root instruction file, not
-in a user-global instruction file.
-
-Read the full contract at `HZR.md` only when a bounded lookup cannot resolve HZR-policy
-ambiguity. Ordinary tasks must not import or read it in full. Start with
-`hzr read HZR.md --outline`, then read only the relevant `--from`/`--to` range.
-
-| Instead of | Use |
+| Need | Use |
 |---|---|
-| Read | `hzr read <file>`; Choose exact full content or bounded ranges by total task cost; --json reports completeness, hashes and continuation. |
-| Grep or repository search | `hzr search "<intent>" --mode auto`; Use --mode exact only for a known literal; hzr rgai is the semantic shorthand. |
-| Edit or Write | `hzr write patch\|replace\|set\|create\|batch ...`; Writes are atomic and idempotent per file; a batch is not an all-files transaction. |
-| durable memory | `hzr memory recall\|get\|store\|update\|forget\|prune`; Project is the default scope; global is only for durable user-wide facts. |
-| cross-cutting context discovery | `hzr context plan "<intent>"`; Use --max-tokens to bound evidence and --no-memory when memory is irrelevant. |
-| shell command | `hzr exec run '<shell command>'`; Default policy route; preserves shell grammar and selects managed filtering or tracked fallback. |
-| build this project | `hzr exec run '<project build command>'`; Project builds are ordinary managed shell commands; hzr build is not a generic project-build wrapper. |
-| optional TDD | `hzr tdd`; Use only when requested, repository-required, or justified by regression risk. |
-| explicit unfiltered recovery | `HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'`; Allowed reasons: binary, checksum, machine_protocol, complete_log, full_patch, or verbatim_source. |
+| File outline or line range | `hzr read <file> --outline`; or `--from A --to B`; native Read stays the default for whole files. |
+| Search by intent | `hzr search "<intent>"`; `--mode exact` for a known literal. |
+| Atomic multi-file edit (optional) | `hzr write batch ...`; native Edit/Write stay the default. |
+| Durable decisions and fixes | `hzr memory recall\|store`; project scope by default; `--scope global` only for user-wide preferences. |
+| Unfamiliar or cross-cutting area | `hzr context plan "<intent>"`; bound with `--max-tokens N`. |
+| Shell command outside the hook | `hzr exec run '<cmd>'`; hook-routed Bash is already managed. |
+| Exact unfiltered output | `HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'`; reason: binary, checksum, machine_protocol, complete_log, full_patch or verbatim_source. |
 
-## Execution invariants
+Filtered or bounded output always names its recovery command; never treat it as
+complete. Use MCP `hzr_*` tools only when the server reports this worktree. If enabled
+in `hzr settings`, `hzr delegate` runs scoped tasks; review its results. Policy details:
+`HZR.md` (read with `--outline` first).
 
-For agent-originated shell work, `hzr exec run` is the default. If
-`hzr exec rewrite '<shell command>'` returns `allow_rewrite`, `raw` is forbidden.
-When no filter exists, it performs a tracked fallback; policy ambiguity returns `Ask`.
-For plain argv commands with known output intent,
-`hzr rtk -- test`, `err`, `summary` and `log` routes provide bounded
-filtering. Keep pipes, redirects and other shell grammar on `hzr exec run`.
-
-Choose reads by total task cost: exact full content is appropriate when repeated
-fragments would cost more or the whole file is needed. Use `hzr --json read <file>`
-for exact content with completeness and hashes; `--batch --max-tokens N` shares a
-budget across files. Continue from `next_line` with `--expected-sha256` to detect
-changes. Use `--outline` for structure and `--from`/`--to` for focused evidence
-when that reduces total work. Never treat a truncated response as complete.
-For repeated typed reads, `--context-epoch` and `--session-id` enable scoped
-cost advice. Change epoch after compaction/fork/resume; advice never hides text.
-
-TDD is opt-in, not the default. When token or time efficiency matters, skip it
-and use proportionate verification; repository-required quality gates still apply.
-
-## Memory scopes
-
-One store, two namespaces. `--scope project` (the store default) is for facts about
-*this repository*. `--scope global` is for facts about the **user** — a preference or
-standing rule that applies in every repository. Recall may combine project and global;
-another repository's memory is never reachable.
-
-## MCP tools
-
-Use a registered `hzr` MCP server only after its initialize result reports
-`serverInfo.workspace.bound = true` and `serverInfo.workspace.project` exactly matches
-the canonical current worktree. Otherwise use the CLI routes and repair the project pin;
-never recommend or use an MCP session bound to another workspace:
-
-| Tool | Use it for |
-|---|---|
-| `hzr_context_plan` | Build bounded graph-first evidence for unfamiliar or cross-cutting work. |
-| `hzr_search` | Find code by intent or by a known exact literal. |
-| `hzr_memory_recall` | Recall durable decisions, resolved errors, and prior context. |
-| `hzr_memory_store` | Persist one durable fact or finished handoff, not ephemeral state. |
-| `hzr_read` | Read exact full or bounded batch content with total token budget, hashes and explicit continuation. |
-| `hzr_write` | Apply confined atomic patch or create operations with typed CAS receipts. |
-| `hzr_exec` | Run commands, or start/wait/cancel bounded background jobs through daemon policy and accounting. |
-
-Specialist tools, called only when the task needs them; their full contracts live in the
-MCP schema, not here: `hzr_memory_get`, `hzr_memory_update`, `hzr_memory_forget`,
-`hzr_memory_prune`, `hzr_codec`, `hzr_observability`, `hzr_doctor`.
-
-
-MCP is client-managed stdio; `hzr init` writes the trusted-project Codex registration
-but never starts it. `isError: true` confirms no
-success and no fallback store. Recall before retrying an ambiguously completed write.
-Never register `rtk`, `grepai`, `icm` as separate MCP servers.
-
-Claude Code hooks route supported Bash calls through HZR without granting new
-permissions. Native Read/Grep/Glob/Edit/Write retain exact host semantics in all
-legacy modes; no optimization-only deny/retry is emitted. Native Explore workers
-also pass through unchanged, with host permissions preserved. The PostToolUse observer
-stores no content and grants no savings credit. Missing accounting stays visible.
-Run `hzr hooks capabilities --host claude --probe` for local adapter checks; these
-checks do not prove installation, trusted activation or model-visible delivery.
-
-If enabled in `hzr settings`, use `hzr delegate` for scoped tasks; review results.
-
-## Response density
-
-Write concisely by default: lead with the result, omit greetings, request restatement
-and tool recaps, and keep code, commands, paths, identifiers, errors and numbers exact.
-Do not route generated prose through `hzr_codec`: a transform applied after generation
-cannot refund tokens already emitted, and it only removes exact duplicate paragraphs.
-Call `hzr_codec` only when the user asks for it or to shadow-measure a counterfactual
-with `profile: "shadow"`. Response coverage is `instructed` via
-`managed_instruction_and_session_start`; HZR grants no economic credit unless a trusted
-host confirms replacement.
+Write concisely: lead with the result, skip restatement and tool recaps, keep code,
+paths, errors and numbers exact.
 
 <!-- hzr:end managed agent contract -->

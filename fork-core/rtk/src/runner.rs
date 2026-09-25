@@ -13,6 +13,19 @@ pub fn emit_guarded(filtered: &str, hint: Option<&str>, raw: &str) -> String {
     shown
 }
 
+/// [`emit_guarded`] for a summary of a format rtk injected itself; see
+/// [`crate::guard::never_worse_rendered`].
+pub fn emit_guarded_rendered(filtered: &str, hint: Option<&str>, raw: &str) -> String {
+    // 0.10.0: go test -json / golangci JSON summaries
+    let body = match hint {
+        Some(hint) => format!("{}\n{}", filtered, hint),
+        None => filtered.to_string(),
+    };
+    let shown = crate::guard::never_worse_rendered(raw, &body).to_string();
+    println!("{}", shown);
+    shown
+}
+
 /// Run a command and filter output to show only errors/warnings
 pub fn run_err(command: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();

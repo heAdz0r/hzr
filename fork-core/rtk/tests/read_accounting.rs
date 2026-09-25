@@ -38,8 +38,8 @@ fn numbered_exact_reads_compare_equivalent_presentations() {
             String::from_utf8_lossy(&output.stderr)
         );
         let delivered = String::from_utf8(output.stdout).expect("utf-8 stdout");
-        assert!(delivered.contains("2 │ second"));
-        assert_eq!(delivered.contains("1 │ первая 🎵"), !range);
+        assert!(delivered.contains("2\tsecond"));
+        assert_eq!(delivered.contains("1\tпервая 🎵"), !range);
         let connection = Connection::open(&ledger).expect("open ledger");
         let (baseline, recorded): (u64, u64) = connection
             .query_row(
@@ -100,7 +100,7 @@ fn bounded_read_ledger_counts_notices_unicode_and_newline_shapes() {
     fs::write(&unicode, "первая 🎵\nвторая строка\nтретья строка\n").expect("write unicode");
     let delivered = assert_accounted_read(&unicode, &ledger, 1);
     assert!(delivered.starts_with("первая 🎵\n"));
-    assert!(delivered.contains("recovery:"));
+    assert!(delivered.contains("[lines 1-1 of 3]"), "{delivered}"); // 0.10.0: explicit bound marker
 
     let without_newline = directory.path().join("without-newline.txt");
     fs::write(&without_newline, "exact terminal line").expect("write no-newline source");

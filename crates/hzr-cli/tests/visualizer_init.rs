@@ -126,7 +126,7 @@ fn acceptance_gate_init_repairs_stale_managed_instructions() {
     let codex = directory.path().join("codex/AGENTS.md");
     let stale = std::fs::read_to_string(&codex)
         .expect("managed Codex instructions")
-        .replace("raw` is forbidden", "raw` is preferred");
+        .replace("never treat it as", "always treat it as"); // 0.10.0 block wording
     std::fs::write(&codex, stale).expect("stale managed instructions");
 
     let repaired = run_init(&workspace, &config, &["--if-needed"]);
@@ -141,7 +141,7 @@ fn acceptance_gate_init_repairs_stale_managed_instructions() {
     assert!(
         std::fs::read_to_string(codex)
             .expect("repaired Codex instructions")
-            .contains("raw` is forbidden")
+            .contains("never treat it as")
     );
 }
 

@@ -16,11 +16,12 @@ import sys
 from pathlib import Path
 
 
-EXPECTED_COUNT = 141
-# Recomputed after the 0.8.0 Git diff status fix moved the same needless_return diagnostic
-# from git.rs:1226 to :1229 in two targets. Reverse line mapping reproduces the prior hash;
-# no warning code/message/source identity was added or removed (see the verification report).
-EXPECTED_SHA256 = "5b013a3c862ea687ad6e8c12a9ce9be2370113b7620a60018c81a90fcd19bcd8"
+EXPECTED_COUNT = 137
+# Recomputed for 0.10.0. The golangci-lint rewrite reads `Issue.text` and `Position.line/column`,
+# removing four dead_code warnings (two targets each); the Go, diff, read and guard ports moved
+# existing diagnostics' line numbers. A (code, message, file) multiset comparison against
+# 0.9.13 shows no warning added.
+EXPECTED_SHA256 = "d5f4b7edcde572f135795b3ac48382fa93e48a96fa4b1e2649ebdb3ce5b9c9a3"
 
 
 def main() -> int:
