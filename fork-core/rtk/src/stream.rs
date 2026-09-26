@@ -61,6 +61,205 @@ pub struct StreamResult {
     pub filtered: String,
 }
 
+// 0.11.0 (US-007, upstream 9900d70/5b1d523/9418aa8): while rtk holds a child's
+// captured output, SIGINT/SIGTERM is relayed to the child instead of killing rtk
+// on the spot. The child ends, rtk prints what it captured, then dies by the same
+// signal so the caller still sees a signal death. A child that ignores the relay
+// is SIGKILLed after a grace period; an inherited SIG_IGN is left in place.
+#[cfg(unix)]
+mod signal_relay {
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+    use std::thread;
+    use std::time::Duration;
+
+    const POLL: Duration = Duration::from_millis(25);
+    const KILL_GRACE: Duration = Duration::from_millis(750);
+    const EXIT_GRACE: Duration = Duration::from_millis(750);
+
+    static CHILD_PID: AtomicU32 = AtomicU32::new(0);
+    static RELAYED: AtomicI32 = AtomicI32::new(0);
+    static FINISHED: AtomicBool = AtomicBool::new(false);
+    /// The child leads its own process group: signal the whole group, so a
+    /// grandchild holding the output pipe (`sh -c script` → `sleep`) ends too.
+    static GROUP: AtomicBool = AtomicBool::new(false);
+
+    fn target(pid: u32) -> libc::pid_t {
+        if GROUP.load(Ordering::SeqCst) {
+            -(pid as libc::pid_t)
+        } else {
+            pid as libc::pid_t
+        }
+    }
+
+    /// Signal handler: only atomics, `kill`, `signal` and `raise`, all
+    /// async-signal-safe.
+    extern "C" fn relay(sig: libc::c_int) {
+        let pid = CHILD_PID.load(Ordering::SeqCst);
+        if pid == 0 || RELAYED.swap(sig, Ordering::SeqCst) != 0 {
+            // No child, or a second signal: default action, now.
+            // SAFETY: async-signal-safe libc calls inside a signal handler.
+            unsafe {
+                libc::signal(sig, libc::SIG_DFL);
+                libc::raise(sig);
+            }
+            return;
+        }
+        // SAFETY: async-signal-safe; the pid is our own live child (or its group).
+        unsafe {
+            libc::kill(target(pid), sig);
+        }
+    }
+
+    fn escalate(pid: u32) {
+        thread::sleep(KILL_GRACE);
+        if FINISHED.load(Ordering::SeqCst) {
+            return;
+        }
+        // SAFETY: plain libc call on our own child (or its group).
+        unsafe {
+            libc::kill(target(pid), libc::SIGKILL);
+        }
+        thread::sleep(EXIT_GRACE);
+        if FINISHED.load(Ordering::SeqCst) {
+            return;
+        }
+        let sig = RELAYED.load(Ordering::SeqCst);
+        // SAFETY: restoring the default action and re-raising ends the process.
+        unsafe {
+            libc::signal(sig, libc::SIG_DFL);
+            libc::raise(sig);
+        }
+    }
+
+    pub fn relayed() -> Option<libc::c_int> {
+        match RELAYED.load(Ordering::SeqCst) {
+            0 => None,
+            sig => Some(sig),
+        }
+    }
+
+    pub struct Relay;
+
+    impl Relay {
+        /// `group`: the child was spawned as the leader of its own process group.
+        pub fn install(pid: u32, group: bool) -> Self {
+            GROUP.store(group, Ordering::SeqCst);
+            CHILD_PID.store(pid, Ordering::SeqCst);
+            FINISHED.store(false, Ordering::SeqCst);
+            // SAFETY: installing a handler that only makes async-signal-safe calls.
+            unsafe {
+                for sig in [libc::SIGINT, libc::SIGTERM] {
+                    let handler = relay as extern "C" fn(libc::c_int) as libc::sighandler_t;
+                    let previous = libc::signal(sig, handler);
+                    if previous == libc::SIG_IGN {
+                        // `nohup`/background jobs ignore SIGINT on purpose.
+                        libc::signal(sig, libc::SIG_IGN);
+                    }
+                }
+            }
+            thread::spawn(move || {
+                while !FINISHED.load(Ordering::SeqCst) {
+                    if RELAYED.load(Ordering::SeqCst) != 0 {
+                        escalate(pid);
+                        return;
+                    }
+                    thread::sleep(POLL);
+                }
+            });
+            Relay
+        }
+    }
+
+    impl Drop for Relay {
+        fn drop(&mut self) {
+            FINISHED.store(true, Ordering::SeqCst);
+            CHILD_PID.store(0, Ordering::SeqCst);
+            // SAFETY: restoring default dispositions, preserving an inherited SIG_IGN.
+            unsafe {
+                for sig in [libc::SIGINT, libc::SIGTERM] {
+                    if libc::signal(sig, libc::SIG_DFL) == libc::SIG_IGN {
+                        libc::signal(sig, libc::SIG_IGN);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+mod signal_relay {
+    pub struct Relay;
+
+    impl Relay {
+        pub fn install(_pid: u32, _group: bool) -> Self {
+            Relay
+        }
+    }
+}
+
+/// After the captured output is printed, die by the signal that was relayed, if
+/// any, so the caller sees `128 + signal` from a real signal death. (0.11.0, US-007)
+#[cfg(unix)]
+pub fn die_by_relayed_signal() {
+    let Some(sig) = signal_relay::relayed() else {
+        return;
+    };
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    // SAFETY: restoring the default action and re-raising ends the process.
+    unsafe {
+        libc::signal(sig, libc::SIG_DFL);
+        libc::raise(sig);
+    }
+}
+
+#[cfg(not(unix))]
+pub fn die_by_relayed_signal() {}
+
+/// Spawn the child as leader of its own process group so a relayed signal reaches
+/// its whole tree (`sh -c script` → a grandchild holding the output pipe). Only
+/// when none of rtk's own stdio is a terminal — the agent case: at an interactive
+/// terminal a background group that prompts on the TTY (`prisma migrate dev`)
+/// would be stopped, so there the relay targets the child alone, as upstream
+/// does. Returns whether the group was requested. (0.11.0, US-007)
+fn own_process_group(cmd: &mut Command) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: isatty only inspects file descriptors.
+        let interactive = (0..3).any(|fd| unsafe { libc::isatty(fd) } == 1);
+        if !interactive {
+            cmd.process_group(0);
+        }
+        !interactive
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = cmd;
+        false
+    }
+}
+
+/// `Command::output()` with the signal relay installed for the child's lifetime.
+/// Same stdio as `output()`: stdin null, stdout and stderr captured.
+/// (0.11.0, US-007)
+pub trait RelayedOutput {
+    fn output_relayed(&mut self) -> io::Result<std::process::Output>;
+}
+
+impl RelayedOutput for Command {
+    fn output_relayed(&mut self) -> io::Result<std::process::Output> {
+        let group = own_process_group(self);
+        let child = self
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let _signal_relay = signal_relay::Relay::install(child.id(), group);
+        child.wait_with_output()
+    }
+}
+
 pub fn status_to_exit_code(status: std::process::ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
@@ -110,7 +309,9 @@ pub fn run_streaming(
         }
     }
 
+    let group = own_process_group(cmd); // 0.11.0 (US-007)
     let mut child = ChildGuard(cmd.spawn().context("Failed to spawn process")?);
+    let _signal_relay = signal_relay::Relay::install(child.0.id(), group); // 0.11.0 (US-007)
     let stdout = child.0.stdout.take().context("No child stdout handle")?;
     let stderr = child.0.stderr.take().context("No child stderr handle")?;
 
@@ -283,7 +484,17 @@ pub fn exec_capture_stdin(cmd: &mut Command) -> Result<CaptureResult> {
 /// call site has to supply one.
 fn capture(cmd: &mut Command) -> Result<CaptureResult> {
     let label = cmd.get_program().to_string_lossy().into_owned();
-    let output = cmd.output().context("Failed to execute command")?;
+    // 0.11.0 (US-007): spawn + wait so a signal to rtk is relayed while capturing.
+    let group = own_process_group(cmd);
+    let child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to execute command")?;
+    let _signal_relay = signal_relay::Relay::install(child.id(), group);
+    let output = child
+        .wait_with_output()
+        .context("Failed to execute command")?;
     Ok(CaptureResult {
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),

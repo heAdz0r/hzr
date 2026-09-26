@@ -1,9 +1,9 @@
-# HZR 0.10.1 — fork-core parity ledger
+# HZR 0.11.0 — fork-core parity ledger
 
 **Audit date:** 2026-09-03
-**Status:** HZR 0.10.1 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
+**Status:** HZR 0.11.0 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
-**Current runtime core:** HZR-owned evolvable `fork-core/rtk`, derived from that complete baseline
+**Current runtime core:** HZR-owned evolvable `fork-core/rtk` `0.50.0-fork.1`, derived from that complete baseline and synced selectively with upstream `rtk-ai/rtk` v0.50.0
 
 This ledger distinguishes between four verifiable assertions:
 
@@ -19,7 +19,7 @@ This ledger distinguishes between four verifiable assertions:
 | Source | `https://github.com/heAdz0r/rtk.git` |
 | Branch at capture | `feat/upstream-0.42-fork.1` |
 | Source HEAD | `5f403c465cbdbe148e9ca03e0ac8e856eef0bfee` |
-| Effective version | `0.44.1-fork.1` |
+| Effective version | `0.50.0-fork.1` (current engine; the `v0.1.0` import was `0.44.1-fork.1`) |
 | Included files | 516 existing tracked/untracked non-ignored files |
 | Recorded tracked deletions | 4 |
 | Canonical snapshot schema | `hzr-fork-snapshot-v2-tsv`, hex-encoded paths |
@@ -41,6 +41,41 @@ The 0.6.0 gate verified current engine manifest
 `be0459b8d4dde1a76dcfe836afd77fe0432cf5cb22e83845c522c4568f6a3f53`, 1,940 passed tests,
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
+
+### 0.11.0 upstream v0.50.0 sync delta (fork-core `0.50.0-fork.1`)
+
+Selective re-implementation of upstream `rtk-ai/rtk` work between `develop@f8d636d`
+(the 0.5.0 sync point) and tag `v0.50.0` (`1d87b8e`). The analysis, the per-item
+decisions and the items deliberately not adopted are recorded in
+[`docs/PRD_HZR_UPSTREAM_RTK_SYNC_0_50_0.md`](docs/PRD_HZR_UPSTREAM_RTK_SYNC_0_50_0.md).
+The version names the upstream reference point, not full parity.
+
+Fidelity defects closed, each reproduced on the installed 0.44.1-fork.1 engine first:
+`rtk diff` printed both files and exited 0 for differing files (now the native diff,
+bounded); `grep -m/-l/-t` and a global `-v`/`-u` captured the wrapped tool's own flags
+(`grep -v` lost invert-match); `gh pr checks` printed nothing when a check failed;
+`find` on a missing root was an empty success, read `find src` as a name pattern and
+dropped unknown predicates; `head`/`tail` rewrites corrupted non-UTF-8 bytes and CRLF
+and bare `head` read the whole file; `ls` listed dot entries without `-a`; colour
+configuration emptied the compacted `git diff`; `git show --oneline -p <sha>` reported
+HEAD; `go build`, `next build` and `bun test` rendered success beside a non-zero exit;
+`rtk pnpm install` had an invalid clap definition; `tsc --pretty` fell back to raw and
+`tsc --version` was replaced by a summary; rg's `-r`/`-E` were read as booleans.
+
+Added: SIGINT/SIGTERM relay while output is captured (group-wide when no stdio is a
+terminal, then death by the same signal); Bun lockfile detection and the named JS runner
+(`rtk --js-runner bunx`); `rtk deno lint|check|test`; pnpm global flags; `timeout`/`nohup`
+peeling; anchored TOML `match_command` enforcement; large UTF-8 blob windowing for
+`git show rev:path`. Anti-evasion fixture 91 → 97 cases. Regression: new integration
+suites `diff_native`, `git_show_diff_fidelity`, `signal_relay`, `stderr_visibility`, and
+the differential probe `scripts/upstream-parity-probe.sh` (22 cases). Fixes from open upstream
+pull requests that reproduced on this engine are ported with `tests/upstream_pr_fixes.rs`; among
+them, injected JSON reports (vitest, ESLint, playwright, pip, pnpm) were returned raw by the
+machine-protocol guard and now use the self-injected-format guard.
+
+Accounting direction: the diff, grep, find, head/tail and git fixes return native bytes
+where the old rendering was a loss, so measured savings fall on those calls. The Clippy
+ratchet keeps 137 inherited warnings (multiset unchanged; line positions moved).
 
 ### Contributor find-path fidelity delta (2026-09-10)
 
@@ -269,11 +304,11 @@ failure-first filtering cannot change a failing verification command into succes
 | Surface |Actual HZR route|Check/bound|Status|
 |---|---|---|---|
 | Exact source snapshot | `fork-core/rtk` + manifest v2 |528 files, modes/types/bytes/deletions/exclusions; verifier before build| ✅ |
-| Exact fork build |`cargo build --locked --release` inside snapshot|Bundle only accepts output `rtk 0.44.1-fork.1`| ✅ |
+| Exact fork build |`cargo build --locked --release` inside snapshot|Bundle only accepts output `rtk 0.50.0-fork.1`| ✅ |
 | Fork regression suite | Synthetic temporary Git history + `cargo test --locked --all-targets` |Git history is needed by the staff `git_churn`; `.git` is not included in the snapshot| ✅ |
 | No stock RTK fallback | Runtime pin — fork; upstream RTK — `reference-only` |Bundle not fetch/build/install stock RTK| ✅ |
 | Full fork CLI |`hzr rtk -- <args>` and `bin/rtk -> bin/hzr`|Unix passthrough saves argv, non-UTF8, cwd, stdio, signals, PID and exit| ✅ |
-| Runtime detection |`PinnedRtkAdapter` requires exact version `0.44.1-fork.1`|Binary is built only after snapshot verification; runtime separately does not re-hash-it compiled executable| 🟡 |
+| Runtime detection |`PinnedRtkAdapter` requires exact version `0.50.0-fork.1`|Binary is built only after snapshot verification; runtime separately does not re-hash-it compiled executable| 🟡 |
 | Raw shell rewrite |The complete line is passed to fork `rewrite`| Pipes, redirects, heredoc, multiline, quoting, `&&/||`, xargs are covered by tests| ✅ |
 | Exit `0/1/2/3` | rewrite / raw / deny / one-time approval |Approval ID bounded, TTL and single-use; approve/deny CLI/API| ✅ |
 | Command filters/guards |Fork rewrite selects exact command, HZR transport executes it|Private PATH resolves `rtk` again in exact fork; no generic replacement table| ✅ |

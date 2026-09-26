@@ -24,7 +24,7 @@ use crate::release_version;
 /// is what let a stale bundle look current: the public binary can be new while every
 /// engine underneath it is still the previous release's.
 const VERIFIED_ENGINES: [(&str, &[&str], &str); 6] = [
-    ("rtk", &["--version"], "0.44.1-fork.1"),
+    ("rtk", &["--version"], "0.50.0-fork.1"), // 0.11.0 (US-018)
     ("grepai", &["version"], "0.35.0"),
     ("icm", &["--version"], "0.10.61"),
     ("node", &["--version"], "22.17.1"),

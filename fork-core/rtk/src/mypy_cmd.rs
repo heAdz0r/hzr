@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use crate::utils::{strip_ansi, truncate};
 use anyhow::{Context, Result};
@@ -25,7 +26,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .context("Failed to run mypy. Is it installed? Try: pip install mypy")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);

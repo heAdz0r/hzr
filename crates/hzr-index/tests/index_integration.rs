@@ -885,6 +885,24 @@ async fn test_connect_rejects_unpinned_grepai_version() {
     ));
 }
 
+// 0.11.0 (heAdz0r/hzr#22): initialization leaves the tracked `.gitignore` untouched.
+#[tokio::test]
+async fn initialization_does_not_modify_the_tracked_gitignore() {
+    let repo = git_repo();
+    fs::write(repo.path().join(".gitignore"), "target/\n").expect("gitignore");
+    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.35.0")).await;
+
+    engine
+        .initialize(&InitOptions::default())
+        .await
+        .expect("initialization");
+
+    assert_eq!(
+        fs::read_to_string(repo.path().join(".gitignore")).expect("gitignore"),
+        "target/\n"
+    );
+}
+
 #[tokio::test]
 async fn acceptance_gate_managed_initialization_enables_local_repository_graph() {
     let repo = git_repo();
@@ -1056,6 +1074,10 @@ case "$command_name" in
     printf 'version: 1\nrpg:\n    enabled: false\n' > .grepai/config.yaml
     : > .grepai/index.gob
     : > .grepai/symbols.gob
+    # Like grepai 0.35.0: append .grepai/ to a present .gitignore (heAdz0r/hzr#22).
+    if [ -f .gitignore ] && ! grep -qx '.grepai/' .gitignore; then
+      printf '.grepai/\n' >> .gitignore
+    fi
     ;;
   search)
     query="${{2:-}}"

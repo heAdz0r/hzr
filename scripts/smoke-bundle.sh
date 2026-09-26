@@ -267,11 +267,11 @@ verify_matches_repository \
   '
 )
 
-"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.10.1" >/dev/null
+"${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.11.0" >/dev/null
 "${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.35.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
-"${HZR_ENGINE_ROOT}/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
+"${HZR_ENGINE_ROOT}/rtk" --version | grep -Fx "rtk 0.50.0-fork.1" >/dev/null
 
 HZR_SMOKE_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-bundle-smoke.XXXXXX")"
 HZR_DAEMON_PID=""
@@ -396,7 +396,7 @@ HZR_DOCTOR_JSON="$(
 HZR_FORK_VERSION="$(
   "${HZR_BINARY_ROOT}/hzr" --config "${HZR_SMOKE_CONFIG}" rtk -- --version
 )"
-if [[ "${HZR_FORK_VERSION}" != "rtk 0.44.1-fork.1" ]]; then
+if [[ "${HZR_FORK_VERSION}" != "rtk 0.50.0-fork.1" ]]; then
   echo "assembled HZR-to-fork passthrough failed: ${HZR_FORK_VERSION}" >&2
   exit 1
 fi
@@ -404,7 +404,7 @@ fi
 HZR_COMPAT_FORK_VERSION="$(
   "${HZR_BINARY_ROOT}/rtk" --version
 )"
-if [[ "${HZR_COMPAT_FORK_VERSION}" != "rtk 0.44.1-fork.1" ]]; then
+if [[ "${HZR_COMPAT_FORK_VERSION}" != "rtk 0.50.0-fork.1" ]]; then
   echo "bin/rtk argv0 compatibility routing failed: ${HZR_COMPAT_FORK_VERSION}" >&2
   exit 1
 fi
@@ -435,7 +435,7 @@ fi
 
 "${HZR_NODE_BINARY}" -e '
   const report = JSON.parse(process.argv[1]);
-if (report.protocol_version !== 1 || report.hzr_version !== "0.10.1") {
+if (report.protocol_version !== 1 || report.hzr_version !== "0.11.0") {
     console.error("assembled daemon protocol/version mismatch", report);
     process.exit(1);
   }
@@ -444,7 +444,7 @@ if (report.protocol_version !== 1 || report.hzr_version !== "0.10.1") {
     process.exit(1);
   }
   const rtk = report.engines.find((engine) => engine.name === "rtk");
-  if (!rtk || rtk.version !== "0.44.1-fork.1" || rtk.state.toLowerCase() !== "ready") {
+  if (!rtk || rtk.version !== "0.50.0-fork.1" || rtk.state.toLowerCase() !== "ready") {
     console.error("assembled daemon did not load exact fork-core", rtk);
     process.exit(1);
   }
@@ -475,7 +475,7 @@ if (report.protocol_version !== 1 || report.hzr_version !== "0.10.1") {
     fetch(`${endpoint}/v1/dashboard`).then(async (response) => {
       const report = await response.json();
       const ids = new Set(report.services.map((service) => service.id));
-if (response.status !== 200 || report.hzr_version !== "0.10.1" ||
+if (response.status !== 200 || report.hzr_version !== "0.11.0" ||
           !["hzrd", "rtk", "icm", "grepai"].every((id) => ids.has(id))) {
         throw new Error(`visualizer dashboard contract failed: ${JSON.stringify(report)}`);
       }

@@ -210,12 +210,12 @@ cd rtk
 cargo install --path .
 
 # Native build pipeline (replacement for ./rtk-build.sh)
-rtk build sh --set-version 0.44.1-fork.1
+rtk build sh --set-version 0.50.0-fork.1
 # or (from repo root, same behavior)
-./rtk-build.sh --set-version 0.44.1-fork.1
+./rtk-build.sh --set-version 0.50.0-fork.1
 
 # Verify
-rtk --version   # Should show 0.44.1-fork.1
+rtk --version   # Should show 0.50.0-fork.1
 rtk gain         # Token savings stats
 ```
 

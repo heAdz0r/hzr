@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use crate::utils::truncate;
 use anyhow::{Context, Result};
@@ -67,7 +68,7 @@ pub(crate) fn parse_major_version(version_output: &str) -> u32 {
 }
 
 fn detect_major_version() -> u32 {
-    match Command::new("golangci-lint").arg("--version").output() {
+    match Command::new("golangci-lint").arg("--version").output_relayed() {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let text = if stdout.trim().is_empty() {
@@ -146,7 +147,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
 
     let output = Command::new("golangci-lint")
         .args(&command_args)
-        .output()
+        .output_relayed()
         .context(
             "Failed to run golangci-lint. Is it installed? Try: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest",
         )?;

@@ -1,370 +1,190 @@
+//! `rtk diff`: the native `diff`, bounded.
+//!
+//! 0.11.0 (US-001): rewritten. The inherited module compared line N to line N,
+//! declared files "identical" when every difference was a modification, read
+//! files through `read_to_string` (failing on non-UTF-8), truncated lines to 80
+//! characters, never exited 1, and — because its never-worse guard measured
+//! against a dump of both files — printed exactly that dump for ordinary edits.
+//!
+//! Upstream RTK v0.50.0 answers with its own aligner and a large family of
+//! edge-case renderers, and measures its savings against the classic diff. For
+//! HZR the classic diff *is* the answer: `diff(1)` already aligns minimally and
+//! owns exit codes 0/1/2, line endings, missing final newlines, binary files and
+//! every flag (`-u`, `-r`, `-q`, `-w`, …). RTK adds only what a model needs on
+//! top: a bound on very large outputs with the exact recovery command.
+
 use crate::tracking;
-use crate::utils::truncate;
-use anyhow::Result;
-use std::fs;
-use std::path::Path;
+use anyhow::{Context, Result};
+use std::io::{Read, Write};
+use std::process::{Command, Stdio};
 
-/// Ultra-condensed diff - only changed lines, no context
-pub fn run(file1: &Path, file2: &Path, verbose: u8) -> Result<()> {
+/// Visible-output bounds, matching the bounded passthrough used by `find`.
+const MAX_LINES: usize = 200;
+const MAX_BYTES: usize = 16 * 1024;
+
+/// `rtk diff [diff-args…]`: run the native `diff` with the caller's argv.
+/// Returns diff's own exit code (0 identical, 1 different, 2 trouble).
+pub fn run(args: &[String], verbose: u8) -> Result<i32> {
     let timer = tracking::TimedExecution::start();
-
     if verbose > 0 {
-        eprintln!("Comparing: {} vs {}", file1.display(), file2.display());
+        eprintln!("diff: {}", args.join(" "));
     }
+    let output = Command::new("diff")
+        .args(args)
+        .stdin(Stdio::inherit()) // `diff - file` reads the caller's stdin
+        .output()
+        .context("Failed to run diff")?;
 
-    let content1 = fs::read_to_string(file1)?;
-    let content2 = fs::read_to_string(file2)?;
-    let raw = format!("{}\n---\n{}", content1, content2);
-
-    let lines1: Vec<&str> = content1.lines().collect();
-    let lines2: Vec<&str> = content2.lines().collect();
-    let diff = compute_diff(&lines1, &lines2);
-    let mut rtk = String::new();
-
-    if diff.added == 0 && diff.removed == 0 {
-        rtk.push_str("✅ Files are identical");
-        let shown = crate::guard::never_worse_content(&raw, &rtk); // 0.10.0: content guard
-        println!("{}", shown);
-        timer.track(
-            &format!("diff {} {}", file1.display(), file2.display()),
-            "rtk diff",
-            &raw,
-            shown,
-        );
-        return Ok(());
-    }
-
-    rtk.push_str(&format!("📊 {} → {}\n", file1.display(), file2.display()));
-    rtk.push_str(&format!(
-        "   +{} added, -{} removed, ~{} modified\n\n",
-        diff.added, diff.removed, diff.modified
-    ));
-
-    for change in diff.changes.iter().take(50) {
-        match change {
-            DiffChange::Added(ln, c) => rtk.push_str(&format!("+{:4} {}\n", ln, truncate(c, 80))),
-            DiffChange::Removed(ln, c) => rtk.push_str(&format!("-{:4} {}\n", ln, truncate(c, 80))),
-            DiffChange::Modified(ln, old, new) => rtk.push_str(&format!(
-                "~{:4} {} → {}\n",
-                ln,
-                truncate(old, 70),
-                truncate(new, 70)
-            )),
+    let command = std::iter::once("diff".to_string())
+        .chain(args.iter().map(|a| shell_quote_word(a)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let (shown, omitted) = bound_output(&output.stdout);
+    {
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(shown).context("Failed to write diff output")?;
+        if omitted > 0 {
+            if !shown.ends_with(b"\n") {
+                stdout.write_all(b"\n")?;
+            }
+            writeln!(stdout, "{}", recovery_notice(omitted, &command))?;
         }
+        stdout.flush()?;
     }
-    if diff.changes.len() > 50 {
-        rtk.push_str(&format!("... +{} more changes", diff.changes.len() - 50));
-    }
-
-    let shown = crate::guard::never_worse_content(&raw, &rtk); // 0.10.0: content guard
-    print!("{}", shown);
-    timer.track(
-        &format!("diff {} {}", file1.display(), file2.display()),
-        "rtk diff",
-        &raw,
-        shown,
-    );
-    Ok(())
-}
-
-/// Run diff from stdin (piped command output)
-pub fn run_stdin(_verbose: u8) -> Result<()> {
-    use std::io::{self, Read};
-    let timer = tracking::TimedExecution::start();
-
-    let mut input = String::new();
-    io::stdin().read_to_string(&mut input)?;
-
-    // Parse unified diff format
-    let condensed = condense_unified_diff(&input);
-    let shown = crate::guard::never_worse_content(&input, &condensed); // 0.10.0: content guard
-    println!("{}", shown);
-
-    timer.track("diff (stdin)", "rtk diff (stdin)", &input, shown);
-
-    Ok(())
-}
-
-#[derive(Debug)]
-enum DiffChange {
-    Added(usize, String),
-    Removed(usize, String),
-    Modified(usize, String, String),
-}
-
-struct DiffResult {
-    added: usize,
-    removed: usize,
-    modified: usize,
-    changes: Vec<DiffChange>,
-}
-
-fn compute_diff(lines1: &[&str], lines2: &[&str]) -> DiffResult {
-    let mut changes = Vec::new();
-    let mut added = 0;
-    let mut removed = 0;
-    let mut modified = 0;
-
-    // Simple line-by-line comparison (not optimal but fast)
-    let max_len = lines1.len().max(lines2.len());
-
-    for i in 0..max_len {
-        let l1 = lines1.get(i).copied();
-        let l2 = lines2.get(i).copied();
-
-        match (l1, l2) {
-            (Some(a), Some(b)) if a != b => {
-                // Check if it's similar (modification) or completely different
-                if similarity(a, b) > 0.5 {
-                    changes.push(DiffChange::Modified(i + 1, a.to_string(), b.to_string()));
-                    modified += 1;
-                } else {
-                    changes.push(DiffChange::Removed(i + 1, a.to_string()));
-                    changes.push(DiffChange::Added(i + 1, b.to_string()));
-                    removed += 1;
-                    added += 1;
-                }
-            }
-            (Some(a), None) => {
-                changes.push(DiffChange::Removed(i + 1, a.to_string()));
-                removed += 1;
-            }
-            (None, Some(b)) => {
-                changes.push(DiffChange::Added(i + 1, b.to_string()));
-                added += 1;
-            }
-            _ => {}
-        }
+    {
+        let mut stderr = std::io::stderr().lock();
+        stderr.write_all(&output.stderr)?;
+        stderr.flush()?;
     }
 
-    DiffResult {
-        added,
-        removed,
-        modified,
-        changes,
-    }
-}
-
-fn similarity(a: &str, b: &str) -> f64 {
-    let a_chars: std::collections::HashSet<char> = a.chars().collect();
-    let b_chars: std::collections::HashSet<char> = b.chars().collect();
-
-    let intersection = a_chars.intersection(&b_chars).count();
-    let union = a_chars.union(&b_chars).count();
-
-    if union == 0 {
-        1.0
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let delivered = if omitted > 0 {
+        format!(
+            "{}\n{}",
+            String::from_utf8_lossy(shown),
+            recovery_notice(omitted, &command)
+        )
     } else {
-        intersection as f64 / union as f64
+        raw.to_string()
+    };
+    timer.track(&command, "rtk diff", &raw, &delivered);
+    Ok(crate::stream::status_to_exit_code(output.status))
+}
+
+/// The first lines of `bytes` that fit the bounds, sliced from the original so
+/// CRLF and non-UTF-8 bytes survive, plus how many lines were left out.
+fn bound_output(bytes: &[u8]) -> (&[u8], usize) {
+    let total_lines = bytes.iter().filter(|b| **b == b'\n').count()
+        + usize::from(!bytes.is_empty() && !bytes.ends_with(b"\n"));
+    if total_lines <= MAX_LINES && bytes.len() <= MAX_BYTES {
+        return (bytes, 0);
+    }
+    let (mut end, mut kept) = (0usize, 0usize);
+    for (i, byte) in bytes.iter().enumerate() {
+        if *byte == b'\n' {
+            if kept == MAX_LINES || i + 1 > MAX_BYTES {
+                break;
+            }
+            kept += 1;
+            end = i + 1;
+        }
+    }
+    (&bytes[..end], total_lines - kept)
+}
+
+fn recovery_notice(omitted: usize, command: &str) -> String {
+    format!(
+        "[{omitted} line(s) omitted; full diff: HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=full_patch hzr exec run {}]",
+        shell_quote_word(command)
+    )
+}
+
+fn shell_quote_word(word: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "/._-+=:,@%".contains(c);
+    if !word.is_empty() && word.chars().all(plain) {
+        word.to_string()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
     }
 }
 
-fn condense_unified_diff(diff: &str) -> String {
-    let mut result = Vec::new();
-    let mut current_file = String::new();
-    let mut added = 0;
-    let mut removed = 0;
-    let mut changes = Vec::new();
+/// `… | rtk diff`: compact a piped unified diff.
+///
+/// A git-style diff (`diff --git` sections) goes through the same compaction as
+/// `rtk git diff`, which keeps markers at column 0, full hunk headers, hunk
+/// bodies bounded by their declared lengths (so `++x`/`--x` content lines are
+/// content) and counted truncation with a recovery line. Anything else is
+/// printed unchanged within the visible bound. (0.11.0, US-001)
+pub fn run_stdin(_verbose: u8) -> Result<()> {
+    let timer = tracking::TimedExecution::start();
+    let mut bytes = Vec::new();
+    std::io::stdin().read_to_end(&mut bytes)?;
 
-    for line in diff.lines() {
-        if line.starts_with("diff --git") || line.starts_with("--- ") || line.starts_with("+++ ") {
-            // File header
-            if line.starts_with("+++ ") {
-                if !current_file.is_empty() && (added > 0 || removed > 0) {
-                    result.push(format!("📄 {} (+{} -{})", current_file, added, removed));
-                    for c in changes.iter().take(10) {
-                        result.push(format!("  {}", c));
-                    }
-                    if changes.len() > 10 {
-                        result.push(format!("  ... +{} more", changes.len() - 10));
-                    }
-                }
-                current_file = line
-                    .trim_start_matches("+++ ")
-                    .trim_start_matches("b/")
-                    .to_string();
-                added = 0;
-                removed = 0;
-                changes.clear();
-            }
-        } else if line.starts_with('+') && !line.starts_with("+++") {
-            added += 1;
-            if changes.len() < 15 {
-                changes.push(truncate(line, 70));
-            }
-        } else if line.starts_with('-') && !line.starts_with("---") {
-            removed += 1;
-            if changes.len() < 15 {
-                changes.push(truncate(line, 70));
-            }
+    let input = String::from_utf8_lossy(&bytes);
+    let git_shaped = std::str::from_utf8(&bytes).is_ok()
+        && input.lines().any(|line| line.starts_with("diff --git "));
+    let mut stdout = std::io::stdout().lock();
+    if git_shaped {
+        let condensed = crate::git::compact_diff(&input, 500);
+        let shown = crate::guard::never_worse_content(&input, &condensed);
+        stdout.write_all(shown.as_bytes())?;
+        if !shown.ends_with('\n') {
+            stdout.write_all(b"\n")?;
         }
+        timer.track("diff (stdin)", "rtk diff (stdin)", &input, shown);
+    } else {
+        let (shown, omitted) = bound_output(&bytes);
+        stdout.write_all(shown)?;
+        let mut delivered = String::from_utf8_lossy(shown).into_owned();
+        if omitted > 0 {
+            let notice = format!(
+                "[{omitted} line(s) omitted; the full diff is the piped command's own output]"
+            );
+            if !shown.ends_with(b"\n") {
+                stdout.write_all(b"\n")?;
+            }
+            writeln!(stdout, "{notice}")?;
+            delivered.push_str(&notice);
+        }
+        timer.track("diff (stdin)", "rtk diff (stdin)", &input, &delivered);
     }
-
-    // Last file
-    if !current_file.is_empty() && (added > 0 || removed > 0) {
-        result.push(format!("📄 {} (+{} -{})", current_file, added, removed));
-        for c in changes.iter().take(10) {
-            result.push(format!("  {}", c));
-        }
-        if changes.len() > 10 {
-            result.push(format!("  ... +{} more", changes.len() - 10));
-        }
-    }
-
-    result.join("\n")
+    stdout.flush()?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // --- similarity ---
-
     #[test]
-    fn test_similarity_identical() {
-        assert_eq!(similarity("hello", "hello"), 1.0);
+    fn small_outputs_pass_through_byte_exact() {
+        for bytes in [&b""[..], b"2c2\n< a\r\n---\n> b\r\n", b"\\ No newline", b"caf\xe9\n"] {
+            assert_eq!(bound_output(bytes), (bytes, 0), "{bytes:?}");
+        }
     }
 
     #[test]
-    fn test_similarity_completely_different() {
-        assert_eq!(similarity("abc", "xyz"), 0.0);
+    fn long_outputs_keep_whole_leading_lines_and_count_the_rest() {
+        let bytes: Vec<u8> = (0..450).flat_map(|i| format!("> {i}\n").into_bytes()).collect();
+        let (shown, omitted) = bound_output(&bytes);
+        assert_eq!(shown.iter().filter(|b| **b == b'\n').count(), MAX_LINES);
+        assert_eq!(omitted, 450 - MAX_LINES);
+        assert!(shown.ends_with(b"\n"));
     }
 
     #[test]
-    fn test_similarity_empty_strings() {
-        // Both empty: union is 0, returns 1.0 by convention
-        assert_eq!(similarity("", ""), 1.0);
+    fn the_byte_bound_applies_to_long_lines() {
+        let line = format!("> {}\n", "x".repeat(4000));
+        let bytes = line.repeat(10).into_bytes();
+        let (shown, omitted) = bound_output(&bytes);
+        assert!(shown.len() <= MAX_BYTES, "{}", shown.len());
+        assert_eq!(omitted, 10 - shown.iter().filter(|b| **b == b'\n').count());
     }
 
     #[test]
-    fn test_similarity_partial_overlap() {
-        let s = similarity("abcd", "abef");
-        // Shared: a, b. Union: a, b, c, d, e, f = 6. Jaccard = 2/6
-        assert!((s - 2.0 / 6.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_similarity_threshold_for_modified() {
-        // "let x = 1;" vs "let x = 2;" should be > 0.5 (treated as modification)
-        assert!(similarity("let x = 1;", "let x = 2;") > 0.5);
-    }
-
-    // --- truncate ---
-
-    #[test]
-    fn test_truncate_short_string() {
-        assert_eq!(truncate("hello", 10), "hello");
-    }
-
-    #[test]
-    fn test_truncate_exact_length() {
-        assert_eq!(truncate("hello", 5), "hello");
-    }
-
-    #[test]
-    fn test_truncate_long_string() {
-        assert_eq!(truncate("hello world!", 8), "hello...");
-    }
-
-    // --- compute_diff ---
-
-    #[test]
-    fn test_compute_diff_identical() {
-        let a = vec!["line1", "line2", "line3"];
-        let b = vec!["line1", "line2", "line3"];
-        let result = compute_diff(&a, &b);
-        assert_eq!(result.added, 0);
-        assert_eq!(result.removed, 0);
-        assert_eq!(result.modified, 0);
-        assert!(result.changes.is_empty());
-    }
-
-    #[test]
-    fn test_compute_diff_added_lines() {
-        let a = vec!["line1"];
-        let b = vec!["line1", "line2", "line3"];
-        let result = compute_diff(&a, &b);
-        assert_eq!(result.added, 2);
-        assert_eq!(result.removed, 0);
-    }
-
-    #[test]
-    fn test_compute_diff_removed_lines() {
-        let a = vec!["line1", "line2", "line3"];
-        let b = vec!["line1"];
-        let result = compute_diff(&a, &b);
-        assert_eq!(result.removed, 2);
-        assert_eq!(result.added, 0);
-    }
-
-    #[test]
-    fn test_compute_diff_modified_line() {
-        // Similar lines (>0.5 similarity) are classified as modified
-        let a = vec!["let x = 1;"];
-        let b = vec!["let x = 2;"];
-        let result = compute_diff(&a, &b);
-        assert_eq!(result.modified, 1);
-        assert_eq!(result.added, 0);
-        assert_eq!(result.removed, 0);
-    }
-
-    #[test]
-    fn test_compute_diff_completely_different_line() {
-        // Dissimilar lines (<= 0.5 similarity) are added+removed, not modified
-        let a = vec!["aaaa"];
-        let b = vec!["zzzz"];
-        let result = compute_diff(&a, &b);
-        assert_eq!(result.modified, 0);
-        assert_eq!(result.added, 1);
-        assert_eq!(result.removed, 1);
-    }
-
-    #[test]
-    fn test_compute_diff_empty_inputs() {
-        let result = compute_diff(&[], &[]);
-        assert_eq!(result.added, 0);
-        assert_eq!(result.removed, 0);
-        assert!(result.changes.is_empty());
-    }
-
-    // --- condense_unified_diff ---
-
-    #[test]
-    fn test_condense_unified_diff_single_file() {
-        let diff = r#"diff --git a/src/main.rs b/src/main.rs
---- a/src/main.rs
-+++ b/src/main.rs
-@@ -1,3 +1,4 @@
- fn main() {
-+    println!("hello");
-     println!("world");
- }
-"#;
-        let result = condense_unified_diff(diff);
-        assert!(result.contains("src/main.rs"));
-        assert!(result.contains("+1"));
-        assert!(result.contains("println"));
-    }
-
-    #[test]
-    fn test_condense_unified_diff_multiple_files() {
-        let diff = r#"diff --git a/a.rs b/a.rs
---- a/a.rs
-+++ b/a.rs
-+added line
-diff --git a/b.rs b/b.rs
---- a/b.rs
-+++ b/b.rs
--removed line
-"#;
-        let result = condense_unified_diff(diff);
-        assert!(result.contains("a.rs"));
-        assert!(result.contains("b.rs"));
-    }
-
-    #[test]
-    fn test_condense_unified_diff_empty() {
-        let result = condense_unified_diff("");
-        assert!(result.is_empty());
+    fn recovery_names_the_exact_command() {
+        let notice = recovery_notice(3, "diff -u 'a b' c");
+        assert!(notice.contains("3 line(s) omitted"));
+        assert!(notice.contains("hzr exec run 'diff -u '\\''a b'\\'' c'"), "{notice}");
     }
 }

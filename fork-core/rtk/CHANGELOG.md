@@ -30,6 +30,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Non-JSON `cargo check` output is labelled `cargo check` and uses the child
   exit code instead of the generic build label.
 
+## [0.50.0-fork.1] - 2026-09-26
+
+Selective sync with upstream v0.50.0 (HZR 0.11.0). See the HZR repository's
+`docs/PRD_HZR_UPSTREAM_RTK_SYNC_0_50_0.md` for the adopted and rejected items.
+
+### Fixed
+- `diff` runs the native diff (flags, exit codes, encodings) with a bounded window.
+- `grep` short flags and global `-v`/`-u` no longer shadow the wrapped tool's flags.
+- `gh pr checks` summary on failing checks; `find` grammar dispatch, missing roots,
+  hidden-match disclosure; exact `head`/`tail` windows (`--head-lines`); `ls` dotfiles.
+- `git diff`/`git show`: `--no-color` hardening, caller's command is the verdict,
+  `--oneline -p <sha>`, blob windowing; `git log` limit notice; `--` restored for every
+  git subcommand; engine-specific grep/rg value flags.
+- Exit guard for `go build`, `next build`, `bun`; `pnpm install` clap definition;
+  `tsc --pretty`, global diagnostics and pass-through of non-diagnostic output.
+
+### Added
+- Signal relay while capturing output; `rtk deno`; `--js-runner`; Bun lockfile
+  detection; pnpm global flags; `timeout`/`nohup` peeling; anchored TOML matchers.
+
+### Fixed (from open upstream pull requests)
+- Injected JSON reports (vitest, ESLint, playwright, pip, pnpm) are summarised instead of
+  returned raw by the machine-protocol guard.
+- `rtk vitest` free argv, vitest 5 report file, suite load failures; `git status` cwd-relative
+  paths and exact machine formats; `git branch` explicit formats; `git add` semantics;
+  `-h` for grep/ls/tree; `ls` command-line symlinks; listing producers in pipelines; `gh`
+  help passthrough; `curl` stdin; `pnpm outdated` exit code; ESLint rule-less errors;
+  `cargo test` compiler warnings; subcommand boundaries in rule patterns.
+
 ## [0.44.1-fork.1] - 2026-07-31
 
 Selective P0/P1 sync on the current stable upstream v0.44.1 base, plus the

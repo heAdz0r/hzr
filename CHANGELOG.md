@@ -4,6 +4,58 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-26
+
+Upstream RTK v0.50.0 sync (fork-core `0.50.0-fork.1`) and the fidelity fixes it surfaced.
+
+### Changed (fork-core `0.50.0-fork.1`, upstream RTK v0.50.0 sync)
+
+- `diff` answers like `diff(1)`: the native diff with the caller's flags and exit code
+  (1 when files differ), bounded with an exact recovery line. It used to print both files
+  and exit 0 for a one-line change.
+- `grep -m N`, `-l`, `-t`, `grep -v`, `rg -u`, `diff -u` reach the tool: rtk's own
+  options are long-only (`--max-len`, `--max`, `--ultra-compact`) and `-v` is rtk's only
+  before the subcommand.
+- `gh pr checks` shows the table when a check fails, counts every bucket and forwards
+  the caller's flags; `find` reports a missing root and discloses hidden/gitignored
+  matches, dispatching on find's grammar; `head`/`tail` return the native bytes;
+  `ls` hides dot entries without `-a`; `git diff`/`git show` survive colour config and
+  report the requested commit; `git log` says when its default limit hid commits.
+- A signal to rtk while it captures output is relayed to the child's process group; the
+  captured output is printed and rtk dies by the same signal (`timeout` still reports 124).
+- Bun projects are detected by `bun.lock`/`bun.lockb`, `bunx <tool>` runs through bunx,
+  `bun test` shows failures and the tally; `deno lint|check|test` are compacted; pnpm
+  global flags (`--filter`, `-r`, `-w`, `-C`) and `timeout`/`nohup` wrappers are routed.
+- `go build`, `next build`, `bun`, `pnpm install` and `tsc` no longer render success or a
+  summary beside a failure or a different request.
+- Scripts: `scripts/upstream-parity-probe.sh` reproduces the fixed cases against native tools.
+
+### Fixed (ported from open upstream RTK pull requests, each reproduced first)
+
+- `vitest`, `lint` (ESLint), `playwright`, `pip list`, `pnpm list/outdated` treated the JSON
+  format rtk injects as the caller's machine protocol and printed the raw report whenever
+  the tool printed nothing else — the filters mostly never ran. They now summarise, with
+  the exit verdict enforced separately.
+- `rtk vitest` takes vitest's own argv: the rewritten `npx vitest run` (→ `rtk vitest`)
+  failed to parse and fell back to a PATH lookup local installs lack; `vitest list/related/
+  bench` keep their position; vitest 5's report file is read (#3680, #4264); a suite that
+  fails to load is reported (#4184).
+- `git status` from a subdirectory prints cwd-relative paths; `--porcelain*`/`-z` and
+  `git branch --format`/`--show-current` are git's bytes; a bare `git add` no longer stages
+  `.`; `--dry-run`/`--verbose` show git's report; a no-op add says so (#2542, #2573, #3183,
+  #3830, #4082, #4146).
+- `grep -h`, `ls -h`, `tree -h` reach the tool instead of rtk's help; `ls link` lists the
+  linked directory; `ls`/`find`/`grep`/`wc` stay native before `| head`/`| tail` (#3888,
+  #3651, #4041).
+- `gh … --help` is gh's text (#1661); `curl -d @-` sends stdin (#4085); `pnpm outdated`
+  propagates its exit code and shows a real failure (#2659); ESLint rule-less errors are
+  shown (#4185); `cargo test` names compiler warnings on a passing run (#2877); npm
+  progress-filter precedence (#2655); one trailing newline (#4154); rule patterns require a
+  subcommand boundary (#4109).
+- `hzr index init` and the daemon no longer leave `.grepai/` appended to a tracked
+  `.gitignore`: grepai's append is undone and the managed link is excluded through the local
+  `info/exclude` (heAdz0r/hzr#22).
+
 ## [0.10.1] - 2026-09-26
 
 `hzr delegate` checked against real tasks and the upstream astra-flash-orchestrator contract,

@@ -9,7 +9,7 @@
     "id": "bare-head",
     "command": "head -200 README.md",
     "decision": "rewrite",
-    "route": "rtk read README.md --max-lines 200"
+    "route": "rtk read README.md --head-lines 200"
   },
   {
     "id": "bare-tail",
@@ -171,7 +171,7 @@
     "id": "cat-head-pipeline",
     "command": "cat README.md | head -50",
     "decision": "rewrite",
-    "route": "rtk read README.md --max-lines 50"
+    "route": "rtk read README.md --head-lines 50"
   },
   {
     "id": "cat-identity-pipeline",
@@ -189,7 +189,7 @@
     "id": "env-shell",
     "command": "env CI=1 sh -c 'head -20 README.md'",
     "decision": "rewrite",
-    "route": "env CI=1 sh -c 'rtk read README.md --max-lines 20'"
+    "route": "env CI=1 sh -c 'rtk read README.md --head-lines 20'"
   },
   {
     "id": "path-override-missing-engine",
@@ -742,5 +742,41 @@
     "id": "sudo-builtin-prefix-covered-command",
     "command": "sudo noglob git status",
     "decision": "proxy"
+  },
+  {
+    "id": "timeout-wrapper",
+    "command": "timeout 60 cargo test",
+    "decision": "rewrite",
+    "route": "timeout 60 rtk cargo test"
+  },
+  {
+    "id": "timeout-options-wrapper",
+    "command": "timeout -s KILL 5m git status",
+    "decision": "rewrite",
+    "route": "timeout -s KILL 5m rtk git status"
+  },
+  {
+    "id": "nohup-wrapper",
+    "command": "nohup cargo test",
+    "decision": "rewrite",
+    "route": "nohup rtk cargo test"
+  },
+  {
+    "id": "pnpm-filter-global",
+    "command": "pnpm --filter web test",
+    "decision": "rewrite",
+    "route": "rtk pnpm --filter web test"
+  },
+  {
+    "id": "bunx-tool-runner",
+    "command": "bunx tsc --noEmit",
+    "decision": "rewrite",
+    "route": "rtk --js-runner bunx tsc --noEmit"
+  },
+  {
+    "id": "deno-test",
+    "command": "deno test",
+    "decision": "rewrite",
+    "route": "rtk deno test"
   }
 ]

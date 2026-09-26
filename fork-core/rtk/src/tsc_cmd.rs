@@ -1,23 +1,22 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
-use crate::utils::truncate;
+// 0.11.0 (US-016): messages are no longer truncated
 use anyhow::{Context, Result};
 use regex::Regex;
 use std::collections::HashMap;
-use std::path::PathBuf;
+// 0.11.0 (US-009): PathBuf no longer needed (command_for_tsc removed)
 use std::process::Command;
 
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
-    // Try tsc directly first, fallback to npx if not found
-    let tsc = crate::utils::resolve_binary("tsc").ok();
-    let tsc_exists = tsc.is_some();
-
-    let mut cmd = command_for_tsc(tsc);
+    // 0.11.0 (US-009): the runner the caller named, PATH, node_modules/.bin, then
+    // lockfile detection (bun included) — not an unconditional `npx`.
+    let (mut cmd, tool) = crate::utils::js_tool_command("tsc");
 
     for arg in args {
         cmd.arg(arg);
     }
 
-    let tool = if tsc_exists { "tsc" } else { "npx tsc" };
+    let tool = tool.as_str();
     run_tsc_like(
         cmd,
         tool,
@@ -30,8 +29,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
 }
 
 pub fn run_vue_tsc(args: &[String], verbose: u8, skip_env: bool) -> Result<()> {
-    let mut cmd = Command::new("npx");
-    cmd.arg("vue-tsc");
+    let (mut cmd, _) = crate::utils::js_tool_command("vue-tsc"); // 0.11.0 (US-009)
     for arg in args {
         cmd.arg(arg);
     }
@@ -49,15 +47,6 @@ pub fn run_vue_tsc(args: &[String], verbose: u8, skip_env: bool) -> Result<()> {
     )
 }
 
-fn command_for_tsc(tsc: Option<PathBuf>) -> Command {
-    if let Some(binary) = tsc {
-        Command::new(binary)
-    } else {
-        let mut c = Command::new("npx");
-        c.arg("tsc");
-        c
-    }
-}
 
 fn run_tsc_like(
     mut cmd: Command,
@@ -74,7 +63,7 @@ fn run_tsc_like(
         eprintln!("Running: {} {}", tool_name, args.join(" "));
     }
 
-    let output = cmd.output().with_context(|| error_context.to_string())?;
+    let output = cmd.output_relayed().with_context(|| error_context.to_string())?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let raw = format!("{}\n{}", stdout, stderr);
@@ -105,7 +94,22 @@ pub(crate) fn filter_tsc_output(output: &str) -> String {
         static ref TSC_ERROR: Regex = Regex::new(
             r"^(.+?)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.+)$"
         ).unwrap();
+        // 0.11.0 (US-016, upstream 9d1c60a): `--pretty` / `"pretty": true`:
+        // src/file.ts:12:5 - error TS2322: Type 'string' is not assignable …
+        static ref TSC_PRETTY: Regex = Regex::new(
+            r"^(.+?):(\d+):(\d+) - (error|warning) (TS\d+): (.+)$"
+        ).unwrap();
+        // 0.11.0 (US-016, upstream 6232c37): position-less global diagnostics
+        // (bad tsconfig option, missing lib): error TS5023: Unknown compiler option …
+        static ref TSC_GLOBAL: Regex = Regex::new(
+            r"^(error|warning) (TS\d+): (.+)$"
+        ).unwrap();
+        // Pretty code frame: `12 const a = 1;` and the `~~~` marker line.
+        static ref PRETTY_FRAME: Regex = Regex::new(r"^\s*(\d+ |\s*~+\s*$)").unwrap();
     }
+    // 0.11.0 (US-016): colour is stripped before parsing; pretty output is coloured.
+    let cleaned = crate::utils::strip_ansi(output);
+    let output = cleaned.as_str();
 
     struct TsError {
         file: String,
@@ -121,23 +125,40 @@ pub(crate) fn filter_tsc_output(output: &str) -> String {
 
     while i < lines.len() {
         let line = lines[i];
-        if let Some(caps) = TSC_ERROR.captures(line) {
+        let parsed = TSC_ERROR
+            .captures(line)
+            .or_else(|| TSC_PRETTY.captures(line))
+            .map(|caps| (caps[1].to_string(), caps[2].parse().unwrap_or(0), caps[5].to_string(), caps[6].to_string()))
+            .or_else(|| {
+                TSC_GLOBAL
+                    .captures(line)
+                    .map(|caps| ("(global)".to_string(), 0, caps[2].to_string(), caps[3].to_string()))
+            });
+        if let Some((file, line_no, code, message)) = parsed {
             let mut err = TsError {
-                file: caps[1].to_string(),
-                line: caps[2].parse().unwrap_or(0),
-                code: caps[5].to_string(),
-                message: caps[6].to_string(),
+                file,
+                line: line_no,
+                code,
+                message,
                 context_lines: Vec::new(),
             };
 
-            // Capture continuation lines (indented context from tsc)
+            // Capture continuation lines (indented context from tsc); a pretty
+            // code frame is presentation and is skipped. (0.11.0, US-016)
             i += 1;
             while i < lines.len() {
                 let next = lines[i];
-                if !next.is_empty()
-                    && (next.starts_with("  ") || next.starts_with('\t'))
-                    && !TSC_ERROR.is_match(next)
-                {
+                let starts_diag = TSC_ERROR.is_match(next) || TSC_PRETTY.is_match(next);
+                if next.trim().is_empty() || starts_diag {
+                    if next.trim().is_empty() && lines.get(i + 1).is_some_and(|l| PRETTY_FRAME.is_match(l)) {
+                        i += 1;
+                        continue;
+                    }
+                    break;
+                }
+                if PRETTY_FRAME.is_match(next) {
+                    i += 1;
+                } else if next.starts_with("  ") || next.starts_with('\t') {
                     err.context_lines.push(next.trim().to_string());
                     i += 1;
                 } else {
@@ -154,6 +175,11 @@ pub(crate) fn filter_tsc_output(output: &str) -> String {
     if errors.is_empty() {
         if output.contains("Found 0 errors") {
             return "✓ TypeScript: No errors found".to_string();
+        }
+        // 0.11.0: no diagnostics is not no output — `tsc --version`, `--showConfig`
+        // and `--listFiles` print what was asked for, and it replaced all of them.
+        if !output.trim().is_empty() {
+            return output.trim_end().to_string();
         }
         return "TypeScript compilation completed".to_string();
     }
@@ -200,14 +226,11 @@ pub(crate) fn filter_tsc_output(output: &str) -> String {
         result.push_str(&format!("{} ({} errors)\n", file, file_errors.len()));
 
         for err in *file_errors {
-            result.push_str(&format!(
-                "  L{}: {} {}\n",
-                err.line,
-                err.code,
-                truncate(&err.message, 120)
-            ));
+            // 0.11.0 (US-016): the message is the payload — never cut. A cut at
+            // 120 characters dropped the list of allowed values from TS6046.
+            result.push_str(&format!("  L{}: {} {}\n", err.line, err.code, err.message));
             for ctx in &err.context_lines {
-                result.push_str(&format!("    {}\n", truncate(ctx, 120)));
+                result.push_str(&format!("    {}\n", ctx));
             }
         }
         result.push('\n');
@@ -219,6 +242,22 @@ pub(crate) fn filter_tsc_output(output: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.11.0 (US-016): real tsc 5 `--pretty` output and a position-less diagnostic.
+    #[test]
+    fn test_pretty_and_global_diagnostics_are_grouped() {
+        let pretty = "\x1b[96ma.ts\x1b[0m:\x1b[93m1\x1b[0m:\x1b[93m7\x1b[0m - \x1b[91merror\x1b[0m\x1b[90m TS2322: \x1b[0mType 'string' is not assignable to type 'number'.\n\n\
+\x1b[7m1\x1b[0m const a: number = \"x\";\n\x1b[7m \x1b[0m \x1b[91m      ~\x1b[0m\n\n\
+error TS5023: Unknown compiler option 'bogusOpt'.\n\n\
+Found 2 errors in the same file, starting at: a.ts\x1b[90m:1\x1b[0m\n";
+        let out = filter_tsc_output(pretty);
+        assert!(out.starts_with("TypeScript: 2 errors in 2 files"), "{out}");
+        assert!(out.contains("L1: TS2322 Type 'string' is not assignable"), "{out}");
+        assert!(out.contains("(global) (1 errors)"), "{out}");
+        assert!(out.contains("TS5023 Unknown compiler option 'bogusOpt'."), "{out}");
+        assert!(!out.contains("const a"), "code frame leaked: {out}");
+        assert!(!out.contains('\u{1b}'), "{out}");
+    }
 
     #[test]
     fn test_filter_tsc_output() {

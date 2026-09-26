@@ -55,7 +55,7 @@ def record_receipt(operation, mode):
     with open(journal, 'a', encoding='utf-8') as handle:
         handle.write(json.dumps(receipt, separators=(',', ':')) + '\n')
 if a == ['--version']:
-    print('rtk 0.44.1-fork.1')
+    print('rtk 0.50.0-fork.1')
 elif a == ['contract', '--json']:
     print(json.dumps(engine, separators=(',', ':')))
 elif len(a) >= 2 and a[0] == 'rewrite' and a[1] == '--help':

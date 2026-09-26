@@ -17,10 +17,10 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 137
-# Recomputed for 0.10.1: the lossless read filter and the Markdown/read changes moved existing
-# diagnostics' line numbers (and dropped the now-unused CommentPatterns.doc_line). A
-# (code, message, file) multiset comparison against 0.10.0 shows no warning added or removed.
-EXPECTED_SHA256 = "6514ca48356738a9a16ec66711bb644970cbce4ee444c239ecc82ced87cbbed1"
+# Recomputed for 0.11.0 (upstream RTK v0.50.0 sync, fork-core 0.50.0-fork.1): the ported
+# changes moved existing diagnostics' line numbers. A (code, message, file) multiset
+# comparison against 0.10.1 shows no warning added or removed; the new code is clean.
+EXPECTED_SHA256 = "4487753a213bfbe91919f06cf68fce495ec8820a7728b58d226e9973908bc0bf"
 
 
 def main() -> int:

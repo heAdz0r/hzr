@@ -84,12 +84,7 @@ lazy_static! {
     // invocations like `head -3 a b c` fail to match so the segment is passed through
     // to the native `head`/`tail` binary — which already handles multi-file with
     // `==> name <==` banners that `rtk read --max-lines` cannot reproduce.
-    static ref HEAD_N: Regex = Regex::new(r"^head\s+-(\d+)\s+(\S+)$").unwrap();
-    static ref HEAD_LINES: Regex = Regex::new(r"^head\s+--lines=(\d+)\s+(\S+)$").unwrap();
-    static ref TAIL_N: Regex = Regex::new(r"^tail\s+-(\d+)\s+(\S+)$").unwrap();
-    static ref TAIL_N_SPACE: Regex = Regex::new(r"^tail\s+-n\s+(\d+)\s+(\S+)$").unwrap();
-    static ref TAIL_LINES_EQ: Regex = Regex::new(r"^tail\s+--lines=(\d+)\s+(\S+)$").unwrap();
-    static ref TAIL_LINES_SPACE: Regex = Regex::new(r"^tail\s+--lines\s+(\d+)\s+(\S+)$").unwrap();
+    // 0.11.0 (US-005): HEAD_N/HEAD_LINES/TAIL_* regex fallbacks removed (operand gate).
 }
 
 const GOLANGCI_GLOBAL_OPT_WITH_VALUE: &[&str] = &[
@@ -1266,16 +1261,20 @@ fn rewrite_bounded_read_pipeline(command: &str) -> Option<String> {
     let file = shell_word_spans(producer)
         .get(1)
         .map(|span| &producer[span.clone()])?;
+    if !is_single_file_operand(file) {
+        return None; // 0.11.0 (US-005)
+    }
 
     let consumer_normalized = strip_absolute_path(consumer);
     let words = shell_split(&consumer_normalized);
     match words.as_slice() {
         [tool] if tool == "cat" => Some(format!("rtk read {file}")),
+        // 0.11.0 (US-005): exact byte windows, not the `--max-lines` preview.
         [tool, flag] if tool == "head" => {
-            parse_line_count(flag).map(|lines| format!("rtk read {file} --max-lines {lines}"))
+            parse_line_count(flag).map(|lines| format!("rtk read {file} --head-lines {lines}"))
         }
         [tool, flag, lines] if tool == "head" && (flag == "-n" || flag == "--lines") => {
-            decimal_line_count(lines).map(|lines| format!("rtk read {file} --max-lines {lines}"))
+            decimal_line_count(lines).map(|lines| format!("rtk read {file} --head-lines {lines}"))
         }
         [tool, flag] if tool == "tail" => {
             parse_line_count(flag).map(|lines| format!("rtk read {file} --tail-lines {lines}"))
@@ -1406,6 +1405,18 @@ fn rewrite_pipeline_producer(
         return None;
     }
     let producer = cmd[segment_start..first_pipe_offset].trim();
+    // 0.11.0 (upstream PR #4041): a listing whose rtk rendering reorders or regroups
+    // its lines — `ls` puts directories first, `find` groups by directory, `wc`,
+    // `tree`, `grep`/`rg` restructure — hands `head`/`tail` different items than
+    // the native producer would. Those producers stay native in a pipeline.
+    let stripped = ENV_PREFIX.replace(producer, "");
+    let program = shell_split(stripped.trim())
+        .first()
+        .map(|word| executable_name(word).to_string())
+        .unwrap_or_default();
+    if matches!(program.as_str(), "ls" | "find" | "tree" | "wc" | "grep" | "rg" | "du") {
+        return None;
+    }
     rewrite_segment_inner(
         producer,
         excluded,
@@ -1527,47 +1538,114 @@ fn rewrite_compound(
     any_changed.then_some(result)
 }
 
+/// Whether a shell word is certainly one file operand after expansion: not an
+/// option, no glob or brace that could expand into several words, no comment.
+/// A fully quoted literal qualifies; `$NAME`/`${NAME}` is kept because 0.10.0
+/// made `$U/a.rs` rewrite correctly. Anything uncertain stays with the native
+/// binary. (0.11.0, US-005, upstream ed8480f `is_single_file_operand`)
+fn is_single_file_operand(word: &str) -> bool {
+    if word.is_empty() || word.starts_with('-') || word.starts_with('#') {
+        return false;
+    }
+    let quoted_literal = |q: char| {
+        word.len() >= 2
+            && word.starts_with(q)
+            && word.ends_with(q)
+            && !word[1..word.len() - 1].contains(q)
+    };
+    if quoted_literal('\'') {
+        return true;
+    }
+    if quoted_literal('"') {
+        // Expansion inside double quotes never splits the word; only an escape
+        // could hide a closing quote.
+        return !word[1..word.len() - 1].contains('\\');
+    }
+    let bytes = word.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '$' {
+            // `$NAME` or `${NAME}`: one word unless its value holds spaces.
+            if bytes.get(i + 1) == Some(&b'{') {
+                let Some(close) = word[i..].find('}') else {
+                    return false;
+                };
+                let name = &word[i + 2..i + close];
+                if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                    return false;
+                }
+                i += close + 1;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+        if !(c.is_alphanumeric()
+            || matches!(c, '.' | '_' | '/' | '-' | '~' | '+' | '@' | ':' | ',' | '=')
+            || !c.is_ascii())
+        {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// `head`/`tail` → an exact byte window of one file. (0.11.0, US-005)
+///
+/// `head` without a count means ten lines, like the native command — it used to
+/// fall through to the generic rule and read the whole file. `tail -f`, `-c`,
+/// `+N` and every other shape are not matched and stay native.
+fn rewrite_head_tail(words: &[String], path: Option<&str>) -> Option<String> {
+    let (tool, rest) = words.split_first()?;
+    let window = match tool.as_str() {
+        "head" => "--head-lines",
+        "tail" => "--tail-lines",
+        _ => return None,
+    };
+    let (lines, file) = match rest {
+        [file] => ("10", file),
+        [flag, file] => {
+            let count = flag
+                .strip_prefix("--lines=")
+                .or_else(|| flag.strip_prefix("-n"))
+                .or_else(|| flag.strip_prefix('-'))?;
+            (decimal_line_count(count)?, file)
+        }
+        [flag, count, file] if flag == "-n" || flag == "--lines" => {
+            (decimal_line_count(count)?, file)
+        }
+        _ => return None,
+    };
+    let operand = path.unwrap_or(file);
+    is_single_file_operand(operand).then(|| format!("rtk read {operand} {window} {lines}"))
+}
+
 fn rewrite_line_range(cmd: &str) -> Option<String> {
     let tokens = tokenize(cmd);
+    // 0.11.0 (US-005): head/tail accept plain words and `$NAME` expansions only;
+    // the operand gate in rewrite_head_tail decides the rest.
+    if cmd.starts_with("head") || cmd.starts_with("tail") {
+        let plain = tokens.iter().all(|token| {
+            token.kind == TokenKind::Arg
+                || (token.kind == TokenKind::Shellism
+                    && token.value.starts_with('$')
+                    && !token.value.starts_with("$("))
+        });
+        if !plain {
+            return None;
+        }
+        let words = shell_split(cmd);
+        let path = shell_word_spans(cmd).last().map(|span| &cmd[span.clone()]);
+        return rewrite_head_tail(&words, path);
+    }
     if tokens.iter().all(|token| token.kind == TokenKind::Arg) {
         let words = shell_split(cmd);
         // 0.10.0: the path is the last shell WORD; `$U/a.rs` is two tokens and the last
         // token alone (`/a.rs`) named a different file.
         let path = shell_word_spans(cmd).last().map(|span| &cmd[span.clone()]);
         match words.as_slice() {
-            [tool, flag, file] if tool == "head" => {
-                let lines = flag
-                    .strip_prefix("--lines=")
-                    .or_else(|| flag.strip_prefix('-'))?;
-                if lines.chars().all(|character| character.is_ascii_digit()) {
-                    return Some(format!(
-                        "rtk read {} --max-lines {}",
-                        path.unwrap_or(file),
-                        lines
-                    ));
-                }
-            }
-            [tool, flag, file] if tool == "tail" => {
-                let lines = flag
-                    .strip_prefix("--lines=")
-                    .or_else(|| flag.strip_prefix('-'))?;
-                if lines.chars().all(|character| character.is_ascii_digit()) {
-                    return Some(format!(
-                        "rtk read {} --tail-lines {}",
-                        path.unwrap_or(file),
-                        lines
-                    ));
-                }
-            }
-            [tool, flag, lines, file] if tool == "tail" && (flag == "-n" || flag == "--lines") => {
-                if lines.chars().all(|character| character.is_ascii_digit()) {
-                    return Some(format!(
-                        "rtk read {} --tail-lines {}",
-                        path.unwrap_or(file),
-                        lines
-                    ));
-                }
-            }
             [tool, flag, span, file] if tool == "sed" && flag == "-n" => {
                 if let Some((from, to)) = parse_sed_read_span(span) {
                     return Some(format!(
@@ -1584,28 +1662,9 @@ fn rewrite_line_range(cmd: &str) -> Option<String> {
             _ => {}
         }
     }
-    for re in [&*HEAD_N, &*HEAD_LINES] {
-        if let Some(caps) = re.captures(cmd) {
-            let n = caps.get(1)?.as_str();
-            let file = caps.get(2)?.as_str();
-            return Some(format!("rtk read {} --max-lines {}", file, n));
-        }
-    }
-    if cmd.starts_with("head -") {
-        return None;
-    }
-    for re in [
-        &*TAIL_N,
-        &*TAIL_N_SPACE,
-        &*TAIL_LINES_EQ,
-        &*TAIL_LINES_SPACE,
-    ] {
-        if let Some(caps) = re.captures(cmd) {
-            let n = caps.get(1)?.as_str();
-            let file = caps.get(2)?.as_str();
-            return Some(format!("rtk read {} --tail-lines {}", file, n));
-        }
-    }
+    // 0.11.0 (US-005): the regex fallbacks matched any `\S+` operand (`--help`,
+    // globs, `#`) and are gone. A command whose tokens are not all plain words
+    // is not a single-file head/tail, so it stays native.
     None
 }
 
@@ -1701,6 +1760,45 @@ fn execution_prefix(command: &str) -> Option<(&str, &str)> {
         "time" => {
             while index < args.len() && matches!(args[index].value.as_str(), "-p" | "--") {
                 index += 1;
+            }
+        }
+        // 0.11.0 (US-011, upstream b17dda3): `timeout [opts] DURATION cmd`. Safe to
+        // peel since the signal relay (US-007): on expiry timeout's SIGTERM reaches
+        // rtk, rtk forwards it, prints what it captured, and dies by the signal, so
+        // timeout still reports 124. An option it does not know stays native.
+        "timeout" => {
+            while index < args.len() {
+                match args[index].value.as_str() {
+                    "--" => {
+                        index += 1;
+                        break;
+                    }
+                    "-s" | "--signal" | "-k" | "--kill-after" => index += 2,
+                    "--preserve-status" | "--foreground" | "-v" | "--verbose" => index += 1,
+                    value
+                        if value.starts_with("--signal=")
+                            || value.starts_with("--kill-after=")
+                            || (value.len() > 2
+                                && (value.starts_with("-s") || value.starts_with("-k"))) =>
+                    {
+                        index += 1
+                    }
+                    value if value.starts_with('-') => return None,
+                    _ => break,
+                }
+            }
+            // The duration: digits with an optional fraction and unit.
+            let duration = args.get(index)?.value.as_str();
+            let number = duration.trim_end_matches(['s', 'm', 'h', 'd']);
+            if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+                return None;
+            }
+            index += 1;
+        }
+        // 0.11.0 (US-011): `nohup cmd` — no options of its own.
+        "nohup" => {
+            if args.get(index).is_some_and(|a| a.value.starts_with('-')) {
+                return None;
             }
         }
         _ => return None,
@@ -1915,7 +2013,7 @@ fn rewrite_segment_inner(
     }
 
     if context == RewriteContext::Normal
-        && (cmd_part.starts_with("head -")
+        && (cmd_part.starts_with("head ") // 0.11.0 (US-005): bare `head FILE` too
             || cmd_part.starts_with("tail ")
             || cmd_part.starts_with("sed -n ")
             || cmd_part.starts_with("nl -ba "))
@@ -2025,10 +2123,18 @@ fn rewrite_segment_inner(
     // Try each rewrite prefix (longest first) with word-boundary check
     for &prefix in rule.rewrite_prefixes {
         if let Some(rest) = strip_word_prefix(cmd_part, prefix) {
+            // 0.11.0 (US-009, upstream c7c1d96): `bunx tsc` / `bun x vitest` keep
+            // the runner the caller named instead of lockfile detection or npx.
+            let rtk_cmd = match rule.rtk_cmd.strip_prefix("rtk ") {
+                Some(tool) if prefix.starts_with("bunx ") || prefix.starts_with("bun x ") => {
+                    std::borrow::Cow::Owned(format!("rtk --js-runner bunx {tool}"))
+                }
+                _ => std::borrow::Cow::Borrowed(rule.rtk_cmd),
+            };
             let rewritten = if rest.is_empty() {
-                format!("{}{}", rule.rtk_cmd, redirect_suffix)
+                format!("{}{}", rtk_cmd, redirect_suffix)
             } else {
-                format!("{} {}{}", rule.rtk_cmd, rest, redirect_suffix)
+                format!("{} {}{}", rtk_cmd, rest, redirect_suffix)
             };
             return Some(rewritten);
         }
@@ -2434,9 +2540,9 @@ mod tests {
                 "sed -n '1,5p' $HOME/a.rs",
                 "rtk read $HOME/a.rs --from 1 --to 5",
             ),
-            ("head -5 $U/a.rs", "rtk read $U/a.rs --max-lines 5"),
+            ("head -5 $U/a.rs", "rtk read $U/a.rs --head-lines 5"),
             ("tail -20 $U/log.txt", "rtk read $U/log.txt --tail-lines 20"),
-            ("cat $U/a.rs | head -5", "rtk read $U/a.rs --max-lines 5"),
+            ("cat $U/a.rs | head -5", "rtk read $U/a.rs --head-lines 5"),
             (
                 "cat \"$U/a b.rs\" | tail -3",
                 "rtk read \"$U/a b.rs\" --tail-lines 3",
@@ -3590,6 +3696,20 @@ mod tests {
         }
     }
 
+    // 0.11.0 (upstream PR #4041): listings rtk reorders stay native before head/tail.
+    #[test]
+    fn test_rewrite_pipe_listing_producers_stay_native() {
+        for command in [
+            "ls | head -2",
+            "ls -la src | tail -3",
+            "find . -name '*.rs' | head -5",
+            "grep -rn foo . | head -3",
+            "wc -l *.rs | tail -1",
+        ] {
+            assert_eq!(rewrite_command_no_prefixes(command, &[]), None, "{command}");
+        }
+    }
+
     #[test]
     fn test_rewrite_pipe_read_producer_stays_raw() {
         for command in ["head -20 file.txt | tail -5", "tail -20 file.txt | head -5"] {
@@ -3875,10 +3995,10 @@ mod tests {
 
     #[test]
     fn test_rewrite_head_numeric_flag() {
-        // head -20 file → rtk read file --max-lines 20 (not rtk read -20 file)
+        // head -20 file → rtk read file --head-lines 20 (not rtk read -20 file)
         assert_eq!(
             rewrite_command_no_prefixes("head -20 src/main.rs", &[]),
-            Some("rtk read src/main.rs --max-lines 20".into())
+            Some("rtk read src/main.rs --head-lines 20".into())
         );
     }
 
@@ -3886,16 +4006,16 @@ mod tests {
     fn test_rewrite_head_lines_long_flag() {
         assert_eq!(
             rewrite_command_no_prefixes("head --lines=50 src/lib.rs", &[]),
-            Some("rtk read src/lib.rs --max-lines 50".into())
+            Some("rtk read src/lib.rs --head-lines 50".into())
         );
     }
 
     #[test]
     fn test_rewrite_head_no_flag_still_rewrites() {
-        // plain `head file` → `rtk read file` (no numeric flag)
+        // 0.11.0 (US-005): plain `head file` is ten lines, like the native command
         assert_eq!(
             rewrite_command_no_prefixes("head src/main.rs", &[]),
-            Some("rtk read src/main.rs".into())
+            Some("rtk read src/main.rs --head-lines 10".into())
         );
     }
 
@@ -3949,8 +4069,73 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_tail_plain_file_skipped() {
-        assert_eq!(rewrite_command_no_prefixes("tail src/main.rs", &[]), None);
+    fn test_rewrite_tail_plain_file_is_ten_lines() {
+        // 0.11.0 (US-005): the byte-exact tail window makes the default safe to serve
+        assert_eq!(
+            rewrite_command_no_prefixes("tail src/main.rs", &[]),
+            Some("rtk read src/main.rs --tail-lines 10".into())
+        );
+    }
+
+    // 0.11.0 (US-010): pnpm global flags before the subcommand are routed.
+    #[test]
+    fn test_pnpm_global_flags_are_routed() {
+        for command in [
+            "pnpm --filter web test",
+            "pnpm -F web install",
+            "pnpm -r install",
+            "pnpm -C packages/a list",
+            "pnpm --filter=web --recursive run build",
+        ] {
+            assert_eq!(
+                rewrite_command_no_prefixes(command, &[]),
+                Some(format!("rtk {command}")),
+                "{command}"
+            );
+        }
+        // `pnpm -r build` is a workspace script, not a routed subcommand.
+        assert_eq!(rewrite_command_no_prefixes("pnpm -r build", &[]), None);
+    }
+
+    // 0.11.0 (US-009): bunx / bun x keep the runner the caller named.
+    #[test]
+    fn test_bun_runner_is_preserved_for_js_tools() {
+        for (command, expected) in [
+            ("bunx tsc --noEmit", "rtk --js-runner bunx tsc --noEmit"),
+            ("bun x tsc --noEmit", "rtk --js-runner bunx tsc --noEmit"),
+            ("bunx vitest run", "rtk --js-runner bunx vitest run"),
+            ("bunx eslint src", "rtk --js-runner bunx lint src"),
+            ("npx tsc --noEmit", "rtk tsc --noEmit"),
+        ] {
+            assert_eq!(
+                rewrite_command_no_prefixes(command, &[]).as_deref(),
+                Some(expected),
+                "{command}"
+            );
+        }
+    }
+
+    // 0.11.0 (US-005): operands that could expand, or be an option, stay native.
+    #[test]
+    fn test_head_tail_uncertain_operands_stay_native() {
+        for command in [
+            "head -1 --help",
+            "head -n 1 *.rs",
+            "head -5 a?.rs",
+            "head -5 {a,b}.rs",
+            "tail -3 #notes",
+            "head -5 $(pick)",
+            "tail -n +5 src/main.rs",
+            "tail -f app.log",
+            "head -c 10 src/main.rs",
+            "head -3 a.rs b.rs",
+        ] {
+            assert_eq!(rewrite_command_no_prefixes(command, &[]), None, "{command}");
+        }
+        assert_eq!(
+            rewrite_command_no_prefixes("head -n 5 'x y.md'", &[]).as_deref(),
+            Some("rtk read 'x y.md' --head-lines 5")
+        );
     }
 
     // --- Issue #1362: head/tail with multiple files falls back to native command ---
@@ -5661,7 +5846,7 @@ mod tests {
         // where exclusions are normally applied.
         assert_eq!(
             rewrite_command_no_prefixes("head -20 README.md", &[]),
-            Some("rtk read README.md --max-lines 20".into())
+            Some("rtk read README.md --head-lines 20".into())
         );
         assert_eq!(
             rewrite_command_no_prefixes("head -20 README.md", &["head".to_string()]),
@@ -6308,7 +6493,7 @@ mod tests {
             ("bash -lc 'bun run check'", "bash -lc 'rtk bun run check'"),
             (
                 "env CI=1 sh -c 'head -20 README.md'",
-                "env CI=1 sh -c 'rtk read README.md --max-lines 20'",
+                "env CI=1 sh -c 'rtk read README.md --head-lines 20'",
             ),
             (
                 "/usr/bin/env CI=1 sh -c 'git status --short'",
@@ -6339,7 +6524,7 @@ mod tests {
     fn acceptance_gate_preserves_quoted_file_arguments_inside_shell_wrappers() {
         assert_eq!(
             rewrite_command_no_prefixes("sh -c 'head -20 \"file with spaces.md\"'", &[]),
-            Some("sh -c 'rtk read \"file with spaces.md\" --max-lines 20'".into())
+            Some("sh -c 'rtk read \"file with spaces.md\" --head-lines 20'".into())
         );
         assert_eq!(
             rewrite_command_no_prefixes("sh -c 'sed -n 4,8p \"file with spaces.md\"'", &[]),

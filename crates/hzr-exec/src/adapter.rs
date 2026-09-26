@@ -15,7 +15,7 @@ use tokio::process::Command;
 
 use crate::{CanonicalCommand, ExecError, RewriteDecision, RewriteSource};
 
-pub const PINNED_RTK_VERSION: &str = "0.44.1-fork.1";
+pub const PINNED_RTK_VERSION: &str = "0.50.0-fork.1"; // 0.11.0 (US-018): upstream v0.50.0 sync
 pub use hzr_engine_contract::INTERNAL_EVASION_ENV;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

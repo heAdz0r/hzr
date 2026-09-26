@@ -61,6 +61,9 @@ const DIFF_HARDENING: &[&str] = &[
     "--no-textconv",
     "--src-prefix=a/",
     "--dst-prefix=b/",
+    // 0.11.0 (US-006, upstream 4a2e58d): `color.ui=always` puts an escape at column
+    // 0, so `diff --git` and `@@` never matched and the compacted body was empty.
+    "--no-color",
 ];
 
 /// [`git_cmd`] plus a diff-producing subcommand and [`DIFF_HARDENING`].
@@ -83,6 +86,11 @@ pub fn run(
     verbose: u8,
     global_args: &[String],
 ) -> Result<()> {
+    // 0.11.0 (US-015, upstream 9c314a4): clap's trailing_var_arg swallows a literal
+    // `--`; restore it once for every subcommand, not only `git log`, so
+    // `git checkout -- <file>` / `git diff -- <path>` keep their pathspec boundary.
+    let restored = args_utils::restore_double_dash(args);
+    let args = restored.as_slice();
     let command_class = classify_git_command(&cmd, args);
     if verbose > 2 {
         eprintln!("git command class: {:?}", command_class);
@@ -394,22 +402,28 @@ fn run_diff(
     }
 
     // Preserve the inherited compact view on successful ordinary diffs only.
-    let mut cmd = git_diff_cmd(global_args, &["diff", "--stat"]);
-    cmd.args(args);
-    let output = cmd.output().context("Failed to run git diff")?;
-    if !output.status.success() {
-        return emit_exact_diff(&timer, args, output);
-    }
-    let stat_stdout = String::from_utf8_lossy(&output.stdout);
-    if verbose > 0 { eprintln!("Git diff summary:"); }
-
+    // 0.11.0 (US-006, upstream 4a2e58d): the caller's own diff runs first and its
+    // result is the verdict. The stat probe answers a different command, so its
+    // failure used to replace git's real error (`--unified expects a numerical
+    // value`, 129) with an unrelated one; now it only costs the header.
     let mut diff_cmd = git_diff_cmd(global_args, &["diff"]);
     diff_cmd.args(args);
     let diff_output = diff_cmd.output().context("Failed to run git diff")?;
     if !diff_output.status.success() {
         return emit_exact_diff(&timer, args, diff_output);
     }
-    let diff_stdout = String::from_utf8_lossy(&diff_output.stdout);
+    let mut cmd = git_diff_cmd(global_args, &["diff", "--stat"]);
+    cmd.args(args);
+    let mut output = cmd.output().context("Failed to run git diff")?;
+    if !output.status.success() {
+        output.stdout.clear(); // 0.11.0 (US-006): a failed probe costs the header only
+        output.stderr.clear();
+    }
+    // An explicit `--color` from the caller outranks the hardening; RTK renders
+    // its own output, so the escapes go before parsing. (0.11.0, US-006)
+    let stat_stdout = crate::utils::strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    if verbose > 0 { eprintln!("Git diff summary:"); }
+    let diff_stdout = crate::utils::strip_ansi(&String::from_utf8_lossy(&diff_output.stdout));
     let printed = if !diff_stdout.is_empty() {
         let header = format!("{}\n\n--- Changes ---\n", stat_stdout.trim());
         let compacted = compact_diff_within_host(&diff_stdout, max_lines, header.len()); // 0.10.0
@@ -479,9 +493,12 @@ fn run_show(
         .any(|arg| arg.starts_with("--pretty") || arg.starts_with("--format"));
 
     // fix #248: `git show rev:path` prints a blob, not a commit diff — pass through directly
-    let wants_blob_show = args.iter().any(|arg| is_blob_show_arg(arg));
+    // 0.11.0 (US-013, upstream 533b964): git decides what the argument names.
+    if let Some((object, is_blob)) = blob_show_target(args, global_args) {
+        return show_blob(args, &object, is_blob, global_args, &timer);
+    }
 
-    if wants_stat_only || wants_format || wants_blob_show {
+    if wants_stat_only || wants_format {
         let mut cmd = git_cmd(global_args);
         cmd.arg("show");
         for arg in args {
@@ -494,11 +511,7 @@ fn run_show(
             std::process::exit(output.status.code().unwrap_or(1));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
-        if wants_blob_show {
-            print!("{}", stdout); // fix #248: no trim — preserve trailing newlines exactly
-        } else {
-            println!("{}", stdout.trim());
-        }
+        println!("{}", stdout.trim()); // 0.11.0 (US-013): blobs are served by show_blob
 
         timer.track(
             &format!("git show {}", args.join(" ")),
@@ -522,10 +535,16 @@ fn run_show(
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
 
+    // 0.11.0 (US-006, upstream 5d3c1e5): the steps below set their own format and
+    // patch shape. A caller's `-p`/`-U5`/`-W` placed after RTK's `--no-patch` won
+    // git's last-flag arbitration and a caller's `--oneline` outranked RTK's
+    // `--pretty`, so `git show --oneline -p <sha>` printed its header twice.
+    let rev_args = show_rev_args(args);
+
     // Step 1: one-line commit summary
     let mut summary_cmd = git_cmd(global_args);
     summary_cmd.args(["show", "--no-patch", "--pretty=format:%h %s (%ar) <%an>"]);
-    for arg in args {
+    for arg in &rev_args {
         summary_cmd.arg(arg);
     }
     let summary_output = summary_cmd.output().context("Failed to run git show")?;
@@ -538,27 +557,26 @@ fn run_show(
     let mut printed = summary.trim().to_string();
 
     // Step 2: --stat summary
-    let mut stat_cmd = git_cmd(global_args);
-    stat_cmd.args(["show", "--stat", "--pretty=format:"]);
-    for arg in args {
+    let mut stat_cmd = git_diff_cmd(global_args, &["show", "--stat", "--pretty=format:"]); // 0.11.0 (US-006)
+    for arg in &rev_args {
         stat_cmd.arg(arg);
     }
     let stat_output = stat_cmd.output().context("Failed to run git show --stat")?;
-    let stat_stdout = String::from_utf8_lossy(&stat_output.stdout);
+    let stat_stdout = crate::utils::strip_ansi(&String::from_utf8_lossy(&stat_output.stdout));
     let stat_text = stat_stdout.trim();
     if !stat_text.is_empty() {
         printed.push('\n');
         printed.push_str(stat_text);
     }
 
-    // Step 3: compacted diff
-    let mut diff_cmd = git_cmd(global_args);
-    diff_cmd.args(["show", "--pretty=format:"]);
-    for arg in args {
+    // Step 3: compacted diff — hardened like every parsed diff, so an external
+    // driver or textconv cannot replace what the compaction reads. (0.11.0, US-006)
+    let mut diff_cmd = git_diff_cmd(global_args, &["show", "--pretty=format:"]);
+    for arg in &rev_args {
         diff_cmd.arg(arg);
     }
     let diff_output = diff_cmd.output().context("Failed to run git show (diff)")?;
-    let diff_stdout = String::from_utf8_lossy(&diff_output.stdout);
+    let diff_stdout = crate::utils::strip_ansi(&String::from_utf8_lossy(&diff_output.stdout));
     let diff_text = diff_stdout.trim();
 
     if !diff_text.is_empty() {
@@ -580,6 +598,116 @@ fn run_show(
         shown,
     );
 
+    Ok(())
+}
+
+/// The caller's `git show` arguments without the flags RTK's own steps set:
+/// patch shape (`-p`, `-u`, `--patch`, `-U<n>`, `--unified=<n>`, `-W`,
+/// `--function-context`) and the one-line format. Pathspecs after `--` are kept
+/// verbatim. (0.11.0, US-006, upstream 5d3c1e5)
+fn show_rev_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len());
+    let mut pathspecs = false;
+    for arg in args {
+        if pathspecs {
+            out.push(arg.clone());
+            continue;
+        }
+        if arg == "--" {
+            pathspecs = true;
+            out.push(arg.clone());
+            continue;
+        }
+        let a = arg.as_str();
+        let rtk_owned = matches!(a, "-p" | "-u" | "--patch" | "-W" | "--function-context" | "--oneline")
+            || (a.starts_with("-U") && a[2..].bytes().all(|b| b.is_ascii_digit()))
+            || a.starts_with("--unified");
+        if !rtk_owned {
+            out.push(arg.clone());
+        }
+    }
+    out
+}
+
+/// A blob of this size or less is shown whole, like a plain `rtk read`. (0.11.0, US-013)
+const BLOB_EXACT_BYTES: usize = 24 * 1024;
+/// Lines shown from a larger UTF-8 blob.
+const BLOB_WINDOW_LINES: usize = 400;
+
+/// The single `rev:path` operand of a `git show`, and whether `git cat-file -t`
+/// confirms it names a blob. Flags or several operands go the ordinary way.
+/// Asking git replaces a flag-grammar guess that misread colon-carrying flag
+/// values; a tree or a missing path is still shown exactly. (0.11.0, US-013,
+/// upstream 533b964)
+fn blob_show_target(args: &[String], global_args: &[String]) -> Option<(String, bool)> {
+    let mut operands = args.iter().filter(|a| !a.starts_with('-'));
+    let candidate = operands.next()?;
+    if operands.next().is_some() || args.iter().any(|a| a.starts_with('-')) {
+        return None;
+    }
+    if !is_blob_show_arg(candidate) {
+        return None;
+    }
+    let is_blob = git_cmd(global_args)
+        .args(["cat-file", "-t", candidate])
+        .output()
+        .is_ok_and(|out| out.status.success() && out.stdout.trim_ascii() == b"blob");
+    Some((candidate.clone(), is_blob))
+}
+
+/// Print a blob byte-for-byte; window only a large blob that is valid UTF-8, so
+/// the recovery command always reconstructs it exactly. Latin-1, UTF-16 and
+/// binary content pass through untouched. (0.11.0, US-013, upstream 533b964/f9415c5)
+fn show_blob(
+    args: &[String],
+    blob: &str,
+    is_blob: bool,
+    global_args: &[String],
+    timer: &tracking::TimedExecution,
+) -> Result<()> {
+    let output = git_cmd(global_args)
+        .arg("show")
+        .args(args)
+        .output()
+        .context("Failed to run git show")?;
+    let code = crate::stream::status_to_exit_code(output.status);
+    let label = format!("git show {}", args.join(" "));
+    let text = std::str::from_utf8(&output.stdout).ok();
+    let window = text.filter(|_| is_blob && output.stdout.len() > BLOB_EXACT_BYTES).and_then(|text| {
+        let total = text.lines().count();
+        (total > BLOB_WINDOW_LINES).then(|| {
+            let end = text
+                .match_indices('\n')
+                .nth(BLOB_WINDOW_LINES - 1)
+                .map_or(text.len(), |(i, _)| i + 1);
+            // The recovery names the HZR raw route, which the hook leaves alone —
+            // a bare `git show` in the hint would be windowed again.
+            let recovery = format!(
+                "[lines 1-{BLOB_WINDOW_LINES} of {total}; whole blob: HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=verbatim_source hzr exec run 'git {}show {}']\n",
+                global_args
+                    .iter()
+                    .map(|a| format!("{a} "))
+                    .collect::<String>(),
+                blob
+            );
+            format!("{}{}", &text[..end], recovery)
+        })
+    });
+    {
+        let mut stdout = std::io::stdout().lock();
+        match &window {
+            Some(windowed) => stdout.write_all(windowed.as_bytes())?,
+            None => stdout.write_all(&output.stdout)?,
+        }
+        stdout.flush()?;
+    }
+    std::io::stderr().lock().write_all(&output.stderr)?;
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let shown = window.as_deref().map_or(raw.as_ref(), |w| w);
+    timer.track(&label, &format!("rtk {label} (blob)"), &raw, shown);
+    if code != 0 {
+        std::process::exit(code);
+    }
     Ok(())
 }
 
@@ -1040,7 +1168,18 @@ fn run_log(
 
     // Post-process: truncate long messages, cap lines
     let filtered = filter_log_output(&stdout, limit);
-    let filtered = crate::guard::never_worse_content(&stdout, &filtered).to_string(); // 0.10.0: content guard
+    let mut filtered = crate::guard::never_worse_content(&stdout, &filtered).to_string(); // 0.10.0: content guard
+    // 0.11.0 (US-006, upstream 5d3c1e5/4a2e58d): RTK injected `-10`, so say so —
+    // but only when a commit past the limit really exists. Asking git for it is
+    // immune to every output shape (`--oneline`, `--graph`, colour, SHA-256).
+    if !has_limit_flag && log_has_commit_past(args, limit, global_args) {
+        if !filtered.ends_with('\n') {
+            filtered.push('\n');
+        }
+        filtered.push_str(&format!(
+            "[{limit} most recent commits shown; older: git log --skip={limit} -n <N>]\n"
+        ));
+    }
     print!("{}", filtered);
 
     timer.track(
@@ -1051,6 +1190,45 @@ fn run_log(
     );
 
     Ok(())
+}
+
+/// Whether `git log <args>` reaches past its first `limit` commits. The probe
+/// keeps what bounds the walk and drops what would change its answer or its
+/// side effects: format flags (RTK's own is written first), `--skip` (folded into
+/// the probe's), `--exit-code` and `--output`. (0.11.0, US-006, upstream 5d3c1e5)
+fn log_has_commit_past(args: &[String], limit: usize, global_args: &[String]) -> bool {
+    let mut skip = limit;
+    let mut probe_args: Vec<&str> = Vec::new();
+    let mut iter = args.iter().map(String::as_str).peekable();
+    let mut pathspecs = false;
+    while let Some(arg) = iter.next() {
+        if pathspecs || arg == "--" {
+            pathspecs = true;
+            probe_args.push(arg);
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--skip=") {
+            skip = skip.saturating_add(value.parse().unwrap_or(0));
+        } else if arg == "--skip" {
+            let value = iter.next().and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+            skip = skip.saturating_add(value);
+        } else if arg == "--output" {
+            iter.next();
+        } else if arg.starts_with("--output=")
+            || arg == "--exit-code"
+            || arg.starts_with("--oneline")
+            || arg.starts_with("--pretty")
+            || arg.starts_with("--format")
+        {
+        } else {
+            probe_args.push(arg);
+        }
+    }
+    let mut cmd = git_cmd(global_args);
+    cmd.args(["log", "--format=%H", "-n", "1", &format!("--skip={skip}")]);
+    cmd.args(&probe_args);
+    cmd.output()
+        .is_ok_and(|out| out.status.success() && !out.stdout.trim_ascii().is_empty())
 }
 
 /// True for git log/diff options that take their value as a separate,
@@ -1386,6 +1564,28 @@ fn run_status(args: &[String], verbose: u8, global_args: &[String]) -> Result<()
             .output()
             .context("Failed to run git status")?;
 
+        // 0.11.0 (upstream PRs #3183/#2573): machine formats are a protocol, byte for
+        // byte — the filter dropped the final newline of `--porcelain=v2`.
+        let machine = args.iter().any(|a| {
+            a.starts_with("--porcelain") || a == "-z" || a == "--null"
+        });
+        if machine {
+            std::io::stdout().lock().write_all(&output.stdout)?;
+            std::io::stderr().lock().write_all(&output.stderr)?;
+            let raw = String::from_utf8_lossy(&output.stdout);
+            timer.track(
+                &format!("git status {}", args.join(" ")),
+                &format!("rtk git status {} (exact)", args.join(" ")),
+                &raw,
+                &raw,
+            );
+            let code = crate::stream::status_to_exit_code(output.status);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            return Ok(());
+        }
+
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -1426,8 +1626,12 @@ fn run_status(args: &[String], verbose: u8, global_args: &[String]) -> Result<()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default();
 
+    // 0.11.0 (upstream PR #2542): `--short` shares porcelain v1's line format but
+    // prints paths relative to the working directory, as `git status` does;
+    // porcelain's repository-root paths sent an agent in a subdirectory to the wrong
+    // file. Colour is pinned off so the parser sees plain columns.
     let output = git_cmd(global_args)
-        .args(["status", "--porcelain", "-b"])
+        .args(["-c", "color.status=false", "status", "--short", "-b"])
         .output()
         .context("Failed to run git status")?;
 
@@ -1466,16 +1670,44 @@ fn run_status(args: &[String], verbose: u8, global_args: &[String]) -> Result<()
 fn run_add(args: &[String], verbose: u8, global_args: &[String]) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
+    // 0.11.0 (upstream PRs #4082/#4146): git's own report is the answer for a bare
+    // `git add` ("Nothing specified, nothing added" — rtk used to stage `.`!), for
+    // `--dry-run`/`--verbose`, and interactive modes need the terminal.
+    let before_args = args.iter().take_while(|a| *a != "--");
+    let own_report = args.is_empty()
+        || before_args.clone().any(|a| {
+            matches!(
+                a.as_str(),
+                "-n" | "--dry-run" | "-v" | "--verbose" | "-p" | "--patch" | "-i" | "--interactive" | "-e" | "--edit"
+            )
+        });
+    if own_report {
+        let status = git_cmd(global_args)
+            .arg("add")
+            .args(args)
+            .status()
+            .context("Failed to run git add")?;
+        timer.track_passthrough(
+            &format!("git add {}", args.join(" ")),
+            &format!("rtk git add {} (passthrough)", args.join(" ")),
+        );
+        let code = crate::stream::status_to_exit_code(status);
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return Ok(());
+    }
+    // What was staged before, so the summary can tell a no-op from a change.
+    let staged_before = git_cmd(global_args)
+        .args(["diff", "--cached", "--stat", "--shortstat"])
+        .output()
+        .map(|o| o.stdout)
+        .unwrap_or_default();
+
     let mut cmd = git_cmd(global_args);
     cmd.arg("add");
-
-    // Pass all arguments directly to git (flags like -A, -p, --all, etc.)
-    if args.is_empty() {
-        cmd.arg(".");
-    } else {
-        for arg in args {
-            cmd.arg(arg);
-        }
+    for arg in args {
+        cmd.arg(arg);
     }
 
     let output = cmd.output().context("Failed to run git add")?;
@@ -1500,6 +1732,9 @@ fn run_add(args: &[String], verbose: u8, global_args: &[String]) -> Result<()> {
         let stat = String::from_utf8_lossy(&status_output.stdout);
         let compact = if stat.trim().is_empty() {
             "ok (nothing to add)".to_string()
+        } else if status_output.stdout == staged_before {
+            // 0.11.0 (upstream PR #4146): this invocation changed nothing in the index.
+            "ok (nothing new staged)".to_string()
         } else {
             // Parse "1 file changed, 5 insertions(+)" format
             let short = stat.lines().last().unwrap_or("").trim();
@@ -1822,6 +2057,33 @@ fn run_branch(args: &[String], verbose: u8, global_args: &[String]) -> Result<()
             println!("ok ✓");
         } else {
             exit_with_git_failure("git branch", &stdout, &stderr, output.status);
+        }
+        return Ok(());
+    }
+
+    // 0.11.0 (upstream PR #3830): only a bare `git branch` / `git branch -a` is
+    // compacted. `--format`, `--show-current`, `--merged`, `-vv`, `-r`, patterns and
+    // the like ask for a shape of their own; the injected `-a` and the re-rendering
+    // changed that answer (an extra blank line on `--format`, remote branches added
+    // to `--merged`). Those get git's bytes.
+    if args.iter().any(|a| a != "-a" && a != "--all") {
+        let output = git_cmd(global_args)
+            .arg("branch")
+            .args(args)
+            .output()
+            .context("Failed to run git branch")?;
+        std::io::stdout().lock().write_all(&output.stdout)?;
+        std::io::stderr().lock().write_all(&output.stderr)?;
+        let raw = String::from_utf8_lossy(&output.stdout);
+        timer.track(
+            &format!("git branch {}", args.join(" ")),
+            &format!("rtk git branch {} (exact)", args.join(" ")),
+            &raw,
+            &raw,
+        );
+        let code = crate::stream::status_to_exit_code(output.status);
+        if code != 0 {
+            std::process::exit(code);
         }
         return Ok(());
     }

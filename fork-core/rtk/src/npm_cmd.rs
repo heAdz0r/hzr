@@ -2,7 +2,24 @@ use crate::tracking;
 use anyhow::{Context, Result};
 use std::process::Command;
 
+/// npm's own subcommands (and aliases): `rtk npm ci` must stay `npm ci`, not become
+/// `npm run ci`. `start`/`stop`/`restart`/`test` are run-script shortcuts and keep
+/// going through `npm run`. (0.11.0, US-017, upstream 56519c4)
+const NPM_BUILTINS: &[&str] = &[
+    "access", "add", "adduser", "audit", "bugs", "cache", "ci", "cit", "clean-install",
+    "completion", "config", "dedupe", "deprecate", "diff", "dist-tag", "docs", "doctor",
+    "edit", "exec", "explain", "explore", "find-dupes", "fund", "help", "hook", "i", "init",
+    "install", "install-ci-test", "install-test", "it", "link", "ln", "login", "logout", "ls",
+    "list", "org", "outdated", "owner", "pack", "ping", "pkg", "prefix", "profile", "prune",
+    "publish", "query", "rebuild", "remove", "repo", "rm", "root", "sbom", "search",
+    "shrinkwrap", "star", "stars", "team", "token", "un", "uninstall", "unpublish", "unstar",
+    "up", "update", "upgrade", "version", "view", "whoami", "x",
+];
+
 pub fn run(args: &[String], verbose: u8, skip_env: bool) -> Result<()> {
+    if args.first().is_some_and(|a| NPM_BUILTINS.contains(&a.as_str())) {
+        return run_builtin(args, verbose); // 0.11.0 (US-017)
+    }
     let timer = tracking::TimedExecution::start();
 
     let mut cmd = Command::new("npm");
@@ -78,6 +95,25 @@ impl crate::stream::StreamFilter for NpmStreamFilter {
 /// Filter npm run output - strip boilerplate, progress bars, npm WARN
 /// Buffered form of the filter, kept as the reference the streaming path is
 /// asserted against. Production output goes through [`NpmStreamFilter`].
+/// A builtin npm subcommand, unfiltered, with npm's own exit code. (0.11.0, US-017)
+fn run_builtin(args: &[String], verbose: u8) -> Result<()> {
+    let timer = tracking::TimedExecution::start();
+    if verbose > 0 {
+        eprintln!("Running: npm {}", args.join(" "));
+    }
+    let status = Command::new("npm")
+        .args(args)
+        .status()
+        .context("Failed to run npm")?;
+    let label = format!("npm {}", args.join(" "));
+    timer.track_passthrough(&label, &format!("rtk {label} (passthrough)"));
+    let code = crate::stream::status_to_exit_code(status);
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 fn filter_npm_output(output: &str) -> String {
     let result: Vec<&str> = output.lines().filter(|line| keep_npm_line(line)).collect();
@@ -104,7 +140,10 @@ fn keep_npm_line(line: &str) -> bool {
         return false;
     }
     // progress indicators
-    if line.contains("⸩") || line.contains("⸨") || line.contains("...") && line.len() < 10 {
+    // 0.11.0 (upstream PR #2655): `&&` bound tighter than `||`, so any line with a
+    // `⸨`/`⸩` glyph was dropped whatever its length; the guard covers all three.
+    let is_progress_glyph = line.contains('⸩') || line.contains('⸨') || line.contains("...");
+    if is_progress_glyph && line.len() < 10 {
         return false;
     }
     !line.trim().is_empty()

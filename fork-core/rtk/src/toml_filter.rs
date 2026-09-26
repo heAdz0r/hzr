@@ -326,7 +326,59 @@ const RUST_HANDLED_COMMANDS: &[&str] = &[
     "proxy",
     "verify",
     "learn",
+    "deno", // 0.11.0 (US-009)
 ];
+
+/// Strip leading flag-only groups such as `(?i)` or `(?x-s)`.
+fn strip_inline_flags(pattern: &str) -> &str {
+    let mut rest = pattern;
+    while let Some(after) = rest.strip_prefix("(?") {
+        match after.find(')') {
+            Some(end) if after[..end].bytes().all(|b| b.is_ascii_alphabetic() || b == b'-') => {
+                rest = &after[end + 1..];
+            }
+            _ => break,
+        }
+    }
+    rest
+}
+
+/// Split on `|` outside groups, classes and escapes.
+fn top_level_branches(pattern: &str) -> Vec<&str> {
+    let bytes = pattern.as_bytes();
+    let (mut depth, mut in_class, mut escaped, mut start) = (0usize, false, false, 0usize);
+    let mut branches = Vec::new();
+    for (i, &b) in bytes.iter().enumerate() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match b {
+            b'\\' => escaped = true,
+            b'[' if !in_class => in_class = true,
+            b']' if in_class => in_class = false,
+            b'(' if !in_class => depth += 1,
+            b')' if !in_class => depth = depth.saturating_sub(1),
+            b'|' if !in_class && depth == 0 => {
+                branches.push(&pattern[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    branches.push(&pattern[start..]);
+    branches
+}
+
+/// Whether every top-level branch of `match_command` is `^`-anchored. An
+/// unanchored branch matches a path component or a wrapper argument mid-command,
+/// so a filter meant for argv[0] activated on `timeout 5 /usr/bin/liquibase`.
+/// (0.11.0, US-012, upstream 3522477)
+pub(crate) fn is_fully_anchored(pattern: &str) -> bool {
+    top_level_branches(strip_inline_flags(pattern))
+        .iter()
+        .all(|branch| strip_inline_flags(branch).starts_with('^'))
+}
 
 fn compile_filter(name: String, def: TomlFilterDef) -> Result<CompiledFilter, String> {
     // Mutual exclusion: strip and keep cannot both be set
@@ -334,6 +386,13 @@ fn compile_filter(name: String, def: TomlFilterDef) -> Result<CompiledFilter, St
         return Err("strip_lines_matching and keep_lines_matching are mutually exclusive".into());
     }
 
+    // 0.11.0 (US-012): built-in, project and global filters alike.
+    if !is_fully_anchored(&def.match_command) {
+        return Err(format!(
+            "match_command '{}' must anchor every alternative with '^'",
+            def.match_command
+        ));
+    }
     let match_regex = Regex::new(&def.match_command)
         .map_err(|e| format!("invalid match_command regex: {}", e))?;
 
@@ -768,6 +827,17 @@ pub fn is_rtk_reserved_command(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.11.0 (US-012): anchoring gate.
+    #[test]
+    fn match_command_must_anchor_every_branch() {
+        for ok in ["^liquibase(?:\\s|$)", "(?i)^pnpm\\b|^npm\\b", "^(a|b)\\s", "^x[|]y"] {
+            assert!(is_fully_anchored(ok), "{ok}");
+        }
+        for bad in ["liquibase", "^pnpm|npm", "(?i)ssh", "^a|(b)"] {
+            assert!(!is_fully_anchored(bad), "{bad}");
+        }
+    }
 
     // Helper: build a CompiledFilter from inline TOML for tests.
     // Never touches the lazy_static registry.

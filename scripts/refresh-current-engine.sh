@@ -47,7 +47,9 @@ HZR_SOURCE_HEAD="$(hzr_baseline_string source_head)"
 HZR_SOURCE_DIFF_SHA256="$(hzr_baseline_string source_diff_sha256)"
 HZR_SOURCE_STATUS_SHA256="$(hzr_baseline_string source_status_sha256)"
 HZR_CONTENT_MANIFEST_SHA256="$(hzr_snapshot_sha256_file "${HZR_TEMP_ROOT}/CURRENT_SHA256SUMS")"
-HZR_CORE_VERSION="$(hzr_baseline_string core_version)"
+# 0.11.0 (US-018): the current engine carries its own version (Cargo.toml), not the baseline's.
+HZR_CORE_VERSION="$(sed -n 's/^version = "\([^"]*\)"$/\1/p' "${HZR_ENGINE_ROOT}/Cargo.toml" | head -n 1)"
+: "${HZR_CORE_VERSION:?fork-core Cargo.toml has no version}"
 HZR_SELECTION="HZR-owned current engine files, derived from immutable snapshot v2 and enumerated by CURRENT_FILES"
 
 hzr_snapshot_emit_v2 \
@@ -65,7 +67,7 @@ HZR_PARENT_SNAPSHOT_SHA256="$(hzr_baseline_string snapshot_sha256)"
 {
   printf 'schema_version = 1\n'
   printf 'engine_version = "%s"\n' "${HZR_CORE_VERSION}"
-  printf 'hzr_release_line = "0.10.x"\n'
+  printf 'hzr_release_line = "0.11.x"\n'
   printf 'parent_snapshot_sha256 = "%s"\n' "${HZR_PARENT_SNAPSHOT_SHA256}"
   printf 'manifest = "CURRENT_ENGINE_V1.tsv"\n'
   printf 'manifest_sha256 = "%s"\n' "${HZR_CURRENT_MANIFEST_SHA256}"

@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use anyhow::{bail, Context, Result};
 use regex::Regex;
 use std::fs;
@@ -394,7 +395,7 @@ fn verify_binary(path: &Path) -> Result<()> {
         println!("sha256: unavailable");
     }
 
-    match Command::new(path).arg("--version").output() {
+    match Command::new(path).arg("--version").output_relayed() {
         Ok(out) => {
             let version = String::from_utf8_lossy(&out.stdout);
             print!("{}", version);
@@ -412,7 +413,7 @@ fn verify_binary(path: &Path) -> Result<()> {
     let ssh_subcommand_present = Command::new(path)
         .arg("ssh")
         .arg("--help")
-        .output()
+        .output_relayed()
         .map(|out| {
             let text = format!(
                 "{}{}",
@@ -440,14 +441,14 @@ fn sha256_file(path: &Path) -> Option<String> {
         .arg("-a")
         .arg("256")
         .arg(path)
-        .output()
+        .output_relayed()
     {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout);
             return s.split_whitespace().next().map(|v| v.to_string());
         }
     }
-    if let Ok(out) = Command::new("sha256sum").arg(path).output() {
+    if let Ok(out) = Command::new("sha256sum").arg(path).output_relayed() {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout);
             return s.split_whitespace().next().map(|v| v.to_string());

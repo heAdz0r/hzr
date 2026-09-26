@@ -330,12 +330,12 @@ fi
 
 hzr_build_stage "Building the managed RTK fork-core"
 HZR_FORK_CACHE_KEY="$(component_cache_key \
-  rtk 0.44.1-fork.1 "$(sha256_file "${HZR_REPOSITORY_ROOT}/fork-core/CURRENT_ENGINE_V1.tsv")" \
+  rtk 0.50.0-fork.1 "$(sha256_file "${HZR_REPOSITORY_ROOT}/fork-core/CURRENT_ENGINE_V1.tsv")" \
   "$(sha256_file "${HZR_REPOSITORY_ROOT}/fork-core/rtk/Cargo.lock")" \
   "${HZR_PLATFORM}" "${HZR_RUST_TOOLCHAIN_KEY}" "${HZR_BUILD_SCRIPT_SHA256}")"
 if restore_cached_component \
   rtk "${HZR_FORK_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/rtk" "" "" && \
-  "${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null; then
+  "${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 0.50.0-fork.1" >/dev/null; then
   :
 else
   HZR_FORK_TARGET="${HZR_BUILD_TEMP}/rtk-target"
@@ -345,7 +345,7 @@ else
   install -m 0755 "${HZR_FORK_TARGET}/release/rtk" "${HZR_ENGINE_OUTPUT}/rtk"
   store_cached_component rtk "${HZR_FORK_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/rtk" ""
 fi
-"${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 0.44.1-fork.1" >/dev/null
+"${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 0.50.0-fork.1" >/dev/null
 
 hzr_build_stage "Building the pinned agtx runtime and observer"
 HZR_AGTX_COMMIT="d307c4c182dff19a65370a50403185cb826f7f49"

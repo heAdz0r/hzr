@@ -16,9 +16,11 @@ pub use coordinator::{
 };
 pub use error::{ErrorCode, IndexError, Result};
 pub use generation::{CACHE_SCHEMA_VERSION, IndexGeneration};
+// 0.11.0 (heAdz0r/hzr#22): restore_gitignore_if_only_grepai_added is exported for tests.
 pub use grepai::{
     Deadlines, EmbeddingProvider, GrepAi, IndexStatus, InitOptions, InitOutcome,
     SINGLE_WORKTREE_WATCH_FLAG, SUPPORTED_GREPAI_VERSION, StoreBackend,
+    restore_gitignore_if_only_grepai_added,
 };
 pub use migration::{
     INDEX_MIGRATION_SCHEMA_VERSION, IndexArchiveManifest, IndexArchiveOutcome, IndexArchiveState,

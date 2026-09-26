@@ -23,7 +23,7 @@ additional pinned engines plus a private Node.js runtime without removing their 
 
 | Component | Version | License | Source | Role |
 |---|---:|---|---|---|
-| heAdz0r RTK fork-core | 0.44.1-fork.1 | MIT | https://github.com/heAdz0r/rtk | HZR-owned runtime; immutable v0.1.0 baseline plus versioned current engine |
+| heAdz0r RTK fork-core | 0.50.0-fork.1 | MIT | https://github.com/heAdz0r/rtk | HZR-owned runtime; immutable v0.1.0 baseline plus versioned current engine |
 | upstream RTK | 0.44.1 | Apache-2.0 | https://github.com/rtk-ai/rtk | provenance/reference pin only; never built as HZR runtime |
 | ICM | 0.10.61 | Apache-2.0 | https://github.com/rtk-ai/icm | lockfile-corrected runtime |
 | grepai | 0.35.0 | MIT | https://github.com/yoanbernabeu/grepai | patched runtime |

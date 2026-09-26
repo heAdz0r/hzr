@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::ruff_cmd;
 use crate::tracking;
 use crate::utils::{package_manager_exec, truncate};
@@ -13,7 +14,11 @@ struct EslintMessage {
     rule_id: Option<String>,
     severity: u8,
     message: String,
+    // 0.11.0 (upstream PR #4185): some ESLint messages carry no position
+    // ("File ignored because of a matching ignore pattern").
+    #[serde(default)]
     line: usize,
+    #[serde(default)]
     column: usize,
 }
 
@@ -142,7 +147,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         eprintln!("Running: {} with structured output", linter);
     }
 
-    let output = cmd.output().context(format!(
+    let output = cmd.output_relayed().context(format!(
         "Failed to run {}. Is it installed? Try: pip install {} (or npm/pnpm for JS linters)",
         linter, linter
     ))?;
@@ -188,7 +193,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     // happened; the exit code is what distinguishes "clean" from "never ran".
     let filtered = crate::guard::guard_exit(&raw, exit_code, linter, &filtered);
     let hint = crate::tee::tee_and_hint(&raw, "lint", exit_code);
-    let shown = crate::runner::emit_guarded(&filtered, hint.as_deref(), &raw);
+    let shown = crate::runner::emit_guarded_rendered(&filtered, hint.as_deref(), &raw); // 0.11.0: rtk injected the JSON format; not the caller's protocol
 
     timer.track(
         &format!("{} {}", linter, args.join(" ")),
@@ -246,7 +251,9 @@ fn filter_eslint_json(output: &str) -> String {
         .filter(|r| !r.messages.is_empty())
         .map(|r| (r, r.messages.len()))
         .collect();
-    by_file.sort_by(|a, b| b.1.cmp(&a.1));
+    // 0.11.0 (upstream PR #4185): files with errors first, so a warning-heavy file
+    // cannot push the one that fails the run out of the top ten.
+    by_file.sort_by(|a, b| b.0.error_count.cmp(&a.0.error_count).then(b.1.cmp(&a.1)));
 
     // Build output
     let mut result = String::new();
@@ -287,6 +294,11 @@ fn filter_eslint_json(output: &str) -> String {
 
         for (rule, count) in file_rule_counts.iter().take(3) {
             result.push_str(&format!("    {} ({})\n", rule, count));
+        }
+        // 0.11.0 (upstream PR #4185): a message with no rule — a parse error, a
+        // fatal config problem — has no rule line to stand for it, so show it.
+        for msg in file_result.messages.iter().filter(|m| m.rule_id.is_none()) {
+            result.push_str(&format!("    L{}: {}\n", msg.line, msg.message.trim()));
         }
     }
 
@@ -588,6 +600,24 @@ fn compact_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.11.0 (upstream PR #4185): rule-less errors are shown, error files lead.
+    #[test]
+    fn test_eslint_rule_less_errors_are_visible() {
+        let json = r#"[
+          {"filePath":"/p/src/warn.ts","errorCount":0,"warningCount":3,"messages":[
+            {"ruleId":"no-console","severity":1,"message":"x","line":1,"column":1},
+            {"ruleId":"no-console","severity":1,"message":"x","line":2,"column":1},
+            {"ruleId":"no-console","severity":1,"message":"x","line":3,"column":1}]},
+          {"filePath":"/p/src/broken.ts","errorCount":1,"warningCount":0,"messages":[
+            {"ruleId":null,"fatal":true,"severity":2,"message":"Parsing error: ';' expected.","line":7,"column":3}]}
+        ]"#;
+        let out = filter_eslint_json(json);
+        assert!(out.contains("L7: Parsing error: ';' expected."), "{out}");
+        let broken = out.find("broken.ts").unwrap();
+        let warn = out.find("warn.ts").unwrap();
+        assert!(broken < warn, "error file must lead: {out}");
+    }
 
     #[test]
     fn a_bare_path_is_not_read_as_a_linter_name() {

@@ -38,6 +38,12 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let show_all = args
         .iter()
         .any(|a| (a.starts_with('-') && !a.starts_with("--") && a.contains('a')) || a == "--all");
+    // 0.11.0 (US-014, upstream aa40853/a7e7329): standard dotfile semantics — `-a`
+    // and `-A` show dot entries, plain `ls` does not. `-A` still filters noise dirs.
+    let show_dot = show_all
+        || args
+            .iter()
+            .any(|a| (a.starts_with('-') && !a.starts_with("--") && a.contains('A')) || a == "--almost-all");
 
     let flags: Vec<&str> = args
         .iter()
@@ -50,10 +56,31 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         .map(|s| s.as_str())
         .collect();
 
+    // 0.11.0 (US-014): several operands, `-R` or `-d` print sections or the
+    // directory itself; the one-list compaction merged them. Native ls answers.
+    let short_flags: String = flags
+        .iter()
+        .filter(|f| !f.starts_with("--"))
+        .flat_map(|f| f.chars().skip(1))
+        .collect();
+    if paths.len() > 1
+        || short_flags.contains(['R', 'd'])
+        || flags.contains(&"--recursive")
+        || flags.contains(&"--directory")
+    {
+        return run_native(args);
+    }
+
     // Build ls -la + any extra flags the user passed (e.g. -R)
     // Strip -l, -a, -h (we handle all of these ourselves)
     let mut cmd = Command::new("ls");
     cmd.arg("-la");
+    // 0.11.0 (upstream PR #3651): plain `ls link` lists the directory a command-line
+    // symlink points to; the injected `-l` would show the link itself. Follow
+    // command-line symlinks unless the caller asked for the long format.
+    if !short_flags.contains('l') && !flags.contains(&"--format=long") {
+        cmd.arg("-H");
+    }
     for flag in &flags {
         if flag.starts_with("--") {
             // Long flags: skip --all (already handled)
@@ -90,7 +117,8 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     }
 
     let raw = String::from_utf8_lossy(&output.stdout).to_string();
-    let filtered = compact_ls(&raw, show_all, std::io::stdout().is_terminal());
+    let target = paths.first().copied().unwrap_or(".");
+    let filtered = compact_ls(&raw, show_all, show_dot, std::io::stdout().is_terminal(), target);
 
     if verbose > 0 {
         eprintln!(
@@ -132,14 +160,40 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
+/// Native `ls` with the caller's own arguments, output untouched.
+fn run_native(args: &[String]) -> Result<()> {
+    let timer = tracking::TimedExecution::start();
+    let status = Command::new("ls")
+        .args(args)
+        .status()
+        .context("Failed to run ls")?;
+    let label = format!("ls {}", args.join(" "));
+    timer.track_passthrough(&label, &format!("rtk {label} (passthrough)"));
+    let code = crate::stream::status_to_exit_code(status);
+    if code != 0 {
+        std::process::exit(code);
+    }
+    Ok(())
+}
+
+/// Entries listed before the rest goes behind the recovery line. (0.11.0, US-014)
+const LS_MAX_ENTRIES: usize = 200;
+
 /// Parse ls -la output into compact format:
 ///   name/  (dirs)
 ///   name  size  (files)
-fn compact_ls(raw: &str, show_all: bool, include_summary: bool) -> String {
+fn compact_ls(
+    raw: &str,
+    show_all: bool,
+    show_dot: bool,
+    include_summary: bool,
+    target: &str,
+) -> String {
     use std::collections::HashMap;
 
     let ignore_dirs = crate::config::Config::merged_ignore_dirs(NOISE_DIRS);
     let mut hidden = 0usize;
+    let mut hidden_names: Vec<String> = Vec::new(); // 0.11.0 (US-014)
     let mut dirs: Vec<String> = Vec::new();
     let mut files: Vec<(String, String)> = Vec::new(); // (name, size)
     let mut by_ext: HashMap<String, usize> = HashMap::new();
@@ -163,10 +217,16 @@ fn compact_ls(raw: &str, show_all: bool, include_summary: bool) -> String {
             continue;
         }
 
+        // 0.11.0 (US-014): without -a/-A, dot entries are not listed — like ls.
+        if !show_dot && name.starts_with('.') {
+            continue;
+        }
+
         // Filter noise dirs unless -a. The list is the built-in noise set merged
         // with the user's configured `[filters].ignore_dirs`.
         if !show_all && ignore_dirs.contains(&name) {
             hidden += 1;
+            hidden_names.push(name);
             continue;
         }
 
@@ -196,19 +256,41 @@ fn compact_ls(raw: &str, show_all: bool, include_summary: bool) -> String {
     }
 
     let mut out = String::new();
+    let total_entries = dirs.len() + files.len();
+    let mut listed = 0usize;
 
     // Dirs first, compact
     for d in &dirs {
+        if listed == LS_MAX_ENTRIES {
+            break;
+        }
         out.push_str(d);
         out.push_str("/\n");
+        listed += 1;
     }
 
     // Files with size
     for (name, size) in &files {
+        if listed == LS_MAX_ENTRIES {
+            break;
+        }
         out.push_str(name);
         out.push_str("  ");
         out.push_str(size);
         out.push('\n');
+        listed += 1;
+    }
+
+    // 0.11.0 (US-014): what rtk left out is named, with the way back.
+    if listed < total_entries {
+        out.push_str(&format!(
+            "+{} more; full listing: HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=complete_log hzr exec run 'ls -la {}'\n",
+            total_entries - listed,
+            target.replace('\'', "'\\''")
+        ));
+    }
+    if hidden > 0 {
+        out.push_str(&format!("({} noise hidden: {}; -a shows)\n", hidden, hidden_names.join(", ")));
     }
 
     if include_summary {
@@ -240,6 +322,41 @@ fn compact_ls(raw: &str, show_all: bool, include_summary: bool) -> String {
 mod tests {
     use super::*;
 
+    // 0.11.0 (US-014): dotfile semantics, noise disclosure and the entry cap.
+    const LS_WITH_DOTS: &str = "total 8\n\
+drwxr-xr-x  5 u g  160 Jan  1 00:00 .\n\
+drwxr-xr-x  9 u g  288 Jan  1 00:00 ..\n\
+-rw-r--r--  1 u g   12 Jan  1 00:00 .env\n\
+drwxr-xr-x  3 u g   96 Jan  1 00:00 .github\n\
+drwxr-xr-x  3 u g   96 Jan  1 00:00 node_modules\n\
+drwxr-xr-x  3 u g   96 Jan  1 00:00 src\n\
+-rw-r--r--  1 u g  100 Jan  1 00:00 main.rs\n";
+
+    #[test]
+    fn plain_ls_hides_dot_entries_and_names_hidden_noise() {
+        let out = compact_ls(LS_WITH_DOTS, false, false, false, ".");
+        assert!(!out.contains(".env") && !out.contains(".github"), "{out}");
+        assert!(out.contains("src/") && out.contains("main.rs"), "{out}");
+        assert!(out.contains("(1 noise hidden: node_modules; -a shows)"), "{out}");
+        let almost_all = compact_ls(LS_WITH_DOTS, false, true, false, ".");
+        assert!(almost_all.contains(".env") && almost_all.contains(".github/"), "{almost_all}");
+        assert!(!almost_all.contains("node_modules/"), "{almost_all}");
+        let all = compact_ls(LS_WITH_DOTS, true, true, false, ".");
+        assert!(all.contains("node_modules/") && !all.contains("noise hidden"), "{all}");
+    }
+
+    #[test]
+    fn huge_listings_are_capped_with_recovery() {
+        let mut raw = String::from("total 1\n");
+        for i in 0..(LS_MAX_ENTRIES + 25) {
+            raw.push_str(&format!("-rw-r--r--  1 u g  1 Jan  1 00:00 f{i}.txt\n"));
+        }
+        let out = compact_ls(&raw, false, false, false, "big dir");
+        assert_eq!(out.lines().filter(|l| l.starts_with('f')).count(), LS_MAX_ENTRIES);
+        assert!(out.contains("+25 more; full listing:"), "{out}");
+        assert!(out.contains("hzr exec run 'ls -la big dir'"), "{out}");
+    }
+
     #[test]
     fn test_compact_basic() {
         let input = "total 48\n\
@@ -248,7 +365,7 @@ mod tests {
                      drwxr-xr-x  2 user  staff    64 Jan  1 12:00 src\n\
                      -rw-r--r--  1 user  staff  1234 Jan  1 12:00 Cargo.toml\n\
                      -rw-r--r--  1 user  staff  5678 Jan  1 12:00 README.md\n";
-        let output = compact_ls(input, false, true);
+        let output = compact_ls(input, false, true, true, ".");
         assert!(output.contains("src/"));
         assert!(output.contains("Cargo.toml"));
         assert!(output.contains("README.md"));
@@ -269,10 +386,12 @@ mod tests {
                      drwxr-xr-x  2 user  staff  64 Jan  1 12:00 target\n\
                      drwxr-xr-x  2 user  staff  64 Jan  1 12:00 src\n\
                      -rw-r--r--  1 user  staff  100 Jan  1 12:00 main.rs\n";
-        let output = compact_ls(input, false, true);
-        assert!(!output.contains("node_modules"));
-        assert!(!output.contains(".git"));
-        assert!(!output.contains("target"));
+        let output = compact_ls(input, false, true, true, ".");
+        // 0.11.0 (US-014): not listed as entries, but named in the disclosure line.
+        assert!(!output.contains("node_modules/"));
+        assert!(!output.contains(".git/"));
+        assert!(!output.contains("target/"));
+        assert!(output.contains("(3 noise hidden: node_modules, .git, target; -a shows)"), "{output}");
         assert!(output.contains("src/"));
         assert!(output.contains("main.rs"));
     }
@@ -282,7 +401,7 @@ mod tests {
         let input = "total 8\n\
                      drwxr-xr-x  2 user  staff  64 Jan  1 12:00 .git\n\
                      drwxr-xr-x  2 user  staff  64 Jan  1 12:00 src\n";
-        let output = compact_ls(input, true, true);
+        let output = compact_ls(input, true, true, true, ".");
         assert!(output.contains(".git/"));
         assert!(output.contains("src/"));
     }
@@ -290,7 +409,7 @@ mod tests {
     #[test]
     fn test_compact_empty() {
         let input = "total 0\n";
-        let output = compact_ls(input, false, true);
+        let output = compact_ls(input, false, true, true, ".");
         assert_eq!(output, "(empty)\n");
     }
 
@@ -301,7 +420,7 @@ mod tests {
                      -rw-r--r--  1 user  staff  1234 Jan  1 12:00 main.rs\n\
                      -rw-r--r--  1 user  staff  5678 Jan  1 12:00 lib.rs\n\
                      -rw-r--r--  1 user  staff   100 Jan  1 12:00 Cargo.toml\n";
-        let output = compact_ls(input, false, true);
+        let output = compact_ls(input, false, true, true, ".");
         assert!(output.contains("📊 3 files, 1 dirs"));
         assert!(output.contains(".rs"));
         assert!(output.contains(".toml"));
@@ -312,7 +431,7 @@ mod tests {
         let input = "total 8\n\
                      drwxr-xr-x  2 user  staff  64 Jan  1 12:00 src\n\
                      -rw-r--r--  1 user  staff  100 Jan  1 12:00 main.rs\n";
-        let output = compact_ls(input, false, false);
+        let output = compact_ls(input, false, true, false, ".");
         assert_eq!(output, "src/\nmain.rs  100B\n");
         assert!(!output.contains("📊"));
     }
@@ -331,7 +450,7 @@ mod tests {
     fn test_compact_handles_filenames_with_spaces() {
         let input = "total 8\n\
                      -rw-r--r--  1 user  staff  1234 Jan  1 12:00 my file.txt\n";
-        let output = compact_ls(input, false, true);
+        let output = compact_ls(input, false, true, true, ".");
         assert!(output.contains("my file.txt"));
     }
 
@@ -339,7 +458,7 @@ mod tests {
     fn test_compact_symlinks() {
         let input = "total 8\n\
                      lrwxr-xr-x  1 user  staff  10 Jan  1 12:00 link -> target\n";
-        let output = compact_ls(input, false, true);
+        let output = compact_ls(input, false, true, true, ".");
         assert!(output.contains("link -> target"));
     }
 }

@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -260,34 +261,20 @@ fn extract_outdated_text(output: &str) -> Option<DependencyState> {
     }
 }
 
-/// Validates npm package name according to official rules
-fn is_valid_package_name(name: &str) -> bool {
-    if name.is_empty() || name.len() > 214 {
-        return false;
-    }
-
-    // No path traversal
-    if name.contains("..") {
-        return false;
-    }
-
-    // Only safe characters
-    name.chars()
-        .all(|c| c.is_alphanumeric() || matches!(c, '@' | '/' | '-' | '_' | '.'))
-}
 
 #[derive(Debug, Clone)]
 pub enum PnpmCommand {
     List { depth: usize },
     Outdated,
-    Install { packages: Vec<String> },
+    // 0.11.0 (US-008): one argv; package specs are no longer "validated".
+    Install,
 }
 
 pub fn run(cmd: PnpmCommand, args: &[String], verbose: u8) -> Result<()> {
     match cmd {
         PnpmCommand::List { depth } => run_list(depth, args, verbose),
         PnpmCommand::Outdated => run_outdated(args, verbose),
-        PnpmCommand::Install { packages } => run_install(&packages, args, verbose),
+        PnpmCommand::Install => run_install(args, verbose),
     }
 }
 
@@ -303,11 +290,13 @@ fn run_list(depth: usize, args: &[String], verbose: u8) -> Result<()> {
         cmd.arg(arg);
     }
 
-    let output = cmd.output().context("Failed to run pnpm list")?;
+    let output = cmd.output_relayed().context("Failed to run pnpm list")?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("pnpm list failed: {}", stderr);
+        // 0.11.0 (US-008): pnpm's own streams and exit code, not rtk's "Error:".
+        std::io::Write::write_all(&mut std::io::stdout(), &output.stdout)?;
+        std::io::Write::write_all(&mut std::io::stderr(), &output.stderr)?;
+        std::process::exit(crate::stream::status_to_exit_code(output.status));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -335,7 +324,7 @@ fn run_list(depth: usize, args: &[String], verbose: u8) -> Result<()> {
         }
     };
 
-    let shown = crate::guard::never_worse(&stdout, &filtered);
+    let shown = crate::guard::never_worse_rendered(&stdout, &filtered); // 0.11.0: rtk injected the JSON format; not the caller's protocol
     println!("{}", shown);
 
     timer.track(
@@ -360,7 +349,7 @@ fn run_outdated(args: &[String], verbose: u8) -> Result<()> {
         cmd.arg(arg);
     }
 
-    let output = cmd.output().context("Failed to run pnpm outdated")?;
+    let output = cmd.output_relayed().context("Failed to run pnpm outdated")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{}{}", stdout, stderr);
@@ -368,6 +357,11 @@ fn run_outdated(args: &[String], verbose: u8) -> Result<()> {
     // Parse output using PnpmOutdatedParser
     let parse_result = PnpmOutdatedParser::parse(&stdout);
     let mode = FormatMode::from_verbosity(verbose);
+    // 0.11.0 (upstream PR #2659): pnpm exits 1 when packages are outdated — a normal
+    // answer — and non-zero on a real failure, which printed "All packages
+    // up-to-date ✓". The exit code is propagated; an unparsed failure shows pnpm's text.
+    let exit_code = crate::stream::status_to_exit_code(output.status);
+    let parsed = !matches!(parse_result, ParseResult::Passthrough(_));
 
     let filtered = match parse_result {
         ParseResult::Full(data) => {
@@ -388,38 +382,33 @@ fn run_outdated(args: &[String], verbose: u8) -> Result<()> {
         }
     };
 
-    let display = if filtered.trim().is_empty() {
+    let display = if !parsed && exit_code != 0 {
+        combined.clone() // 0.11.0: a failure is pnpm's own text
+    } else if filtered.trim().is_empty() {
         "All packages up-to-date ✓".to_string()
     } else {
         filtered
     };
-    let shown = crate::guard::never_worse(&combined, &display);
+    let shown = crate::guard::never_worse_rendered(&combined, &display); // 0.11.0: rtk injected the JSON format; not the caller's protocol
     println!("{}", shown);
 
     timer.track("pnpm outdated", "rtk pnpm outdated", &combined, shown);
 
+    if exit_code != 0 {
+        std::process::exit(exit_code); // 0.11.0 (upstream PR #2659)
+    }
     Ok(())
 }
 
-fn run_install(packages: &[String], args: &[String], verbose: u8) -> Result<()> {
+// 0.11.0 (US-008): arguments reach pnpm as an argv, never through a shell, so
+// there is nothing to inject into. The old "validation" rejected valid specs
+// (`react@^18`, `github:user/repo`, `file:../pkg`). A failed install used to
+// `bail!` — rtk's own "Error:" with exit 1, pnpm's stdout and exit code gone.
+fn run_install(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
-
-    // Validate package names to prevent command injection
-    for pkg in packages {
-        if !is_valid_package_name(pkg) {
-            anyhow::bail!(
-                "Invalid package name: '{}' (contains unsafe characters)",
-                pkg
-            );
-        }
-    }
 
     let mut cmd = Command::new("pnpm");
     cmd.arg("install");
-
-    for pkg in packages {
-        cmd.arg(pkg);
-    }
 
     for arg in args {
         cmd.arg(arg);
@@ -429,12 +418,16 @@ fn run_install(packages: &[String], args: &[String], verbose: u8) -> Result<()> 
         eprintln!("pnpm install running...");
     }
 
-    let output = cmd.output().context("Failed to run pnpm install")?;
+    let output = cmd.output_relayed().context("Failed to run pnpm install")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if !output.status.success() {
-        anyhow::bail!("pnpm install failed: {}", stderr);
+        print!("{stdout}");
+        eprint!("{stderr}");
+        let raw = format!("{stdout}{stderr}");
+        timer.track("pnpm install", "rtk pnpm install", &raw, &raw);
+        std::process::exit(crate::stream::status_to_exit_code(output.status));
     }
 
     let combined = format!("{}{}", stdout, stderr);
@@ -444,8 +437,8 @@ fn run_install(packages: &[String], args: &[String], verbose: u8) -> Result<()> 
     println!("{}", shown);
 
     timer.track(
-        &format!("pnpm install {}", packages.join(" ")),
-        &format!("rtk pnpm install {}", packages.join(" ")),
+        &format!("pnpm install {}", args.join(" ")),
+        &format!("rtk pnpm install {}", args.join(" ")),
         &combined,
         shown,
     );
@@ -558,14 +551,6 @@ mod tests {
         let data = result.unwrap();
         assert_eq!(data.outdated_count, 1);
         assert_eq!(data.dependencies[0].name, "express");
-    }
-
-    #[test]
-    fn test_package_name_validation() {
-        assert!(is_valid_package_name("lodash"));
-        assert!(is_valid_package_name("@clerk/express"));
-        assert!(!is_valid_package_name("../../../etc/passwd"));
-        assert!(!is_valid_package_name("lodash; rm -rf /"));
     }
 
     #[test]

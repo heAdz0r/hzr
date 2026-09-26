@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use anyhow::{bail, Context, Result};
 use regex::Regex;
@@ -9,7 +10,13 @@ pub fn emit_guarded(filtered: &str, hint: Option<&str>, raw: &str) -> String {
         None => filtered.to_string(),
     };
     let shown = crate::guard::never_worse(raw, &body).to_string();
-    println!("{}", shown);
+    // 0.11.0 (upstream PR #4154): one trailing newline, not one on top of the
+    // output's own — a raw fallback already ends in one.
+    if shown.ends_with('\n') {
+        print!("{}", shown);
+    } else {
+        println!("{}", shown);
+    }
     shown
 }
 
@@ -22,7 +29,13 @@ pub fn emit_guarded_rendered(filtered: &str, hint: Option<&str>, raw: &str) -> S
         None => filtered.to_string(),
     };
     let shown = crate::guard::never_worse_rendered(raw, &body).to_string();
-    println!("{}", shown);
+    // 0.11.0 (upstream PR #4154): one trailing newline, not one on top of the
+    // output's own — a raw fallback already ends in one.
+    if shown.ends_with('\n') {
+        print!("{}", shown);
+    } else {
+        println!("{}", shown);
+    }
     shown
 }
 
@@ -42,7 +55,7 @@ pub fn run_err(command: &[String], verbose: u8) -> Result<()> {
         .args(arguments)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .output_relayed()
         .context("Failed to execute command")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -97,7 +110,7 @@ pub fn run_test(command: &[String], verbose: u8) -> Result<()> {
         .args(arguments)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .output_relayed()
         .context("Failed to execute test command")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);

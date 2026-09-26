@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use anyhow::{Context, Result};
 use std::process::Command;
@@ -26,13 +27,7 @@ pub fn run(cmd: PrismaCommand, args: &[String], verbose: u8) -> Result<()> {
 
 /// Create a Command that will run prisma (tries global first, then npx)
 fn create_prisma_command() -> Command {
-    if let Ok(binary) = crate::utils::resolve_binary("prisma") {
-        Command::new(binary)
-    } else {
-        let mut c = Command::new("npx");
-        c.arg("prisma");
-        c
-    }
+    crate::utils::js_tool_command("prisma").0 // 0.11.0 (US-009)
 }
 
 fn run_generate(args: &[String], verbose: u8) -> Result<()> {
@@ -50,7 +45,7 @@ fn run_generate(args: &[String], verbose: u8) -> Result<()> {
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .context("Failed to run prisma generate (try: npm install -g prisma)")?;
 
     if !output.status.success() {
@@ -103,7 +98,7 @@ fn run_migrate(subcommand: MigrateSubcommand, args: &[String], verbose: u8) -> R
         eprintln!("Running: {}", cmd_name);
     }
 
-    let output = cmd.output().context("Failed to run prisma migrate")?;
+    let output = cmd.output_relayed().context("Failed to run prisma migrate")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -142,7 +137,7 @@ fn run_db_push(args: &[String], verbose: u8) -> Result<()> {
         eprintln!("Running: prisma db push");
     }
 
-    let output = cmd.output().context("Failed to run prisma db push")?;
+    let output = cmd.output_relayed().context("Failed to run prisma db push")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

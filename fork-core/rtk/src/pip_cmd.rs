@@ -86,7 +86,10 @@ fn run_list(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let raw = format!("{}\n{}", stdout, stderr);
 
-    let filtered = crate::guard::never_worse(&raw, &filter_pip_list(&stdout)).to_string();
+    // 0.11.0: rtk injected the JSON format; the exit guard keeps a failure visible.
+    let code = crate::stream::status_to_exit_code(output.status);
+    let summary = crate::guard::guard_exit(&raw, code, "pip list", &filter_pip_list(&stdout));
+    let filtered = crate::guard::never_worse_rendered(&raw, &summary).to_string();
     println!("{}", filtered);
 
     if !output.status.success() {
@@ -126,7 +129,10 @@ fn run_outdated(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let raw = format!("{}\n{}", stdout, stderr);
 
-    let filtered = crate::guard::never_worse(&raw, &filter_pip_outdated(&stdout)).to_string();
+    // 0.11.0: rtk injected the JSON format; the exit guard keeps a failure visible.
+    let code = crate::stream::status_to_exit_code(output.status);
+    let summary = crate::guard::guard_exit(&raw, code, "pip list --outdated", &filter_pip_outdated(&stdout));
+    let filtered = crate::guard::never_worse_rendered(&raw, &summary).to_string();
     println!("{}", filtered);
 
     if !output.status.success() {

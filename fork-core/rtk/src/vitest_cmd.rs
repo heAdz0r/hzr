@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use anyhow::{Context, Result};
 use regex::Regex;
 use serde::Deserialize;
@@ -33,6 +34,12 @@ struct VitestTestFile {
     name: String,
     #[serde(rename = "assertionResults")]
     assertion_results: Vec<VitestTest>,
+    // 0.11.0 (upstream PR #4184): a suite that fails to load has no assertions;
+    // its status and message are the whole report.
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,10 +76,16 @@ impl OutputParser for VitestParser {
                     _ => None,
                 };
 
+                // 0.11.0 (upstream PR #4184): suites that failed to load count as
+                // failures, so the summary is never "PASS (0) FAIL (0)" on exit 1.
+                let suite_failures = failures
+                    .iter()
+                    .filter(|f| f.test_name.ends_with(SUITE_LOAD_FAILURE))
+                    .count();
                 let result = TestResult {
                     total: json.num_total_tests,
                     passed: json.num_passed_tests,
-                    failed: json.num_failed_tests,
+                    failed: json.num_failed_tests + suite_failures,
                     skipped: json.num_pending_tests,
                     duration_ms,
                     failures,
@@ -96,11 +109,25 @@ impl OutputParser for VitestParser {
     }
 }
 
+/// Name given to a test file that failed before any test ran. (0.11.0, upstream PR #4184)
+const SUITE_LOAD_FAILURE: &str = "(suite failed to load)";
+
 /// Extract failures from JSON structure
 fn extract_failures_from_json(json: &VitestJsonOutput) -> Vec<TestFailure> {
     let mut failures = Vec::new();
 
     for file in &json.test_results {
+        let file_failed = file.status.as_deref() == Some("failed");
+        let has_failed_test = file.assertion_results.iter().any(|t| t.status == "failed");
+        if file_failed && !has_failed_test {
+            // 0.11.0 (upstream PR #4184)
+            failures.push(TestFailure {
+                test_name: format!("{} {SUITE_LOAD_FAILURE}", file.name),
+                file_path: file.name.clone(),
+                error_message: file.message.clone().unwrap_or_default(),
+                stack_trace: None,
+            });
+        }
         for test in &file.assertion_results {
             if test.status == "failed" {
                 let error_message = test.failure_messages.join("\n");
@@ -225,13 +252,40 @@ fn run_vitest(args: &[String], verbose: u8) -> Result<()> {
     let mut cmd = package_manager_exec("vitest");
     let effective_args = build_vitest_effective_args(args);
     cmd.args(&effective_args.args);
+    // 0.11.0 (upstream PR #4264): vitest 5 writes the JSON reporter's report to a file
+    // and prints only "JSON report written to <path>", so every parser tier failed on
+    // stdout. Send the report to a temp file (vitest 4 honours the same option) unless
+    // the caller chose an output file, and read it from there.
+    let report_path = (!effective_args.passthrough && !has_explicit_output_file(args)).then(|| {
+        std::env::temp_dir().join(format!(
+            "rtk-vitest-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ))
+    });
+    if let Some(path) = &report_path {
+        cmd.arg(format!("--outputFile.json={}", path.display()));
+    }
 
-    let output = cmd.output().context("Failed to run vitest")?;
+    let output = cmd.output_relayed().context("Failed to run vitest")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}{}", stdout, stderr);
+    let report = report_path.as_ref().and_then(|path| {
+        let text = std::fs::read_to_string(path).ok();
+        let _ = std::fs::remove_file(path);
+        text.filter(|t| !t.trim().is_empty())
+    });
+    // The report counts as raw output: the guard, the recovery tee and the savings
+    // baseline all measure against everything vitest produced.
+    let combined = match &report {
+        Some(report) => format!("{report}\n{stdout}{stderr}"),
+        None => format!("{}{}", stdout, stderr),
+    };
+    let parse_source = report.as_deref().unwrap_or(&stdout);
 
-    let filtered = format_test_output(&stdout, &combined, effective_args.passthrough, verbose);
+    let filtered = format_test_output(parse_source, &combined, effective_args.passthrough, verbose);
 
     let exit_code = output.status.code().unwrap_or(1); // upstream sync: tee integration
                                                        // A failed suite that the JSON parser could not attribute must not surface
@@ -241,8 +295,20 @@ fn run_vitest(args: &[String], verbose: u8) -> Result<()> {
         ..filtered
     };
     let rendered = render_test_output(&filtered, &combined, "vitest_run", exit_code);
-    let shown = crate::guard::never_worse(&combined, &rendered);
-    println!("{}", shown);
+    // 0.11.0: the JSON report is rtk's own injected format, not the caller's protocol.
+    // `never_worse` treated an all-JSON output as a machine protocol and returned the
+    // raw report whenever vitest printed nothing else — the filter never ran on a clean
+    // vitest 4 run. The exit verdict is enforced by guard_exit above.
+    let shown = if effective_args.passthrough {
+        crate::guard::never_worse(&combined, &rendered)
+    } else {
+        crate::guard::never_worse_rendered(&combined, &rendered)
+    };
+    if shown.ends_with('\n') {
+        print!("{}", shown);
+    } else {
+        println!("{}", shown);
+    }
 
     timer.track("vitest run", "rtk vitest run", &combined, shown);
 
@@ -255,7 +321,18 @@ struct EffectiveVitestArgs {
     passthrough: bool,
 }
 
+/// vitest's own subcommands keep the leading position; `run` in front of them made
+/// the word a test-name filter. (0.11.0, upstream PR #3680)
+const VITEST_SUBCOMMANDS: &[&str] = &["related", "bench", "list", "typecheck", "init"];
+
 fn build_vitest_effective_args(args: &[String]) -> EffectiveVitestArgs {
+    if args.first().is_some_and(|a| VITEST_SUBCOMMANDS.contains(&a.as_str())) {
+        // 0.11.0 (upstream PR #3680): unfiltered — their output is not a test report.
+        return EffectiveVitestArgs {
+            args: args.to_vec(),
+            passthrough: true,
+        };
+    }
     let passthrough = has_explicit_vitest_reporter(args);
     let mut effective = vec!["run".to_string()];
 
@@ -273,6 +350,13 @@ fn build_vitest_effective_args(args: &[String]) -> EffectiveVitestArgs {
         args: effective,
         passthrough,
     }
+}
+
+/// The caller named where reports go: `--outputFile`, `--outputFile=…`, `--outputFile.json…`.
+fn has_explicit_output_file(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|a| *a != "--")
+        .any(|a| a == "--outputFile" || a.starts_with("--outputFile=") || a.starts_with("--outputFile."))
 }
 
 fn has_explicit_vitest_reporter(args: &[String]) -> bool {
@@ -354,6 +438,30 @@ fn render_test_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.11.0 (upstream PR #4184): a suite that failed to load is a failure.
+    #[test]
+    fn test_vitest_suite_load_failure_is_reported() {
+        let json = r#"{"numTotalTestSuites":1,"numFailedTestSuites":1,"numTotalTests":0,"numPassedTests":0,"numFailedTests":0,"numPendingTests":0,"testResults":[{"name":"/p/broken.test.ts","status":"failed","message":"Failed to load url ./missing","assertionResults":[]}]}"#;
+        match VitestParser::parse(json) {
+            ParseResult::Full(result) => {
+                assert_eq!(result.failed, 1);
+                assert_eq!(result.failures[0].file_path, "/p/broken.test.ts");
+                assert!(result.failures[0].error_message.contains("Failed to load url"));
+            }
+            _ => panic!("expected a full parse"),
+        }
+    }
+
+    // 0.11.0 (upstream PR #3680): vitest subcommands are not buried under `run`.
+    #[test]
+    fn test_vitest_subcommands_keep_their_position() {
+        for sub in ["list", "related", "bench", "typecheck", "init"] {
+            let built = build_vitest_effective_args(&[sub.to_string(), "src/a.ts".to_string()]);
+            assert_eq!(built.args, vec![sub.to_string(), "src/a.ts".to_string()]);
+            assert!(built.passthrough, "{sub}");
+        }
+    }
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()

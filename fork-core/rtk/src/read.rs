@@ -12,6 +12,157 @@ use anyhow::{Context, Result};
 use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
 
+/// An exact line window, the byte-for-byte answer of `head -n N` / `tail -n N`.
+/// (0.11.0, US-005, upstream ed8480f/6f4913b/0df1d2b)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Window {
+    Head(usize),
+    Tail(usize),
+}
+
+const WINDOW_CHUNK: usize = 64 * 1024;
+
+/// Read into `buf`, retrying an interrupted read like `fs::read` does.
+fn read_retrying(reader: &mut impl std::io::Read, buf: &mut [u8]) -> std::io::Result<usize> {
+    loop {
+        match reader.read(buf) {
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            other => return other,
+        }
+    }
+}
+
+/// First `n` lines: the bytes through the `n`th newline, or to EOF. Reads in
+/// chunks and stops there, so an endless source (`/dev/urandom`) returns at
+/// once. The flag says whether any byte follows the window.
+fn head_window(reader: &mut impl std::io::Read, n: usize) -> std::io::Result<(Vec<u8>, bool)> {
+    let mut out = Vec::new();
+    if n == 0 {
+        let mut probe = [0u8; 1];
+        return Ok((out, read_retrying(reader, &mut probe)? > 0));
+    }
+    let mut seen = 0usize;
+    let mut chunk = vec![0u8; WINDOW_CHUNK];
+    loop {
+        let read = read_retrying(reader, &mut chunk)?;
+        if read == 0 {
+            return Ok((out, false));
+        }
+        for (i, byte) in chunk[..read].iter().enumerate() {
+            if *byte == b'\n' {
+                seen += 1;
+                if seen == n {
+                    out.extend_from_slice(&chunk[..=i]);
+                    let more = i + 1 < read || {
+                        let mut probe = [0u8; 1];
+                        read_retrying(reader, &mut probe)? > 0
+                    };
+                    return Ok((out, more));
+                }
+            }
+        }
+        out.extend_from_slice(&chunk[..read]);
+    }
+}
+
+/// Offset where the last `n` lines of `bytes` begin. A final newline ends the
+/// last line rather than starting an empty one, as in `tail`.
+fn tail_start(bytes: &[u8], n: usize) -> usize {
+    if n == 0 {
+        return bytes.len();
+    }
+    let body = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+    let mut seen = 0usize;
+    for (i, byte) in body.iter().enumerate().rev() {
+        if *byte == b'\n' {
+            seen += 1;
+            if seen == n {
+                return i + 1;
+            }
+        }
+    }
+    0
+}
+
+/// Last `n` lines of a regular file, reading backwards from the end so a large
+/// log is never held whole. Returns the window and whether anything precedes it.
+fn tail_window_seek(file: &mut std::fs::File, n: usize) -> std::io::Result<(Vec<u8>, bool)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let len = file.seek(SeekFrom::End(0))?;
+    if n == 0 {
+        return Ok((Vec::new(), len > 0));
+    }
+    let mut tail: Vec<u8> = Vec::new();
+    let mut pos = len;
+    loop {
+        let start = tail_start(&tail, n);
+        // Enough newlines found (start > 0), or the whole file is in hand.
+        if start > 0 || pos == 0 {
+            return Ok((tail.split_off(start), start > 0));
+        }
+        let size = WINDOW_CHUNK.min(pos as usize);
+        pos -= size as u64;
+        file.seek(SeekFrom::Start(pos))?;
+        let mut chunk = vec![0u8; size];
+        file.read_exact(&mut chunk)?;
+        chunk.extend_from_slice(&tail);
+        tail = chunk;
+    }
+}
+
+/// Serve `head`/`tail` rewrites with the native bytes. The only addition is a
+/// one-line stderr note when the window actually cut something, so stdout stays
+/// identical to the native command. (0.11.0, US-005; Q1 option b)
+pub fn run_window(file: &Path, window: Window) -> Result<()> {
+    use std::io::Read as _;
+    let timer = tracking::TimedExecution::start();
+    let (bytes, cut) = if file == Path::new("-") {
+        let mut stdin = std::io::stdin().lock();
+        match window {
+            Window::Head(n) => head_window(&mut stdin, n)?,
+            Window::Tail(n) => {
+                let mut all = Vec::new();
+                stdin.read_to_end(&mut all)?;
+                let start = tail_start(&all, n);
+                (all.split_off(start), start > 0)
+            }
+        }
+    } else {
+        let mut handle = std::fs::File::open(file)
+            .with_context(|| format!("Failed to read file: {}", file.display()))?;
+        let regular = handle.metadata().is_ok_and(|m| m.is_file());
+        match window {
+            Window::Head(n) => head_window(&mut handle, n)?,
+            Window::Tail(n) if regular => tail_window_seek(&mut handle, n)?,
+            Window::Tail(n) => {
+                let mut all = Vec::new();
+                handle.read_to_end(&mut all)?;
+                let start = tail_start(&all, n);
+                (all.split_off(start), start > 0)
+            }
+        }
+    };
+    {
+        let mut stdout = std::io::stdout().lock();
+        stdout.write_all(&bytes).context("Failed to write output")?;
+        stdout.flush().context("Failed to flush output")?;
+    }
+    if cut {
+        match window {
+            Window::Head(n) => eprintln!("[head: first {n} lines; the file continues]"),
+            Window::Tail(n) => eprintln!("[tail: last {n} lines; earlier lines omitted]"),
+        }
+    }
+    // Native head/tail would print the same bytes, so the counterfactual is the window.
+    let shown = String::from_utf8_lossy(&bytes);
+    let label = match window {
+        Window::Head(_) => "rtk read (head window)",
+        Window::Tail(_) => "rtk read (tail window)",
+    };
+    timer.track("read <path omitted>", label, &shown, &shown);
+    Ok(())
+}
+
 const MIN_BATCH_FILE_TOKENS: usize = 64;
 pub const DEFAULT_READ_MAX_LINES: usize = 400;
 /// A plain read of a file up to this size is returned whole: it fits the 30,000-character
@@ -889,6 +1040,77 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
+
+    // --- 0.11.0 (US-005): exact head/tail windows ---
+
+    const WINDOW_CASES: &[&[u8]] = &[
+        b"",
+        b"only",
+        b"a\r\nb\r\nc",
+        b"caf\xe9 one\nl2\nl3\n",
+        b"\n\n\n",
+        b"1\n2\n3\n4\n5\n",
+    ];
+
+    /// Reference answers built the way head(1)/tail(1) define them.
+    fn reference(bytes: &[u8], window: Window) -> Vec<u8> {
+        let lines: Vec<&[u8]> = bytes.split_inclusive(|b| *b == b'\n').collect();
+        match window {
+            Window::Head(n) => lines.iter().take(n).flat_map(|l| l.iter().copied()).collect(),
+            Window::Tail(n) => {
+                let skip = lines.len().saturating_sub(n);
+                lines.iter().skip(skip).flat_map(|l| l.iter().copied()).collect()
+            }
+        }
+    }
+
+    #[test]
+    fn head_window_matches_head_bytes() {
+        for case in WINDOW_CASES {
+            for n in [0, 1, 2, 3, 10] {
+                let (got, more) = head_window(&mut &case[..], n).unwrap();
+                let want = reference(case, Window::Head(n));
+                assert_eq!(got, want, "{case:?} head {n}");
+                assert_eq!(more, want.len() < case.len(), "{case:?} head {n} more");
+            }
+        }
+    }
+
+    #[test]
+    fn tail_windows_match_tail_bytes_in_memory_and_by_seeking() {
+        for case in WINDOW_CASES {
+            let mut file = NamedTempFile::new().unwrap();
+            file.write_all(case).unwrap();
+            for n in [0, 1, 2, 3, 10] {
+                let want = reference(case, Window::Tail(n));
+                let start = tail_start(case, n);
+                assert_eq!(&case[start..], want.as_slice(), "{case:?} tail {n}");
+                let mut handle = std::fs::File::open(file.path()).unwrap();
+                let (got, cut) = tail_window_seek(&mut handle, n).unwrap();
+                assert_eq!(got, want, "{case:?} seek tail {n}");
+                assert_eq!(cut, want.len() < case.len(), "{case:?} seek tail {n} cut");
+            }
+        }
+    }
+
+    #[test]
+    fn windows_cross_chunk_boundaries() {
+        // Lines straddling the 64 KiB read size, with CRLF and no final newline.
+        let mut bytes = Vec::new();
+        for i in 0..20_000 {
+            bytes.extend_from_slice(format!("line {i:05} padding\r\n").as_bytes());
+        }
+        bytes.extend_from_slice(b"last");
+        for n in [1, 3_000, 19_999, 20_001, 25_000] {
+            let (head, _) = head_window(&mut &bytes[..], n).unwrap();
+            assert_eq!(head, reference(&bytes, Window::Head(n)), "head {n}");
+            let mut file = NamedTempFile::new().unwrap();
+            file.write_all(&bytes).unwrap();
+            let mut handle = std::fs::File::open(file.path()).unwrap();
+            let (tail, _) = tail_window_seek(&mut handle, n).unwrap();
+            assert_eq!(tail, reference(&bytes, Window::Tail(n)), "tail {n}");
+        }
+    }
 
     // fork: tail semantics tests (upstream v0.42.4 parity)
     #[test]

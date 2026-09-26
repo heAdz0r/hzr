@@ -64,7 +64,7 @@ patch_sha256 = [
 
 [[engine]]
 name = "rtk"
-version = "0.44.1-fork.1"
+version = "0.50.0-fork.1"
 tag = "worktree-snapshot"
 commit = "5f403c465cbdbe148e9ca03e0ac8e856eef0bfee"
 repository = "https://github.com/heAdz0r/rtk.git"
@@ -81,9 +81,9 @@ source_status_sha256 = "cc3d82662a190ffcc5f9e7cd8bfff3dec985fd1a068bc58acc40c62f
 
 [[engine]]
 name = "rtk-upstream-reference"
-version = "0.44.1"
-tag = "v0.44.1"
-commit = "36591fb00d650bf987b57483c0b3a395a35a8dc1"
+version = "0.50.0"
+tag = "v0.50.0"
+commit = "1d87b8e719ce0a50c223cd93ca64dd16921f9aec"
 repository = "https://github.com/rtk-ai/rtk"
 license = "Apache-2.0"
 binary = ""

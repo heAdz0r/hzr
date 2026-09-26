@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use crate::truncate::{CAP_ERRORS, CAP_WARNINGS};
 use crate::utils::truncate;
@@ -47,7 +48,7 @@ where
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .with_context(|| format!("Failed to run cargo {}", subcommand))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -107,7 +108,7 @@ where
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .with_context(|| format!("Failed to run cargo {}", subcommand))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1001,6 +1002,7 @@ pub(crate) fn filter_cargo_test(output: &str) -> String {
         base: String,
         failures: &[String],
         diag: &crate::diag_summary::DiagnosticSummary,
+        warning_lines: &str, // 0.11.0 (upstream PR #2877)
     ) -> String {
         let details = if failures.is_empty() {
             String::new()
@@ -1008,13 +1010,17 @@ pub(crate) fn filter_cargo_test(output: &str) -> String {
             format_cargo_test_failures(failures)
         };
         format!(
-            "{}{}\n{}\n{}",
+            "{}{}\n{}\n{}{}",
             details,
             base,
             diag.warnings_line(),
-            diag.errors_line()
+            diag.errors_line(),
+            warning_lines
         )
     }
+    // 0.11.0 (upstream PR #2877): a passing run said only "warnings: 1 (src/lib.rs)";
+    // the agent read the build as clean or re-ran it. Name each warning and where.
+    let warning_lines = compiler_warning_lines(output, diag.warnings);
     let summary_lines: Vec<&str> = output
         .lines()
         .filter(|l| l.trim_start().starts_with("test result:"))
@@ -1045,7 +1051,7 @@ pub(crate) fn filter_cargo_test(output: &str) -> String {
     if parsed_any && parsed_all {
         if let Some(agg) = aggregated {
             if agg.suites > 0 {
-                return with_diag(agg.format_compact(), &failures, &diag);
+                return with_diag(agg.format_compact(), &failures, &diag, &warning_lines);
             }
         }
     }
@@ -1055,10 +1061,48 @@ pub(crate) fn filter_cargo_test(output: &str) -> String {
             format!("cargo test: {}", summary_lines.last().unwrap().trim()),
             &failures,
             &diag,
+            &warning_lines,
         );
     }
 
-    with_diag("cargo test: completed".to_string(), &failures, &diag)
+    with_diag("cargo test: completed".to_string(), &failures, &diag, &warning_lines)
+}
+
+/// `warning: <message> --> <file:line:col>` for each compiler warning, capped.
+/// cargo's own tallies ("generated N warnings") are skipped. (0.11.0, upstream PR #2877)
+fn compiler_warning_lines(output: &str, count: usize) -> String {
+    if count == 0 {
+        return String::new();
+    }
+    let lines: Vec<&str> = output.lines().collect();
+    let mut found = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let Some(message) = line.strip_prefix("warning: ") else {
+            continue;
+        };
+        if message.contains(" generated ") && message.contains("warning") {
+            continue;
+        }
+        let location = lines
+            .get(i + 1)
+            .and_then(|next| next.trim_start().strip_prefix("--> "))
+            .map(|loc| format!(" --> {}", loc.trim()))
+            .unwrap_or_default();
+        found.push(format!("  warning: {message}{location}"));
+    }
+    if found.is_empty() {
+        return String::new();
+    }
+    let cap = crate::truncate::CAP_WARNINGS;
+    let mut out = String::new();
+    for line in found.iter().take(cap) {
+        out.push('\n');
+        out.push_str(line);
+    }
+    if found.len() > cap {
+        out.push_str(&format!("\n  ... +{} more warnings", found.len() - cap));
+    }
+    out
 }
 
 /// Verbose cargo test filter with failure details (for `-v`).
@@ -1281,6 +1325,18 @@ pub fn run_passthrough(args: &[OsString], verbose: u8) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.11.0 (upstream PR #2877): compiler warnings survive a passing test run.
+    #[test]
+    fn test_filter_cargo_test_pass_names_compiler_warnings() {
+        let output = "   Compiling cw v0.1.0 (/p)\n\
+warning: unused variable: `unused`\n --> src/lib.rs:1:18\n  |\n1 | pub fn f() { let unused = 1; }\n  |                  ^^^^^^\n\n\
+warning: `cw` (lib test) generated 1 warning\n    Finished `test` profile\n     Running unittests src/lib.rs\n\n\
+running 1 test\ntest t ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n";
+        let out = filter_cargo_test(output);
+        assert!(out.contains("warning: unused variable: `unused` --> src/lib.rs:1:18"), "{out}");
+        assert!(!out.contains("generated 1 warning"), "{out}");
+    }
 
     #[test]
     fn json_message_format_detection_honors_last_value() {

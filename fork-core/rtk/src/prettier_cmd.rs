@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use crate::utils::package_manager_exec;
 use anyhow::{Context, Result};
@@ -17,7 +18,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .context("Failed to run prettier (try: npm install -g prettier)")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);

@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use anyhow::{Context, Result};
 use regex::Regex;
@@ -25,7 +26,7 @@ pub fn run(args: &[String], verbose: u8, skip_env: bool) -> Result<()> {
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .context("Failed to run bun. Is Bun installed?")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -35,7 +36,8 @@ pub fn run(args: &[String], verbose: u8, skip_env: bool) -> Result<()> {
         .status
         .code()
         .unwrap_or(if output.status.success() { 0 } else { 1 });
-    let rendered = render_bun_output(args, &raw, verbose);
+    // 0.11.0 (US-008): "✓ bun … errors: 0" beside a non-zero exit is a false pass.
+    let rendered = crate::guard::guard_exit(&raw, exit_code, "bun", &render_bun_output(args, &raw, verbose));
 
     if let Some(hint) = crate::tee::tee_and_hint(&raw, "bun", exit_code) {
         println!("{}\n{}", rendered, hint);
@@ -57,6 +59,52 @@ pub fn run(args: &[String], verbose: u8, skip_env: bool) -> Result<()> {
     Ok(())
 }
 
+/// `bun test`'s own report: passing lines, the version banner, blank lines and
+/// file headers left empty go; failures with their code frames, skipped/todo
+/// lines and the tally stay. (0.11.0, US-009, upstream f4ac0cc/950e772) The
+/// generic summary looked for vitest's "Tests N passed" and rendered "✓ bun
+/// test … errors: 0" for a failing bun run.
+fn filter_bun_test(output: &str) -> String {
+    let cleaned = crate::utils::strip_ansi(output);
+    let lines: Vec<&str> = cleaned
+        .lines()
+        .filter(|line| {
+            let t = line.trim();
+            !t.is_empty() && !t.starts_with("(pass)") && !t.starts_with("bun test v")
+        })
+        .collect();
+    let is_file_header = |line: &str| {
+        !line.starts_with(char::is_whitespace) && line.ends_with(':') && !line.contains(' ')
+    };
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+    for (i, line) in lines.iter().enumerate() {
+        // A file whose every test passed leaves its header with nothing under it.
+        let empty_header = is_file_header(line)
+            && lines.get(i + 1).is_none_or(|next| {
+                is_file_header(next) || is_bun_tally(next)
+            });
+        if !empty_header {
+            kept.push(line);
+        }
+    }
+    if kept.is_empty() {
+        "ok".to_string()
+    } else {
+        kept.join("\n")
+    }
+}
+
+/// ` 3 pass`, ` 0 fail`, ` 5 expect() calls`, `Ran 3 tests across 1 file.`
+fn is_bun_tally(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with("Ran ")
+        || t.split_once(' ').is_some_and(|(n, rest)| {
+            n.bytes().all(|b| b.is_ascii_digit())
+                && (matches!(rest, "pass" | "fail" | "skip" | "todo" | "snapshots")
+                    || rest.starts_with("expect() call"))
+        })
+}
+
 fn render_bun_output(args: &[String], output: &str, verbose: u8) -> String {
     // Version/short commands should stay as-is.
     if matches!(args.first().map(|s| s.as_str()), Some("--version" | "-v")) {
@@ -64,6 +112,9 @@ fn render_bun_output(args: &[String], output: &str, verbose: u8) -> String {
     }
     if verbose > 0 {
         return filter_bun_output(output);
+    }
+    if args.first().map(String::as_str) == Some("test") {
+        return filter_bun_test(output); // 0.11.0 (US-009)
     }
     summarize_bun_output(args, output)
 }
@@ -302,6 +353,36 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.11.0 (US-009): real bun 1.2.19 output.
+    const BUN_TEST_FAILING: &str = "bun test v1.2.19 (aad3abea)\n\na.test.ts:\n\
+1 | import { test, expect } from \"bun:test\";\n\
+2 | test(\"adds\", () => { expect(1 + 1).toBe(2); });\n\
+3 | test(\"fails\", () => { expect(1 + 1).toBe(3); });\n\
+                                        ^\n\
+error: expect(received).toBe(expected)\n\nExpected: 3\nReceived: 2\n\n\
+      at <anonymous> (/p/a.test.ts:3:37)\n(pass) adds [0.10ms]\n(fail) fails [0.57ms]\n\n\
+ 1 pass\n 1 fail\n 2 expect() calls\nRan 2 tests across 1 file. [4.00ms]\n";
+
+    #[test]
+    fn test_bun_test_keeps_failure_frame_and_tally() {
+        let out = filter_bun_test(BUN_TEST_FAILING);
+        assert!(out.contains("(fail) fails"), "{out}");
+        assert!(out.contains("Expected: 3"), "{out}");
+        assert!(out.contains(" 1 fail"), "{out}");
+        assert!(!out.contains("(pass)"), "{out}");
+        assert!(!out.contains("bun test v"), "{out}");
+        assert!(crate::guard::guard_exit(BUN_TEST_FAILING, 1, "bun", &out) == out);
+    }
+
+    #[test]
+    fn test_bun_test_passing_run_is_its_tally() {
+        let raw = "bun test v1.2.19 (aad3abea)\n\nok.test.ts:\n(pass) adds [0.08ms]\n\n 1 pass\n 0 fail\n 1 expect() calls\nRan 1 test across 1 file. [3.00ms]\n";
+        assert_eq!(
+            filter_bun_test(raw),
+            " 1 pass\n 0 fail\n 1 expect() calls\nRan 1 test across 1 file. [3.00ms]"
+        );
+    }
 
     #[test]
     fn test_filter_bun_output_strips_boilerplate() {

@@ -21,7 +21,13 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         eprintln!("Running: curl -sS {}", args.join(" "));
     }
 
-    let output = cmd.output().context("Failed to run curl")?;
+    // 0.11.0 (upstream PR #4085): `output()` gives the child an immediately-closed
+    // stdin, so `-d @-`, `--data-binary @-`, `-T -` and `-K -` sent an empty body
+    // (`curl -d @- url < body.json` is rewritten to rtk). Inherit it.
+    let output = cmd
+        .stdin(std::process::Stdio::inherit())
+        .output()
+        .context("Failed to run curl")?;
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     if !output.status.success() {

@@ -10,7 +10,9 @@ Snapshot identity:
 - source: `https://github.com/heAdz0r/rtk.git`;
 - branch: `feat/upstream-0.42-fork.1`;
 - source HEAD: `5f403c465cbdbe148e9ca03e0ac8e856eef0bfee`;
-- package version: `0.44.1-fork.1`;
+- package version: `0.44.1-fork.1` (import baseline; the current HZR-owned engine is
+  `0.50.0-fork.1`, synced selectively with upstream `rtk-ai/rtk` v0.50.0 — see
+  `docs/PRD_HZR_UPSTREAM_RTK_SYNC_0_50_0.md`);
 - included files: 516;
 - tracked deletions: 4;
 - canonical snapshot v2 SHA-256: `f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a078ded5529f0a16`;

@@ -106,7 +106,7 @@ mod tests {
         let decision: RewriteDecision = serde_json::from_value(json!({
             "decision": "allow_rewrite",
             "command": {"kind": "shell", "shell": "/bin/sh", "command": "rtk rg needle"},
-            "source": {"source": "rtk", "version": "0.44.1-fork.1"},
+            "source": {"source": "rtk", "version": "0.50.0-fork.1"}, // 0.11.0 (US-018)
             "reason": "legacy payload"
         }))?;
 

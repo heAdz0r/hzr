@@ -1,20 +1,15 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use crate::utils::{strip_ansi, truncate};
 use anyhow::{Context, Result};
 use regex::Regex;
-use std::process::Command;
+// 0.11.0 (US-009): Command comes from utils::js_tool_command
 
 pub fn run(args: &[String], verbose: u8) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
-    // Try next directly first, fallback to npx if not found
-    let next = crate::utils::resolve_binary("next").ok();
-    let next_exists = next.is_some();
-    let mut cmd = next.map(Command::new).unwrap_or_else(|| {
-        let mut command = Command::new("npx");
-        command.arg("next");
-        command
-    });
+    // 0.11.0 (US-009): named runner, PATH, node_modules/.bin, then detection.
+    let (mut cmd, tool_label) = crate::utils::js_tool_command("next");
 
     cmd.arg("build");
 
@@ -23,18 +18,20 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     }
 
     if verbose > 0 {
-        let tool = if next_exists { "next" } else { "npx next" };
-        eprintln!("Running: {} build", tool);
+        eprintln!("Running: {} build", tool_label);
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .context("Failed to run next build (try: npm install -g next)")?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let raw = format!("{}\n{}", stdout, stderr);
 
-    let filtered = filter_next_build(&raw);
+    // 0.11.0 (US-008): "Errors: 0" beside a non-zero exit is a false pass; the exit
+    // guard falls back to the failure evidence, stderr included.
+    let exit_code = crate::stream::status_to_exit_code(output.status);
+    let filtered = crate::guard::guard_exit(&raw, exit_code, "next build", &filter_next_build(&raw));
 
     println!("{}", filtered);
 

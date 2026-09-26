@@ -11,6 +11,7 @@ mod container;
 mod curl_cmd;
 mod deps;
 mod diag_summary;
+mod deno_cmd; // 0.11.0 (US-009)
 mod diff_cmd;
 mod discover;
 mod display_helpers;
@@ -124,17 +125,26 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Verbosity level (-v, -vv, -vvv)
-    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    // 0.11.0 (upstream a global-flag fix): a global `-v`/`-u` captured the wrapped
+    // tool's own flag before it could reach it — `grep -v` lost invert-match,
+    // `rg -u` unrestricted, `diff -u` unified. `-v` is rtk's only before the
+    // subcommand; ultra-compact is long-only.
+    /// Verbosity level (-v, -vv, -vvv) — only recognized before the subcommand
+    #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
 
     /// Ultra-compact mode: ASCII icons, inline format (Level 2 optimizations)
-    #[arg(short = 'u', long, global = true)]
+    #[arg(long, global = true)]
     ultra_compact: bool,
 
     /// Set SKIP_ENV_VALIDATION=1 for child processes (Next.js, tsc, lint, prisma)
     #[arg(long = "skip-env", global = true)]
     skip_env: bool,
+
+    /// Package runner the original command named (bunx, npx, pnpm, yarn); JS tools
+    /// run through it instead of lockfile detection // 0.11.0 (US-009)
+    #[arg(long, value_parser = ["bunx", "bun", "npx", "pnpm", "yarn"])]
+    js_runner: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -152,6 +162,9 @@ enum Commands {
     CapabilityBatch,
 
     /// List directory contents with token-optimized output (proxy to native ls)
+    // 0.11.0 (upstream PR #3888/#3944): `-h` is the tool's own flag (grep no-filename,
+    // ls/tree human sizes, rg help); clap's auto help captured it.
+    #[command(disable_help_flag = true)]
     Ls {
         /// Arguments passed to ls (supports all native ls flags like -l, -a, -h, -R)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -159,6 +172,9 @@ enum Commands {
     },
 
     /// Directory tree with token-optimized output (proxy to native tree)
+    // 0.11.0 (upstream PR #3888/#3944): `-h` is the tool's own flag (grep no-filename,
+    // ls/tree human sizes, rg help); clap's auto help captured it.
+    #[command(disable_help_flag = true)]
     Tree {
         /// Arguments passed to tree (supports all native tree flags like -L, -d, -a)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -197,6 +213,9 @@ enum Commands {
         /// Keep only last N lines (tail semantics) // fork: ported from upstream v0.42.4
         #[arg(long)]
         tail_lines: Option<usize>,
+        /// Exact first N lines as bytes, like `head -n N` (no filtering) // 0.11.0 (US-005)
+        #[arg(long, conflicts_with_all = ["max_lines", "tail_lines", "from", "to", "line_numbers", "level"])]
+        head_lines: Option<usize>,
         /// Show source line numbers (defaults to exact content)
         #[arg(short = 'n', long)]
         line_numbers: bool,
@@ -298,6 +317,20 @@ enum Commands {
 
     /// pnpm commands with ultra-compact output
     Pnpm {
+        // 0.11.0 (US-010, upstream 0fe63b3/6c84b82): pnpm's own global flags before
+        // the subcommand (`pnpm --filter web install`), forwarded to pnpm.
+        /// Workspace filter(s), forwarded as --filter
+        #[arg(short = 'F', long = "filter")]
+        filter: Vec<String>,
+        /// Run in every workspace package, forwarded as --recursive
+        #[arg(short = 'r', long)]
+        recursive: bool,
+        /// Run in the workspace root, forwarded as --workspace-root
+        #[arg(short = 'w', long)]
+        workspace_root: bool,
+        /// Run as if started in this directory, forwarded as --dir
+        #[arg(short = 'C', long = "dir")]
+        dir: Option<String>,
         #[command(subcommand)]
         command: PnpmCommands,
     },
@@ -351,10 +384,11 @@ enum Commands {
 
     /// Ultra-condensed diff (only changed lines)
     Diff {
-        /// First file or - for stdin (unified diff)
-        file1: PathBuf,
-        /// Second file (optional if stdin)
-        file2: Option<PathBuf>,
+        // 0.11.0 (US-001): the native diff's own argv (`-u`, `-r`, `-q`, …); no
+        // arguments or a lone `-` compacts a unified diff piped on stdin.
+        /// diff arguments, passed to the native diff unchanged
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 
     /// Filter and deduplicate log output
@@ -389,25 +423,40 @@ enum Commands {
     },
 
     /// Compact grep - strips whitespace, truncates, groups by file
+    // 0.11.0 (upstream PR #3888/#3944): `-h` is the tool's own flag (grep no-filename,
+    // ls/tree human sizes, rg help); clap's auto help captured it.
+    #[command(disable_help_flag = true)]
     Grep {
+        // 0.11.0 (US-002, upstream 16228b7/3b6b812/5681008): rtk's own options are
+        // long-only. `-l` is grep's --files-with-matches, `-m` its --max-count and
+        // `-t` reaches rg's --type; a short form here captured each before search.rs
+        // could forward it, so `grep -m 1` printed every match.
         /// Max line length
-        #[arg(short = 'l', long, default_value = "80")]
+        #[arg(long, default_value = "80")] // 0.11.0 (US-002): no short `-l`
         max_len: usize,
         /// Max results to show
-        #[arg(short, long, default_value = "200")]
+        #[arg(long, default_value = "200")] // 0.11.0 (US-002): no short `-m`
         max: usize,
         /// Show only match context (not full line)
         #[arg(long)]
         context_only: bool,
-        /// Filter by file type (e.g., ts, py, rust)
-        #[arg(short = 't', long)]
-        file_type: Option<String>,
+        // 0.11.0 (US-002): `--file-type`/`-t` removed — it never reached the engine.
         /// Pattern, path, and any grep/rg flags (e.g. -v, -i, -A 3, --glob, --version)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra_args: Vec<String>,
     },
 
+    /// Deno: compact lint, check and test; everything else runs natively // 0.11.0 (US-009)
+    Deno {
+        /// deno subcommand and arguments
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
     /// Compact ripgrep - runs rg natively, same output filter as grep
+    // 0.11.0 (upstream PR #3888/#3944): `-h` is the tool's own flag (grep no-filename,
+    // ls/tree human sizes, rg help); clap's auto help captured it.
+    #[command(disable_help_flag = true)]
     Rg {
         /// Pattern, path, and any rg flags (e.g. -v, -i, -t rust, --glob)
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -592,8 +641,12 @@ enum Commands {
 
     /// Vitest commands with compact output
     Vitest {
-        #[command(subcommand)]
-        command: VitestCommands,
+        // 0.11.0: vitest's own argv. The subcommand enum knew only `run`, so the
+        // rewritten `npx vitest run` (→ `rtk vitest`) and `vitest list` failed to
+        // parse and fell back to a `vitest` lookup on PATH that local installs lack.
+        /// vitest arguments (`run`, `list`, `related`, filters, flags)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 
     /// Prisma commands with compact output (no ASCII art)
@@ -1234,9 +1287,9 @@ enum PnpmCommands {
     },
     /// Install packages (filter progress bars)
     Install {
-        /// Packages to install
-        packages: Vec<String>,
-        /// Additional pnpm arguments
+        // 0.11.0 (US-008): two variadic positionals were an invalid clap
+        // definition (a debug-build panic on every `rtk pnpm install`).
+        /// Packages and pnpm install arguments
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -1361,15 +1414,7 @@ enum OcCommands {
     Other(Vec<OsString>),
 }
 
-#[derive(Subcommand)]
-enum VitestCommands {
-    /// Run tests with filtered output (90% token reduction)
-    Run {
-        /// Additional vitest arguments
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<String>,
-    },
-}
+// 0.11.0: VitestCommands removed — `rtk vitest` takes vitest's own argv.
 
 #[derive(Subcommand)]
 enum PrismaCommands {
@@ -1957,6 +2002,19 @@ fn main() -> Result<()> {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
+    // 0.11.0 (US-007): every exit path — a returning main or a module's
+    // `process::exit(child_code)` — ends by a relayed signal once output is out.
+    #[cfg(unix)]
+    {
+        extern "C" fn die_by_relayed_signal_at_exit() {
+            crate::stream::die_by_relayed_signal();
+        }
+        // SAFETY: registering a plain extern "C" function with no captured state.
+        unsafe {
+            libc::atexit(die_by_relayed_signal_at_exit);
+        }
+    }
+
     // fix #200: graceful fallback when Clap cannot parse the command
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
@@ -1967,6 +2025,10 @@ fn main() -> Result<()> {
             return run_fallback(e);
         }
     };
+
+    if let Some(runner) = cli.js_runner.as_deref() {
+        utils::set_js_runner(runner); // 0.11.0 (US-009)
+    }
 
     match cli.command {
         Commands::Contract { json } => {
@@ -1996,6 +2058,7 @@ fn main() -> Result<()> {
             to,
             max_lines,
             tail_lines,
+            head_lines, // 0.11.0 (US-005)
             line_numbers,
             outline,
             symbols,
@@ -2004,6 +2067,25 @@ fn main() -> Result<()> {
             diff_context,
             dedup,
         } => {
+            // 0.11.0 (US-005, upstream ed8480f/6f4913b/0df1d2b): `head`/`tail` rewrites
+            // get the native bytes — CRLF, a missing final newline and non-UTF-8 intact.
+            let plain_window = !batch
+                && additional_files.is_empty()
+                && !(outline || symbols || changed || since.is_some() || dedup);
+            if head_lines.is_some() && !plain_window {
+                anyhow::bail!("--head-lines reads one file and takes no mode or batch flags");
+            }
+            if plain_window {
+                if let Some(n) = head_lines {
+                    return read::run_window(&file, read::Window::Head(n));
+                }
+                let exact_level = level.is_none_or(|l| l == filter::FilterLevel::None);
+                if let Some(n) = tail_lines.filter(|_| {
+                    exact_level && from.is_none() && to.is_none() && !line_numbers
+                }) {
+                    return read::run_window(&file, read::Window::Tail(n));
+                }
+            }
             if batch {
                 let mut incompatible = Vec::new();
                 if level.is_some() {
@@ -2506,30 +2588,68 @@ fn main() -> Result<()> {
             gh_cmd::run(&subcommand, &args, cli.verbose, cli.ultra_compact)?;
         }
 
-        Commands::Pnpm { command } => match command {
-            PnpmCommands::List { depth, args } => {
-                pnpm_cmd::run(pnpm_cmd::PnpmCommand::List { depth }, &args, cli.verbose)?;
+        Commands::Pnpm {
+            filter,
+            recursive,
+            workspace_root,
+            dir,
+            command,
+        } => {
+            // 0.11.0 (US-010): global flags lead the forwarded argv.
+            let mut globals: Vec<String> = Vec::new();
+            for f in &filter {
+                globals.extend(["--filter".to_string(), f.clone()]);
             }
-            PnpmCommands::Outdated { args } => {
-                pnpm_cmd::run(pnpm_cmd::PnpmCommand::Outdated, &args, cli.verbose)?;
+            if recursive {
+                globals.push("--recursive".to_string());
             }
-            PnpmCommands::Install { packages, args } => {
-                pnpm_cmd::run(
-                    pnpm_cmd::PnpmCommand::Install { packages },
-                    &args,
-                    cli.verbose,
-                )?;
+            if workspace_root {
+                globals.push("--workspace-root".to_string());
             }
-            PnpmCommands::Build { args } => {
-                next_cmd::run(&args, cli.verbose)?;
+            if let Some(d) = &dir {
+                globals.extend(["--dir".to_string(), d.clone()]);
             }
-            PnpmCommands::Typecheck { args } => {
-                tsc_cmd::run(&args, cli.verbose)?;
+            let with_globals = |args: &[String]| -> Vec<String> {
+                globals.iter().cloned().chain(args.iter().cloned()).collect()
+            };
+            let passthrough = |sub: &str, args: &[String]| -> Result<()> {
+                let argv: Vec<OsString> = globals
+                    .iter()
+                    .map(OsString::from)
+                    .chain(std::iter::once(OsString::from(sub)))
+                    .chain(args.iter().map(OsString::from))
+                    .collect();
+                pnpm_cmd::run_passthrough(&argv, cli.verbose)
+            };
+            match command {
+                PnpmCommands::List { depth, args } => {
+                    pnpm_cmd::run(pnpm_cmd::PnpmCommand::List { depth }, &with_globals(&args), cli.verbose)?;
+                }
+                PnpmCommands::Outdated { args } => {
+                    pnpm_cmd::run(pnpm_cmd::PnpmCommand::Outdated, &with_globals(&args), cli.verbose)?;
+                }
+                PnpmCommands::Install { args } => {
+                    pnpm_cmd::run(pnpm_cmd::PnpmCommand::Install, &with_globals(&args), cli.verbose)?; // 0.11.0 (US-008)
+                }
+                // With a workspace flag `build`/`typecheck` are pnpm scripts run in
+                // several packages, not a single next/tsc run.
+                PnpmCommands::Build { args } if !globals.is_empty() => passthrough("build", &args)?,
+                PnpmCommands::Typecheck { args } if !globals.is_empty() => {
+                    passthrough("typecheck", &args)?
+                }
+                PnpmCommands::Build { args } => {
+                    next_cmd::run(&args, cli.verbose)?;
+                }
+                PnpmCommands::Typecheck { args } => {
+                    tsc_cmd::run(&args, cli.verbose)?;
+                }
+                PnpmCommands::Other(args) => {
+                    let argv: Vec<OsString> =
+                        globals.iter().map(OsString::from).chain(args).collect();
+                    pnpm_cmd::run_passthrough(&argv, cli.verbose)?;
+                }
             }
-            PnpmCommands::Other(args) => {
-                pnpm_cmd::run_passthrough(&args, cli.verbose)?;
-            }
-        },
+        }
 
         Commands::Err { command } => {
             runner::run_err(&command, cli.verbose)?;
@@ -2559,11 +2679,15 @@ fn main() -> Result<()> {
             find_cmd::run_from_args(&args, cli.verbose)?; // fix #211: native flag support
         }
 
-        Commands::Diff { file1, file2 } => {
-            if let Some(f2) = file2 {
-                diff_cmd::run(&file1, &f2, cli.verbose)?;
-            } else {
+        Commands::Diff { args } => {
+            // 0.11.0 (US-001): diff's own exit code (1 = files differ) reaches the caller.
+            if args.is_empty() || args == ["-"] {
                 diff_cmd::run_stdin(cli.verbose)?;
+            } else {
+                let code = diff_cmd::run(&args, cli.verbose)?;
+                if code != 0 {
+                    std::process::exit(code);
+                }
             }
         }
 
@@ -2685,8 +2809,7 @@ fn main() -> Result<()> {
             max_len,
             max,
             context_only,
-            file_type: _,
-            extra_args,
+            extra_args, // 0.11.0 (US-002): file_type field removed
         } => {
             let code = search::run(
                 search::Engine::Grep,
@@ -2700,6 +2823,7 @@ fn main() -> Result<()> {
                 std::process::exit(code);
             }
         }
+        Commands::Deno { args } => deno_cmd::run(&args, cli.verbose)?, // 0.11.0 (US-009)
         Commands::Rg { extra_args } => {
             let code = search::run(search::Engine::Rg, 80, 200, false, &extra_args, cli.verbose)?;
             if code != 0 {
@@ -2847,11 +2971,9 @@ fn main() -> Result<()> {
             }
         }
 
-        Commands::Vitest { command } => match command {
-            VitestCommands::Run { args } => {
-                vitest_cmd::run(vitest_cmd::VitestCommand::Run, &args, cli.verbose)?;
-            }
-        },
+        Commands::Vitest { args } => {
+            vitest_cmd::run(vitest_cmd::VitestCommand::Run, &args, cli.verbose)?; // 0.11.0
+        }
 
         Commands::Prisma { command } => match command {
             PrismaCommands::Generate { args } => {
@@ -3419,6 +3541,8 @@ fn main() -> Result<()> {
         }
     }
 
+    // 0.11.0 (US-007): the captured output is printed; now die by a relayed signal.
+    crate::stream::die_by_relayed_signal();
     Ok(())
 }
 
@@ -3605,6 +3729,94 @@ mod rgai_arg_tests {
                 ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
             )),
             Ok(_) => panic!("Expected parse error for unknown subcommand"),
+        }
+    }
+
+    // 0.11.0 (US-002): native short flags reach the engine instead of rtk's options.
+    #[test]
+    fn test_grep_short_flags_flow_to_engine() {
+        for (flag, value) in [("-m", Some("1")), ("-l", None), ("-t", Some("rust"))] {
+            let mut argv = vec!["rtk", "grep", flag];
+            argv.extend(value);
+            argv.extend(["8080", "a.txt"]);
+            let cli = Cli::try_parse_from(argv.clone()).unwrap();
+            match cli.command {
+                Commands::Grep {
+                    max_len,
+                    max,
+                    extra_args,
+                    ..
+                } => {
+                    assert_eq!((max_len, max), (80, 200), "{argv:?} changed rtk's options");
+                    assert_eq!(extra_args, argv[2..].to_vec(), "{argv:?}");
+                }
+                _ => panic!("Expected Grep command"),
+            }
+        }
+    }
+
+    // 0.11.0 (US-008): clap validates every subcommand definition; `pnpm install`
+    // had two variadic positionals and panicked in debug builds.
+    #[test]
+    fn test_cli_definition_is_valid() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
+
+    // 0.11.0 (US-010): pnpm global flags parse before the subcommand.
+    #[test]
+    fn test_pnpm_global_flags_parse() {
+        let cli = Cli::try_parse_from(["rtk", "pnpm", "--filter", "web", "-r", "install", "x"]).unwrap();
+        match cli.command {
+            Commands::Pnpm {
+                filter,
+                recursive,
+                command: PnpmCommands::Install { args },
+                ..
+            } => {
+                assert_eq!(filter, vec!["web"]);
+                assert!(recursive);
+                assert_eq!(args, vec!["x"]);
+            }
+            _ => panic!("Expected Pnpm Install"),
+        }
+    }
+
+    // 0.11.0: `-v`/`-u` after the subcommand belong to the wrapped tool.
+    #[test]
+    fn test_wrapped_tool_keeps_v_and_u() {
+        let cli = Cli::try_parse_from(["rtk", "grep", "-v", "FOO", "file"]).unwrap();
+        assert_eq!(cli.verbose, 0);
+        match cli.command {
+            Commands::Grep { extra_args, .. } => assert_eq!(extra_args, vec!["-v", "FOO", "file"]),
+            _ => panic!("Expected Grep command"),
+        }
+        let cli = Cli::try_parse_from(["rtk", "diff", "-u", "a", "b"]).unwrap();
+        assert!(!cli.ultra_compact);
+        match cli.command {
+            Commands::Diff { args } => assert_eq!(args, vec!["-u", "a", "b"]),
+            _ => panic!("Expected Diff command"),
+        }
+        let cli = Cli::try_parse_from(["rtk", "-vv", "--ultra-compact", "git", "status"]).unwrap();
+        assert_eq!((cli.verbose, cli.ultra_compact), (2, true));
+    }
+
+    // 0.11.0 (US-002): rtk's own options stay reachable in their long form.
+    #[test]
+    fn test_grep_long_rtk_options() {
+        let cli = Cli::try_parse_from(["rtk", "grep", "--max-len", "40", "--max", "5", "p"])
+            .unwrap();
+        match cli.command {
+            Commands::Grep {
+                max_len,
+                max,
+                extra_args,
+                ..
+            } => {
+                assert_eq!((max_len, max), (40, 5));
+                assert_eq!(extra_args, vec!["p"]);
+            }
+            _ => panic!("Expected Grep command"),
         }
     }
 

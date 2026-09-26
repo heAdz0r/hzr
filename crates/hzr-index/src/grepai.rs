@@ -197,6 +197,13 @@ impl GrepAi {
             args.push(OsString::from("--model"));
             args.push(OsString::from(model));
         }
+        // 0.11.0 (heAdz0r/hzr#22): `grepai init` appends `.grepai/` to a present
+        // `.gitignore` — a tracked file of the user's repository, dirtied in every
+        // workspace and worktree even when git already ignores `.grepai`. HZR keeps
+        // its link out of `git status` through the local `info/exclude` instead
+        // (coordinator, `hzr doctor --fix`), so grepai's append is undone.
+        let gitignore = self.workspace.identity.root.join(".gitignore");
+        let gitignore_before = fs::read(&gitignore).ok();
         let output = process::output(
             &self.binary,
             &args,
@@ -204,13 +211,23 @@ impl GrepAi {
             self.deadlines.initialize,
             "initialize grepai",
         )
-        .await?;
+        .await;
+        if let Some(before) = &gitignore_before {
+            restore_gitignore_if_only_grepai_added(&gitignore, before);
+        }
+        let output = output?;
         process::require_success(output, "initialize grepai")?;
         self.workspace.require_initialized()?;
         if options.repository_graph {
             enable_repository_graph_in_config(&self.workspace.index.config)?;
         }
         Ok(InitOutcome::Initialized)
+    }
+
+    /// Keep the managed `.grepai` link out of `git status` via the local `info/exclude`.
+    /// For callers outside a CLI lifecycle transaction. (0.11.0, heAdz0r/hzr#22)
+    pub fn exclude_managed_entry(&self) {
+        self.workspace.exclude_managed_entry();
     }
 
     fn enable_repository_graph(&self) -> Result<bool> {
@@ -259,6 +276,26 @@ impl GrepAi {
         Ok(stdout
             .windows(SINGLE_WORKTREE_WATCH_FLAG.len())
             .any(|window| window == SINGLE_WORKTREE_WATCH_FLAG.as_bytes()))
+    }
+}
+
+/// Undo `grepai init`'s `.gitignore` append — and only that. The file is restored
+/// when its new content is exactly the old content plus an optional separating
+/// newline and a `.grepai/` line; any other change is someone else's and is left
+/// alone. (0.11.0, heAdz0r/hzr#22)
+pub fn restore_gitignore_if_only_grepai_added(path: &Path, before: &[u8]) {
+    let Ok(after) = fs::read(path) else {
+        return;
+    };
+    if after == before {
+        return;
+    }
+    let Some(added) = after.strip_prefix(before) else {
+        return;
+    };
+    let added = added.strip_prefix(b"\n").unwrap_or(added);
+    if added == b".grepai/\n" || added == b".grepai/" {
+        let _ = fs::write(path, before);
     }
 }
 

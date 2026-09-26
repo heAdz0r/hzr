@@ -311,44 +311,95 @@ pub fn make_raw(stdout: impl AsRef<str>, stderr: impl AsRef<str>) -> String {
 /// ```
 #[allow(dead_code)]
 pub fn detect_package_manager() -> &'static str {
-    if std::path::Path::new("pnpm-lock.yaml").exists() {
+    detect_package_manager_in(Path::new("."))
+}
+
+/// Lockfile detection against an explicit directory. (0.11.0, US-009: bun)
+pub fn detect_package_manager_in(dir: &Path) -> &'static str {
+    if dir.join("pnpm-lock.yaml").exists() {
         "pnpm"
-    } else if std::path::Path::new("yarn.lock").exists() {
+    } else if dir.join("yarn.lock").exists() {
         "yarn"
+    } else if dir.join("bun.lock").exists() || dir.join("bun.lockb").exists() {
+        "bun" // 0.11.0 (US-009)
     } else {
         "npm"
+    }
+}
+
+/// The package runner the caller named (`bunx tsc` → `bunx`), set once from
+/// `rtk --js-runner <runner>`. (0.11.0, US-009, upstream c7c1d96)
+static JS_RUNNER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn set_js_runner(runner: &str) {
+    let _ = JS_RUNNER.set(runner.to_string());
+}
+
+/// A Command that runs a JavaScript tool, and how it was resolved (for labels).
+/// (0.11.0, US-009, upstream c7c1d96/6ff2571/1173de0)
+///
+/// 1. A runner the caller named wins outright: `bunx tsc` must not become
+///    `npx tsc` — in a bun-only environment there is no npx at all.
+/// 2. The tool on PATH, then the project's own `node_modules/.bin`.
+/// 3. Lockfile detection. A detected bun still prefers `npx --no-install`
+///    when npx exists, because bunx always fetches a missing tool; without
+///    npx, bunx is the only runner there is.
+pub fn js_tool_command(tool: &str) -> (Command, String) {
+    let exec = |runner: &str, args: &[&str]| {
+        let mut c = resolved_command(runner);
+        c.args(args).arg(tool);
+        let label = std::iter::once(runner)
+            .chain(args.iter().copied().filter(|a| *a != "--"))
+            .chain(std::iter::once(tool))
+            .collect::<Vec<_>>()
+            .join(" ");
+        (c, label)
+    };
+    match JS_RUNNER.get().map(String::as_str) {
+        Some("bunx") | Some("bun") => return exec("bunx", &[]),
+        Some("npx") => return exec("npx", &["--"]),
+        Some("pnpm") => return exec("pnpm", &["exec", "--"]),
+        Some("yarn") => return exec("yarn", &["exec", "--"]),
+        _ => {}
+    }
+    if let Ok(binary) = resolve_binary(tool) {
+        return (Command::new(binary), tool.to_string());
+    }
+    let local = Path::new("node_modules").join(".bin").join(tool);
+    if local.is_file() {
+        return (Command::new(&local), local.to_string_lossy().into_owned());
+    }
+    match detect_package_manager() {
+        "pnpm" => exec("pnpm", &["exec", "--"]),
+        "yarn" => exec("yarn", &["exec", "--"]),
+        "bun" if resolve_binary("npx").is_err() => exec("bunx", &[]),
+        _ => exec("npx", &["--no-install", "--"]),
     }
 }
 
 /// Build a Command using the detected package manager's exec mechanism.
 /// Returns a Command ready to have tool-specific args appended.
 pub fn package_manager_exec(tool: &str) -> Command {
-    if let Ok(binary) = resolve_binary(tool) {
-        Command::new(binary)
-    } else {
-        let pm = detect_package_manager();
-        match pm {
-            "pnpm" => {
-                let mut c = Command::new("pnpm");
-                c.arg("exec").arg("--").arg(tool);
-                c
-            }
-            "yarn" => {
-                let mut c = Command::new("yarn");
-                c.arg("exec").arg("--").arg(tool);
-                c
-            }
-            _ => {
-                let mut c = Command::new("npx");
-                c.arg("--no-install").arg("--").arg(tool);
-                c
-            }
-        }
-    }
+    js_tool_command(tool).0 // 0.11.0 (US-009)
 }
 
 #[cfg(test)]
 mod tests {
+
+    // 0.11.0 (US-009): bun lockfiles are recognised.
+    #[test]
+    fn detects_bun_from_either_lockfile() {
+        for lock in ["bun.lock", "bun.lockb"] {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join(lock), "").unwrap();
+            assert_eq!(detect_package_manager_in(dir.path()), "bun", "{lock}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("bun.lock"), "").unwrap();
+        std::fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
+        assert_eq!(detect_package_manager_in(dir.path()), "pnpm");
+    }
+
     use super::*;
     use std::fs;
 

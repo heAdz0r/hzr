@@ -127,7 +127,9 @@ fn summarize_cargo_str(path: &Path) -> Result<String> {
 
 fn summarize_package_json_str(path: &Path) -> Result<String> {
     let content = fs::read_to_string(path)?;
-    let json: serde_json::Value = serde_json::from_str(&content)?;
+    // 0.11.0 (US-017): tolerate a UTF-8 BOM in package.json.
+    let json: serde_json::Value =
+        serde_json::from_str(content.strip_prefix('\u{feff}').unwrap_or(&content))?;
     let mut out = String::new();
 
     if let Some(name) = json.get("name").and_then(|v| v.as_str()) {

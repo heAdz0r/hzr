@@ -12,6 +12,11 @@ use std::process::Command;
 
 /// Run a gh command with token-optimized output
 pub fn run(subcommand: &str, args: &[String], verbose: u8, ultra_compact: bool) -> Result<()> {
+    // 0.11.0 (upstream PR #1661): `--help`/`-h` is gh's own text. `pr comment --help`
+    // answered "ok commented" and `pr create --help` stitched "ok created" onto it.
+    if args.iter().take_while(|a| *a != "--").any(|a| a == "--help" || a == "-h") {
+        return run_passthrough("gh", subcommand, args);
+    }
     // `--json` selects the caller's own field set, so no per-subcommand summary
     // applies; the only useful transform is removing the field names repeated on
     // every row. Reachable only when the lossless repacker is switched on — the
@@ -315,90 +320,120 @@ fn view_pr(args: &[String], _verbose: u8, ultra_compact: bool) -> Result<()> {
     Ok(())
 }
 
+// 0.11.0 (US-003, upstream ecdf332/d105227/656a864): `gh pr checks` exits 1 when a
+// check failed and 8 while one is pending, and that is exactly when the table
+// matters. The summary is rendered on every exit status, every bucket is counted,
+// the caller's identifier and flags are forwarded, and stderr and the exit code
+// are gh's own.
 fn pr_checks(args: &[String], _verbose: u8, _ultra_compact: bool) -> Result<()> {
     let timer = tracking::TimedExecution::start();
 
-    if args.is_empty() {
-        return Err(anyhow::anyhow!("PR number required"));
+    // `--web` opens a browser; there is no table to summarise.
+    if args.iter().any(|arg| arg == "--web" || arg == "-w") {
+        let mut passthrough_args = vec!["checks".to_string()]; // 0.11.0 (US-003)
+        passthrough_args.extend(args.iter().cloned());
+        return run_passthrough("gh", "pr", &passthrough_args);
     }
-
-    let pr_number = &args[0];
 
     let mut cmd = Command::new("gh");
-    cmd.args(["pr", "checks", pr_number]);
+    cmd.args(["pr", "checks"]);
+    cmd.args(args); // 0.11.0 (US-003): identifier optional, flags forwarded
 
     let output = cmd.output().context("Failed to run gh pr checks")?;
-    let raw = String::from_utf8_lossy(&output.stdout).to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let label = std::iter::once("gh pr checks".to_string())
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>()
+        .join(" ");
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        timer.track(
-            &format!("gh pr checks {}", pr_number),
-            &format!("rtk gh pr checks {}", pr_number),
-            &stderr,
-            &stderr,
-        );
-        eprintln!("{}", stderr.trim());
-        std::process::exit(output.status.code().unwrap_or(1));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Parse and compress checks output
-    let mut passed = 0;
-    let mut failed = 0;
-    let mut pending = 0;
-    let mut failed_checks = Vec::new();
-
-    for line in stdout.lines() {
-        if line.contains('✓') || line.contains("pass") {
-            passed += 1;
-        } else if line.contains('✗') || line.contains("fail") {
-            failed += 1;
-            failed_checks.push(line.trim().to_string());
-        } else if line.contains('*') || line.contains("pending") {
-            pending += 1;
-        }
-    }
-
-    let mut filtered = String::new();
-
-    let line = "🔍 CI Checks Summary:\n";
-    filtered.push_str(line);
-    print!("{}", line);
-
-    let line = format!("  ✅ Passed: {}\n", passed);
-    filtered.push_str(&line);
-    print!("{}", line);
-
-    let line = format!("  ❌ Failed: {}\n", failed);
-    filtered.push_str(&line);
-    print!("{}", line);
-
-    if pending > 0 {
-        let line = format!("  ⏳ Pending: {}\n", pending);
-        filtered.push_str(&line);
-        print!("{}", line);
-    }
-
-    if !failed_checks.is_empty() {
-        let line = "\n  Failed checks:\n";
-        filtered.push_str(line);
-        print!("{}", line);
-        for check in failed_checks {
-            let line = format!("    {}\n", check);
-            filtered.push_str(&line);
-            print!("{}", line);
-        }
-    }
+    // No parseable row (an error, an unknown format): gh's bytes, unchanged.
+    let shown = match format_pr_checks(&stdout) {
+        Some(summary) => crate::guard::never_worse_content(&stdout, &summary).to_string(),
+        None => stdout.clone(),
+    };
+    print!("{}", shown);
+    eprint!("{}", stderr);
 
     timer.track(
-        &format!("gh pr checks {}", pr_number),
-        &format!("rtk gh pr checks {}", pr_number),
-        &raw,
-        &filtered,
+        &label,
+        &format!("rtk {}", label),
+        &format!("{stdout}{stderr}"),
+        &format!("{shown}{stderr}"),
     );
+    let code = crate::stream::status_to_exit_code(output.status);
+    if code != 0 {
+        std::process::exit(code);
+    }
     Ok(())
+}
+
+/// Summarise the tab-separated table gh prints when stdout is not a terminal:
+/// `name \t bucket \t elapsed \t link [\t description]`. (0.11.0, US-003)
+///
+/// `--watch` appends one table per poll, so the latest row per check wins.
+/// Returns `None` when no row parses, so the caller can print gh's bytes.
+fn format_pr_checks(stdout: &str) -> Option<String> {
+    let mut checks: Vec<(&str, &str, PrCheckStatus, &str)> = Vec::new();
+    for line in stdout.lines() {
+        let Some((name, link, status)) = parse_pr_check_line(line) else {
+            continue;
+        };
+        if let Some(check) = checks.iter_mut().find(|c| c.0 == name && c.1 == link) {
+            check.2 = status;
+            check.3 = line.trim();
+        } else {
+            checks.push((name, link, status, line.trim()));
+        }
+    }
+    if checks.is_empty() {
+        return None;
+    }
+
+    let count = |s: PrCheckStatus| checks.iter().filter(|c| c.2 == s).count();
+    let (passed, failed) = (count(PrCheckStatus::Passed), count(PrCheckStatus::Failed));
+    let (pending, other) = (count(PrCheckStatus::Pending), count(PrCheckStatus::Other));
+
+    let mut out = String::from("CI Checks Summary:\n");
+    out.push_str(&format!("  [ok] Passed: {}\n", passed));
+    out.push_str(&format!("  [FAIL] Failed: {}\n", failed));
+    if pending > 0 {
+        out.push_str(&format!("  [pending] Pending: {}\n", pending));
+    }
+    if other > 0 {
+        out.push_str(&format!("  [skip] Skipped/cancelled: {}\n", other));
+    }
+    if failed > 0 {
+        out.push_str("\n  Failed checks:\n");
+        for check in checks.iter().filter(|c| c.2 == PrCheckStatus::Failed) {
+            out.push_str(&format!("    {}\n", check.3));
+        }
+    }
+    Some(out)
+}
+
+// 0.11.0 (US-003): gh's own bucket column, not a substring anywhere in the row.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PrCheckStatus {
+    Passed,
+    Failed,
+    Pending,
+    Other,
+}
+
+fn parse_pr_check_line(line: &str) -> Option<(&str, &str, PrCheckStatus)> {
+    let mut fields = line.split('\t');
+    let name = fields.next()?.trim();
+    let status = match fields.next()?.trim() {
+        "pass" => PrCheckStatus::Passed,
+        "fail" => PrCheckStatus::Failed,
+        "pending" | "*" => PrCheckStatus::Pending,
+        // skipping, cancel and whatever a later gh adds: counted, never dropped,
+        // so the totals add up and a cancelled run cannot read as a clean one.
+        _ => PrCheckStatus::Other,
+    };
+    let link = fields.nth(1).unwrap_or("").trim();
+    (!name.is_empty()).then_some((name, link, status))
 }
 
 fn pr_status(_verbose: u8, _ultra_compact: bool) -> Result<()> {
@@ -1208,6 +1243,41 @@ fn has_jq_or_template(args: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.11.0 (US-003): gh's non-TTY row shape — name, bucket, elapsed, link, description.
+    const CHECKS_FAILING: &str = "build\tpass\t1m2s\thttps://github.com/o/r/actions/runs/1/job/1\t\n\
+fail-fast-lint\tpass\t20s\thttps://github.com/o/r/actions/runs/1/job/2\t\n\
+test (ubuntu)\tfail\t3m1s\thttps://github.com/o/r/actions/runs/1/job/3\t\n\
+deploy\tskipping\t0\thttps://github.com/o/r/actions/runs/1/job/4\t\n\
+e2e\tcancel\t5s\thttps://github.com/o/r/actions/runs/1/job/5\t\n\
+docs\tpending\t0\thttps://github.com/o/r/actions/runs/1/job/6\t\n";
+
+    #[test]
+    fn test_pr_checks_counts_every_bucket_by_column() {
+        let out = format_pr_checks(CHECKS_FAILING).unwrap();
+        // A job named `fail-fast-lint` that passed is a pass, not a failure.
+        assert!(out.contains("[ok] Passed: 2"), "{out}");
+        assert!(out.contains("[FAIL] Failed: 1"), "{out}");
+        assert!(out.contains("[pending] Pending: 1"), "{out}");
+        assert!(out.contains("[skip] Skipped/cancelled: 2"), "{out}");
+        assert!(out.contains("test (ubuntu)\tfail"), "{out}");
+        assert!(!out.contains("fail-fast-lint"), "{out}");
+    }
+
+    #[test]
+    fn test_pr_checks_watch_keeps_latest_row_per_check() {
+        let polls = "build\tpending\t0\thttps://x/1\t\nbuild\tpending\t10s\thttps://x/1\t\nbuild\tfail\t40s\thttps://x/1\t\n";
+        let out = format_pr_checks(polls).unwrap();
+        assert!(out.contains("[FAIL] Failed: 1"), "{out}");
+        assert!(!out.contains("Pending"), "{out}");
+        assert!(out.contains("Passed: 0"), "{out}");
+    }
+
+    #[test]
+    fn test_pr_checks_unparsed_output_is_left_to_the_caller() {
+        assert!(format_pr_checks("").is_none());
+        assert!(format_pr_checks("no checks reported on the 'main' branch\n").is_none());
+    }
 
     #[test]
     fn test_truncate() {

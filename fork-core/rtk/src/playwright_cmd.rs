@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use crate::utils::{package_manager_exec, strip_ansi};
 use anyhow::{Context, Result};
@@ -285,7 +286,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .context("Failed to run playwright (try: npm install -g playwright)")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -315,7 +316,7 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         }
     };
 
-    let shown = crate::guard::never_worse(&raw, &filtered);
+    let shown = crate::guard::never_worse_rendered(&raw, &filtered); // 0.11.0: rtk injected the JSON format; not the caller's protocol
     println!("{}", shown);
 
     timer.track(

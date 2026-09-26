@@ -219,7 +219,7 @@ fn write_fake_rtk(path: &Path) {
     let script = r#"#!/bin/sh
 case "$1" in
   --version)
-    printf '%s\n' 'rtk 0.44.1-fork.1'
+    printf '%s\n' 'rtk 0.50.0-fork.1'
     ;;
   contract)
     [ "$2" = "--json" ] && printf '%s\n' '__CONTRACT_JSON__' || exit 64

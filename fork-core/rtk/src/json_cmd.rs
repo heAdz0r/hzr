@@ -52,6 +52,8 @@ pub fn run_stdin(max_depth: usize, verbose: u8) -> Result<()> {
 /// Parse a JSON string and return its schema representation.
 /// Useful for piping JSON from other commands (e.g., `gh api`, `curl`).
 pub fn filter_json_string(json_str: &str, max_depth: usize) -> Result<String> {
+    // 0.11.0 (US-017, upstream a39a872/7e7be16): an editor-written UTF-8 BOM is not JSON.
+    let json_str = json_str.strip_prefix('\u{feff}').unwrap_or(json_str);
     let value: Value = serde_json::from_str(json_str).context("Failed to parse JSON")?;
     Ok(extract_schema(&value, 0, max_depth))
 }

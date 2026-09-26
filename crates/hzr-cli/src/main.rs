@@ -2026,6 +2026,8 @@ async fn execute_index(config: &Config, command: IndexCommand, json: bool) -> Re
         }
         IndexCommand::Init { .. } => {
             let outcome = grepai.initialize(&InitOptions::default()).await?;
+            // 0.11.0 (heAdz0r/hzr#22): local `info/exclude`, never the tracked `.gitignore`.
+            grepai.exclude_managed_entry();
             let status = grepai.status()?;
             if json {
                 print_json(&serde_json::json!({

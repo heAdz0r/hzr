@@ -1,3 +1,4 @@
+use crate::stream::RelayedOutput; // 0.11.0 (US-007): relay signals while capturing
 use crate::tracking;
 use crate::utils::truncate;
 use anyhow::{Context, Result};
@@ -63,7 +64,7 @@ pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .context("Failed to run go test. Is Go installed?")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -128,7 +129,7 @@ pub fn run_build(args: &[String], verbose: u8) -> Result<()> {
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .context("Failed to run go build. Is Go installed?")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -139,7 +140,9 @@ pub fn run_build(args: &[String], verbose: u8) -> Result<()> {
         .status
         .code()
         .unwrap_or(if output.status.success() { 0 } else { 1 });
-    let filtered = filter_go_build(&raw);
+    // 0.11.0 (US-008): "✓ Go build: Success" beside a non-zero exit hid the error
+    // go printed on stderr; the exit guard falls back to the failure evidence.
+    let filtered = crate::guard::guard_exit(&raw, exit_code, "go build", &filter_go_build(&raw));
 
     let hint = crate::tee::tee_and_hint(&raw, "go_build", exit_code);
     let shown = crate::runner::emit_guarded(&filtered, hint.as_deref(), &raw);
@@ -174,7 +177,7 @@ pub fn run_vet(args: &[String], verbose: u8) -> Result<()> {
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .context("Failed to run go vet. Is Go installed?")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -223,7 +226,7 @@ pub fn run_run(args: &[String], verbose: u8) -> Result<()> {
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .context("Failed to run go run. Is Go installed?")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -295,7 +298,7 @@ pub fn run_other(args: &[OsString], verbose: u8) -> Result<()> {
     }
 
     let output = cmd
-        .output()
+        .output_relayed()
         .with_context(|| format!("Failed to run go {}", subcommand))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);

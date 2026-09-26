@@ -46,7 +46,8 @@ pub const RULES: &[RtkRule] = &[
         ],
     },
     RtkRule {
-        pattern: r"^gh\s+(pr|issue|run|repo|api|release)",
+        // 0.11.0 (upstream PR #4109): a subcommand boundary — `gh prs` is not `gh pr`.
+        pattern: r"^gh\s+(pr|issue|run|repo|api|release)(\s|$)",
         rtk_cmd: "rtk gh",
         rewrite_prefixes: &["gh"],
         category: "GitHub",
@@ -55,7 +56,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^glab\s+(mr|issue|ci|pipeline|api|release)",
+        pattern: r"^glab\s+(mr|issue|ci|pipeline|api|release)(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk glab",
         rewrite_prefixes: &["glab"],
         category: "GitLab",
@@ -73,7 +74,8 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[("fmt", RtkStatus::Passthrough)],
     },
     RtkRule {
-        pattern: r"^pnpm\s+(exec|i|install|list|ls|outdated|run|run-script|test)(\s|$)",
+        // 0.11.0 (US-010): leading pnpm global flags are part of the command.
+        pattern: r"^pnpm\s+(?:(?:--filter|-F|--dir|-C)(?:=\S+|\s+\S+)\s+|(?:-r|--recursive|-w|--workspace-root)\s+)*(exec|i|install|list|ls|outdated|run|run-script|test)(\s|$)",
         rtk_cmd: "rtk pnpm",
         rewrite_prefixes: &["pnpm"],
         category: "PackageManager",
@@ -294,7 +296,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^((p?np(m|x)|bunx|p?npm\s+(exec|run|run-script)|npm\s+(rum|urn|x)|pnpm\s+dlx|bun\s+x)\s+)?prettier",
+        pattern: r"^((p?np(m|x)|bunx|p?npm\s+(exec|run|run-script)|npm\s+(rum|urn|x)|pnpm\s+dlx|bun\s+x)\s+)?prettier(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk prettier",
         rewrite_prefixes: &[
             "npm exec prettier",
@@ -321,7 +323,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^((p?np(m|x)|bunx|p?npm\s+(exec|run|run-script)|npm\s+(rum|urn|x)|pnpm\s+dlx|bun\s+x)\s+)?next\s+build",
+        pattern: r"^((p?np(m|x)|bunx|p?npm\s+(exec|run|run-script)|npm\s+(rum|urn|x)|pnpm\s+dlx|bun\s+x)\s+)?next\s+build(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk next",
         rewrite_prefixes: &[
             "next build",
@@ -430,7 +432,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^((p?np(m|x)|bunx|p?npm\s+(exec|run|run-script)|npm\s+(rum|urn|x)|pnpm\s+dlx|bun\s+x)\s+)?playwright",
+        pattern: r"^((p?np(m|x)|bunx|p?npm\s+(exec|run|run-script)|npm\s+(rum|urn|x)|pnpm\s+dlx|bun\s+x)\s+)?playwright(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk playwright",
         rewrite_prefixes: &[
             "npm exec playwright",
@@ -457,7 +459,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^((p?np(m|x)|bunx|p?npm\s+(exec|run|run-script)|npm\s+(rum|urn|x)|pnpm\s+dlx|bun\s+x)\s+)?prisma",
+        pattern: r"^((p?np(m|x)|bunx|p?npm\s+(exec|run|run-script)|npm\s+(rum|urn|x)|pnpm\s+dlx|bun\s+x)\s+)?prisma(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk prisma",
         rewrite_prefixes: &[
             "npm exec prisma",
@@ -484,7 +486,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^docker\s+(ps|images|logs|run|exec|build|compose\s+(ps|logs|build))",
+        pattern: r"^docker\s+(ps|images|logs|run|exec|build|compose\s+(ps|logs|build))(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk docker",
         rewrite_prefixes: &["docker"],
         category: "Infra",
@@ -493,7 +495,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^kubectl\s+(get|logs|describe|apply)",
+        pattern: r"^kubectl\s+(get|logs|describe|apply)(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk kubectl",
         rewrite_prefixes: &["kubectl"],
         category: "Infra",
@@ -502,7 +504,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^oc\s+(get|logs|describe|apply|status|adm)",
+        pattern: r"^oc\s+(get|logs|describe|apply|status|adm)(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk oc",
         rewrite_prefixes: &["oc"],
         category: "Infra",
@@ -516,6 +518,16 @@ pub const RULES: &[RtkRule] = &[
         rewrite_prefixes: &["tree"],
         category: "Files",
         savings_pct: 70.0,
+        subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    // 0.11.0 (US-009): deno lint/check/test; other deno subcommands stay native.
+    RtkRule {
+        pattern: r"^deno\s+(lint|check|test)(\s|$)",
+        rtk_cmd: "rtk deno",
+        rewrite_prefixes: &["deno"],
+        category: "Build",
+        savings_pct: 60.0,
         subcmd_savings: &[],
         subcmd_status: &[],
     },
@@ -584,7 +596,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^ruff\s+(check|format)",
+        pattern: r"^ruff\s+(check|format)(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk ruff",
         rewrite_prefixes: &["ruff"],
         category: "Python",
@@ -611,7 +623,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^go\s+(test|build|vet)",
+        pattern: r"^go\s+(test|build|vet)(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk go",
         rewrite_prefixes: &["go"],
         category: "Go",
@@ -638,7 +650,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^(?:bundle\s+exec\s+)?(?:bin/)?(?:rake|rails)\s+test",
+        pattern: r"^(?:bundle\s+exec\s+)?(?:bin/)?(?:rake|rails)\s+test(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk rake",
         rewrite_prefixes: &[
             "bundle exec rails",
@@ -857,7 +869,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^pio\s+run",
+        pattern: r"^pio\s+run(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk pio",
         rewrite_prefixes: &["pio"],
         category: "Build",
@@ -893,7 +905,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^quarto\s+render",
+        pattern: r"^quarto\s+render(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk quarto",
         rewrite_prefixes: &["quarto"],
         category: "Build",
@@ -920,7 +932,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^shopify\s+theme\s+(push|pull)",
+        pattern: r"^shopify\s+theme\s+(push|pull)(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk shopify",
         rewrite_prefixes: &["shopify"],
         category: "Build",
@@ -956,7 +968,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^terraform\s+plan",
+        pattern: r"^terraform\s+plan(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk terraform",
         rewrite_prefixes: &["terraform"],
         category: "Infra",
@@ -974,7 +986,7 @@ pub const RULES: &[RtkRule] = &[
         subcmd_status: &[],
     },
     RtkRule {
-        pattern: r"^trunk\s+build",
+        pattern: r"^trunk\s+build(\s|$)", // 0.11.0 (upstream PR #4109): subcommand boundary
         rtk_cmd: "rtk trunk",
         rewrite_prefixes: &["trunk"],
         category: "Build",
