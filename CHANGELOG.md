@@ -4,6 +4,34 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-26
+
+### Changed
+
+- grepai 0.35.0 → 0.37.0. A file saved atomically (temp file + rename — editors, `hzr write`)
+  was removed from the semantic index until the next full scan: 0.35.0 logged
+  `Removed src/ls.rs from index` on the rename, 0.37.0 re-indexes it. The update also writes
+  the index atomically and recovers from a corrupted index file, stops rewriting unchanged
+  indexes, breaks score ties deterministically, and exits with a clear error when file
+  watching fails. The HZR worktree-isolation patch is rebased onto 0.37.0; indexes built by
+  0.35.0 are read unchanged. grepai 0.36+ enables per-file search deduplication in a fresh
+  config; HZR switches it off so new and existing workspaces answer `rgai` identically.
+  Building grepai now needs Go 1.25.5 (CI pins updated).
+- `hzr doctor --fix` (and the post-upgrade fleet pass) restores a tracked `.gitignore` that an
+  earlier `grepai init` left with a `.grepai/` line (heAdz0r/hzr#22): only when the working copy is
+  HEAD plus exactly that line; the owner's own edits and a committed `.grepai/` line are left alone.
+
+### Fixed
+
+- Memory recall with a project, topic or keyword filter no longer comes back empty when other
+  projects' memories outrank the filtered ones. ICM's HTTP `/recall` ranked and truncated to the
+  requested count across every topic before filtering; the new ICM patch
+  `0.10.61-http-recall-filter-headroom.patch` asks the store for up to ten times as many candidates
+  (at most 200) while a filter is active and truncates after filtering, as ICM's own MCP recall
+  does. ICM 0.10.65 fixed this only for its CLI.
+- Init tests no longer depend on the grepai installed on the host `PATH`: tests whose config
+  names no engine directory pin an empty one, so an older grepai there cannot fail them.
+
 ## [0.11.0] - 2026-09-26
 
 Upstream RTK v0.50.0 sync (fork-core `0.50.0-fork.1`) and the fidelity fixes it surfaced.
@@ -2050,3 +2078,4 @@ First public HZR release.
 [0.9.10]: https://github.com/heAdz0r/hzr/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/heAdz0r/hzr/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/heAdz0r/hzr/compare/v0.9.7...v0.9.8
+[0.11.1]: https://github.com/heAdz0r/hzr/compare/v0.11.0...v0.11.1

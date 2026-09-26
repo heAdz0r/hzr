@@ -26,7 +26,7 @@ additional pinned engines plus a private Node.js runtime without removing their 
 | heAdz0r RTK fork-core | 0.50.0-fork.1 | MIT | https://github.com/heAdz0r/rtk | HZR-owned runtime; immutable v0.1.0 baseline plus versioned current engine |
 | upstream RTK | 0.44.1 | Apache-2.0 | https://github.com/rtk-ai/rtk | provenance/reference pin only; never built as HZR runtime |
 | ICM | 0.10.61 | Apache-2.0 | https://github.com/rtk-ai/icm | lockfile-corrected runtime |
-| grepai | 0.35.0 | MIT | https://github.com/yoanbernabeu/grepai | patched runtime |
+| grepai | 0.37.0 | MIT | https://github.com/yoanbernabeu/grepai | patched runtime |
 | Caveman design-derived codec | 1.9.1 reference | MIT | https://github.com/JuliusBrussee/caveman | design reference |
 | caveman-code managed SDK | 0.65.2 | MIT | https://github.com/JuliusBrussee/caveman-code | managed runtime |
 | extract-zip hardened compatibility fork | 2.0.2 | BSD-2-Clause | https://github.com/max-mapper/extract-zip | rejects archive path and symlink escape in the managed Caveman runtime |
@@ -60,11 +60,11 @@ Node.js distribution license file, including its bundled dependency notices, is 
 bundle as `licenses/Node.js-MIT-and-dependencies.txt`. Node.js is private runtime infrastructure and
 is not represented as a separately installed system dependency.
 
-HZR applies `patches/grepai/0.35.0-disable-worktree-discovery.patch` to the pinned grepai source.
+HZR applies `patches/grepai/0.37.0-disable-worktree-discovery.patch` to the pinned grepai source.
 The patch adds an opt-out for upstream watcher's automatic linked-worktree discovery so HZR remains
 the sole index owner. Modified-source distributions must retain grepai's MIT license and identify
 this change. Patch SHA-256:
-`55535352bc9f4837198c652b8c44ec54a0a7ef82fbd81e11b4ec11f4c4082991`.
+`4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f`.
 
 HZR applies `patches/icm/0.10.61-refresh-workspace-lock.patch` to the pinned ICM source. The patch
 only brings the `icm-cli` package version in upstream's committed `Cargo.lock` from `0.10.54` to the
@@ -77,6 +77,14 @@ the server exits once that parent process is gone, so an HZR daemon that was kil
 no longer leave an orphaned memory server behind. Modified-source distributions must retain ICM's
 Apache-2.0 license and identify this change. Patch SHA-256:
 `c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8`.
+
+HZR also applies `patches/icm/0.10.61-http-recall-filter-headroom.patch` to the pinned ICM source. The patch makes
+the `icm serve --http` `/recall` handler ask the store for up to ten times the requested number of
+candidates (at most 200) when a topic, project or keyword filter is active, and truncates to the
+requested limit only after filtering, as ICM's own MCP recall already does; without it, memories of
+other projects that outrank the filtered ones leave the filtered recall empty. Modified-source
+distributions must retain ICM's Apache-2.0 license and identify this change. Patch SHA-256:
+`2562ed26c3df8f48a9d19ca351a916afdd2b60c6439e9d7e58662085baed6730`.
 
 HZR distributes agtx and its read-only observer under the confirmed Apache-2.0
 license. The repository owner confirmed upstream clarification on 2026-09-10.

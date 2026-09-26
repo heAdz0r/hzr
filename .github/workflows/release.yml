@@ -86,7 +86,7 @@ jobs:
           components: rustfmt, clippy
       - uses: actions/setup-go@v6
         with:
-          go-version: 1.24.2
+          go-version: 1.25.5
           # Managed Go sources are fetched by build-bundle.sh, so no repository-root
           # go.sum exists for setup-go's automatic dependency cache.
           cache: false

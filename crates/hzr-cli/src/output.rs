@@ -439,6 +439,9 @@ pub fn print_hygiene_repair(repair: &crate::diagnostics::WorkspaceHygieneRepair)
             repair.removed_lock_files
         ));
     }
+    if repair.restored_gitignore {
+        actions.push("restore .gitignore without the grepai append".to_owned()); // 0.11.1 (#22)
+    }
     writeln!(
         io::stdout().lock(),
         "workspace hygiene {}: {verb} {}",

@@ -3125,12 +3125,16 @@ pub struct WorkspaceHygieneRepair {
     pub removed_lock_files: usize,
     /// Lock sidecars committed to the repository; deleting tracked files is the owner's call.
     pub tracked_lock_files: usize,
+    /// A tracked `.gitignore` restored from HEAD: grepai < 0.37 under HZR < 0.11.0 appended
+    /// `.grepai/` to it in every workspace and worktree. (0.11.1, heAdz0r/hzr#22)
+    #[serde(default)]
+    pub restored_gitignore: bool,
 }
 
 impl WorkspaceHygieneRepair {
     #[must_use]
     pub fn changed(&self) -> bool {
-        !self.excluded.is_empty() || self.removed_lock_files > 0
+        !self.excluded.is_empty() || self.removed_lock_files > 0 || self.restored_gitignore
     }
 }
 
@@ -3203,6 +3207,7 @@ fn repair_workspace_hygiene_scoped(
     if !scan_lock_files {
         return Ok(repair);
     }
+    repair.restored_gitignore = restore_grepai_gitignore_append(workspace, dry_run)?; // 0.11.1 (#22)
     for relative in git_list(
         workspace,
         &["ls-files", "-z", "--others", "--", "*.rtk-lock"],
@@ -3227,6 +3232,42 @@ fn repair_workspace_hygiene_scoped(
     )
     .len();
     Ok(repair)
+}
+
+/// Undo the `.grepai/` line that `grepai init` appended to a tracked `.gitignore` before
+/// 0.11.0. The file is restored from HEAD only when the working copy is HEAD plus exactly
+/// that line; any other edit is the owner's, and a committed `.grepai/` line is a choice
+/// already made. Returns whether it was (or, in a dry run, would be) restored.
+/// (0.11.1, heAdz0r/hzr#22)
+fn restore_grepai_gitignore_append(workspace: &Path, dry_run: bool) -> anyhow::Result<bool> {
+    let path = workspace.join(".gitignore");
+    let Ok(current) = std::fs::read(&path) else {
+        return Ok(false);
+    };
+    if !git_tracks(workspace, ".gitignore") {
+        return Ok(false);
+    }
+    let head = match activation::git_probe(
+        workspace,
+        &[
+            std::ffi::OsStr::new("show"),
+            std::ffi::OsStr::new("HEAD:./.gitignore"),
+        ],
+        true,
+        "workspace hygiene .gitignore probe",
+    ) {
+        Ok(output) if output.status.success() => output.stdout,
+        _ => return Ok(false),
+    };
+    if !hzr_index::is_only_grepai_gitignore_append(&head, &current) {
+        return Ok(false);
+    }
+    if !dry_run {
+        anyhow::Context::with_context(std::fs::write(&path, &head), || {
+            format!("restore {}", path.display())
+        })?;
+    }
+    Ok(true)
 }
 
 /// Append `pattern` to a local exclude file unless an equivalent line is present. Returns
@@ -3307,6 +3348,13 @@ fn workspace_hygiene_check(config: &Config, workspace: &Path) -> DoctorCheck {
                     "not excluded from git status: {}",
                     plan.excluded.join(", ")
                 ));
+            }
+            if plan.restored_gitignore {
+                // 0.11.1 (heAdz0r/hzr#22)
+                findings.push(
+                    "`.grepai/` appended to the tracked `.gitignore` by an earlier grepai init"
+                        .to_owned(),
+                );
             }
             if plan.removed_lock_files > 0 {
                 findings.push(format!(
@@ -4560,6 +4608,69 @@ justification = "This repository measures upstream RTK as the explicit benchmark
             reconcile_fleet_contracts(&config, &checkout_contract, fixture.path(), true, false)
                 .await;
         assert!(planned.refused.is_none());
+    }
+
+    // 0.11.1 (heAdz0r/hzr#22): `hzr doctor --fix` undoes grepai's `.gitignore` append and
+    // nothing else.
+    #[test]
+    fn workspace_hygiene_restores_only_the_grepai_gitignore_append() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let repo = fixture.path().join("repo");
+        fs::create_dir_all(&repo).expect("repo");
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.email=t@example.com", "-c", "user.name=t"])
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .expect("git");
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        fs::write(repo.join(".gitignore"), "target/\n").expect("gitignore");
+        git(&["add", ".gitignore"]);
+        git(&["commit", "-qm", "init"]);
+        let config = Config {
+            data_dir: fixture.path().join("data"),
+            ..Config::default()
+        };
+
+        fs::write(repo.join(".gitignore"), "target/\n.grepai/\n").expect("grepai append");
+        let plan =
+            crate::diagnostics::repair_workspace_hygiene(&config, &repo, true).expect("dry run");
+        assert!(plan.restored_gitignore && plan.changed());
+        assert_eq!(
+            fs::read_to_string(repo.join(".gitignore")).expect("read"),
+            "target/\n.grepai/\n",
+            "a dry run writes nothing"
+        );
+        let fixed =
+            crate::diagnostics::repair_workspace_hygiene(&config, &repo, false).expect("fix");
+        assert!(fixed.restored_gitignore);
+        assert_eq!(
+            fs::read_to_string(repo.join(".gitignore")).expect("read"),
+            "target/\n"
+        );
+        let again = crate::diagnostics::repair_workspace_hygiene(&config, &repo, false)
+            .expect("second fix");
+        assert!(!again.restored_gitignore, "a second run changes nothing");
+
+        // The owner's own edit is left alone.
+        fs::write(repo.join(".gitignore"), "target/\ndist/\n.grepai/\n").expect("owner edit");
+        let owner = crate::diagnostics::repair_workspace_hygiene(&config, &repo, false)
+            .expect("owner edit run");
+        assert!(!owner.restored_gitignore);
+        assert_eq!(
+            fs::read_to_string(repo.join(".gitignore")).expect("read"),
+            "target/\ndist/\n.grepai/\n"
+        );
+
+        // A committed `.grepai/` line is a choice already made.
+        fs::write(repo.join(".gitignore"), "target/\n.grepai/\n").expect("commit fixture");
+        git(&["commit", "-qam", "ignore grepai"]);
+        let committed = crate::diagnostics::repair_workspace_hygiene(&config, &repo, false)
+            .expect("committed run");
+        assert!(!committed.restored_gitignore);
     }
 
     #[tokio::test]

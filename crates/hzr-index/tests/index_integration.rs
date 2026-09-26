@@ -154,7 +154,7 @@ async fn test_coordinator_keeps_canonical_index_available_with_dormant_nested_in
     fs::write(duplicate.join("index.gob"), b"legacy-index").expect("dormant nested vectors");
     let canonical_duplicate =
         fs::canonicalize(&duplicate).expect("dormant nested index must canonicalize");
-    let grepai = fake_grepai(repo.path(), "0.35.0");
+    let grepai = fake_grepai(repo.path(), "0.37.0");
     let coordinator = IndexCoordinator::new(
         data.path().to_path_buf(),
         PathBuf::from("git"),
@@ -199,7 +199,7 @@ async fn test_coordinator_refuses_an_active_nested_index_writer() {
     let coordinator = IndexCoordinator::new(
         data.path().to_path_buf(),
         PathBuf::from("git"),
-        fake_grepai(repo.path(), "0.35.0"),
+        fake_grepai(repo.path(), "0.37.0"),
         deadlines(),
         true,
     );
@@ -271,7 +271,7 @@ async fn test_linked_worktrees_share_repository_identity_but_not_index_identity(
         linked_workspace.index.directory
     );
 
-    let grepai = fake_grepai(&main, "0.35.0");
+    let grepai = fake_grepai(&main, "0.37.0");
     let engine = GrepAi::connect(grepai, main_workspace, deadlines())
         .await
         .expect("stock grepai must connect");
@@ -291,7 +291,7 @@ async fn test_managed_placement_creates_one_central_index_and_project_symlink() 
     let repo = git_repo();
     let data = tempfile::tempdir().expect("managed data root must be created");
     write_source(repo.path(), "pub fn managed() {}\n");
-    let grepai = fake_grepai(repo.path(), "0.35.0");
+    let grepai = fake_grepai(repo.path(), "0.37.0");
     let workspace = Workspace::discover_managed(
         repo.path(),
         Path::new("git"),
@@ -385,7 +385,7 @@ async fn test_managed_discovery_adopts_legacy_project_index_without_second_datab
     fs::create_dir(repo.path().join(".grepai")).expect("legacy index directory must be created");
     fs::write(repo.path().join(".grepai/config.yaml"), "version: 1\n")
         .expect("legacy config must be written");
-    let grepai = fake_grepai(repo.path(), "0.35.0");
+    let grepai = fake_grepai(repo.path(), "0.37.0");
     let workspace = Workspace::discover_managed(
         repo.path(),
         Path::new("git"),
@@ -456,7 +456,7 @@ async fn test_managed_discovery_blocks_foreign_symlink_without_mutation() {
     let foreign = tempfile::tempdir().expect("foreign index target must be created");
     std::os::unix::fs::symlink(foreign.path(), repo.path().join(".grepai"))
         .expect("foreign symlink must be created");
-    let grepai = fake_grepai(repo.path(), "0.35.0");
+    let grepai = fake_grepai(repo.path(), "0.37.0");
     let workspace = Workspace::discover_managed(
         repo.path(),
         Path::new("git"),
@@ -487,7 +487,7 @@ async fn test_managed_discovery_blocks_foreign_symlink_without_mutation() {
 async fn test_watch_has_one_owner_and_is_supervised() {
     let repo = git_repo();
     write_source(repo.path(), "pub fn watched() {}\n");
-    let grepai = fake_grepai(repo.path(), "0.35.0");
+    let grepai = fake_grepai(repo.path(), "0.37.0");
     fs::write(repo.path().join("fake-grepai-capable"), b"enabled")
         .expect("capability marker must be written");
     let engine = connect(repo.path(), grepai).await;
@@ -521,7 +521,7 @@ async fn test_coordinator_reuses_one_watcher_for_repeated_prepare() {
     let data = tempfile::tempdir().expect("managed data root");
     write_source(repo.path(), "pub fn coordinated() {}\n");
     fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
-    let grepai = fake_grepai(repo.path(), "0.35.0");
+    let grepai = fake_grepai(repo.path(), "0.37.0");
     let coordinator = IndexCoordinator::new(
         data.path().to_path_buf(),
         PathBuf::from("git"),
@@ -554,7 +554,7 @@ async fn test_coordinator_reuses_one_watcher_for_repeated_prepare() {
 async fn test_coordinator_evicts_lru_watcher_at_budget() {
     let data = tempfile::tempdir().expect("managed data root");
     let binaries = tempfile::tempdir().expect("fake binary root");
-    let grepai = fake_grepai(binaries.path(), "0.35.0");
+    let grepai = fake_grepai(binaries.path(), "0.37.0");
     let first = git_repo();
     let second = git_repo();
     for repo in [&first, &second] {
@@ -607,7 +607,7 @@ async fn test_coordinator_reaps_idle_watcher_after_ttl() {
     let coordinator = IndexCoordinator::with_watcher_limits(
         data.path().to_path_buf(),
         PathBuf::from("git"),
-        fake_grepai(repo.path(), "0.35.0"),
+        fake_grepai(repo.path(), "0.37.0"),
         deadlines(),
         true,
         2,
@@ -636,7 +636,7 @@ async fn live_watcher_status_polling_does_not_extend_idle_ttl() {
     let coordinator = IndexCoordinator::with_watcher_limits(
         data.path().to_path_buf(),
         PathBuf::from("git"),
-        fake_grepai(repo.path(), "0.35.0"),
+        fake_grepai(repo.path(), "0.37.0"),
         deadlines(),
         true,
         2,
@@ -681,7 +681,7 @@ async fn failed_watcher_status_polling_does_not_extend_its_tombstone_ttl() {
     let coordinator = IndexCoordinator::with_watcher_limits(
         data.path().to_path_buf(),
         PathBuf::from("git"),
-        fake_grepai(repo.path(), "0.35.0"),
+        fake_grepai(repo.path(), "0.37.0"),
         deadlines(),
         true,
         2,
@@ -735,7 +735,7 @@ async fn failed_watcher_status_polling_does_not_extend_its_tombstone_ttl() {
 async fn test_concurrent_prepares_never_exceed_watcher_budget() {
     let data = tempfile::tempdir().expect("managed data root");
     let binaries = tempfile::tempdir().expect("fake binary root");
-    let grepai = fake_grepai(binaries.path(), "0.35.0");
+    let grepai = fake_grepai(binaries.path(), "0.37.0");
     let repos = (0..6)
         .map(|_| {
             let repo = git_repo();
@@ -784,7 +784,7 @@ async fn test_concurrent_prepares_never_exceed_watcher_budget() {
 async fn test_shutdown_attempts_every_watcher_after_first_stop_failure() {
     let data = tempfile::tempdir().expect("managed data root");
     let binaries = tempfile::tempdir().expect("fake binary root");
-    let grepai = fake_grepai(binaries.path(), "0.35.0");
+    let grepai = fake_grepai(binaries.path(), "0.37.0");
     let first = git_repo();
     let second = git_repo();
     for repo in [&first, &second] {
@@ -844,7 +844,7 @@ async fn test_coordinator_status_proves_index_artifacts_and_live_watcher() {
     let data = tempfile::tempdir().expect("managed data root");
     write_source(repo.path(), "pub fn observable() {}\n");
     fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
-    let grepai = fake_grepai(repo.path(), "0.35.0");
+    let grepai = fake_grepai(repo.path(), "0.37.0");
     let coordinator = IndexCoordinator::new(
         data.path().to_path_buf(),
         PathBuf::from("git"),
@@ -879,10 +879,30 @@ async fn test_connect_rejects_unpinned_grepai_version() {
     assert!(matches!(
         result,
         Err(IndexError::UnsupportedVersion {
-            expected: "0.35.0",
+            expected: "0.37.0",
             ..
         })
     ));
+}
+
+// 0.11.1 (grepai 0.37.0): a fresh index keeps every chunk, like indexes built by
+// grepai 0.35 — `search.dedup.enabled: true` from `grepai init` is switched off.
+#[tokio::test]
+async fn initialization_pins_search_dedup_off() {
+    let repo = git_repo();
+    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.37.0")).await;
+
+    engine
+        .initialize(&InitOptions::default())
+        .await
+        .expect("initialization");
+
+    let config =
+        fs::read_to_string(repo.path().join(".grepai/config.yaml")).expect("managed config");
+    assert!(
+        config.contains("search:\n    dedup:\n        enabled: false\n"),
+        "{config}"
+    );
 }
 
 // 0.11.0 (heAdz0r/hzr#22): initialization leaves the tracked `.gitignore` untouched.
@@ -890,7 +910,7 @@ async fn test_connect_rejects_unpinned_grepai_version() {
 async fn initialization_does_not_modify_the_tracked_gitignore() {
     let repo = git_repo();
     fs::write(repo.path().join(".gitignore"), "target/\n").expect("gitignore");
-    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.35.0")).await;
+    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.37.0")).await;
 
     engine
         .initialize(&InitOptions::default())
@@ -914,7 +934,7 @@ async fn acceptance_gate_managed_initialization_enables_local_repository_graph()
     )
     .expect("disabled graph config");
     fs::write(index.join("index.gob"), b"").expect("vector index");
-    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.35.0")).await;
+    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.37.0")).await;
 
     let outcome = engine
         .initialize(&InitOptions::default())
@@ -937,7 +957,7 @@ async fn test_managed_initialization_rejects_ambiguous_repository_graph_setting(
         "version: 1\nrpg:\n    enabled: sometimes\n",
     )
     .expect("invalid graph config");
-    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.35.0")).await;
+    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.37.0")).await;
 
     let result = engine.initialize(&InitOptions::default()).await;
 
@@ -965,7 +985,7 @@ async fn test_managed_initialization_rejects_symlinked_grepai_config() {
     fs::create_dir_all(&index).expect("index directory");
     fs::write(&outside, "version: 1\nrpg:\n    enabled: false\n").expect("outside config");
     symlink(&outside, index.join("config.yaml")).expect("config symlink");
-    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.35.0")).await;
+    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.37.0")).await;
 
     let result = engine.initialize(&InitOptions::default()).await;
 
@@ -1029,7 +1049,7 @@ async fn acceptance_gate_initial_scan_survives_without_ready_marker() {
     let coordinator = IndexCoordinator::with_watcher_limits(
         data.path().to_path_buf(),
         PathBuf::from("git"),
-        fake_grepai(repo.path(), "0.35.0"),
+        fake_grepai(repo.path(), "0.37.0"),
         production_shape,
         true,
         2,
@@ -1071,7 +1091,7 @@ case "$command_name" in
     ;;
   init)
     mkdir -p .grepai
-    printf 'version: 1\nrpg:\n    enabled: false\n' > .grepai/config.yaml
+    printf 'version: 1\nrpg:\n    enabled: false\nsearch:\n    dedup:\n        enabled: true\n' > .grepai/config.yaml
     : > .grepai/index.gob
     : > .grepai/symbols.gob
     # Like grepai 0.35.0: append .grepai/ to a present .gitignore (heAdz0r/hzr#22).

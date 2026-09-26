@@ -243,35 +243,35 @@ HZR_NPM_BINARY="${HZR_NODE_BUILD_ROOT}/bin/npm"
 "${HZR_NODE_BINARY}" --version | grep -Fx "v${HZR_NODE_VERSION}" >/dev/null
 
 verify_sha256 \
-  "55535352bc9f4837198c652b8c44ec54a0a7ef82fbd81e11b4ec11f4c4082991" \
-  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
+  "4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f" \
+  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
 hzr_build_stage "Building the pinned grepai engine"
 HZR_BUILD_SCRIPT_SHA256="$(sha256_file "${BASH_SOURCE[0]}")"
 HZR_GREPAI_LICENSE_SOURCE="${HZR_BUILD_TEMP}/grepai.LICENSE"
 HZR_GREPAI_CACHE_KEY="$(component_cache_key \
-  grepai 0.35.0 65c345ca32122c17a39a5bbec2780c2eea773a12 \
-  55535352bc9f4837198c652b8c44ec54a0a7ef82fbd81e11b4ec11f4c4082991 \
+  grepai 0.37.0 ad90c4216282a434eeb2e28df4a1ea175a5470aa \
+  4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f \
   "${HZR_PLATFORM}" "$(go version)" "${HZR_BUILD_SCRIPT_SHA256}")"
 if restore_cached_component \
   grepai "${HZR_GREPAI_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/grepai" \
   "${HZR_GREPAI_LICENSE_SOURCE}" \
   "49966552514373129de9faea43a890bf6a8b04f158b2966876a57fdf915980e5" && \
-  "${HZR_ENGINE_OUTPUT}/grepai" version | grep -F "0.35.0" >/dev/null && \
+  "${HZR_ENGINE_OUTPUT}/grepai" version | grep -F "0.37.0" >/dev/null && \
   "${HZR_ENGINE_OUTPUT}/grepai" watch --help | grep -F -- "--no-worktree-discovery" >/dev/null; then
   :
 else
   clone_at_commit \
     "https://github.com/yoanbernabeu/grepai" \
-    "65c345ca32122c17a39a5bbec2780c2eea773a12" \
+    "ad90c4216282a434eeb2e28df4a1ea175a5470aa" \
     "${HZR_BUILD_TEMP}/grepai"
   git -C "${HZR_BUILD_TEMP}/grepai" apply --check \
-    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
+    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
   git -C "${HZR_BUILD_TEMP}/grepai" apply \
-    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
+    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
   (
     cd "${HZR_BUILD_TEMP}/grepai"
     go test ./cli
-    go build -trimpath -ldflags "-s -w -X main.version=0.35.0" \
+    go build -trimpath -ldflags "-s -w -X main.version=0.37.0" \
       -o "${HZR_ENGINE_OUTPUT}/grepai" ./cmd/grepai
   )
   install -m 0644 "${HZR_BUILD_TEMP}/grepai/LICENSE" "${HZR_GREPAI_LICENSE_SOURCE}"
@@ -279,7 +279,7 @@ else
     grepai "${HZR_GREPAI_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/grepai" \
     "${HZR_GREPAI_LICENSE_SOURCE}"
 fi
-"${HZR_ENGINE_OUTPUT}/grepai" version | grep -F "0.35.0" >/dev/null
+"${HZR_ENGINE_OUTPUT}/grepai" version | grep -F "0.37.0" >/dev/null
 "${HZR_ENGINE_OUTPUT}/grepai" watch --help | grep -F -- "--no-worktree-discovery" >/dev/null
 
 verify_sha256 \
@@ -289,6 +289,10 @@ verify_sha256 \
 verify_sha256 \
   "c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8" \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-exit-with-parent.patch"
+# 0.11.1: HTTP /recall widens the candidate pool before a topic/project/keyword filter.
+verify_sha256 \
+  "2562ed26c3df8f48a9d19ca351a916afdd2b60c6439e9d7e58662085baed6730" \
+  "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-http-recall-filter-headroom.patch"
 hzr_build_stage "Building the pinned ICM engine"
 HZR_RUST_TOOLCHAIN_KEY="$(component_cache_key "$(rustc -Vv)" "$(cargo -V)")"
 HZR_ICM_LICENSE_SOURCE="${HZR_BUILD_TEMP}/icm.LICENSE"
@@ -296,6 +300,7 @@ HZR_ICM_CACHE_KEY="$(component_cache_key \
   icm 0.10.61 c3a1bac7cfe401b55fd66af16dfc0c774c02167a \
   cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586 \
   c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8 \
+  2562ed26c3df8f48a9d19ca351a916afdd2b60c6439e9d7e58662085baed6730 \
   embeddings-static,http-api,backend-sqlite "${HZR_PLATFORM}" \
   "${HZR_RUST_TOOLCHAIN_KEY}" "${HZR_BUILD_SCRIPT_SHA256}")"
 if restore_cached_component \
@@ -317,6 +322,11 @@ else
     "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-exit-with-parent.patch"
   git -C "${HZR_BUILD_TEMP}/icm" apply \
     "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-exit-with-parent.patch"
+  # 0.11.1: HTTP /recall filter headroom.
+  git -C "${HZR_BUILD_TEMP}/icm" apply --check \
+    "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-http-recall-filter-headroom.patch"
+  git -C "${HZR_BUILD_TEMP}/icm" apply \
+    "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-http-recall-filter-headroom.patch"
   cargo build \
     --manifest-path "${HZR_BUILD_TEMP}/icm/Cargo.toml" \
     --locked --release --package icm-cli \
@@ -556,14 +566,17 @@ install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/claude-code/hzr-awareness.m
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/claude-code/hzr-awareness-codex.md" \
   "${HZR_PROVENANCE_OUTPUT}/integrations/claude-code/hzr-awareness-codex.md"
 install -m 0644 \
-  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.35.0-disable-worktree-discovery.patch" \
-  "${HZR_PROVENANCE_OUTPUT}/patches/grepai/0.35.0-disable-worktree-discovery.patch"
+  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch" \
+  "${HZR_PROVENANCE_OUTPUT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
 install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/icm/0.10.61-refresh-workspace-lock.patch"
 install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-exit-with-parent.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/icm/0.10.61-exit-with-parent.patch"
+install -m 0644 \
+  "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-http-recall-filter-headroom.patch" \
+  "${HZR_PROVENANCE_OUTPUT}/patches/icm/0.10.61-http-recall-filter-headroom.patch"
 install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/agtx/1.0.4-readonly-observer.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/agtx/1.0.4-readonly-observer.patch"

@@ -18,6 +18,12 @@ fn run_init(workspace: &std::path::Path, config: &std::path::Path, arguments: &[
             "CODEX_HOME",
             config.parent().expect("config parent").join("codex"),
         )
+        // 0.11.1: the default config names no engine directory; keep the host PATH's
+        // grepai (of whatever version) out of the workspace initialization.
+        .env(
+            "HZR_ENGINES_DIR",
+            config.parent().expect("config parent").join("engines"),
+        )
         .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1")
         .current_dir(workspace)
         .output()
@@ -246,6 +252,7 @@ fn acceptance_gate_init_repairs_instructions_before_legacy_migration() {
         .args(["--skip-service", "--json"])
         .env("CLAUDE_CONFIG_DIR", directory.path().join("claude"))
         .env("CODEX_HOME", directory.path().join("codex"))
+        .env("HZR_ENGINES_DIR", directory.path().join("engines")) // 0.11.1: see run_init
         .env("HZR_ALLOW_DEV_CLIENT_WRITE", "1")
         .current_dir(&workspace)
         .output()

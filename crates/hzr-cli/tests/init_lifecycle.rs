@@ -209,6 +209,9 @@ fn init_reset_requires_force_and_backs_up_existing_config() {
     fs::write(&config, &original).expect("config fixture");
 
     let status = command(&home, &workspace)
+        // 0.11.1: the reset config names no engine directory; without this the host PATH
+        // supplies whatever grepai is installed and its version decides the test outcome.
+        .env("HZR_ENGINES_DIR", &engines)
         .args([
             "--config",
             config.to_str().expect("config path"),

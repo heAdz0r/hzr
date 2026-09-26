@@ -14,7 +14,7 @@ use crate::process;
 use crate::watch::{self, WatchHandle};
 use crate::workspace::{IndexPlacement, Workspace};
 
-pub const SUPPORTED_GREPAI_VERSION: &str = "0.35.0";
+pub const SUPPORTED_GREPAI_VERSION: &str = "0.37.0"; // 0.11.1: atomic-write indexing fix (#295)
 pub const SINGLE_WORKTREE_WATCH_FLAG: &str = "--no-worktree-discovery";
 static CONFIG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -218,6 +218,7 @@ impl GrepAi {
         let output = output?;
         process::require_success(output, "initialize grepai")?;
         self.workspace.require_initialized()?;
+        disable_search_dedup_in_config(&self.workspace.index.config)?; // 0.11.1 (grepai 0.37.0)
         if options.repository_graph {
             enable_repository_graph_in_config(&self.workspace.index.config)?;
         }
@@ -287,16 +288,21 @@ pub fn restore_gitignore_if_only_grepai_added(path: &Path, before: &[u8]) {
     let Ok(after) = fs::read(path) else {
         return;
     };
-    if after == before {
-        return;
-    }
-    let Some(added) = after.strip_prefix(before) else {
-        return;
-    };
-    let added = added.strip_prefix(b"\n").unwrap_or(added);
-    if added == b".grepai/\n" || added == b".grepai/" {
+    if is_only_grepai_gitignore_append(before, &after) {
         let _ = fs::write(path, before);
     }
+}
+
+/// Whether `after` is `before` plus exactly what `grepai init` appends: an optional
+/// separating newline and a `.grepai/` line. Also used by `hzr doctor --fix` to undo the
+/// append in repositories dirtied before 0.11.0. (heAdz0r/hzr#22)
+#[must_use]
+pub fn is_only_grepai_gitignore_append(before: &[u8], after: &[u8]) -> bool {
+    let Some(added) = after.strip_prefix(before) else {
+        return false;
+    };
+    let added = added.strip_prefix(b"\n").unwrap_or(added);
+    added == b".grepai/\n" || added == b".grepai/"
 }
 
 fn enable_repository_graph_in_config(path: &Path) -> Result<()> {
@@ -348,7 +354,11 @@ fn enable_repository_graph_in_config(path: &Path) -> Result<()> {
         }
     }
 
-    let updated = lines.concat();
+    write_managed_config(path, &lines.concat())
+}
+
+/// Replace the managed grepai config atomically (temp file + rename, mode 0600).
+fn write_managed_config(path: &Path, updated: &str) -> Result<()> {
     let sequence = CONFIG_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let temporary = path.with_extension(format!("yaml.hzr-{}-{sequence}.tmp", std::process::id()));
     let write_result = (|| -> Result<()> {
@@ -381,6 +391,37 @@ fn enable_repository_graph_in_config(path: &Path) -> Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     write_result
+}
+
+/// grepai 0.36+ writes `search.dedup.enabled: true` into a fresh config, which keeps
+/// one chunk per file. Indexes created by earlier grepai have no such key and keep
+/// every chunk. HZR pins the earlier behaviour so every workspace — new or existing —
+/// answers `rgai` the same way. Only an existing `enabled` under `search.dedup` is
+/// flipped; an absent key already means disabled. (0.11.1, grepai 0.37.0 upgrade)
+fn disable_search_dedup_in_config(path: &Path) -> Result<()> {
+    let config = read_managed_config(path)?;
+    let mut lines: Vec<String> = config.split_inclusive('\n').map(str::to_owned).collect();
+    let mut section = "";
+    let mut in_dedup = false;
+    let mut changed = false;
+    for line in &mut lines {
+        let indent = line.len() - line.trim_start().len();
+        let key = line.trim();
+        if indent == 0 && !key.is_empty() {
+            section = if key == "search:" { "search" } else { "" };
+            in_dedup = false;
+        } else if section == "search" && indent == 4 {
+            in_dedup = key == "dedup:";
+        } else if in_dedup && indent == 8 && key == "enabled: true" {
+            let newline = if line.ends_with('\n') { "\n" } else { "" };
+            *line = format!("        enabled: false{newline}");
+            changed = true;
+        }
+    }
+    if changed {
+        write_managed_config(path, &lines.concat())?;
+    }
+    Ok(())
 }
 
 fn read_managed_config(path: &Path) -> Result<String> {

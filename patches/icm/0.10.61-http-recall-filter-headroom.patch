@@ -1,0 +1,147 @@
+diff --git a/crates/icm-cli/src/http_api.rs b/crates/icm-cli/src/http_api.rs
+index c754162..2ccfd15 100644
+--- a/crates/icm-cli/src/http_api.rs
++++ b/crates/icm-cli/src/http_api.rs
+@@ -318,6 +318,9 @@ fn run_recall(state: &AppState, req: &RecallReq) -> Result<Vec<(Memory, Option<f
+     }
+ 
+     let limit = req.limit.unwrap_or(5).clamp(1, 100);
++    // HZR: same widening as `icm-mcp::tools::tool_recall` — the store ranks and
++    // truncates globally, so a filter applied afterwards can starve to nothing.
++    let query_limit = recall_query_limit(limit, recall_filters_active(req));
+ 
+     let project_filter = |m: &Memory| -> bool {
+         match req.project.as_deref() {
+@@ -328,7 +331,7 @@ fn run_recall(state: &AppState, req: &RecallReq) -> Result<Vec<(Memory, Option<f
+ 
+     let scored: Vec<(Memory, Option<f32>)> = if let Some(emb) = state.embedder_ref() {
+         match emb.embed_query(&req.query) {
+-            Ok(q_emb) => match store.search_hybrid(&req.query, &q_emb, limit) {
++            Ok(q_emb) => match store.search_hybrid(&req.query, &q_emb, query_limit) { // HZR
+                 Ok(rows) => rows
+                     .into_iter()
+                     .filter(|(m, _)| project_filter(m))
+@@ -343,13 +346,14 @@ fn run_recall(state: &AppState, req: &RecallReq) -> Result<Vec<(Memory, Option<f
+                             .is_none_or(|k| keyword_matches(&m.keywords, k))
+                     })
+                     .map(|(m, s)| (m, Some(s)))
++                    .take(limit) // HZR: the caller's limit applies after filtering
+                     .collect(),
+-                Err(_) => fts_fallback(&store, req, &project_filter, limit)?,
++                Err(_) => fts_fallback(&store, req, &project_filter, query_limit, limit)?, // HZR
+             },
+-            Err(_) => fts_fallback(&store, req, &project_filter, limit)?,
++            Err(_) => fts_fallback(&store, req, &project_filter, query_limit, limit)?, // HZR
+         }
+     } else {
+-        fts_fallback(&store, req, &project_filter, limit)?
++        fts_fallback(&store, req, &project_filter, query_limit, limit)? // HZR
+     };
+ 
+     // Best-effort access bookkeeping (matches the MCP path).
+@@ -363,15 +367,16 @@ fn fts_fallback<F>(
+     store: &Store,
+     req: &RecallReq,
+     project_filter: &F,
++    query_limit: usize, // HZR: candidate pool requested from the store
+     limit: usize,
+ ) -> Result<Vec<(Memory, Option<f32>)>>
+ where
+     F: Fn(&Memory) -> bool,
+ {
+-    let mut rows = store.search_fts(&req.query, limit)?;
++    let mut rows = store.search_fts(&req.query, query_limit)?; // HZR
+     if rows.is_empty() {
+         let keywords: Vec<&str> = req.query.split_whitespace().collect();
+-        rows = store.search_by_keywords(&keywords, limit)?;
++        rows = store.search_by_keywords(&keywords, query_limit)?; // HZR
+     }
+     rows.retain(project_filter);
+     if let Some(t) = req.topic.as_deref() {
+@@ -380,9 +385,27 @@ where
+     if let Some(k) = req.keyword.as_deref() {
+         rows.retain(|m| keyword_matches(&m.keywords, k));
+     }
++    rows.truncate(limit); // HZR
+     Ok(rows.into_iter().map(|m| (m, None)).collect())
+ }
+ 
++/// HZR: an empty `project` disables the project filter, so it does not count.
++fn recall_filters_active(req: &RecallReq) -> bool {
++    matches!(req.project.as_deref(), Some(p) if !p.is_empty())
++        || req.topic.is_some()
++        || req.keyword.is_some()
++}
++
++/// HZR: how many candidates to ask the store for before the post-hoc filter
++/// (mirrors `tool_recall` and upstream's later `recall_query_limit` in the CLI).
++fn recall_query_limit(limit: usize, filters_active: bool) -> usize {
++    if filters_active {
++        (limit * 10).min(200)
++    } else {
++        limit
++    }
++}
++
+ fn render_recall(results: &[(Memory, Option<f32>)], format: OutputFormat) -> Response {
+     if results.is_empty() {
+         return text_response(MSG_NO_MEMORIES, format);
+@@ -846,6 +869,58 @@ mod tests {
+         );
+     }
+ 
++    /// HZR: the store truncates to `limit` across every topic before the
++    /// topic/project filter runs, so a filtered recall used to return nothing
++    /// when other topics outranked the only relevant memory.
++    #[test]
++    fn filtered_recall_is_not_starved_by_other_topics() {
++        let store = Store::in_memory().unwrap();
++        for i in 0..40 {
++            store
++                .store(Memory::new(
++                    "noise".into(),
++                    format!("widget widget widget {i}"),
++                    Importance::Medium,
++                ))
++                .unwrap();
++        }
++        store
++            .store(Memory::new(
++                "decisions-target".into(),
++                "the widget cache was replaced by a bounded queue with backpressure".into(),
++                Importance::Medium,
++            ))
++            .unwrap();
++        let state = AppState {
++            store: Arc::new(Mutex::new(store)),
++            embedder: None,
++            token: None,
++        };
++        let req = |topic: Option<&str>, project: Option<&str>| RecallReq {
++            query: "widget".into(),
++            topic: topic.map(str::to_string),
++            limit: Some(5),
++            keyword: None,
++            project: project.map(str::to_string),
++        };
++
++        let hits = run_recall(&state, &req(Some("decisions-target"), None)).unwrap();
++        assert_eq!(hits.len(), 1, "topic-filtered recall must find the memory");
++        assert_eq!(hits[0].0.topic, "decisions-target");
++
++        let hits = run_recall(&state, &req(None, Some("target"))).unwrap();
++        assert!(
++            hits.iter().any(|(m, _)| m.topic == "decisions-target"),
++            "project-filtered recall must find the memory"
++        );
++
++        // Unfiltered recall still honours the caller's limit.
++        assert_eq!(run_recall(&state, &req(None, None)).unwrap().len(), 5);
++        assert_eq!(recall_query_limit(5, false), 5);
++        assert_eq!(recall_query_limit(5, true), 50);
++        assert_eq!(recall_query_limit(100, true), 200);
++    }
++
+     /// Manual-testing finding (against the real HTTP server): a third,
+     /// independent /consolidate implementation — same bug class as #400
+     /// (cmd_consolidate/tool_consolidate) — never attached an embedding

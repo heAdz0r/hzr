@@ -25,7 +25,7 @@ use crate::release_version;
 /// engine underneath it is still the previous release's.
 const VERIFIED_ENGINES: [(&str, &[&str], &str); 6] = [
     ("rtk", &["--version"], "0.50.0-fork.1"), // 0.11.0 (US-018)
-    ("grepai", &["version"], "0.35.0"),
+    ("grepai", &["version"], "0.37.0"),       // 0.11.1: grepai 0.37.0
     ("icm", &["--version"], "0.10.61"),
     ("node", &["--version"], "22.17.1"),
     ("agtx", &["--version"], "1.0.4"),

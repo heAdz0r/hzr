@@ -1,8 +1,8 @@
 diff --git a/cli/watch.go b/cli/watch.go
-index d56c1bc..b53a11d 100644
+index ca986db..ef9ac33 100644
 --- a/cli/watch.go
 +++ b/cli/watch.go
-@@ -29,12 +29,13 @@ import (
+@@ -32,12 +32,13 @@ import (
  )
  
  var (
@@ -22,7 +22,7 @@ index d56c1bc..b53a11d 100644
  )
  
  var (
-@@ -84,6 +85,7 @@ func init() {
+@@ -99,6 +100,7 @@ func init() {
  	watchCmd.Flags().BoolVar(&watchStop, "stop", false, "Stop the background watcher")
  	watchCmd.Flags().StringVar(&watchWorkspace, "workspace", "", "Workspace name for multi-project mode")
  	watchCmd.Flags().BoolVar(&watchNoUI, "no-ui", false, "Disable interactive UI in foreground mode")
@@ -30,7 +30,7 @@ index d56c1bc..b53a11d 100644
  }
  
  func runWatch(cmd *cobra.Command, args []string) error {
-@@ -353,6 +355,9 @@ func startBackgroundWatch(logDir, worktreeID string) error {
+@@ -371,6 +373,9 @@ func startBackgroundWatch(logDir, worktreeID string) error {
  	if watchLogDir != "" {
  		args = append(args, "--log-dir", watchLogDir)
  	}
@@ -40,7 +40,7 @@ index d56c1bc..b53a11d 100644
  
  	// Spawn background process
  	var childPID int
-@@ -1850,7 +1855,11 @@ func runWatchForeground() error {
+@@ -2160,7 +2165,11 @@ func runWatchForeground() error {
  	defer emb.Close()
  
  	// Discover linked worktrees (only from main worktree) for initial ready semantics.
@@ -53,11 +53,11 @@ index d56c1bc..b53a11d 100644
  	initialTotalProjects := 1 + len(linkedWorktrees)
  	if len(linkedWorktrees) > 0 {
  		if !isBackgroundChild {
-@@ -1948,6 +1957,7 @@ func runWatchForeground() error {
+@@ -2245,6 +2254,7 @@ func runWatchForeground() error {
  		emb,
  		withWatchSupervisorBackgroundChild(isBackgroundChild),
  		withWatchSupervisorInitialLinkedWorktrees(linkedWorktrees),
 +		withWatchSupervisorDiscoverWorktrees(discoverWorktrees),
- 		withWatchSupervisorInitialReadySelector(func(mainRoot, currentRoot string) bool {
- 			if !isBackgroundChild {
- 				return true
+ 		withWatchSupervisorInitialReadyObserver(func(_ int) error {
+ 			return initialReadyObserver(initialTotalProjects)
+ 		}),

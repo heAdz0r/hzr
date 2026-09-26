@@ -183,6 +183,11 @@ fn test_stdio_mcp_cancels_in_flight_tool_without_late_response() -> anyhow::Resu
     };
     config.daemon.bind = address;
     config.daemon.request_timeout_ms = 10_000;
+    // 0.11.1: pin an empty engine directory so a grepai installed on the host PATH
+    // (of whatever version) never takes part in the workspace initialization.
+    let engines_dir = directory.path().join("engines");
+    fs::create_dir_all(&engines_dir)?;
+    config.engines.directory = Some(engines_dir);
     config.write(&config_path)?;
     let initialized = Command::new(env!("CARGO_BIN_EXE_hzr"))
         .args([

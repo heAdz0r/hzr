@@ -42,7 +42,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.92.0
       - uses: actions/setup-go@v6
         with:
-          go-version: 1.24.2
+          go-version: 1.25.5
           cache: false
       - uses: oven-sh/setup-bun@v2
         with:

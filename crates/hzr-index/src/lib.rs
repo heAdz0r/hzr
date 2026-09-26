@@ -20,7 +20,7 @@ pub use generation::{CACHE_SCHEMA_VERSION, IndexGeneration};
 pub use grepai::{
     Deadlines, EmbeddingProvider, GrepAi, IndexStatus, InitOptions, InitOutcome,
     SINGLE_WORKTREE_WATCH_FLAG, SUPPORTED_GREPAI_VERSION, StoreBackend,
-    restore_gitignore_if_only_grepai_added,
+    is_only_grepai_gitignore_append, restore_gitignore_if_only_grepai_added,
 };
 pub use migration::{
     INDEX_MIGRATION_SCHEMA_VERSION, IndexArchiveManifest, IndexArchiveOutcome, IndexArchiveState,

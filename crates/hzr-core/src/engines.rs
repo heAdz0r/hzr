@@ -64,15 +64,15 @@ mod tests {
             .find(|engine| engine.name == "grepai")
             .expect("grepai pin");
 
-        assert_eq!(grepai.version, "0.35.0");
-        assert_eq!(grepai.tag, "v0.35.0");
+        assert_eq!(grepai.version, "0.37.0");
+        assert_eq!(grepai.tag, "v0.37.0");
         assert_eq!(
             grepai.patches,
-            ["patches/grepai/0.35.0-disable-worktree-discovery.patch"]
+            ["patches/grepai/0.37.0-disable-worktree-discovery.patch"]
         );
         assert_eq!(
             grepai.patch_sha256,
-            ["55535352bc9f4837198c652b8c44ec54a0a7ef82fbd81e11b4ec11f4c4082991"]
+            ["4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f"]
         );
 
         let icm = manifest
@@ -81,18 +81,21 @@ mod tests {
             .find(|engine| engine.name == "icm")
             .expect("ICM pin");
         // 0.8.1: the Cargo.lock refresh plus the parent-watchdog patch.
+        // 0.11.1: plus the HTTP /recall filter-headroom patch.
         assert_eq!(
             icm.patches,
             [
                 "patches/icm/0.10.61-refresh-workspace-lock.patch",
-                "patches/icm/0.10.61-exit-with-parent.patch"
+                "patches/icm/0.10.61-exit-with-parent.patch",
+                "patches/icm/0.10.61-http-recall-filter-headroom.patch" // 0.11.1
             ]
         );
         assert_eq!(
             icm.patch_sha256,
             [
                 "cd38e20e32f352bfde93a4ce297799ef8b5f984f8af928409ef0f3e47102e586",
-                "c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8"
+                "c2e6bde8b70c9fa4baa2383cbf7eb641c31b201c0a3b6cb44cff19b538b7cda8",
+                "2562ed26c3df8f48a9d19ca351a916afdd2b60c6439e9d7e58662085baed6730" // 0.11.1
             ]
         );
 
