@@ -283,7 +283,7 @@ pub fn execute(
     } else {
         let d = &config.delegation;
         println!(
-            "Delegation: {}\nWorker: {} / {}\nLimits: {} turns, {} ms\nCredential: {}\nParent model: unchanged",
+            "Delegation: {}\nWorker: {} / {}\nLimits: {}-turn quota, extended up to 5 times while the worker makes progress; {} ms overall\nCredential: {}\nParent model: unchanged", // 0.10.1
             if d.enabled { "enabled" } else { "disabled" },
             d.provider,
             d.model,

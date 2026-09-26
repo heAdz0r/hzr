@@ -4,6 +4,35 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-26
+
+`hzr delegate` checked against real tasks and the upstream astra-flash-orchestrator contract,
+the read path made lossless for code, and every repair applied automatically to existing
+repositories by `hzr doctor --fix` and the post-upgrade fleet pass.
+
+### Fixed
+
+- Delegated workers read command output. `hzr_exec` returned the daemon's execution record with stdout as an array of byte numbers plus the managed route script — 2.5 KB of test output arrived as 14 KB the model could barely parse, and a worker spent ten turns re-running one command. It now gets `exit N · ms` and the text. `hzr_read`/`hzr_edit`/`hzr_write` return plain text instead of a JSON envelope with JSON-escaped file content.
+- Worker commands run with the caller's `PATH`; they ran under the daemon's launchd `PATH` and could not find `npm`, `cargo` or `go`.
+- A run that ends without a final answer no longer fails as "model response is empty" with edits already on disk and a pointer to the credential. HZR writes the report from the worker's actual activity (changed files, commands with their status, last output) and `hzr delegate` exits 2.
+- A failing fork command (reading a missing file, creating over an existing one) returns its own error instead of HTTP 500 "executed without an accounting receipt; do not retry".
+- The default read level no longer strips comments. `cat` through HZR removed every non-doc line comment and block comment, and a `/*` inside a string literal (a glob such as `src/**/*.js`) deleted code up to the next `*/`; agents then edited or rewrote files from that view. Stripping stays behind the explicit `--level aggressive`.
+- A default read of a Markdown document returns its text in the bounded window instead of a digest; the digest sent agents back with `--level none` 131 times in two weeks. Lock-file and manifest digests are unchanged.
+- HZR's `.grepai` index link and an HZR-created `.codex/config.toml` are kept out of `git status` through the repository's local `info/exclude`; the fleet pass no longer writes `.codex/config.toml` into repositories on machines without Codex.
+- Delegation failures name their cause (timeout, rejected credential, rate limit) instead of always pointing at `hzr doctor`.
+
+### Changed
+
+- `max_turns` is the size of a turn quota. A worker still making progress when a quota ends gets another, up to five, within `timeout_ms`; a worker repeating the same failing results does not. Two turns before a quota ends the worker is told where it stands, and the final quota asks for the report.
+- The worker's harness contract carries the upstream worker instructions: own discovery and checks, stop after the same failure twice, and end with STATUS, changed paths, verification commands with exit codes and open risks.
+- `hzr delegate` prints the report plus one summary line (status, turns, tool calls, time, worker tokens, changed files). `--json` is one compact object with the same data; the full event stream (112 KB for a six-second task) moved to the session's `events.jsonl`. The bridge no longer streams every partial message to the parent process.
+- The delegation heartbeat reports turns, tool calls and the running tool every 30 seconds; `delegation.json` records `incomplete` and the reason of a failure. Worker operations are attributed to `hzr-delegate` in the ledger.
+- The managed block says `cat`, `sed -n` and `head` through the hook are exact, so raw-fidelity is kept for bytes no filter may touch — the bypass the transcript audit found most often (246 raw reads in two weeks).
+
+### Added
+
+- `hzr doctor --fix` repairs HZR leftovers in the working tree idempotently: excludes the managed `.grepai` link and an HZR `.codex/config.toml` from `git status`, deletes untracked zero-byte `*.rtk-lock` files from HZR < 0.10.0, and refreshes stale managed instruction blocks itself. `hzr doctor --reconcile-fleet --fix`, which runs automatically after an upgrade, applies the same repair to every registered workspace. A second run changes nothing.
+
 ## [0.10.0] - 2026-09-25
 
 An external evaluation measured HZR and upstream RTK v0.50.0 on a Go repository and concluded
@@ -1958,6 +1987,7 @@ First public HZR release.
 [0.6.6]: https://github.com/heAdz0r/hzr/compare/v0.6.5...v0.6.6
 [0.8.603]: https://github.com/heAdz0r/hzr/compare/v0.8.602...v0.8.603
 [0.8.602]: https://github.com/heAdz0r/hzr/compare/v0.8.7...v0.8.602
+[0.10.1]: https://github.com/heAdz0r/hzr/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/heAdz0r/hzr/compare/v0.9.13...v0.10.0
 [0.9.13]: https://github.com/heAdz0r/hzr/compare/v0.9.12...v0.9.13
 [0.9.5]: https://github.com/heAdz0r/hzr/compare/v0.9.4...v0.9.5

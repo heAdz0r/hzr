@@ -530,11 +530,30 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 None
             };
-            // 0.10.0: `--fix` closes stale open daemon-unreachable accounting gaps left by an
+            // 0.10.1: `--fix` closes stale open daemon-unreachable accounting gaps left by an
             // earlier outage, so `hzr stats` stops reporting `▲ LIVE DEGRADED` for a condition
             // the operator has already fixed by restoring the daemon.
             let accounting_gap_repair = if fix && !dry_run {
                 diagnostics::repair_accounting_gaps(&config).await?
+            } else {
+                None
+            };
+            // 0.10.1: `--fix` refreshes stale managed instruction blocks itself instead of
+            // telling the operator to run `hzr init --if-needed` (the same reconcile SessionStart
+            // applies; idempotent, backed up, CAS-committed).
+            let instruction_repair = if fix && !dry_run {
+                Some(
+                    reconcile_agent_instructions(&config, &workspace)
+                        .map_err(|error| format!("{error:#}")),
+                )
+            } else {
+                None
+            };
+            // 0.10.1: leftovers of earlier HZR versions in this working tree
+            let hygiene_repair = if fix {
+                Some(diagnostics::repair_workspace_hygiene(
+                    &config, &workspace, dry_run,
+                )?)
             } else {
                 None
             };
@@ -564,7 +583,7 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             report.fidelity_reconcile = fidelity_reconcile;
             report.fleet_reconcile = fleet_reconcile;
             report.orphan_cleanup = orphan_cleanup; // 0.8.3
-            report.accounting_gap_repair = accounting_gap_repair; // 0.10.0
+            report.accounting_gap_repair = accounting_gap_repair; // 0.10.1
             if let Some(fleet) = &report.fleet_reconcile {
                 let completion = fleet.completion_check();
                 if completion.status == diagnostics::CheckStatus::Error {
@@ -603,12 +622,28 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 }
                 if let Some(fleet) = &report.fleet_reconcile {
                     print_fleet_reconcile(fleet)?;
+                    // 0.10.1: per-workspace leftovers repaired by the same pass
+                    for repair in fleet.hygiene.iter().filter(|repair| repair.changed()) {
+                        output::print_hygiene_repair(repair)?;
+                    }
                 }
                 if let Some(cleanup) = &report.orphan_cleanup {
                     output::print_orphan_cleanup(cleanup)?; // 0.8.3
                 }
                 if let Some(count) = report.accounting_gap_repair {
-                    output::print_accounting_gap_repair(count)?; // 0.10.0
+                    output::print_accounting_gap_repair(count)?; // 0.10.1
+                }
+                match &instruction_repair {
+                    Some(Ok(application)) => {
+                        for report in application.reports.iter().filter(|report| report.changed) {
+                            println!("instructions refreshed: {}", report.path.display()); // 0.10.1
+                        }
+                    }
+                    Some(Err(error)) => println!("instructions not refreshed: {error}"),
+                    None => {}
+                }
+                if let Some(repair) = hygiene_repair.as_ref().filter(|repair| repair.changed()) {
+                    output::print_hygiene_repair(repair)?; // 0.10.1
                 }
                 if let Some(repairs) = &report.client_ownership_repair {
                     for repair in repairs {
@@ -1503,7 +1538,7 @@ async fn run_install(options: InstallOptions, config_path: &Path, json: bool) ->
             for root in roots {
                 let preview =
                     apply_agent_instruction_state(&config, &root, &contract, false, true, true)?;
-                // 0.10.0: only targets the install will write are validated and captured; an
+                // 0.10.1: only targets the install will write are validated and captured; an
                 // untouched obsolete target (a symlinked repository CLAUDE.md) is not ours.
                 for report in preview.reports.into_iter().filter(|report| report.changed) {
                     adoption::validate_lifecycle_target(&report.path)?;
@@ -2960,7 +2995,7 @@ async fn initialize_if_needed(
     if !json {
         let update_notice = update::startup_notice(&config.data_dir).await;
         if session_start_hook {
-            // 0.10.0: no per-session codec notice — the managed block already asks for
+            // 0.10.1: no per-session codec notice — the managed block already asks for
             // concise answers, and a quiet session start adds nothing to the context.
             if let Some(payload) =
                 session_start_payload(instruction_alert.as_deref(), update_notice.as_deref(), None)
@@ -3078,7 +3113,7 @@ fn reconcile_session_surfaces(
 )> {
     let instruction_plan = plan_agent_instructions(config, workspace_root)?;
     let binary = project_mcp_binary()?;
-    let mcp_plan = client_config::session_project_codex(&binary, workspace_root, true)?; // 0.10.0
+    let mcp_plan = client_config::session_project_codex(&binary, workspace_root, true)?; // 0.10.1
     let mut transaction = InitTransaction::acquire(config_path, workspace_root, &config.data_dir)?;
     for report in &instruction_plan.reports {
         if let Some(parent) = report.path.parent() {
@@ -3121,7 +3156,7 @@ fn reconcile_session_surfaces(
             }
         }
         inject_init_failure("after_session_instructions")?;
-        let mcp = client_config::session_project_codex(&binary, workspace_root, false)?; // 0.10.0
+        let mcp = client_config::session_project_codex(&binary, workspace_root, false)?; // 0.10.1
         if mcp.changed {
             transaction.mark_written(&mcp.path)?;
             if let Some(backup) = &mcp.backup_path {
@@ -3134,6 +3169,9 @@ fn reconcile_session_surfaces(
     match applied {
         Ok(applied) => {
             transaction.commit();
+            // 0.10.1: after the transaction, never inside it: keep HZR's `.grepai` link and
+            // Codex pin out of `git status`. Best effort, idempotent.
+            let _ = diagnostics::repair_workspace_excludes(config, workspace_root);
             Ok(applied)
         }
         Err(error) => {
@@ -4573,8 +4611,13 @@ async fn execute_agent(
         .data_dir
         .join("sessions")
         .join(SessionId::new().to_string());
-    let mut agent_config =
-        ManagedAgentConfig::new(node, integration_layout(config), workspace, agent_data, api);
+    let mut agent_config = ManagedAgentConfig::new(
+        node,
+        integration_layout(config),
+        workspace,
+        agent_data.clone(),
+        api,
+    );
     agent_config.timeout = Duration::from_millis(timeout_ms);
     if delegated {
         agent_config.worker = Some(hzr_agent::WorkerConfig {
@@ -4584,33 +4627,108 @@ async fn execute_agent(
         });
     }
     let agent = ManagedAgent::new(agent_config);
+    let progress_file = agent_data.join("delegation.json");
+    let started = std::time::Instant::now();
     let running = agent.run(&prompt, response_format.into(), max_turns);
     tokio::pin!(running);
+    // 0.10.1: one progress line every 30 s, with what the worker is doing, instead of a bare
+    // "still working" every 15 s that told the parent nothing.
     let mut heartbeat = tokio::time::interval_at(
-        tokio::time::Instant::now() + Duration::from_secs(15),
-        Duration::from_secs(15),
+        tokio::time::Instant::now() + Duration::from_secs(30),
+        Duration::from_secs(30),
     );
     let run = loop {
         tokio::select! {
-            // A delegated run fails on the operator's machine, not in their code: the worker
-            // credential, the engine bundle and the repository rules it is given are all
-            // conditions `hzr doctor` names one by one. Say so instead of ending at the symptom.
             result = &mut running => break match result {
                 Ok(run) => run,
-                Err(error) if delegated => bail!(
-                    "{error}; run `hzr doctor` for the worker credential, the engine bundle and the repository rules this workspace hands the worker"
-                ),
+                Err(error) if delegated => bail!("{}", delegation_failure(&error, max_turns, timeout_ms)),
                 Err(error) => return Err(error.into()),
             },
             signal = tokio::signal::ctrl_c() => {
                 signal.context("cannot listen for cancellation")?;
                 bail!("managed agent cancelled");
             },
-            _ = heartbeat.tick() => eprintln!("hzr agent is still working"),
+            _ = heartbeat.tick() => eprintln!("{}", delegation_progress_line(&progress_file, started.elapsed())),
         }
     };
+    persist_agent_events(&agent_data, &run);
     print_agent(&run, json)?;
-    Ok(ExitCode::SUCCESS)
+    // 0.10.1: an exhausted budget is not a success the parent can script on
+    Ok(if run.status == "completed" {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    })
+}
+
+/// A failed delegation, named by its cause. (0.10.1)
+///
+/// Every failure used to end with "run `hzr doctor` for the worker credential, the engine
+/// bundle and the repository rules", including a worker that had simply run out of turns.
+/// Only the failures doctor can diagnose point there now.
+fn delegation_failure(error: &hzr_agent::RunError, max_turns: u32, timeout_ms: u64) -> String {
+    use hzr_agent::RunError;
+    let text = error.to_string();
+    match error {
+        RunError::Timeout => format!(
+            "{text}: the worker did not finish within {} s; narrow the task or raise `hzr settings delegation --timeout-ms`",
+            timeout_ms / 1000
+        ),
+        RunError::CaptureLimit(_) => format!("{text}; narrow the task"),
+        RunError::BridgeExit { stderr, .. }
+            if stderr.contains("401")
+                || stderr.contains("403")
+                || stderr.contains("credential") =>
+        {
+            format!("{text}; the provider rejected the worker credential: run `hzr settings login`")
+        }
+        RunError::BridgeExit { stderr, .. } if stderr.contains("429") => {
+            format!("{text}; the provider is rate limiting the worker: retry later")
+        }
+        RunError::BridgeExit { stderr, .. } if stderr.contains("max_turns") => format!(
+            "{text}; the worker used its {max_turns} turns: raise `hzr settings delegation --max-turns`"
+        ),
+        RunError::Preflight(_) | RunError::Spawn(_) => format!(
+            "{text}; run `hzr doctor` for the worker credential, the engine bundle and the repository rules this workspace hands the worker"
+        ),
+        _ => format!("{text}; details are in `hzr doctor` and the session's delegation.json"),
+    }
+}
+
+/// `worker: 7 turns, 9 tool calls (hzr_exec), 64 s` from the bridge's progress file. (0.10.1)
+fn delegation_progress_line(progress_file: &Path, elapsed: Duration) -> String {
+    let progress = std::fs::read(progress_file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    match progress {
+        Some(state) => format!(
+            "hzr worker: {} turns, {} tool calls{}, {} s",
+            state["turns"].as_u64().unwrap_or(0),
+            state["tool_calls"].as_u64().unwrap_or(0),
+            state["current_tool"]
+                .as_str()
+                .map(|tool| format!(" (running {tool})"))
+                .unwrap_or_default(),
+            elapsed.as_secs()
+        ),
+        None => format!("hzr worker: starting, {} s", elapsed.as_secs()),
+    }
+}
+
+/// Keep the full event stream for diagnosis in the session directory, off stdout. (0.10.1)
+fn persist_agent_events(agent_data: &Path, run: &hzr_agent::AgentRun) {
+    if !agent_data.is_dir() {
+        return;
+    }
+    let mut encoded = String::new();
+    for event in &run.events {
+        let line = serde_json::json!({
+            "seq": event.seq, "request_id": event.request_id, "kind": event.kind, "data": event.data,
+        });
+        encoded.push_str(&line.to_string());
+        encoded.push('\n');
+    }
+    let _ = std::fs::write(agent_data.join("events.jsonl"), encoded);
 }
 
 async fn show_stats(
@@ -4894,7 +5012,7 @@ mod tests {
         assert!(rendered.contains("Do not install it without explicit approval."));
         assert!(
             !rendered.contains("HZR CODEC"),
-            "0.10.0: no per-session codec notice"
+            "0.10.1: no per-session codec notice"
         );
     }
 

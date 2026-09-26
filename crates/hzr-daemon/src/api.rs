@@ -3177,7 +3177,15 @@ pub async fn fork_run(
         .execute_accounted(invocation)
         .await
         .map_err(|error| ApiError::service("fork_core_failed", error.to_string(), true))?;
-    commit_fork_accounting(
+    // 0.10.1: a fork command that fails before it writes a receipt — reading a missing file,
+    // creating over an existing one — used to surface as HTTP 500 "executed without an
+    // accounting receipt; do not retry", hiding the command's own error from the agent. The
+    // gap is still recorded; the caller now gets the command's output and exit status.
+    let failed_before_receipt = matches!(
+        &executed.outcome,
+        ExecutionOutcome::Completed { result } if result.termination.exit_code != Some(0)
+    );
+    if let Err(error) = commit_fork_accounting(
         &state,
         &executed.accounting,
         &project_path,
@@ -3186,7 +3194,12 @@ pub async fn fork_run(
         &operation_family,
         command_summary,
     )
-    .await?;
+    .await
+    {
+        if !failed_before_receipt {
+            return Err(error);
+        }
+    }
     let outcome = executed.outcome;
     let result = match outcome {
         ExecutionOutcome::Completed { result } => result,

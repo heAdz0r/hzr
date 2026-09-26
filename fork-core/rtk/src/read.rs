@@ -97,8 +97,13 @@ pub fn run(
     dedup: bool,
     verbose: u8,
 ) -> Result<()> {
+    // 0.10.1: a Markdown document read by default is exact text in the bounded window. Its
+    // digest sent agents straight back with `--level none` (131 re-reads in two weeks, 42 of
+    // them immediately after a digest); the digest remains behind `--level aggressive`.
+    let document_as_text = level == FilterLevel::Minimal && read_digest::is_document(file);
     let preserve_special_digest = default_output_budget
         && level != FilterLevel::None
+        && !document_as_text
         && read_digest::has_special_digest(file);
     // 0.10.0: the default budget bounds files too large to show whole, not line counts. A
     // 500-line file of short lines fits the host's window, and cutting it at 400 lines cost a
@@ -236,6 +241,7 @@ pub fn run(
         && max_lines.is_none()
         && !line_numbers
         && content_bytes.len() > SPECIAL_DIGEST_MIN_BYTES
+        && !document_as_text
         && read_digest::has_special_digest(file)
     {
         let content_str = String::from_utf8_lossy(&content_bytes);

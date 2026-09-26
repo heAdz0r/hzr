@@ -17,11 +17,10 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 137
-# Recomputed for 0.10.0. The golangci-lint rewrite reads `Issue.text` and `Position.line/column`,
-# removing four dead_code warnings (two targets each); the Go, diff, read and guard ports moved
-# existing diagnostics' line numbers. A (code, message, file) multiset comparison against
-# 0.9.13 shows no warning added.
-EXPECTED_SHA256 = "d5f4b7edcde572f135795b3ac48382fa93e48a96fa4b1e2649ebdb3ce5b9c9a3"
+# Recomputed for 0.10.1: the lossless read filter and the Markdown/read changes moved existing
+# diagnostics' line numbers (and dropped the now-unused CommentPatterns.doc_line). A
+# (code, message, file) multiset comparison against 0.10.0 shows no warning added or removed.
+EXPECTED_SHA256 = "6514ca48356738a9a16ec66711bb644970cbce4ee444c239ecc82ced87cbbed1"
 
 
 def main() -> int:

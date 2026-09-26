@@ -33,6 +33,12 @@ pub struct AgentRun {
     pub text: String,
     pub json: Option<Value>,
     pub events: Vec<AgentEvent>,
+    /// `completed`, or `incomplete` when the worker ended without a final report. (0.10.1)
+    pub status: String,
+    /// Deterministic record of the worker's turns, tool calls, changed files, commands and
+    /// usage, independent of what the model wrote. (0.10.1)
+    pub activity: Option<Value>,
+    pub duration_ms: Option<u64>,
 }
 
 pub struct ManagedAgent {
@@ -240,11 +246,22 @@ impl ManagedAgent {
             ));
         }
 
+        let status = result
+            .data
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("completed")
+            .to_owned();
+        let activity = result.data.get("activity").cloned();
+        let duration_ms = result.data.get("duration_ms").and_then(Value::as_u64);
         Ok(AgentRun {
             request_id,
             text,
             json,
             events,
+            status,
+            activity,
+            duration_ms,
         })
     }
 }

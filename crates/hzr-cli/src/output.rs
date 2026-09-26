@@ -344,27 +344,57 @@ pub fn print_execution(outcome: &ExecutionOutcome, json: bool) -> io::Result<Exi
 }
 
 pub fn print_agent(run: &AgentRun, json: bool) -> io::Result<()> {
+    // 0.10.1: the parent pays for every byte printed here. The full event stream (112 KB for a
+    // six-second task) goes to the session's events.jsonl; stdout carries the answer and a
+    // deterministic summary of what the worker did.
     if json {
-        let events = run
-            .events
-            .iter()
-            .map(|event| {
-                serde_json::json!({
-                    "seq": event.seq,
-                    "request_id": event.request_id,
-                    "kind": event.kind,
-                    "data": event.data,
-                })
-            })
-            .collect::<Vec<_>>();
         return print_json(&serde_json::json!({
             "request_id": run.request_id,
+            "status": run.status,
             "text": run.text,
             "response": run.json,
-            "events": events,
+            "duration_ms": run.duration_ms,
+            "activity": run.activity,
         }));
     }
-    io::stdout().lock().write_all(run.text.as_bytes())
+    let mut out = io::stdout().lock();
+    out.write_all(run.text.trim_end().as_bytes())?;
+    writeln!(out)?;
+    if let Some(footer) = agent_footer(run) {
+        writeln!(out, "{footer}")?;
+    }
+    Ok(())
+}
+
+/// One line the parent can accept or reject on: status, effort, usage, changed files. (0.10.1)
+pub fn agent_footer(run: &AgentRun) -> Option<String> {
+    let activity = run.activity.as_ref()?;
+    let number = |value: &serde_json::Value| value.as_u64().unwrap_or(0);
+    let usage = &activity["usage"];
+    let changed = activity["changed_files"]
+        .as_array()
+        .map(|files| {
+            files
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .filter(|files| !files.is_empty())
+        .unwrap_or_else(|| "none".to_owned());
+    let seconds = run
+        .duration_ms
+        .map(|ms| format!(" · {:.1}s", ms as f64 / 1000.0))
+        .unwrap_or_default();
+    Some(format!(
+        "[worker {} · {} turns · {} tool calls{seconds} · tokens in {} / cache {} / out {} · changed: {changed}]",
+        run.status,
+        number(&activity["turns"]),
+        number(&activity["tool_calls"]),
+        number(&usage["input"]),
+        number(&usage["cache_read"]),
+        number(&usage["output"]),
+    ))
 }
 
 pub fn print_stats(report: &StatsReport) -> io::Result<()> {
@@ -393,6 +423,27 @@ pub fn print_index_archive(outcome: &hzr_index::IndexArchiveOutcome) -> io::Resu
         manifest.backup.display,
         manifest.tree_sha256,
         manifest_path.display()
+    )
+}
+
+/// One line per repaired working tree. (0.10.1)
+pub fn print_hygiene_repair(repair: &crate::diagnostics::WorkspaceHygieneRepair) -> io::Result<()> {
+    let verb = if repair.dry_run { "would" } else { "did" };
+    let mut actions = Vec::new();
+    if !repair.excluded.is_empty() {
+        actions.push(format!("exclude {}", repair.excluded.join(", ")));
+    }
+    if repair.removed_lock_files > 0 {
+        actions.push(format!(
+            "remove {} legacy lock file(s)",
+            repair.removed_lock_files
+        ));
+    }
+    writeln!(
+        io::stdout().lock(),
+        "workspace hygiene {}: {verb} {}",
+        repair.workspace.display(),
+        actions.join(", ")
     )
 }
 

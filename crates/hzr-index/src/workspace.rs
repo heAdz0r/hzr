@@ -331,6 +331,49 @@ impl Workspace {
         }
     }
 
+    /// Keep HZR's `.grepai` link out of the repository's `git status`. (0.10.1)
+    ///
+    /// grepai finds its store through `<root>/.grepai`, so the link has to exist, but every
+    /// repository HZR indexed showed it as an untracked file. The entry goes to the local
+    /// `info/exclude` of the git common directory, never a tracked `.gitignore`. Called by the
+    /// daemon's index coordinator, never inside a CLI lifecycle transaction (which reconciles
+    /// the same file). Best effort and idempotent.
+    pub fn exclude_managed_entry(&self) {
+        let Some(common_dir) = self.identity.git_common_dir.as_ref() else {
+            return;
+        };
+        let Ok(relative) = self.index.project_entry.strip_prefix(&self.identity.root) else {
+            return;
+        };
+        let managed_link = fs::symlink_metadata(&self.index.project_entry)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink());
+        if !managed_link {
+            return;
+        }
+        let pattern = format!("/{}", relative.to_string_lossy());
+        let exclude = common_dir.join("info").join("exclude");
+        let before = fs::read_to_string(&exclude).unwrap_or_default();
+        let bare = pattern.trim_start_matches('/');
+        if before
+            .lines()
+            .map(str::trim)
+            .any(|line| line == pattern || line == bare)
+        {
+            return;
+        }
+        let mut after = before;
+        if !after.is_empty() && !after.ends_with('\n') {
+            after.push('\n');
+        }
+        after.push_str("# HZR: managed grepai index link\n");
+        after.push_str(&pattern);
+        after.push('\n');
+        if let Some(parent) = exclude.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(&exclude, after);
+    }
+
     pub async fn git_worktree_count(&self, deadline: Duration) -> Result<usize> {
         if self.identity.git_common_dir.is_none() {
             return Ok(1);

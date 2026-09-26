@@ -68,7 +68,7 @@
       "id": "exact_raw",
       "instead_of": "Exact unfiltered output",
       "command": "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'",
-      "guidance": "reason: binary, checksum, machine_protocol, complete_log, full_patch or verbatim_source.",
+      "guidance": "reason: binary, checksum, machine_protocol, complete_log, full_patch or verbatim_source. `cat`, `sed -n` and `head` through the hook are already exact.",
       "managed_block": true
     }
   ],

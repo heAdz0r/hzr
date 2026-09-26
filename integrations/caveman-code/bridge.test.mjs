@@ -199,6 +199,7 @@ test("production preparation owns tools and disables duplicate subsystems in ord
         return { tokens: {}, assistantMessages: 0 };
       },
       abort() {},
+      steer() {},
     };
     return { session, modelFallbackMessage: null };
   };
@@ -447,4 +448,90 @@ test("an instruction head cuts on a line boundary and never splits a code point"
   const head = instructionHead(multibyte, 8);
   assert.equal(head, "界".repeat(2));
   assert.equal(Buffer.byteLength(head), 6);
+});
+
+// 0.10.1: exec output reaches the worker as shell text, not a byte-number array
+test("renderExecOutcome decodes captured bytes and names the exit status", async () => {
+  const { renderExecOutcome } = await import("./bridge.mjs");
+  const outcome = {
+    outcome: "completed",
+    result: {
+      termination: { cause: "exited", exit_code: 1, signal: null },
+      duration_ms: 42,
+      stdout: { content: { storage: "inline", bytes: [...Buffer.from("ok 1\nnot ok 2\n")] }, total_bytes: 14, stored_bytes: 14, truncated: false },
+      stderr: { content: { storage: "inline", bytes: [] }, total_bytes: 0, stored_bytes: 0, truncated: false },
+      executed: { kind: "shell", shell: "/bin/sh", command: "# HZR managed route\n..." },
+      decision: { kind: "allow_rewrite" },
+    },
+  };
+  const text = await renderExecOutcome(JSON.stringify(outcome));
+  assert.equal(text, "exit 1 · 42 ms\nok 1\nnot ok 2");
+  assert.equal(
+    await renderExecOutcome(JSON.stringify({ outcome: "not_started", disposition: { state: "denied", reason: "policy" } })),
+    "not started (denied): policy",
+  );
+  assert.equal(await renderExecOutcome("plain text"), "plain text");
+});
+
+test("an exhausted turn budget still reports changed files and failing commands", async () => {
+  const { createActivityLog, synthesizeIncompleteReport } = await import("./bridge.mjs");
+  const log = createActivityLog();
+  const result = (text) => ({ content: [{ type: "text", text }] });
+  log.observe({ type: "tool_execution_start", toolCallId: "1", toolName: "hzr_edit", args: { path: "src/a.js" } });
+  log.observe({ type: "tool_execution_end", toolCallId: "1", toolName: "hzr_edit", result: result("{}"), isError: false });
+  for (const id of ["2", "3"]) {
+    log.observe({ type: "tool_execution_start", toolCallId: id, toolName: "hzr_exec", args: { command: "npm test" } });
+    log.observe({ type: "tool_execution_end", toolCallId: id, toolName: "hzr_exec", result: result("exit 1 · 5 ms\nFAIL"), isError: false });
+  }
+  for (let turn = 0; turn < 3; turn += 1) {
+    log.observe({ type: "message_end", message: { role: "assistant", usage: { input: 10, output: 2, cacheRead: 5 } } });
+  }
+  const summary = log.summary();
+  assert.deepEqual(summary.changed_files, ["src/a.js"]);
+  assert.deepEqual(summary.commands, [{ command: "npm test", status: "exit 1", count: 2 }]);
+  assert.deepEqual(summary.usage, { input: 30, output: 6, cache_read: 15 });
+  const report = synthesizeIncompleteReport(summary, 3);
+  assert.match(report, /^STATUS: incomplete — the worker used 3 turns in 1 quota\(s\)/);
+  assert.match(report, /stopped making progress/);
+  assert.match(report, /Changed files: src\/a\.js/);
+  assert.match(report, /`npm test` → exit 1 \(×2\)/);
+});
+
+test("stdout events drop the token stream and bulky payloads", async () => {
+  const { compactAgentEvent } = await import("./bridge.mjs");
+  const end = compactAgentEvent({
+    type: "message_end",
+    message: { role: "assistant", stopReason: "stop", usage: { input: 1 }, content: [{ type: "text", text: "x".repeat(10_000) }] },
+  });
+  assert.deepEqual(end, { type: "message_end", message: { role: "assistant", stopReason: "stop", usage: { input: 1 } } });
+  assert.deepEqual(compactAgentEvent({ type: "agent_end", messages: [1, 2, 3] }), { type: "agent_end" });
+});
+
+test("quota extension requires progress, not repetition", async () => {
+  const { createActivityLog } = await import("./bridge.mjs");
+  const log = createActivityLog();
+  const result = (text) => ({ content: [{ type: "text", text }] });
+  const exec = (id, command, text) => {
+    log.observe({ type: "tool_execution_start", toolCallId: id, toolName: "hzr_exec", args: { command } });
+    log.observe({ type: "tool_execution_end", toolCallId: id, toolName: "hzr_exec", result: result(text), isError: false });
+  };
+  exec("1", "npm test", "exit 1 · 5 ms");
+  let mark = log.checkpoint();
+  exec("2", "npm test", "exit 1 · 6 ms");
+  assert.equal(log.progressSince(mark), false, "same command, same failure");
+  exec("3", "npm test", "exit 0 · 6 ms");
+  assert.equal(log.progressSince(mark), true, "the failing check turned green");
+  mark = log.checkpoint();
+  log.observe({ type: "tool_execution_start", toolCallId: "4", toolName: "hzr_read", args: { path: "src/b.js" } });
+  log.observe({ type: "tool_execution_end", toolCallId: "4", toolName: "hzr_read", result: result("x"), isError: false });
+  assert.equal(log.progressSince(mark), true, "a newly examined file");
+});
+
+test("fork results reach the worker as text, failures with their status", async () => {
+  const { renderForkResult } = await import("./bridge.mjs");
+  const ok = JSON.stringify({ stdout: "line 1\nline 2\n", stderr: "", termination: "exited", exit_code: 0, stdout_sha256: "ab", stdout_truncated: false });
+  assert.equal(renderForkResult(ok), "line 1\nline 2");
+  const failed = JSON.stringify({ stdout: "", stderr: "Error: file exists; pass --force\n", termination: "exited", exit_code: 1 });
+  assert.equal(renderForkResult(failed), "exit 1\nError: file exists; pass --force");
+  assert.equal(renderForkResult("not json"), "not json");
 });

@@ -319,6 +319,14 @@ fn parse_f64_ascii(bytes: &[u8]) -> Option<f64> {
 // ── Filename-based special format digests (PR-6) ────────────
 
 /// Check if a file has a special format digest strategy.
+/// Whether `file` is a prose document whose digest replaces content an agent reads for its
+/// substance. (0.10.1)
+pub fn is_document(file: &Path) -> bool {
+    file.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("mdx"))
+}
+
 pub fn has_special_digest(file: &Path) -> bool {
     special_strategy(file).is_some()
 }

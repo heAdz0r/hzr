@@ -118,7 +118,7 @@ Native Read, Grep, Glob, Edit and Write stay the default in hosts that have them
 whole-file read or an edit through a shell saves no tokens (the content or the patch is the
 same) and collides with repositories that forbid shell file writes. The routes above add
 value where they bound output (`--outline`, line ranges, filtered shell output) or add a
-guarantee (atomic multi-file `hzr write batch`, exact recovery). (0.10.0)
+guarantee (atomic multi-file `hzr write batch`, exact recovery). (0.10.1)
 
 Managed execution forwards the caller's validated `PATH` to the daemon, including through an
 approval, but does not copy the rest of the caller environment. Commands that need explicit
@@ -171,6 +171,26 @@ preload split as `delegation_instructions`.
 Tool reads/writes are workspace-confined by the daemon. Shell commands retain
 HZR's execution policy; this is not an additional operating-system sandbox.
 A task's allowed-file list is an instruction to the worker, not a filesystem ACL.
+
+Parent protocol (upstream astra-flash-orchestrator): one planning pass, one `hzr delegate`
+per coherent task bundle, one wait, one batched review, and at most one correction round.
+Do not poll the worker or redo its verification without a concrete reason.
+
+The worker follows the upstream worker contract: it owns discovery, implementation and the
+named checks, stops retrying a command that failed twice with the same error, and ends with
+one report — STATUS (`ready_for_review`, `blocked`, `failed`), changed paths, each
+verification command with its exit status, and open risks. `max_turns` is the size of one
+turn quota, not a ceiling: when a quota ends without a report while the worker is still
+making progress (new edits, new checks, newly examined files, a failing check turning
+green), the quota is extended, up to five times, within `timeout_ms`. A worker that only
+repeats the same failing results is not extended. If no report was written, HZR writes one
+from what the worker did — changed files, commands with their status, the last output —
+and `hzr delegate` exits 2 so the parent never mistakes it for success.
+
+`hzr delegate` prints the report and one summary line: status, turns, tool calls, time,
+worker tokens and changed files. `--json` returns the same as one compact object; the full
+event stream stays in the session's `events.jsonl`. Worker commands run with the caller's
+`PATH`, see command output as plain text, and are attributed to `hzr-delegate` in the ledger.
 Do not treat delegation as a permission escalation or use it to bypass a host
 restriction.
 

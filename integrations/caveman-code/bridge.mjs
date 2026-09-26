@@ -53,8 +53,8 @@ let activeRequestId = "unknown";
 let workerSecret = "";
 let delegationProgress = null;
 
-function emit(kind, data) {
-  delegationProgress?.observe(kind, data);
+function emit(kind, data, { observed = false } = {}) {
+  if (!observed) delegationProgress?.observe(kind, data);
   const event = {
     seq: sequence,
     request_id: activeRequestId,
@@ -132,7 +132,7 @@ async function readCapabilityContract() {
   return JSON.parse(await readFile(sourceTree, "utf8"));
 }
 
-function renderManagedHarnessContract(contract) {
+function renderManagedHarnessContract(contract, maxTurns) {
   const engines = contract.internal_engines.map((engine) => `\`${engine}\``).join(", ");
   const tools = contract.harnesses.managed_agent.tool_names.map((tool) => `\`${tool}\``).join(", ");
   return [
@@ -141,6 +141,11 @@ function renderManagedHarnessContract(contract) {
     `This harness exposes only these HZR-owned tools: ${tools}.`,
     "Repository-specific instructions are loaded from AGENTS.md and CLAUDE.md, but their generated HZR managed blocks are omitted because this harness contract supersedes them.",
     "Complete only the bounded task. Do not delegate, spawn agents, change provider settings, read credentials, or expand the requested file scope. The parent performs final acceptance.",
+    // 0.10.1: the worker contract of upstream astra-flash-orchestrator WORKER-INSTRUCTIONS.md
+    `You work in quotas of ${maxTurns} turns (one tool round is one turn). HZR extends the quota up to ${MAX_QUOTA_EXTENSIONS} times while you make progress: new edits, new checks, new files examined, or a failing check turning green. Repeating the same failing command is not progress.`,
+    "Own the discovery the task needs, implement real behavior, run the checks the task names, and iterate on failures within scope. Do not weaken tests, types, validation or security checks to make them pass.",
+    "If the same command fails twice with the same error, stop retrying it: report the blocker with the evidence instead of trying variations.",
+    "Finish with one report: STATUS (ready_for_review, blocked or failed); changed paths; each verification command with its exit status and salient result; open risks. Never report success only because a command exited 0.",
     "</hzr_harness_contract>",
   ].join("\n");
 }
@@ -644,6 +649,225 @@ async function readBoundedResponse(response, route) {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
+// 0.10.1: hzr_exec used to hand the worker the daemon's ExecutionOutcome JSON verbatim — stdout
+// as an array of byte numbers plus the managed route script and policy decision. 2.5 KB of test
+// output arrived as 14 KB the model could barely read. Render what a shell would show.
+const MAX_EXEC_STREAM_CHARS = 24 * 1024;
+
+async function capturedStreamText(stream) {
+  if (!stream || typeof stream !== "object") return "";
+  const content = stream.content ?? {};
+  let text = "";
+  if (Array.isArray(content.bytes)) {
+    text = Buffer.from(content.bytes).toString("utf8");
+  } else if (typeof content.path === "string") {
+    try {
+      const handle = await open(content.path, "r");
+      try {
+        const buffer = Buffer.alloc(MAX_EXEC_STREAM_CHARS);
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+        text = buffer.subarray(0, bytesRead).toString("utf8");
+      } finally {
+        await handle.close();
+      }
+    } catch {
+      text = `[output stored at ${content.path}]`;
+    }
+  }
+  text = text.replace(/\s+$/, "");
+  if (text.length > MAX_EXEC_STREAM_CHARS) {
+    const omitted = text.length - MAX_EXEC_STREAM_CHARS;
+    text = `${text.slice(0, MAX_EXEC_STREAM_CHARS)}\n[${omitted} more characters omitted]`;
+  }
+  const total = Number(stream.total_bytes);
+  const stored = Number(stream.stored_bytes);
+  if (stream.truncated === true || (Number.isFinite(total) && Number.isFinite(stored) && stored < total)) {
+    text += `\n[output truncated: ${stored} of ${total} bytes kept]`;
+  }
+  return text;
+}
+
+export async function renderExecOutcome(text) {
+  let outcome;
+  try {
+    outcome = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  if (outcome?.outcome === "not_started") {
+    const disposition = outcome.disposition ?? {};
+    return `not started (${disposition.state ?? "unknown"}): ${disposition.reason ?? "no reason given"}`;
+  }
+  const result = outcome?.result;
+  if (!result || typeof result !== "object") return text;
+  const termination = result.termination ?? {};
+  const status = termination.cause === "exited"
+    ? `exit ${termination.exit_code}`
+    : `${termination.cause ?? "unknown"}${termination.signal ? ` (signal ${termination.signal})` : ""}`;
+  const parts = [`${status} · ${result.duration_ms ?? "?"} ms`];
+  const stdout = await capturedStreamText(result.stdout);
+  const stderr = await capturedStreamText(result.stderr);
+  if (stdout) parts.push(stdout);
+  if (stderr) parts.push(`--- stderr ---\n${stderr}`);
+  return parts.join("\n");
+}
+
+function toolResultText(result) {
+  if (!result || !Array.isArray(result.content)) return "";
+  return result.content.filter((part) => part?.type === "text").map((part) => part.text).join("");
+}
+
+// 0.10.1: a deterministic record of what the worker did, so a run that ends without a final
+// answer (turn budget exhausted) still tells the parent which files changed and what failed.
+export function createActivityLog() {
+  const pending = new Map();
+  const changed = new Set();
+  const commands = [];
+  const examined = new Set();
+  const latestStatus = new Map();
+  let lastOutput = "";
+  let turns = 0;
+  let toolCalls = 0;
+  let extensions = 0;
+  const usage = { input: 0, output: 0, cache_read: 0 };
+  return {
+    observe(event) {
+      if (event?.type === "tool_execution_start") {
+        toolCalls += 1;
+        pending.set(event.toolCallId, { tool: event.toolName, args: event.args ?? {} });
+      } else if (event?.type === "tool_execution_end") {
+        const call = pending.get(event.toolCallId) ?? { tool: event.toolName, args: {} };
+        pending.delete(event.toolCallId);
+        const text = toolResultText(event.result);
+        if ((call.tool === "hzr_edit" || call.tool === "hzr_write") && !event.isError
+            && typeof call.args.path === "string") {
+          changed.add(call.args.path);
+        }
+        if ((call.tool === "hzr_read" || call.tool === "hzr_search" || call.tool === "hzr_context")
+            && !event.isError) {
+          examined.add(`${call.tool}:${JSON.stringify(call.args).slice(0, 200)}`);
+        }
+        if (call.tool === "hzr_exec" && typeof call.args.command === "string") {
+          const status = event.isError ? "error" : (text.split("\n", 1)[0].split(" · ")[0] || "unknown");
+          latestStatus.set(call.args.command, status);
+          const previous = commands.at(-1);
+          if (previous && previous.command === call.args.command && previous.status === status) {
+            previous.count += 1;
+          } else {
+            commands.push({ command: call.args.command.slice(0, 300), status, count: 1 });
+          }
+          lastOutput = text.slice(-1500);
+        }
+      } else if (event?.type === "message_end" && event.message?.role === "assistant") {
+        turns += 1;
+        const reported = event.message.usage;
+        if (reported) {
+          usage.input += Number.isSafeInteger(reported.input) ? reported.input : 0;
+          usage.output += Number.isSafeInteger(reported.output) ? reported.output : 0;
+          usage.cache_read += Number.isSafeInteger(reported.cacheRead) ? reported.cacheRead : 0;
+        }
+      }
+    },
+    noteExtension() {
+      extensions += 1;
+    },
+    checkpoint() {
+      return {
+        changed: changed.size,
+        examined: examined.size,
+        commands: new Map(latestStatus),
+      };
+    },
+    // Progress since `mark`: a new changed file, a newly examined target, a new command, or a
+    // known command whose status changed. Rerunning a failing command unchanged is not.
+    progressSince(mark) {
+      if (changed.size > mark.changed || examined.size > mark.examined) return true;
+      for (const [command, status] of latestStatus) {
+        if (mark.commands.get(command) !== status) return true;
+      }
+      return false;
+    },
+    summary() {
+      return {
+        turns,
+        quota_extensions: extensions,
+        tool_calls: toolCalls,
+        changed_files: [...changed].sort(),
+        commands: commands.slice(-20),
+        usage: { ...usage },
+        last_command_output: lastOutput,
+      };
+    },
+  };
+}
+
+// 0.10.1: the report a worker owes the parent (upstream WORKER-INSTRUCTIONS), written from the
+// activity record when the model produced none.
+export function synthesizeIncompleteReport(activity, maxTurns) {
+  const quotas = (activity.quota_extensions ?? 0) + 1;
+  const exhausted = (activity.quota_extensions ?? 0) >= MAX_QUOTA_EXTENSIONS;
+  const lines = [
+    activity.turns >= maxTurns * quotas
+      ? `STATUS: incomplete — the worker used ${activity.turns} turns in ${quotas} quota(s) without a final report; ${exhausted ? "every extension was used" : "it stopped making progress (only repeated the same results), so the quota was not extended"}.`
+      : "STATUS: incomplete — the worker stopped without a final report.",
+    `Changed files: ${activity.changed_files.length ? activity.changed_files.join(", ") : "none"}`,
+  ];
+  if (activity.commands.length) {
+    lines.push("Commands run:");
+    for (const entry of activity.commands) {
+      lines.push(`- \`${entry.command}\` → ${entry.status}${entry.count > 1 ? ` (×${entry.count})` : ""}`);
+    }
+  }
+  if (activity.last_command_output) {
+    lines.push("Last command output:", activity.last_command_output);
+  }
+  lines.push(
+    "Nothing was accepted: review the working tree, then narrow the task, answer the blocker, or raise the quota with `hzr settings delegation --max-turns N`.",
+  );
+  return lines.join("\n");
+}
+
+// 0.10.1: stdout carries what the parent process needs, not the model's token stream. Every
+// `message_update` repeated the whole partial answer — 112 KB for a 6-second task, growing
+// quadratically toward the 8 MB capture limit on long runs.
+const STREAM_ONLY_EVENTS = new Set(["message_update", "tool_execution_update"]);
+
+// 0.10.1: a quota is extended while the worker makes progress instead of cutting it off.
+export const MAX_QUOTA_EXTENSIONS = 5;
+
+function quotaNotice(final) {
+  return final
+    ? "HZR: two turns remain in your final quota. Stop exploring. Use at most one more tool call only if it completes a verification, then write your final report: STATUS, changed paths, each verification command with its exit status, open risks."
+    : "HZR: two turns remain in this quota. If the task is done, write your final report now. Otherwise keep working: the quota is extended while you make progress.";
+}
+
+function quotaContinuation(turns, extension) {
+  return `HZR: quota extended by ${turns} turns (extension ${extension} of ${MAX_QUOTA_EXTENSIONS}) because you made progress. Continue the task from where you stopped and finish with your report.`;
+}
+
+export function compactAgentEvent(event) {
+  const compact = { type: event?.type };
+  if (event?.type === "message_start" || event?.type === "message_end") {
+    compact.message = {
+      role: event.message?.role,
+      stopReason: event.message?.stopReason,
+      usage: event.message?.usage,
+    };
+  } else if (event?.type === "tool_execution_start") {
+    compact.toolCallId = event.toolCallId;
+    compact.toolName = event.toolName;
+    compact.args = JSON.stringify(event.args ?? {}).slice(0, 1024);
+  } else if (event?.type === "tool_execution_end") {
+    compact.toolCallId = event.toolCallId;
+    compact.toolName = event.toolName;
+    compact.isError = event.isError === true;
+    compact.result_preview = toolResultText(event.result).slice(0, 512);
+  } else if (event?.type === "auto_retry_start") {
+    compact.attempt = event.attempt;
+  }
+  return compact;
+}
+
 function textResult(text, route) {
   return {
     content: [{ type: "text", text }],
@@ -651,10 +875,33 @@ function textResult(text, route) {
   };
 }
 
-function forkRun(callHzr, workspace, args, signal, stdin) {
-  const request = { cwd: workspace, args };
+// 0.10.1: worker operations are attributed in the HZR ledger, not mixed into the parent's.
+const WORKER_AGENT_LABEL = "hzr-delegate";
+
+async function forkRun(callHzr, workspace, args, signal, stdin) {
+  const request = { cwd: workspace, args, agent: WORKER_AGENT_LABEL, session_id: activeRequestId };
   if (stdin !== undefined) request.stdin = stdin;
-  return callHzr("/v1/fork/run", request, signal);
+  return renderForkResult(await callHzr("/v1/fork/run", request, signal)); // 0.10.1
+}
+
+// 0.10.1: a fork run reached the worker as a JSON envelope: the file text JSON-escaped inside
+// "stdout" plus hashes and termination fields. Show the text; name the status only on failure.
+export function renderForkResult(text) {
+  let result;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  if (!result || typeof result.stdout !== "string") return text;
+  const stdout = result.stdout.replace(/\s+$/, "");
+  const stderr = typeof result.stderr === "string" ? result.stderr.replace(/\s+$/, "") : "";
+  const truncated = result.stdout_truncated === true ? "\n[output truncated]" : "";
+  if (result.termination === "exited" && result.exit_code === 0) {
+    return `${stdout}${truncated}${stderr ? `\n--- stderr ---\n${stderr}` : ""}`;
+  }
+  const status = result.termination === "exited" ? `exit ${result.exit_code}` : String(result.termination);
+  return [status, stderr, stdout].filter((part) => part.length > 0).join("\n") + truncated;
 }
 
 function createHzrTools(callHzr, workspace) {
@@ -881,8 +1128,14 @@ function createHzrTools(callHzr, workspace) {
         timeout_ms: Type.Optional(Type.Integer({ minimum: 1, maximum: 1800000 })),
       }),
       async execute(_id, params, signal) {
-        const text = await callHzr("/v1/exec/run", { cwd: workspace, ...params }, signal);
-        return textResult(text, "/v1/exec/run");
+        // 0.10.1: the caller's PATH, as `hzr exec run` forwards it. Without it the worker ran
+        // under the daemon's launchd PATH and could not find npm, cargo or go.
+        const request = { cwd: workspace, ...params, agent: WORKER_AGENT_LABEL, session_id: activeRequestId };
+        if (typeof process.env.PATH === "string" && process.env.PATH.length > 0) {
+          request.caller_path = process.env.PATH;
+        }
+        const text = await callHzr("/v1/exec/run", request, signal);
+        return textResult(await renderExecOutcome(text), "/v1/exec/run"); // 0.10.1: shell-shaped
       },
     },
   ];
@@ -1188,7 +1441,7 @@ export async function prepareManagedRuntime({
   const settings = configureSettings();
   const formatContract =
     request.response_format === "json" ? JSON_RESPONSE_CONTRACT : TEXT_RESPONSE_CONTRACT;
-  const responseContract = `${renderManagedHarnessContract(runtime.capabilityContract)}\n\n${formatContract}`;
+  const responseContract = `${renderManagedHarnessContract(runtime.capabilityContract, request.max_turns)}\n\n${formatContract}`;
   const projectInstructions = await loadProjectInstructions(workspace);
   health.warnings.push(...projectInstructions.warnings);
   const appendedPrompts = projectInstructions.prompt
@@ -1242,6 +1495,7 @@ export async function prepareManagedRuntime({
   }
   configureSessionState(session);
   assertFunction(session, "abort");
+  assertFunction(session, "steer"); // 0.10.1: turn-budget notice
   const toolGuard = installManagedToolGuard(
     session,
     settings,
@@ -1307,6 +1561,8 @@ async function run() {
   let outcome = "failed";
   let usage = { recorded: false, warning: null };
   let preflightWarnings = [];
+  const activity = createActivityLog(); // 0.10.1
+  let runStatus = "completed"; // 0.10.1: completed | incomplete
   const startedAt = performance.now();
   try {
     const prepared = await prepareManagedRuntime({
@@ -1351,7 +1607,19 @@ async function run() {
       },
       model_warning: modelFallbackMessage ?? null,
     });
+    let quotaTurns = 0;
+    let extensions = 0;
     unsubscribe = session.subscribe((event) => {
+      activity.observe(event); // 0.10.1
+      // 0.10.1: two turns before a quota ends, tell the worker where it stands. Without it an
+      // investigating worker spent its last turn on one more command and returned nothing.
+      if (event.type === "message_end" && event.message?.role === "assistant") {
+        quotaTurns += 1;
+        if (request.max_turns > 2 && quotaTurns === request.max_turns - 2) {
+          const final = extensions >= MAX_QUOTA_EXTENSIONS;
+          Promise.resolve(session.steer(quotaNotice(final))).catch(() => {});
+        }
+      }
       if (event.type === "auto_retry_start") {
         retries = Math.max(retries, event.attempt);
       }
@@ -1371,10 +1639,36 @@ async function run() {
           } catch {}
         }
       }
-      emit("agent_event", event);
+      // 0.10.1: progress sees every event; stdout gets a bounded projection
+      if (STREAM_ONLY_EVENTS.has(event.type)) {
+        delegationProgress?.observe("agent_event", event);
+      } else {
+        delegationProgress?.observe("agent_event", event);
+        emit("agent_event", compactAgentEvent(event), { observed: true });
+      }
     });
     const prompt = `${request.prompt}\n\n<hzr_context trust="untrusted-retrieved-data">\n${prefetchedContext}\n</hzr_context>`;
+    let checkpoint = activity.checkpoint();
     await session.prompt(prompt, { expandPromptTemplates: false, source: "rpc" });
+    // 0.10.1: no final answer at the end of a quota is not failure while work is advancing.
+    // Extend the quota (same session, same context) until the worker reports, stalls on
+    // repeated failures, or has used every extension; the parent's timeout still bounds it.
+    while (
+      invariantFailure === null &&
+      extensions < MAX_QUOTA_EXTENSIONS &&
+      assistantText(session.messages).trim().length === 0 &&
+      activity.progressSince(checkpoint)
+    ) {
+      extensions += 1;
+      activity.noteExtension();
+      checkpoint = activity.checkpoint();
+      quotaTurns = 0;
+      emit("quota_extended", { extension: extensions, turns: request.max_turns });
+      await session.prompt(quotaContinuation(request.max_turns, extensions), {
+        expandPromptTemplates: false,
+        source: "rpc",
+      });
+    }
     if (invariantFailure !== null) throw invariantFailure;
     assertSessionInvariants(
       session,
@@ -1383,7 +1677,16 @@ async function run() {
       responseContract,
       toolGuard,
     );
-    const text = assistantText(session.messages);
+    let text = assistantText(session.messages);
+    // 0.10.1: a run that ends without a final answer — usually an exhausted turn budget — used
+    // to fail as "model response is empty" with the edits already on disk and no word of them.
+    if (text.trim().length === 0) {
+      const summary = activity.summary();
+      runStatus = "incomplete";
+      text = request.response_format === "json"
+        ? JSON.stringify({ status: "incomplete", ...summary })
+        : synthesizeIncompleteReport(summary, request.max_turns);
+    }
     try {
       const response = validateAssistantOutput(text, request.response_format);
       result = {
@@ -1396,7 +1699,7 @@ async function run() {
       outcome = "invalid_response";
       throw error;
     }
-    outcome = "completed";
+    outcome = runStatus === "completed" ? "completed" : "failed";
   } catch (error) {
     primaryError = invariantFailure ?? (error instanceof Error ? error : new Error(String(error)));
   } finally {
@@ -1422,6 +1725,7 @@ async function run() {
   if (primaryError !== null) {
     emit("error", {
       message: primaryError.message,
+      activity: activity.summary(), // 0.10.1: what the worker did before it failed
       usage_recorded: usage.recorded,
       usage_warning: usage.warning,
     });
@@ -1429,6 +1733,9 @@ async function run() {
   }
   emit("result", {
     ...result,
+    status: runStatus, // 0.10.1
+    activity: activity.summary(), // 0.10.1
+    duration_ms: Math.round(performance.now() - startedAt),
     preflight_warnings: preflightWarnings,
     usage_recorded: usage.recorded,
     usage_warning: usage.warning,

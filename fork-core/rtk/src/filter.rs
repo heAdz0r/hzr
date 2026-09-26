@@ -76,14 +76,12 @@ impl Language {
                 line: Some("//"),
                 block_start: Some("/*"),
                 block_end: Some("*/"),
-                doc_line: Some("///"),
                 doc_block_start: Some("/**"),
             },
             Language::Python => CommentPatterns {
                 line: Some("#"),
                 block_start: Some("\"\"\""),
                 block_end: Some("\"\"\""),
-                doc_line: None,
                 doc_block_start: Some("\"\"\""),
             },
             Language::JavaScript
@@ -95,28 +93,24 @@ impl Language {
                 line: Some("//"),
                 block_start: Some("/*"),
                 block_end: Some("*/"),
-                doc_line: None,
                 doc_block_start: Some("/**"),
             },
             Language::Ruby => CommentPatterns {
                 line: Some("#"),
                 block_start: Some("=begin"),
                 block_end: Some("=end"),
-                doc_line: None,
                 doc_block_start: None,
             },
             Language::Shell => CommentPatterns {
                 line: Some("#"),
                 block_start: None,
                 block_end: None,
-                doc_line: None,
                 doc_block_start: None,
             },
             Language::Unknown => CommentPatterns {
                 line: Some("//"),
                 block_start: Some("/*"),
                 block_end: Some("*/"),
-                doc_line: None,
                 doc_block_start: None,
             },
         }
@@ -128,7 +122,6 @@ pub struct CommentPatterns {
     pub line: Option<&'static str>,
     pub block_start: Option<&'static str>,
     pub block_end: Option<&'static str>,
-    pub doc_line: Option<&'static str>,
     pub doc_block_start: Option<&'static str>,
 }
 
@@ -152,72 +145,13 @@ lazy_static! {
 }
 
 impl FilterStrategy for MinimalFilter {
-    fn filter(&self, content: &str, lang: &Language) -> String {
-        let patterns = lang.comment_patterns();
-        let mut result = String::with_capacity(content.len());
-        let mut in_block_comment = false;
-        let mut in_docstring = false;
-
-        for line in content.lines() {
-            let trimmed = line.trim();
-
-            // Handle block comments
-            if let (Some(start), Some(end)) = (patterns.block_start, patterns.block_end) {
-                if !in_docstring
-                    && trimmed.contains(start)
-                    && !trimmed.starts_with(patterns.doc_block_start.unwrap_or("###"))
-                {
-                    in_block_comment = true;
-                }
-                if in_block_comment {
-                    if trimmed.contains(end) {
-                        in_block_comment = false;
-                    }
-                    continue;
-                }
-            }
-
-            // Handle Python docstrings (keep them in minimal mode)
-            if *lang == Language::Python && trimmed.starts_with("\"\"\"") {
-                in_docstring = !in_docstring;
-                result.push_str(line);
-                result.push('\n');
-                continue;
-            }
-
-            if in_docstring {
-                result.push_str(line);
-                result.push('\n');
-                continue;
-            }
-
-            // Skip single-line comments (but keep doc comments)
-            if let Some(line_comment) = patterns.line {
-                if trimmed.starts_with(line_comment) {
-                    // Keep doc comments
-                    if let Some(doc) = patterns.doc_line {
-                        if trimmed.starts_with(doc) {
-                            result.push_str(line);
-                            result.push('\n');
-                        }
-                    }
-                    continue;
-                }
-            }
-
-            // Skip empty lines at this point, we'll normalize later
-            if trimmed.is_empty() {
-                result.push('\n');
-                continue;
-            }
-
-            result.push_str(line);
-            result.push('\n');
-        }
-
-        // Normalize multiple blank lines to max 2
-        let result = MULTIPLE_BLANK_LINES.replace_all(&result, "\n\n");
-        result.trim().to_string()
+    /// 0.10.1: lossless. The default read level used to drop every non-doc line comment and
+    /// block comment, so `cat` through HZR showed code whose comments were gone — an agent
+    /// then edited or rewrote the file from that view. A `/*` inside a string literal (a glob
+    /// like `src/**/*.js`) also opened a "block comment" that deleted code up to the next
+    /// `*/`. Code is shown as written; stripping stays behind the explicit `aggressive` level.
+    fn filter(&self, content: &str, _lang: &Language) -> String {
+        content.to_string()
     }
 
     fn name(&self) -> &'static str {
@@ -381,16 +315,11 @@ mod tests {
     }
 
     #[test]
-    fn test_minimal_filter_removes_comments() {
-        let code = r#"
-// This is a comment
-fn main() {
-    println!("Hello");
-}
-"#;
+    fn test_minimal_filter_is_lossless_for_code() {
+        // 0.10.1: comments and glob-like string literals survive the default read level
+        let code = "// This is a comment\nconst glob = \"src/**/*.js\";\nfn main() {\n    println!(\"Hello\");\n}\n";
         let filter = MinimalFilter;
-        let result = filter.filter(code, &Language::Rust);
-        assert!(!result.contains("// This is a comment"));
-        assert!(result.contains("fn main()"));
+        assert_eq!(filter.filter(code, &Language::Rust), code);
+        assert_eq!(filter.filter(code, &Language::JavaScript), code);
     }
 }

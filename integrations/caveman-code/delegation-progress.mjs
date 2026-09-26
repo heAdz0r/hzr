@@ -64,7 +64,11 @@ export function createDelegationProgress(directory, selection, workspace, runId)
           state.actual_cache_read_tokens += usage.cacheRead;
         }
       } else if (kind === "result" || kind === "error") {
-        state.status = kind === "result" ? "completed" : "failed";
+        // 0.10.1: an exhausted budget is "incomplete", and a failure keeps its reason
+        state.status = kind === "result" ? (event?.status === "incomplete" ? "incomplete" : "completed") : "failed";
+        if (kind === "error" && typeof event?.message === "string") {
+          state.error = event.message.slice(0, 300);
+        }
         state.current_tool = null;
         closed = true;
         clearInterval(heartbeat);

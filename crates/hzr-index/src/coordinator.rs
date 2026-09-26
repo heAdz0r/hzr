@@ -186,6 +186,7 @@ impl IndexCoordinator {
         .await?;
         if self.auto_index {
             grepai.initialize(&InitOptions::default()).await?;
+            workspace.exclude_managed_entry(); // 0.10.1: daemon-created links stay out of git status
             self.ensure_watcher(&grepai).await?;
         } else {
             workspace.require_initialized()?;

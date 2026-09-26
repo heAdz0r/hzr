@@ -307,6 +307,8 @@ impl Default for DelegationConfig {
             enabled: false,
             provider: "opencode-go".into(),
             model: "deepseek-v4.1-flash".into(),
+            // 0.10.1: the size of one turn quota; the bridge extends it while the worker makes
+            // progress (MAX_QUOTA_EXTENSIONS in bridge.mjs), bounded by timeout_ms.
             max_turns: 12,
             timeout_ms: 600_000,
         }
@@ -1009,7 +1011,7 @@ mod tests {
         let directory = tempdir().expect("temporary directory");
         let root = directory.path();
         let release = versioned_bundle(root, "v0.4.6-darwin-arm64");
-        let other = versioned_bundle(root, "v0.10.0-other");
+        let other = versioned_bundle(root, "v0.10.1-other");
 
         // `current` pointing at a different release must not capture this one.
         point_current_at(root, &other);

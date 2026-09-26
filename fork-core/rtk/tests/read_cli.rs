@@ -53,7 +53,8 @@ fn read_level_none_no_trailing_newline() {
 // ── Level minimal: filters applied ──────────────────────────
 
 #[test]
-fn read_level_minimal_filters_comments() {
+fn read_level_minimal_keeps_comments() {
+    // 0.10.1: the default level is lossless for code
     let content = b"// this is a comment\nfn main() {}\n";
     let f = write_temp(".rs", content);
 
@@ -64,10 +65,9 @@ fn read_level_minimal_filters_comments() {
 
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // minimal filter should strip single-line comments for Rust
     assert!(
-        !stdout.contains("// this is a comment"),
-        "comment should be filtered in minimal mode"
+        stdout.contains("// this is a comment"),
+        "comments are content and must survive a default read"
     );
     assert!(stdout.contains("fn main()"), "code should remain");
 }
@@ -327,7 +327,8 @@ fn read_markdown_digest_is_self_describing_and_recoverable() {
     let f = write_temp(".md", markdown.as_bytes());
 
     let out = rtk_bin()
-        .args(["read", f.path().to_str().unwrap()])
+        // 0.10.1: the digest is opt-in; a default read returns the text
+        .args(["read", f.path().to_str().unwrap(), "--level", "aggressive"])
         .output()
         .expect("run rtk read markdown digest");
 

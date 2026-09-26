@@ -523,6 +523,8 @@ pub struct FleetReconcileReport {
     pub rewritten: Vec<FleetContractRewrite>,
     pub project_codex_mcp: Vec<FleetProjectMcpRewrite>,
     pub local_excludes: Vec<activation::LocalExcludeReport>,
+    /// Leftovers of earlier HZR versions repaired per workspace. (0.10.1)
+    pub hygiene: Vec<WorkspaceHygieneRepair>,
     pub legacy_indexes: Vec<FleetLegacyIndexAction>,
     pub workspace_errors: Vec<FleetWorkspaceError>,
     pub workspace_warnings: Vec<FleetWorkspaceError>,
@@ -762,6 +764,7 @@ pub async fn reconcile_fleet_contracts(
         rewritten: Vec::new(),
         project_codex_mcp: Vec::new(),
         local_excludes: Vec::new(),
+        hygiene: Vec::new(), // 0.10.1
         legacy_indexes: Vec::new(),
         workspace_errors: Vec::new(),
         workspace_warnings: Vec::new(),
@@ -972,7 +975,8 @@ pub async fn reconcile_fleet_contracts(
         let project_codex = confined_workspace_target(&registration.root, &project_codex_path)
             .map_err(anyhow::Error::msg)
             .and_then(|()| {
-                client_config::install_project_codex(binary, &registration.root, dry_run, true)
+                // 0.10.1: only where Codex is installed or the file exists; excluded from git
+                client_config::session_project_codex(binary, &registration.root, dry_run)
             });
         match project_codex {
             Ok(mcp) => report.project_codex_mcp.push(FleetProjectMcpRewrite {
@@ -986,6 +990,14 @@ pub async fn reconcile_fleet_contracts(
                 path: project_codex_path,
                 changed: false,
                 error: Some(format!("{error:#}")),
+            }),
+        }
+        // 0.10.1: leftovers of earlier versions, repaired in every registered workspace
+        match repair_workspace_hygiene(config, &registration.root, dry_run) {
+            Ok(repair) => report.hygiene.push(repair),
+            Err(error) => report.workspace_warnings.push(FleetWorkspaceError {
+                workspace: registration.root.clone(),
+                error: format!("cannot repair workspace hygiene: {error:#}"),
             }),
         }
         if migrate_legacy_indexes {
@@ -2148,7 +2160,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             if let Some(embedder) = read_embedder_config(&workspace.join(".grepai/config.yaml")) {
                 checks.push(embedding_provider_check(&embedder).await);
             }
-            checks.push(workspace_hygiene_check(workspace));
+            checks.push(workspace_hygiene_check(config, workspace));
         }
         Err(error) => checks.push(check("grepai_ownership", CheckStatus::Error, error)),
     }
@@ -3102,48 +3114,222 @@ fn index_status_snapshot(workspace: &Workspace) -> Result<IndexStatus, String> {
 ///
 /// Совпадает с тем, что оператор видит в `hzr index status`, и даёт remediation до
 /// первого `context plan` warning о cold warm-up.
-/// Files earlier HZR versions left in the user's working tree. (0.10.0)
+/// Leftovers of earlier HZR versions repaired in one working tree. (0.10.1)
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct WorkspaceHygieneRepair {
+    pub workspace: PathBuf,
+    pub dry_run: bool,
+    /// Patterns added to the repository's local `info/exclude`.
+    pub excluded: Vec<String>,
+    /// Zero-byte `*.rtk-lock` sidecars from HZR < 0.10.0 removed from the tree.
+    pub removed_lock_files: usize,
+    /// Lock sidecars committed to the repository; deleting tracked files is the owner's call.
+    pub tracked_lock_files: usize,
+}
+
+impl WorkspaceHygieneRepair {
+    #[must_use]
+    pub fn changed(&self) -> bool {
+        !self.excluded.is_empty() || self.removed_lock_files > 0
+    }
+}
+
+/// Repair what HZR itself left in a repository, idempotently. (0.10.1)
 ///
-/// Before 0.10.0 every `hzr write` left a zero-byte `<file>.rtk-lock` beside the file it
-/// edited; locks now live in the user cache directory, but the old sidecars stay until
-/// removed. Only reported — deleting files in a repository is the user's call.
-fn workspace_hygiene_check(workspace: &Path) -> DoctorCheck {
-    use std::ffi::OsStr;
-    let listed = crate::activation::git_probe(
+/// - `.grepai` — the managed index link grepai needs — is kept out of `git status` through the
+///   local `info/exclude`, never a tracked `.gitignore`;
+/// - an untracked `.codex/config.toml` holding HZR's registration gets the same treatment;
+/// - untracked zero-byte `*.rtk-lock` sidecars from HZR < 0.10.0 are deleted.
+///
+/// A second run changes nothing. Tracked files are counted, not touched.
+pub fn repair_workspace_hygiene(
+    config: &Config,
+    workspace: &Path,
+    dry_run: bool,
+) -> anyhow::Result<WorkspaceHygieneRepair> {
+    repair_workspace_hygiene_scoped(config, workspace, dry_run, true)
+}
+
+/// [`repair_workspace_hygiene`] without the lock-file scan, cheap enough for every session
+/// start: `git ls-files --others` walks ignored trees such as `node_modules`. (0.10.1)
+pub fn repair_workspace_excludes(
+    config: &Config,
+    workspace: &Path,
+) -> anyhow::Result<WorkspaceHygieneRepair> {
+    repair_workspace_hygiene_scoped(config, workspace, false, false)
+}
+
+fn repair_workspace_hygiene_scoped(
+    config: &Config,
+    workspace: &Path,
+    dry_run: bool,
+    scan_lock_files: bool,
+) -> anyhow::Result<WorkspaceHygieneRepair> {
+    let mut repair = WorkspaceHygieneRepair {
+        workspace: workspace.to_path_buf(),
+        dry_run,
+        ..WorkspaceHygieneRepair::default()
+    };
+    let Some(exclude) = activation::local_exclude_path(workspace)? else {
+        return Ok(repair);
+    };
+
+    let grepai = workspace.join(".grepai");
+    let managed_link = std::fs::symlink_metadata(&grepai)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        && std::fs::read_link(&grepai)
+            .is_ok_and(|target| target.starts_with(config.data_dir.join("workspaces")));
+    if managed_link
+        && ensure_local_exclude(&exclude, "/.grepai", "managed grepai index link", dry_run)?
+    {
+        repair.excluded.push("/.grepai".to_owned());
+    }
+
+    let codex = client_config::project_codex_path(workspace);
+    let hzr_codex =
+        std::fs::read_to_string(&codex).is_ok_and(|text| text.contains("[mcp_servers.hzr]"));
+    if hzr_codex
+        && !git_tracks(workspace, ".codex/config.toml")
+        && ensure_local_exclude(
+            &exclude,
+            "/.codex/config.toml",
+            "Codex MCP registration for this worktree",
+            dry_run,
+        )?
+    {
+        repair.excluded.push("/.codex/config.toml".to_owned());
+    }
+
+    if !scan_lock_files {
+        return Ok(repair);
+    }
+    for relative in git_list(
+        workspace,
+        &["ls-files", "-z", "--others", "--", "*.rtk-lock"],
+    ) {
+        let path = workspace.join(&relative);
+        let zero_byte_sidecar = relative.ends_with(".rtk-lock")
+            && std::fs::symlink_metadata(&path)
+                .is_ok_and(|metadata| metadata.is_file() && metadata.len() == 0);
+        if !zero_byte_sidecar {
+            continue;
+        }
+        if !dry_run {
+            anyhow::Context::with_context(std::fs::remove_file(&path), || {
+                format!("remove {}", path.display())
+            })?;
+        }
+        repair.removed_lock_files += 1;
+    }
+    repair.tracked_lock_files = git_list(
+        workspace,
+        &["ls-files", "-z", "--cached", "--", "*.rtk-lock"],
+    )
+    .len();
+    Ok(repair)
+}
+
+/// Append `pattern` to a local exclude file unless an equivalent line is present. Returns
+/// whether it was (or, in a dry run, would be) added.
+fn ensure_local_exclude(
+    exclude: &Path,
+    pattern: &str,
+    why: &str,
+    dry_run: bool,
+) -> anyhow::Result<bool> {
+    let before = std::fs::read_to_string(exclude).unwrap_or_default();
+    let bare = pattern.trim_start_matches('/');
+    let covered = before.lines().map(str::trim).any(|line| {
+        line == pattern
+            || line == bare
+            || (pattern == "/.codex/config.toml"
+                && matches!(line, "/.codex/" | "/.codex" | ".codex/" | ".codex"))
+    });
+    if covered {
+        return Ok(false);
+    }
+    if !dry_run {
+        let mut after = before;
+        if !after.is_empty() && !after.ends_with('\n') {
+            after.push('\n');
+        }
+        after.push_str(&format!("# HZR: {why}\n{pattern}\n"));
+        if let Some(parent) = exclude.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        anyhow::Context::with_context(std::fs::write(exclude, after), || {
+            format!("update {}", exclude.display())
+        })?;
+    }
+    Ok(true)
+}
+
+fn git_tracks(workspace: &Path, relative: &str) -> bool {
+    activation::git_probe(
         workspace,
         &[
-            OsStr::new("ls-files"),
-            OsStr::new("--cached"),
-            OsStr::new("--others"),
-            OsStr::new("--"),
-            OsStr::new("*.rtk-lock"),
+            std::ffi::OsStr::new("ls-files"),
+            std::ffi::OsStr::new("--error-unmatch"),
+            std::ffi::OsStr::new(relative),
         ],
         true,
-        "legacy write-lock scan",
-    );
-    // Without --exclude-standard, --others also lists ignored files: one scan covers all.
-    let count = listed
-        .ok()
-        .filter(|output| output.status.success())
-        .map_or(0, |output| {
-            String::from_utf8_lossy(&output.stdout).lines().count()
-        });
-    if count == 0 {
-        check(
+        "workspace hygiene tracking probe",
+    )
+    .is_ok_and(|output| output.status.success())
+}
+
+fn git_list(workspace: &Path, args: &[&str]) -> Vec<String> {
+    let args = args.iter().map(std::ffi::OsStr::new).collect::<Vec<_>>();
+    match activation::git_probe(workspace, &args, true, "workspace hygiene scan") {
+        Ok(output) if output.status.success() => output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+            .filter_map(|entry| std::str::from_utf8(entry).ok().map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Leftovers earlier HZR versions left in the working tree, found by a dry run of
+/// [`repair_workspace_hygiene`]. (0.10.1)
+fn workspace_hygiene_check(config: &Config, workspace: &Path) -> DoctorCheck {
+    match repair_workspace_hygiene(config, workspace, true) {
+        Ok(plan) if !plan.changed() && plan.tracked_lock_files == 0 => check(
             "workspace_hygiene",
             CheckStatus::Pass,
-            "no legacy HZR write-lock files in the working tree",
-        )
-    } else {
-        check(
-            "workspace_hygiene",
-            CheckStatus::Warning,
-            format!(
-                "{count} legacy zero-byte `*.rtk-lock` files from HZR < 0.10.0 remain; remove \
-                 them with `find . -name '*.rtk-lock' -size 0 -delete` (and `git rm` any that \
-                 are tracked)"
-            ),
-        )
+            "no HZR leftovers in the working tree",
+        ),
+        Ok(plan) => {
+            let mut findings = Vec::new();
+            if !plan.excluded.is_empty() {
+                findings.push(format!(
+                    "not excluded from git status: {}",
+                    plan.excluded.join(", ")
+                ));
+            }
+            if plan.removed_lock_files > 0 {
+                findings.push(format!(
+                    "{} zero-byte `*.rtk-lock` file(s) from HZR < 0.10.0",
+                    plan.removed_lock_files
+                ));
+            }
+            if plan.tracked_lock_files > 0 {
+                findings.push(format!(
+                    "{} committed `*.rtk-lock` file(s) — remove them with `git rm`",
+                    plan.tracked_lock_files
+                ));
+            }
+            check(
+                "workspace_hygiene",
+                CheckStatus::Warning,
+                format!(
+                    "{}; `hzr doctor --fix` repairs this safely",
+                    findings.join("; ")
+                ),
+            )
+        }
+        Err(error) => check("workspace_hygiene", CheckStatus::Warning, error),
     }
 }
 
