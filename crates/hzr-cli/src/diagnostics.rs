@@ -4647,6 +4647,18 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         fs::write(deep_duplicate.join("config.yaml"), "version: 1\n")
             .expect("deep duplicate config");
 
+        // 0.10.1: the project Codex pin is written only where Codex is installed
+        crate::client_config::CODEX_PRESENT_FOR_TEST.with(|present| present.set(Some(false)));
+        let without_codex =
+            reconcile_fleet_contracts(&config, &contract, &binary, true, false).await;
+        assert!(
+            without_codex
+                .project_codex_mcp
+                .iter()
+                .all(|item| !item.changed)
+        );
+        crate::client_config::CODEX_PRESENT_FOR_TEST.with(|present| present.set(Some(true)));
+
         let planned = reconcile_fleet_contracts(&config, &contract, &binary, true, false).await;
         assert_eq!(planned.workspaces_scanned, 1);
         assert_eq!(planned.legacy_index_audit, "not_requested");

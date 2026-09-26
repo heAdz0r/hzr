@@ -479,8 +479,23 @@ pub fn session_project_codex(
     Ok(report)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test override of Codex presence; the real check reads the operator's home. (0.10.1)
+    pub(crate) static CODEX_PRESENT_FOR_TEST: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
 fn codex_available() -> bool {
-    let home_config = BaseDirs::new().is_some_and(|dirs| dirs.home_dir().join(".codex").is_dir());
+    #[cfg(test)]
+    if let Some(present) = CODEX_PRESENT_FOR_TEST.with(std::cell::Cell::get) {
+        return present;
+    }
+    // Codex honours CODEX_HOME before ~/.codex.
+    let home_config = match std::env::var_os("CODEX_HOME").filter(|value| !value.is_empty()) {
+        Some(codex_home) => Path::new(&codex_home).is_dir(),
+        None => BaseDirs::new().is_some_and(|dirs| dirs.home_dir().join(".codex").is_dir()),
+    };
     home_config
         || std::env::var_os("PATH").is_some_and(|paths| {
             std::env::split_paths(&paths).any(|directory| directory.join("codex").is_file())
