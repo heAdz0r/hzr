@@ -522,9 +522,103 @@ fn init_in_git_workspace_leaves_no_lock_or_backup_residue() {
     let status = String::from_utf8(status.stdout).expect("UTF-8 git status");
     assert!(status.contains("AGENTS.md"));
     assert!(status.contains("CLAUDE.md"));
-    assert!(status.contains(".codex"));
+    // 0.11.2: after the transaction commits, init keeps its own `.grepai` link and Codex pin out
+    // of `git status` through the local exclude, exactly as SessionStart already did.
+    assert!(!status.contains(".codex"), "{status}");
+    assert!(!status.contains(".grepai"), "{status}");
+    assert!(workspace.join(".grepai").is_symlink());
+    let exclude = fs::read_to_string(workspace.join(".git/info/exclude")).expect("exclude");
+    assert!(exclude.lines().any(|line| line == "/.grepai"), "{exclude}");
     assert!(!status.contains("hzr-backup"), "{status}");
     assert!(!status.contains("hzr.lock"), "{status}");
+}
+
+// 0.11.2: `hzr doctor` passed `workspace_hygiene` from a subdirectory while `.grepai` was
+// untracked; `--fix` must repair it once and then report health.
+#[test]
+fn doctor_flags_and_fixes_an_unexcluded_grepai_link_from_a_subdirectory() {
+    let fixture = tempdir().expect("fixture");
+    let workspace = fixture.path().join("workspace");
+    let home = fixture.path().join("home");
+    let data = fixture.path().join("data");
+    let engines = fixture.path().join("engines");
+    for directory in [&workspace, &home, &engines] {
+        fs::create_dir_all(directory).expect("fixture directory");
+    }
+    assert!(
+        Command::new("git")
+            .current_dir(&workspace)
+            .args(["init", "-q"])
+            .status()
+            .expect("git init")
+            .success()
+    );
+    let config = fixture.path().join("config.toml");
+    fs::write(&config, custom_config(&data, &engines)).expect("config fixture");
+    let config = config.to_str().expect("config path");
+    let init = command(&home, &workspace)
+        .args(["--config", config, "init", "--force", "--skip-service"])
+        .output()
+        .expect("init runs");
+    assert!(
+        init.status.success(),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let exclude = workspace.join(".git/info/exclude");
+    let stripped = fs::read_to_string(&exclude)
+        .expect("exclude")
+        .lines()
+        .filter(|line| *line != "/.grepai")
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    fs::write(&exclude, &stripped).expect("drop the grepai exclude");
+    let subdirectory = workspace.join("src/nested");
+    fs::create_dir_all(&subdirectory).expect("subdirectory");
+    let hygiene = |fix: bool| {
+        let mut doctor = command(&home, &subdirectory);
+        doctor.args(["--config", config, "doctor", "--json"]);
+        if fix {
+            doctor.arg("--fix");
+        }
+        let output = doctor.output().expect("doctor runs");
+        let report = serde_json::from_slice::<serde_json::Value>(&output.stdout);
+        assert!(
+            report.is_ok(),
+            "doctor JSON: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = report.expect("validated doctor JSON");
+        report["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .find(|check| check["name"] == "workspace_hygiene")
+            .cloned()
+            .expect("workspace_hygiene check")
+    };
+
+    let finding = hygiene(false);
+    assert_eq!(finding["status"], "warning", "{finding}");
+    assert!(
+        finding["detail"]
+            .as_str()
+            .expect("detail")
+            .contains("/.grepai")
+    );
+    hygiene(true);
+    let repaired = fs::read_to_string(&exclude).expect("repaired exclude");
+    assert_eq!(
+        repaired.lines().filter(|line| *line == "/.grepai").count(),
+        1
+    );
+    assert_eq!(hygiene(false)["status"], "pass");
+    hygiene(true);
+    assert_eq!(
+        fs::read_to_string(&exclude).expect("exclude"),
+        repaired,
+        "idempotent"
+    );
 }
 
 #[test]

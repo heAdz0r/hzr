@@ -167,3 +167,23 @@ fn write_set_path_conflict_keeps_file_unchanged() {
     assert!(!out.status.success(), "expected non-zero exit status");
     assert_eq!(fs::read_to_string(&file).unwrap(), "{\"a\":1}");
 }
+
+// 0.11.2: a new file takes the mode any other tool would give it (0666 & !umask), not the
+// 0600 of the temp file it was persisted from.
+#[cfg(unix)]
+#[test]
+fn write_create_new_file_honours_the_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().expect("tempdir"); // 0.11.2
+    let file = tmp.path().join("fresh.txt"); // 0.11.2
+    let out = Command::new("/bin/sh") // 0.11.2
+        .arg("-c")
+        .arg("umask 022 && exec \"$0\" write create \"$1\" --content hi")
+        .arg(env!("CARGO_BIN_EXE_rtk"))
+        .arg(&file)
+        .output()
+        .expect("run rtk write create");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr)); // 0.11.2
+    let mode = fs::metadata(&file).expect("created").permissions().mode() & 0o777; // 0.11.2
+    assert_eq!(mode, 0o644, "new file mode {mode:o}"); // 0.11.2
+}

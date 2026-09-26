@@ -1550,6 +1550,70 @@ mod tests {
         }
     }
 
+    // 0.11.2: the pre-0.11.2 exactness claim. A 282 KB `cat` returned 28 KB with a recovery line.
+    const OVERCLAIMED_EXACTNESS: &str =
+        "`cat`, `sed -n` and `head` through the hook are already exact.";
+
+    #[test]
+    fn test_managed_block_states_where_hook_reads_stop_being_exact() {
+        // 0.11.2: only small `cat` output is whole; larger output is bounded with a recovery line.
+        for surface in [Surface::Claude, Surface::Codex] {
+            let rendered = compose("", surface, contract()).0;
+            let flat = rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(!flat.contains(OVERCLAIMED_EXACTNESS), "{flat}");
+            assert!(flat.contains("`cat` of a file up to 24 KB"), "{flat}");
+            assert!(flat.contains("larger output is bounded"), "{flat}");
+        }
+    }
+
+    #[test]
+    fn test_block_with_the_overclaimed_exactness_is_stale_and_refreshed() {
+        // 0.11.2: `hzr doctor --fix` refreshes through `install`; the old sentence must not survive.
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let contract = directory.path().join("HZR.md");
+        let instructions = directory.path().join("CLAUDE.md");
+        std::fs::write(&contract, "contract").expect("contract fixture");
+        let current = compose("", Surface::Claude, &contract).0;
+        let guidance = super::agent_capabilities()
+            .routes
+            .into_iter()
+            .find(|route| route.instead_of == "Exact unfiltered output")
+            .expect("exact_raw route")
+            .guidance;
+        let sentence = guidance
+            .split_once(". ")
+            .map(|(_, rest)| rest)
+            .expect("exactness sentence");
+        assert!(
+            current.contains(sentence),
+            "fixture must carry the sentence"
+        );
+        std::fs::write(
+            &instructions,
+            current.replace(sentence, OVERCLAIMED_EXACTNESS),
+        )
+        .expect("stale fixture");
+
+        assert!(
+            !super::audit(Surface::Claude, &instructions)
+                .expect("audit")
+                .current
+        );
+        let report =
+            super::install(Surface::Claude, &instructions, &contract, false, true).expect("fix");
+        assert!(report.changed);
+        let refreshed = std::fs::read_to_string(&instructions).expect("refreshed");
+        assert!(!refreshed.contains(OVERCLAIMED_EXACTNESS));
+        assert!(
+            super::audit(Surface::Claude, &instructions)
+                .expect("audit")
+                .current
+        );
+        let again =
+            super::install(Surface::Claude, &instructions, &contract, false, true).expect("again");
+        assert!(!again.changed, "refresh must be idempotent");
+    }
+
     #[test]
     fn test_managed_block_forbids_raw_when_policy_can_rewrite() {
         let out = compose("", Surface::Codex, contract()).0;

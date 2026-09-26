@@ -91,6 +91,10 @@ if test "${{1:-}}" = stdin; then
   cat
   exit 0
 fi
+if test "${{1:-}}" = path; then
+  printf '[%s]' "$PATH" # 0.11.2: the PATH fork-core itself runs under
+  exit 0
+fi
 if test "${{1:-}}" = accounting; then
   printf '%s' "${{RTK_TRACKING_DISABLED:-0}}"
   exit 0
@@ -649,5 +653,105 @@ async fn test_std_command_uses_exact_binary_and_centralized_environment() -> Res
     let non_utf8 = OsString::from_vec(vec![b'x', 0xff]);
     let os_command = runner.std_command_os(std::slice::from_ref(&non_utf8))?;
     assert_eq!(os_command.get_args().next(), Some(non_utf8.as_os_str()));
+    Ok(())
+}
+
+// 0.11.2: a bundled `node` beside the pinned fork-core and a caller-owned one on the caller's
+// PATH. Before 0.11.2 every managed route put the engines directory first, so the bundled one won.
+fn shadowing_toolchains(fork: &FakeFork) -> Result<(TempDir, String)> {
+    let engines = fork
+        .binary
+        .parent()
+        .ok_or_else(|| anyhow!("fake fork-core must have a parent"))?;
+    fs::write(engines.join("node"), "#!/bin/sh\nprintf bundled\n")?;
+    fs::set_permissions(engines.join("node"), fs::Permissions::from_mode(0o700))?;
+    let caller = TempDir::new()?;
+    fs::write(caller.path().join("node"), "#!/bin/sh\nprintf caller\n")?;
+    fs::set_permissions(
+        caller.path().join("node"),
+        fs::Permissions::from_mode(0o700),
+    )?;
+    let caller_path = format!("{}:/usr/bin:/bin", caller.path().display());
+    Ok((caller, caller_path))
+}
+
+// 0.11.2: run a decision under an explicit caller PATH, as the daemon applies `caller_path`.
+async fn execute_with_caller_path(
+    requested: CanonicalCommand,
+    decision: RewriteDecision,
+    caller_path: &str,
+) -> Result<String> {
+    let mut envelope = ExecutionEnvelope::allow_raw(requested);
+    envelope.decision = decision;
+    envelope
+        .environment
+        .set
+        .insert("PATH".to_owned(), caller_path.to_owned());
+    let result = completed(ExecutionPipeline.execute(envelope).await?)?;
+    Ok(String::from_utf8(inline(result.stdout.content)?)?)
+}
+
+#[tokio::test]
+async fn test_managed_shell_route_runs_commands_under_the_callers_exact_path() -> Result<()> {
+    // 0.11.2: regression for hook-managed `node --version` reporting the bundled Node.
+    let _guard = TEST_LOCK.lock().await;
+    let fork = FakeFork::new(
+        PINNED_RTK_VERSION,
+        r#"printf '{"decision":"rewrite","proposed":"rtk proxy node && rtk path && sh -c '\''rtk path'\''"}'"#,
+    )?;
+    let (_caller, caller_path) = shadowing_toolchains(&fork)?;
+    let adapter = PinnedRtkAdapter::detect(fork.config()).await;
+    let requested = CanonicalCommand::shell("node --version");
+    let decision = adapter.decide(&requested).await;
+    assert!(matches!(decision, RewriteDecision::AllowRewrite { .. }));
+
+    let stdout = execute_with_caller_path(requested, decision, &caller_path).await?;
+
+    // The rewritten `rtk` still reaches the pinned engine, including inside a nested wrapper,
+    // yet fork-core and everything it runs see the caller's PATH byte for byte.
+    assert_eq!(stdout, format!("caller[{caller_path}][{caller_path}]"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_managed_proxy_route_runs_commands_under_the_callers_exact_path() -> Result<()> {
+    // 0.11.2: the proxy route names the pinned engine by absolute path and needs no PATH entry.
+    let _guard = TEST_LOCK.lock().await;
+    let fork = FakeFork::new(PINNED_RTK_VERSION, r#"printf '{"decision":"proxy"}'"#)?;
+    let (_caller, caller_path) = shadowing_toolchains(&fork)?;
+    let adapter = PinnedRtkAdapter::detect(fork.config()).await;
+    let requested = CanonicalCommand::shell("node; printf '[%s]' \"$PATH\"");
+    let decision = adapter.decide(&requested).await;
+    assert!(matches!(decision, RewriteDecision::AllowRewrite { .. }));
+
+    let stdout = execute_with_caller_path(requested, decision, &caller_path).await?;
+
+    assert_eq!(stdout, format!("caller[{caller_path}]"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_runner_and_std_command_leave_path_to_the_caller() -> Result<()> {
+    // 0.11.2: direct fork-core invocations name the binary absolutely and inherit PATH unchanged.
+    let _guard = TEST_LOCK.lock().await;
+    let fork = FakeFork::new(PINNED_RTK_VERSION, "exit 1")?;
+    let adapter = PinnedRtkAdapter::detect(fork.config()).await;
+    let runner = adapter.runner()?;
+
+    let command = runner.std_command(&["path".to_owned()])?;
+    assert!(command.get_envs().all(|(key, _)| key != OsStr::new("PATH")));
+    let envelope = runner.envelope(&["path".to_owned()])?;
+    assert!(!envelope.environment.set.contains_key("PATH"));
+
+    let result = completed(
+        runner
+            .execute(ForkCoreInvocation::new(vec!["path".to_owned()]))
+            .await?,
+    )?;
+    let inherited = std::env::var("PATH")?;
+    assert_eq!(
+        inline(result.stdout.content)?,
+        format!("[{inherited}]").into_bytes()
+    );
     Ok(())
 }

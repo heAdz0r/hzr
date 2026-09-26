@@ -136,3 +136,114 @@ button:disabled { background: #34363d; color: #b1b2b8; cursor: not-allowed; tran
   .evidence-cards { grid-template-columns: 1fr; }
   .dashboard-status .status-chip { display: none; }
 }
+
+/* ---------------------------------------------------------------------------
+ * 0.11.2 — clarity pass: no negative offsets over the tab bar, a quieter brand
+ * backdrop, a plain-language headline, and layouts that hold at 375–1440px.
+ * ------------------------------------------------------------------------- */
+/* 0.11.2: states used to pull themselves up over the tab bar with negative margins. */
+.loading-layout, .error-state, .system-section { margin-top: 0; }
+/* 0.11.2: the giant logo competed with the content; keep a faint ember glow only. */
+.hero-overlay { opacity: .05; height: 320px; }
+@media (max-width: 900px) { .hero-overlay { display: none; } }
+
+/* 0.11.2: loading says what it is loading. */
+.loading-panel { display: flex; align-items: flex-start; gap: 16px; padding: 20px 24px; border: 1px solid var(--surface-border); border-radius: 16px; background: var(--ink-900); }
+.loading-panel strong { display: block; font-size: 16px; color: var(--text-primary); }
+.loading-panel p { margin: 6px 0 0; color: var(--text-secondary); line-height: 1.5; }
+.loading-panel code { color: var(--ember-300); overflow-wrap: anywhere; }
+.spinner { flex: none; width: 20px; height: 20px; margin-top: 2px; border: 2px solid var(--ink-700); border-top-color: var(--ember-500); border-radius: 50%; animation: rotate 800ms linear infinite; }
+.loading-layout .skeleton-grid { margin-top: 16px; }
+.loading-layout .skeleton-card { height: 112px; border-radius: 12px; opacity: .6; }
+.project-transition { margin-bottom: 24px; }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+/* 0.11.2: first-load failure — cause, command, retry. */
+.error-state h2 { max-width: 560px; }
+.error-recovery { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 12px; margin: 0 0 20px; padding: 12px 16px; border-radius: 12px; background: var(--ink-850); max-width: 100%; }
+.error-recovery span { color: var(--text-secondary); font-size: 12px; }
+.error-recovery code { color: var(--text-primary); overflow-wrap: anywhere; }
+.error-recovery .secondary-action { min-height: 36px; padding: 6px 12px; }
+.error-raw { margin-top: 16px; color: var(--text-tertiary); font-size: 12px; overflow-wrap: anywhere; }
+
+/* 0.11.2: the tab bar never shares a row with text that can squeeze it. */
+.dashboard-navigation { overflow-x: auto; scrollbar-width: none; }
+.dashboard-navigation::-webkit-scrollbar { display: none; }
+.dashboard-navigation button { flex: 0 0 auto; }
+.snapshot-freshness { white-space: nowrap; padding-left: 12px; }
+@media (max-width: 960px) { .snapshot-freshness { display: none; } }
+@media (max-width: 767px) {
+  .dashboard-navigation { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; overflow: visible; }
+  .dashboard-navigation button { min-width: 0; padding: 12px 4px; text-align: center; }
+}
+
+/* 0.11.2: headline card leads; the others support it. */
+.evidence-cards { grid-template-columns: minmax(0, 1.5fr) repeat(3, minmax(0, 1fr)); }
+.evidence-headline { background: linear-gradient(160deg, rgba(243, 106, 33, .12), var(--ink-850) 60%); border: 1px solid rgba(243, 106, 33, .22); }
+.evidence-headline .evidence-label { color: var(--ember-300); }
+.evidence-headline .evidence-number { font-size: 32px; }
+.evidence-headline > span:not(.evidence-label) { color: var(--text-primary); font-size: 13px; }
+.evidence-card p.evidence-secondary { color: var(--text-secondary); }
+.evidence-disclosure { margin-top: 16px; }
+.evidence-disclosure ul { margin: 0; padding-left: 18px; display: grid; gap: 10px; line-height: 1.55; color: var(--text-secondary); }
+.evidence-disclosure li strong { color: var(--text-primary); font-weight: 600; }
+.evidence-disclosure code { overflow-wrap: anywhere; }
+.command-breakdown-note { margin: 0 0 8px; color: var(--text-tertiary); font-size: 12px; }
+@media (max-width: 1100px) {
+  .evidence-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .evidence-headline, .evidence-whole-task { grid-column: 1 / -1; }
+}
+@media (max-width: 520px) {
+  .evidence-cards { grid-template-columns: 1fr; }
+  .evidence-headline .evidence-number { font-size: 28px; }
+}
+
+/* 0.11.2: last session — the newest evidence, first on the page. */
+.last-session { margin-bottom: 24px; padding: 20px 24px; border: 1px solid rgba(243, 106, 33, .22); border-radius: 16px; background: linear-gradient(160deg, rgba(243, 106, 33, .10), var(--ink-900) 55%); }
+.last-session-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 16px; }
+.last-session-head h3 { margin: 8px 0 0; font-size: 18px; overflow-wrap: anywhere; }
+.last-session-time { margin: 0; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.last-session-time small { color: var(--text-tertiary); font-size: 12px; }
+.last-session-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 16px; }
+.last-session-stats > div { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 14px 16px; border-radius: 12px; background: var(--ink-850); }
+.last-session-stats span { color: var(--text-secondary); font-size: 12px; }
+.last-session-stats strong { font-size: 20px; font-variant-numeric: tabular-nums; color: var(--text-primary); overflow-wrap: anywhere; }
+.last-session-stats small { color: var(--text-tertiary); font-size: 12px; line-height: 1.4; }
+.last-session-lead strong { color: var(--success); font-size: 24px; }
+.last-session-lead strong.value-negative { color: var(--error); }
+.last-session-routes { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; padding: 0; list-style: none; }
+.last-session-routes li { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 6px 10px; border-radius: 999px; background: var(--ink-850); font-size: 12px; color: var(--text-secondary); }
+.last-session-routes code { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 767px) { .last-session { padding: 16px; } }
+
+/* 0.11.2: Agents — the section had no inner padding, and six columns crushed the cards. */
+.agents-section { padding: 24px; border-radius: 16px; }
+.agents-board { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.agents-empty { border: 0; background: transparent; padding: 24px 0; }
+.empty-icon-neutral { color: var(--info); background: rgba(104, 169, 255, .1); }
+.agents-onboarding { padding-left: 0; list-style: none; max-width: 100%; }
+.agents-onboarding li { justify-content: center; }
+.agents-onboarding code { padding: 8px 12px; border-radius: 8px; background: var(--ink-850); }
+.agents-onboarding .secondary-action { min-height: 36px; padding: 6px 14px; }
+@media (max-width: 767px) { .agents-section { padding: 16px; } }
+
+/* 0.11.2: phones — two-up component chips, wrapped project filters. */
+@media (max-width: 767px) {
+  .component-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .component-strip button { flex-direction: row; align-items: center; padding: 12px; }
+  .filter-row { flex-wrap: wrap; overflow: visible; }
+}
+
+/* 0.11.2: phones — the savings table lost its bars but kept their header, so
+ * "Command" and "Runs" collided and command names shrank to two letters. */
+@media (max-width: 720px) {
+  .command-breakdown-row { grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; }
+  .command-breakdown-head span:nth-child(3) { display: none; }
+  .command-breakdown-runs small { display: block; }
+}
+@media (max-width: 767px) {
+  .metric-group .live-activity { padding: 12px; margin-inline: -4px; }
+  .savings-brief { padding: 16px 12px; }
+  .savings-brief-head { flex-direction: column; align-items: flex-start; }
+  .savings-brief-total { justify-items: start; text-align: left; }
+}

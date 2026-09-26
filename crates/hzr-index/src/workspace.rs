@@ -527,6 +527,38 @@ fn create_directory_symlink(target: &Path, link: &Path) -> Result<()> {
     })
 }
 
+/// Whether `project_entry` is a symlink into `<data_root>/workspaces`. (0.11.2)
+///
+/// Both sides are compared canonically, the way placement detection does: the link HZR creates
+/// names the canonical data root, so a `data_dir` spelled through a symlinked alias (`/tmp` for
+/// `/private/tmp`, a relocated home) never matched it textually and the link went unreported.
+#[must_use]
+pub fn is_managed_index_link(project_entry: &Path, data_root: &Path) -> bool {
+    let is_symlink = std::fs::symlink_metadata(project_entry)
+        .is_ok_and(|metadata| metadata.file_type().is_symlink());
+    let Ok(raw_target) = std::fs::read_link(project_entry) else {
+        return false;
+    };
+    if !is_symlink {
+        return false;
+    }
+    let target = if raw_target.is_absolute() {
+        raw_target
+    } else {
+        project_entry
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(raw_target)
+    };
+    match (
+        normalize_future_path(&target),
+        normalize_future_path(&data_root.join("workspaces")),
+    ) {
+        (Ok(target), Ok(managed_root)) => target.starts_with(managed_root),
+        _ => false,
+    }
+}
+
 fn normalize_future_path(path: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()

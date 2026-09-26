@@ -42,7 +42,9 @@ for `board` and `onboard`. agtx creates its store when the board first opens;
 enrollment expects `index.db` or `projects/`. Skip `board` for an existing
 store. Do not assume `~/.agtx` and do not create an empty directory to bypass
 validation. Operating agents through the upstream board still needs its normal
-prerequisites, including tmux and the chosen coding-agent executable.
+prerequisites, including tmux and the chosen coding-agent executable, and an
+interactive terminal: without a TTY on stdin and stdout `board` refuses before
+launching anything. <!-- 0.11.2 -->
 
 `component install` verifies the bundled observer's version, schema and patch
 identity. A damaged bundle fails with an update/reinstall remedy; it does not
@@ -67,6 +69,16 @@ hzr agents status --json                      # component identity, enrollments,
 hzr agents sync --project /absolute/worktree  # one bounded observation, through the daemon
 hzr agents disable --project /absolute/worktree
 ```
+
+<!-- 0.11.2: commands the README did not list -->
+`sync` waits (bounded by one full cycle) for an observation that is already
+running for the project, then runs its own. `hzr agents enable` is `onboard`
+without the component check, for operators who want the reported
+missing-component half-state; `hzr agents component status` reports the
+installed observer's identity. `hzr agents usage import --file <abs.json>`
+imports per-request usage receipts (`usage_kind = "request_delta"` only), and
+`hzr agents link --project <dir> --task <id> --session <id> --host <host>`
+records an explicit task/session link when no hook evidence exists.
 
 `disable` stops observation and reaps HZR's own helper within five seconds. It
 does not touch agtx, tmux or any coding agent, and it keeps the history HZR has
@@ -132,7 +144,14 @@ cross only when the enrollment asks for them (`publish_task_titles`, on by
 default), because a board labelled only `Task 7ac3` cannot be read; both are
 bounded and stripped of control characters at the source, and the pseudonym is
 published beside them either way. Turning the flag off returns the dashboard to
-pseudonyms alone.
+pseudonyms alone. <!-- 0.11.2 --> (The helper's own `include_titles` request field
+defaults to off, as PROVENANCE says; HZR's `publish_task_titles` setting is what
+turns it on for each request.)
+
+Dependencies are reconciled on every page: an edge the source stops declaring
+leaves the graph, and a reference is resolved against every task HZR has seen,
+not only those on the helper's current page. A page cut at the edge limit
+retires nothing. <!-- 0.11.2 -->
 
 ## Fixtures
 

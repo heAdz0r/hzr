@@ -1,0 +1,7 @@
+ok  	gm/a	0.192s
+--- FAIL: TestBad (0.00s)
+    b_test.go:6: context line
+    b_test.go:6: want 1 got 2
+FAIL
+FAIL	gm/b	0.192s
+FAIL

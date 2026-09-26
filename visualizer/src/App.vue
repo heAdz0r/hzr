@@ -12,6 +12,7 @@ import MemoryGraph from "./components/MemoryGraph.vue";
 import ObservabilityTimeline from "./components/ObservabilityTimeline.vue";
 import IndexPipeline from "./components/IndexPipeline.vue";
 import LiveActivity from "./components/LiveActivity.vue";
+import LastSessionCard from "./components/LastSessionCard.vue"; // 0.11.2
 import ProjectCard from "./components/ProjectCard.vue";
 import ServiceNode from "./components/ServiceNode.vue";
 import SessionRoi from "./components/SessionRoi.vue";
@@ -19,6 +20,7 @@ import StatusChip from "./components/StatusChip.vue";
 import type { DashboardProjectPage, DashboardResponse, ProjectState } from "./types";
 import {
   dashboardStateLabel,
+  describeLoadFailure, // 0.11.2
   filterProjects,
   formatBytes,
   formatCost,
@@ -31,6 +33,7 @@ import {
   relativeTime,
 } from "./utils";
 import { mergeObservability, nextRefreshBackoff } from "./observability";
+import { selectSavingsHeadline } from "./savings"; // 0.11.2
 import {
   LatestProjectRequestCoordinator,
   isCurrentProjectSnapshot,
@@ -56,6 +59,7 @@ const navigation = [
   { id: "system", label: "System" },
 ] as const;
 const selectedProjectLabel = computed(() =>
+  (snapshot.value === null ? (error.value ? "HZR dashboard" : "Connecting to HZR…") : null) ?? // 0.11.2: never name a project before one loads
   snapshot.value?.projects.find((project) => project.worktree_id === selectedProjectId.value)?.name ??
   (selectedProjectId.value ? "Selected project" : "Choose a workspace"),
 );
@@ -110,6 +114,14 @@ const projectSnapshotCurrent = computed(
     snapshot.value === null ||
     snapshot.value.selected_worktree_id === selectedProjectId.value,
 );
+
+// 0.11.2: one headline selection shared by the evidence cards and the savings brief.
+const headline = computed(() => (snapshot.value ? selectSavingsHeadline(snapshot.value.local_activity) : null));
+// 0.11.2: a failed first load names the cause and a recovery command.
+const loadFailure = computed(() => (error.value ? describeLoadFailure(error.value) : null));
+// 0.11.2: after a few seconds without a snapshot, say what we are waiting for.
+const loadingSlow = ref(false);
+let loadingSlowTimer: number | undefined;
 
 const totalProviderTokens = computed(() => {
   const usage = snapshot.value?.provider_receipts;
@@ -371,6 +383,7 @@ onMounted(() => {
   if (selectedProjectId.value) projectFilter.value = "selected"; // 0.9.1
   refreshRequests.switchProject(selectedProjectId.value);
   observabilityRequests.switchProject(selectedProjectId.value);
+  loadingSlowTimer = window.setTimeout(() => { loadingSlow.value = true; }, 6_000); // 0.11.2
   void refresh();
   scheduleRefresh();
   scheduleObservability();
@@ -384,6 +397,7 @@ onBeforeUnmount(() => {
   window.clearTimeout(refreshTimer);
   window.clearTimeout(observabilityTimer);
   window.clearTimeout(toastTimer);
+  window.clearTimeout(loadingSlowTimer); // 0.11.2
   document.removeEventListener("visibilitychange", handleVisibility);
 });
 </script>
@@ -406,7 +420,7 @@ onBeforeUnmount(() => {
           <span class="version-pill">Daemon v{{ snapshot.hzr_version }}</span>
           <span v-if="section === 'delegation'" class="version-pill">All workspaces</span>
           <StatusChip v-else-if="projectSnapshotCurrent" :state="snapshot.overall_state" :label="postureLabel" />
-          <span v-else class="loading-scope">Switching project…</span>
+          <span v-else class="loading-scope" role="status">Switching project…</span>
           <button class="refresh-action" type="button" :disabled="manualRefreshing" :aria-busy="manualRefreshing" @click="refresh(true)">
             <AppIcon name="refresh" :size="16" /><span>{{ manualRefreshing ? "Refreshing…" : "Refresh" }}</span>
           </button>
@@ -441,22 +455,36 @@ onBeforeUnmount(() => {
         <button type="button" :disabled="manualRefreshing" @click="refresh(true)">Try again</button>
       </div>
 
-      <section v-if="!snapshot && !error" class="loading-layout" aria-label="Loading dashboard">
-        <div class="skeleton skeleton-wide"></div>
-        <div class="skeleton-grid">
+      <!-- 0.11.2: say what is loading; a few muted placeholders instead of a wall of grey. -->
+      <section v-if="!snapshot && !error" class="loading-layout" aria-busy="true" aria-labelledby="loading-title">
+        <div class="loading-panel" role="status">
+          <span class="spinner" aria-hidden="true"></span>
+          <div>
+            <strong id="loading-title">Loading the dashboard snapshot</strong>
+            <p v-if="!loadingSlow">Reading project health, memory, index and accounting from the local HZR daemon.</p>
+            <p v-else>Still waiting for the daemon. If this persists, check it with <code>hzr daemon service status</code>.</p>
+          </div>
+        </div>
+        <div class="skeleton-grid" aria-hidden="true">
           <div v-for="item in 4" :key="item" class="skeleton skeleton-card"></div>
         </div>
-        <div class="skeleton skeleton-panel"></div>
       </section>
 
-      <section v-else-if="!snapshot && error" class="empty-state error-state" role="alert">
+      <!-- 0.11.2: name what failed and how to recover. -->
+      <section v-else-if="!snapshot && error && loadFailure" class="empty-state error-state" role="alert">
         <span class="empty-icon"><AppIcon name="warning" :size="24" /></span>
-        <span class="eyebrow">Visualizer unavailable</span>
-        <h2>HZR did not return a dashboard snapshot.</h2>
-        <p>{{ error }}</p>
+        <span class="eyebrow">Dashboard unavailable</span>
+        <h2>{{ loadFailure.title }}</h2>
+        <p>{{ loadFailure.detail }}</p>
+        <div class="error-recovery">
+          <span>Check it from a terminal</span>
+          <code>{{ loadFailure.command }}</code>
+          <button class="secondary-action" type="button" @click="copyCommand(loadFailure.command)"><AppIcon name="copy" :size="16" /> Copy</button>
+        </div>
         <button class="primary-action" type="button" :disabled="manualRefreshing" @click="refresh(true)">
-          <AppIcon name="refresh" :size="18" /> Try again
+          <AppIcon name="refresh" :size="18" /> {{ manualRefreshing ? "Retrying…" : "Try again" }}
         </button>
+        <small class="error-raw">Technical detail: {{ error }}</small>
       </section>
 
       <template v-else-if="snapshot">
@@ -577,13 +605,15 @@ onBeforeUnmount(() => {
           <div class="section-heading metrics-heading">
             <div>
               <span class="eyebrow">Verifiable accounting</span>
-              <h2 id="metrics-title">What the evidence shows</h2>
+              <h2 id="metrics-title">What HZR saved in this workspace</h2>
             </div>
             <p>
-              Output observations for the selected workspace.
-              Provider receipts and global estimates have separate sections below.
+              <!-- 0.11.2: plain language first; the method sits behind each "How" disclosure. -->
+              Estimates for the selected workspace only. Other workspaces and provider receipts are in the sections at the bottom.
             </p>
           </div>
+
+          <LastSessionCard v-if="snapshot.local_activity.last_session" :session="snapshot.local_activity.last_session" />
 
           <div class="component-strip" aria-label="Component states">
             <button v-for="service in snapshot.services" :key="service.id" type="button" @click="section = 'system'">
@@ -593,8 +623,8 @@ onBeforeUnmount(() => {
           <div class="metric-group local-group">
             <div class="metric-group-title">
               <span class="metric-group-mark local-mark"><AppIcon name="activity" :size="18" /></span>
-              <div><strong>Project output ledger</strong><span>Estimated output sizes · {{ snapshot.local_activity.accounting_policy_version }}</span></div>
-              <span class="metric-legend">Project-scoped · {{ formatCount(snapshot.local_activity.excluded_legacy_operations) }} legacy excluded</span>
+              <div><strong>This project</strong><span>Estimated from recorded command output</span></div><!-- 0.11.2 -->
+              <span class="metric-legend">Project scope</span>
             </div>
             <EvidenceOverview :activity="snapshot.local_activity" :receipts="snapshot.provider_receipts" :selected="selectedProjectId !== null" />
             <LiveActivity
@@ -606,15 +636,16 @@ onBeforeUnmount(() => {
               :unmeasured-count="snapshot.local_activity.unmeasured_bypass_operations"
               :measurement="snapshot.local_activity.measurement"
               :breakdown="snapshot.local_activity.command_breakdown ?? []"
-              :baseline="snapshot.local_activity.baseline_tokens_estimated"
-              :delivered="snapshot.local_activity.delivered_tokens_estimated"
-              :net-avoided="snapshot.local_activity.net_avoided_tokens_estimated"
-            />
+              :baseline="headline?.primary.baseline"
+              :delivered="headline?.primary.delivered"
+              :net-avoided="headline?.primary.netAvoided"
+              :host-capped="headline?.source === 'host_capped'"
+            /><!-- 0.11.2: the savings brief follows the same headline source -->
             <SessionRoi :roi="snapshot.session_roi" />
             <details class="detail-disclosure"><summary>Request traces & lifecycle events</summary><ObservabilityTimeline :observability="snapshot.observability" /></details>
           </div>
 
-          <details class="metric-group estimate-group detail-disclosure"><summary>All-workspace producer estimates <span>Global scope</span></summary>
+          <details class="metric-group estimate-group detail-disclosure"><summary>All workspaces <span>Raw tool-output estimates · global scope</span></summary><!-- 0.11.2 -->
             <div class="metric-group-title">
               <span class="metric-group-mark estimate-mark"><AppIcon name="cpu" :size="18" /></span>
               <div><strong>All-workspace efficiency ledger</strong><span>Global operational context · {{ snapshot.estimated_efficiency.accounting_policy_version }}</span></div>
@@ -624,7 +655,7 @@ onBeforeUnmount(() => {
               <MetricCard
                 eyebrow="Estimate"
                 :value="formatCount(snapshot.estimated_efficiency.operations)"
-                label="Producer operations"
+                label="Commands recorded"
                 :detail="`${formatDuration(snapshot.estimated_efficiency.total_execution_ms)} measured execution`"
                 icon="activity"
                 tone="estimated"
@@ -640,7 +671,7 @@ onBeforeUnmount(() => {
               <MetricCard
                 eyebrow="Estimate"
                 :value="formatPercent(snapshot.estimated_efficiency.reduction_pct)"
-                label="Producer reduction"
+                label="Tool-output reduction"
                 detail="Not a provider billing claim"
                 icon="database"
                 tone="estimated"
@@ -648,7 +679,7 @@ onBeforeUnmount(() => {
               <MetricCard
                 eyebrow="Estimate"
                 :value="formatCount(snapshot.estimated_efficiency.delivered_tokens_estimated)"
-                label="Produced tokens"
+                label="Tokens after HZR"
                 :detail="`${formatCount(snapshot.estimated_efficiency.baseline_tokens_estimated)} baseline estimate`"
                 icon="clock"
                 tone="estimated"

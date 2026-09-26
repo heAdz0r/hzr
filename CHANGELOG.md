@@ -4,6 +4,48 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-09-26
+
+### Fixed
+
+- `hzr stats` host-visible accounting used a flat 512-token cap for Claude Code rows only and left
+  other rows uncapped; every row is now bounded by the engine's host ceiling
+  (`HZR_HOST_OUTPUT_CEILING` → `BASH_MAX_OUTPUT_LENGTH` → 30,000 chars). The economics block is
+  priced on that host-capped net instead of the raw producer net.
+- `hzr stats` from a project subdirectory reported `this project 0`; the project row and
+  `--workspace .` resolve to the project root.
+- MCP `hzr_search` failed every call (`index_generation` missing from its output schema); all
+  output schemas were audited and a test calls every tool. With `structuredContent`, the text
+  block is a compact summary instead of a second copy (30 KB read: 68.6 KB → 33 KB).
+- `hzr memory recall --topic X --scope project` returned HTTP 400.
+- Hook-managed commands ran the bundled Node: the engines directory was prepended to `PATH`.
+  rtk now runs by absolute path; the shell route adds only an `rtk` shim directory.
+- fork-core: `rg` dropped file names with `/dev/null` stdin; read-cache, batch and failed reads
+  skipped the HZR ledger; `ls` and `go test` baselines measured internal output (`ls -la`,
+  `-json`) instead of what the user's command prints; `rtk ls` printed more than plain `ls` and
+  `rtk ls -1` printed `(empty)`; `ls -l` lost its columns; filtered tail reads credited the whole
+  file; semantic search failures did not fall back to exact; new files were created 0600.
+- `auto` search sent identifier-like queries to semantic search, and an unavailable semantic
+  index returned nothing.
+- The daemon accepted any `Host` header; non-loopback hosts now get 421.
+- `hzr init` left `.grepai` untracked while doctor reported hygiene PASS.
+- agtx: removed dependencies stayed on the board, cross-page dependencies showed unresolved,
+  project observed time was 0, `sync` right after `enable` failed, `board` without a TTY launched
+  agtx.
+
+### Added
+
+- `hzr stats` LAST SESSION section (also `last_session` in `--json` and on the dashboard).
+- Pricing catalog `hzr-public-api-pricing-2026-09-26-v1`: Claude Opus 5.5, Mythos 5/5.1,
+  Opus 4.5–4.8, Sonnet 4.5, GPT-6 Sol/Luna, Grok 4.7, Grok Build 0.1, DeepSeek Flash, Qwen 3.6/3.7
+  Plus. GPT-5.5/5.4/5.4-mini no longer carry an unpublished cache-write rate.
+
+### Changed
+
+- `hzr stats` names projects by directory, `--fleet` defaults to lifetime, tables no longer
+  truncate labels. The dashboard headline is the host-capped net; layout fixed at every width.
+- The managed instruction block states that `cat` through the hook is exact up to 24 KB.
+
 ## [0.11.1] - 2026-09-26
 
 ### Changed
@@ -2078,4 +2120,5 @@ First public HZR release.
 [0.9.10]: https://github.com/heAdz0r/hzr/compare/v0.9.9...v0.9.10
 [0.9.9]: https://github.com/heAdz0r/hzr/compare/v0.9.8...v0.9.9
 [0.9.8]: https://github.com/heAdz0r/hzr/compare/v0.9.7...v0.9.8
+[0.11.2]: https://github.com/heAdz0r/hzr/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/heAdz0r/hzr/compare/v0.11.0...v0.11.1

@@ -116,3 +116,69 @@ fn bounded_read_ledger_counts_notices_unicode_and_newline_shapes() {
         "exact terminal line\n"
     );
 }
+
+// 0.11.2: every read, cached or failed, reaches the HZR ledger as a receipt and never the
+// engine's own history database.
+fn receipt_read(directory: &Path, args: &[&str]) -> (std::process::Output, Vec<serde_json::Value>) {
+    let receipts = directory.join("receipts.jsonl"); // 0.11.2
+    let output = Command::new(env!("CARGO_BIN_EXE_rtk")) // 0.11.2
+        .args(args)
+        .current_dir(directory)
+        .env("HOME", directory.join("home"))
+        .env("XDG_CACHE_HOME", directory.join("home/cache"))
+        .env("RTK_DB_PATH", directory.join("must-not-exist.sqlite"))
+        .env("RTK_TRACKING_DISABLED", "0")
+        .env("HZR_INTERNAL_ACCOUNTING_RECEIPT_JOURNAL", &receipts)
+        .env("HZR_INTERNAL_ACCOUNTING_FAILURE_JOURNAL", directory.join("failures.jsonl"))
+        .env("HZR_INTERNAL_ACCOUNTING_CORRELATION", "0123456789abcdef0123456789abcdef")
+        .output()
+        .expect("run read");
+    let journal = fs::read_to_string(&receipts).unwrap_or_default(); // 0.11.2
+    let parsed = journal // 0.11.2
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("receipt json"))
+        .collect();
+    (output, parsed)
+}
+
+#[test]
+fn cached_reads_write_receipts_and_never_the_history_database() {
+    let directory = tempdir().expect("temp directory"); // 0.11.2
+    let source = "fn main() {\n    // a comment the minimal filter drops\n    println!(\"hi\");\n}\n"; // 0.11.2
+    fs::write(directory.path().join("main.rs"), source).expect("write source"); // 0.11.2
+    for _ in 0..2 {
+        let (output, _) = receipt_read(directory.path(), &["read", "main.rs"]); // 0.11.2
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr)); // 0.11.2
+    }
+    let (_, receipts) = receipt_read(directory.path(), &["read", "main.rs"]); // 0.11.2
+    assert_eq!(receipts.len(), 3, "a cache hit wrote no receipt: {receipts:?}"); // 0.11.2
+    let whole_file = source.len().div_ceil(4) as u64; // 0.11.2
+    for receipt in &receipts {
+        assert_eq!(receipt["baseline_tokens"], whole_file, "{receipt}"); // 0.11.2
+    }
+    assert!(!directory.path().join("must-not-exist.sqlite").exists()); // 0.11.2
+}
+
+#[test]
+fn failed_reads_write_a_zero_saving_receipt() {
+    let directory = tempdir().expect("temp directory"); // 0.11.2
+    let (output, receipts) = receipt_read(directory.path(), &["read", "missing.rs"]); // 0.11.2
+    assert!(!output.status.success()); // 0.11.2
+    assert_eq!(receipts.len(), 1, "a failed read wrote no receipt"); // 0.11.2
+    assert_eq!(receipts[0]["baseline_tokens"], receipts[0]["delivered_tokens"]); // 0.11.2
+    assert!(!directory.path().join("must-not-exist.sqlite").exists()); // 0.11.2
+}
+
+#[test]
+fn batch_reads_write_receipts_and_never_the_history_database() {
+    let directory = tempdir().expect("temp directory"); // 0.11.2
+    fs::write(directory.path().join("a.txt"), "alpha\n").expect("write a"); // 0.11.2
+    fs::write(directory.path().join("b.txt"), "beta\n").expect("write b"); // 0.11.2
+    let (output, receipts) = receipt_read(
+        directory.path(),
+        &["read", "--batch", "a.txt", "b.txt", "--max-tokens", "400"],
+    ); // 0.11.2
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr)); // 0.11.2
+    assert_eq!(receipts.len(), 1, "a batch read wrote no receipt"); // 0.11.2
+    assert!(!directory.path().join("must-not-exist.sqlite").exists()); // 0.11.2
+}

@@ -506,6 +506,31 @@ fn passthrough<T: AsRef<str>>(
     Ok(exit_code)
 }
 
+/// 0.11.2: ripgrep's rule for "stdin is the input": a pipe/FIFO, a socket or a regular file
+/// with data. A terminal, `/dev/null` or a closed descriptor is not.
+fn stdin_is_readable_input() -> bool {
+    if std::io::stdin().is_terminal() {
+        return false; // 0.11.2
+    }
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsFd;
+        use std::os::unix::fs::FileTypeExt;
+        let Ok(descriptor) = std::io::stdin().as_fd().try_clone_to_owned() else {
+            return false; // 0.11.2: no stdin at all
+        };
+        let Ok(metadata) = std::fs::File::from(descriptor).metadata() else {
+            return false; // 0.11.2
+        };
+        let kind = metadata.file_type(); // 0.11.2
+        kind.is_fifo() || kind.is_socket() || kind.is_file() // 0.11.2: ripgrep's is_readable_stdin rule
+    }
+    #[cfg(not(unix))]
+    {
+        true // 0.11.2: previous behaviour off unix
+    }
+}
+
 fn has_short_flag(flags: &[String], ch: char) -> bool {
     flags
         .iter()
@@ -576,8 +601,10 @@ pub fn run(
         eprintln!("grep: '{}' in {}", pattern_display, path_display);
     }
 
-    let reads_piped_stdin = !std::io::stdin().is_terminal()
-        && (paths.is_empty() || paths.iter().any(|path| path == "-"));
+    // 0.11.2: `-` always reads stdin; with no path operand only readable input does. An
+    // agent harness runs with stdin on /dev/null, where rg searches the working directory.
+    let reads_piped_stdin = paths.iter().any(|path| path == "-")
+        || (paths.is_empty() && stdin_is_readable_input());
 
     // format/shape flags (-c/-l/-o/...): already-minimal native output, passthrough.
     if has_format_flag(&extra_args) {

@@ -14,7 +14,7 @@ Write stay the default.
 | Durable decisions and fixes | `hzr memory recall\|store`; project scope by default; `--scope global` only for user-wide preferences. |
 | Unfamiliar or cross-cutting area | `hzr context plan "<intent>"`; bound with `--max-tokens N`. |
 | Shell command outside the hook | `hzr exec run '<cmd>'`; hook-routed Bash is already managed. |
-| Exact unfiltered output | `HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'`; reason: binary, checksum, machine_protocol, complete_log, full_patch or verbatim_source. `cat`, `sed -n` and `head` through the hook are already exact. |
+| Exact unfiltered output | `HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'`; reason: binary, checksum, machine_protocol, complete_log, full_patch or verbatim_source. `cat` of a file up to 24 KB and `sed -n`, `head` or `tail` windows through the hook are exact; larger output is bounded and names its recovery command. |
 
 Filtered or bounded output always names its recovery command; never treat it as
 complete. Use MCP `hzr_*` tools only when the server reports this worktree. If enabled

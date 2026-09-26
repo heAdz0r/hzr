@@ -196,7 +196,17 @@ impl AtomicWriter {
             })?;
         }
 
-        let mut temp_file = NamedTempFile::new_in(parent)
+        // 0.11.2: a new file gets the mode any other tool gives it (0666 & !umask). The temp
+        // file is 0600 and was persisted as-is, so every created file came out owner-only.
+        // Passing 0666 to the create call lets the kernel apply the umask — no global state.
+        let mut builder = tempfile::Builder::new(); // 0.11.2
+        #[cfg(unix)]
+        if existing_meta.is_none() {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(fs::Permissions::from_mode(0o666)); // 0.11.2
+        }
+        let mut temp_file: NamedTempFile = builder
+            .tempfile_in(parent) // 0.11.2
             .with_context(|| format!("Failed to create temp file in {}", parent.display()))?;
 
         {

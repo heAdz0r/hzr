@@ -223,14 +223,39 @@ impl ContextPlanner {
         if migration_fallback.is_some() {
             request.mode = SearchMode::Exact;
         }
+        // 0.11.2: auto sends identifiers and quoted literals to exact search; ranking
+        // `multiply_numbers` or `foo::bar` as prose found nothing the literal would.
+        if request.mode == SearchMode::Auto {
+            if let Some(literal) = auto_exact_literal(&request.query) {
+                request.query = literal.to_owned(); // 0.11.2
+                request.mode = SearchMode::Exact; // 0.11.2
+            }
+        }
         let initial_generation = IndexGeneration::read(&workspace)?;
+        // 0.11.2: a ranked request that cannot use the index degrades by query shape.
+        let mut kind = ForkSearchKind::from(request.mode);
         let (workspace, generation, fallback_reason) = if request.mode == SearchMode::Exact {
             (workspace, initial_generation, migration_fallback)
         } else {
             match self.prepare_within_request_budget(&workspace).await {
+                // 0.11.2: a warming index has no vectors yet; ranking against it answered 0/0.
+                Ok(prepared)
+                    if requested_mode == SearchMode::Auto
+                        && !prepared.workspace.index.vectors.is_file() =>
+                {
+                    kind = ForkSearchKind::degraded_for(&request.query); // 0.11.2
+                    (
+                        prepared.workspace,
+                        prepared.generation,
+                        Some((
+                            SearchFallbackCode::SemanticIndexUnavailable,
+                            "semantic index vectors are not built yet (index warming); auto used builtin search without the index".to_owned(),
+                        )),
+                    )
+                }
                 Ok(prepared) => (prepared.workspace, prepared.generation, None),
                 Err(error) => {
-                    request.mode = SearchMode::Exact;
+                    kind = ForkSearchKind::degraded_for(&request.query); // 0.11.2
                     (
                         workspace,
                         initial_generation,
@@ -247,9 +272,56 @@ impl ContextPlanner {
         if requested_mode == SearchMode::Auto && request.mode == SearchMode::Auto {
             request.mode = SearchMode::Semantic;
         }
-        let mut response = self
-            .search_in(&workspace, &generation, &request, account_usage)
-            .await?;
+        let mut response = match self
+            .search_in(&workspace, &generation, &request, kind, account_usage)
+            .await
+        {
+            // 0.11.2: a failed semantic pass (grepai 503, unparseable JSON) degrades with a
+            // notice instead of failing the request, as the search contract promises.
+            Err(error) if kind == ForkSearchKind::Adaptive && semantic_failure_degrades(&error) => {
+                let mut response = self
+                    .search_in(
+                        &workspace,
+                        &generation,
+                        &request,
+                        ForkSearchKind::degraded_for(&request.query),
+                        account_usage,
+                    )
+                    .await?;
+                response.fallback_code = Some(SearchFallbackCode::SemanticIndexUnavailable);
+                response.fallback_reason = Some(format!(
+                    "semantic search failed; fork rgai used its builtin fallback: {error}"
+                ));
+                return Ok(response);
+            }
+            // 0.11.2: an auto query the semantic index answered with nothing gets one
+            // builtin pass, so a stale or partial index cannot hide a lexical match.
+            Ok(response)
+                if requested_mode == SearchMode::Auto
+                    && kind == ForkSearchKind::Adaptive
+                    && response.total_hits == 0
+                    && fallback_reason.is_none() =>
+            {
+                let mut retried = self
+                    .search_in(
+                        &workspace,
+                        &generation,
+                        &request,
+                        ForkSearchKind::degraded_for(&request.query),
+                        account_usage,
+                    )
+                    .await?;
+                if retried.total_hits == 0 {
+                    return Ok(response);
+                }
+                retried.fallback_code = Some(SearchFallbackCode::SemanticIndexUnavailable);
+                retried.fallback_reason = Some(
+                    "the semantic index returned no hits; auto retried builtin search without the index".to_owned(),
+                );
+                return Ok(retried);
+            }
+            other => other?,
+        };
         if let Some((code, reason)) = fallback_reason {
             response.fallback_code = Some(code);
             response.fallback_reason = Some(reason);
@@ -474,7 +546,13 @@ impl ContextPlanner {
                     include_content: true,
                 };
                 match self
-                    .search_in(workspace, &generation, &exact_request, true)
+                    .search_in(
+                        workspace,
+                        &generation,
+                        &exact_request,
+                        ForkSearchKind::Literal, // 0.11.2
+                        true,
+                    )
                     .await
                 {
                     Ok(response) => {
@@ -535,7 +613,19 @@ impl ContextPlanner {
             include_content: true,
         };
         let source = match self
-            .search_in(workspace, &generation, &search_request, true)
+            .search_in(
+                workspace,
+                &generation,
+                &search_request,
+                // 0.11.2: without an index the intent is ranked by the builtin model; a
+                // literal match of a whole sentence found nothing.
+                if adaptive_search_ready {
+                    ForkSearchKind::Adaptive
+                } else {
+                    ForkSearchKind::degraded_for(&request.intent)
+                },
+                true,
+            )
             .await
         {
             Ok(response) => {
@@ -704,6 +794,7 @@ impl ContextPlanner {
         workspace: &Workspace,
         generation: &IndexGeneration,
         request: &SearchRequest,
+        kind: ForkSearchKind, // 0.11.2: the fork strategy is chosen by the caller
         account_usage: bool,
     ) -> Result<SearchApiResponse> {
         let filter = workspace.normalize_filter(request.path.as_deref())?;
@@ -721,8 +812,8 @@ impl ContextPlanner {
                     field: "workspace",
                     reason: "workspace root must be valid UTF-8".into(),
                 })?;
-        let planned_strategy = if request.mode == SearchMode::Exact {
-            SearchStrategy::ForkRgaiBuiltin
+        let planned_strategy = if kind != ForkSearchKind::Adaptive {
+            SearchStrategy::ForkRgaiBuiltin // 0.11.2: literal and degraded passes skip grepai
         } else {
             self.ensure_managed_fork_search_config(workspace, account_usage)
                 .await?;
@@ -732,7 +823,7 @@ impl ContextPlanner {
             &request.query,
             Path::new(path_text),
             Path::new(root_text),
-            request.mode,
+            kind, // 0.11.2
             request.limit,
             request.include_content,
         );
@@ -755,7 +846,8 @@ impl ContextPlanner {
             .backend
             .map(ForkSearchBackend::strategy)
             .unwrap_or(planned_strategy);
-        let fallback_code = fork_backend_fallback_code(request.mode, strategy);
+        let effective_mode = kind.effective_mode(request.mode); // 0.11.2
+        let fallback_code = fork_backend_fallback_code(effective_mode, strategy);
         let hits = raw
             .hits
             .into_iter()
@@ -780,7 +872,7 @@ impl ContextPlanner {
             skipped_large: raw.skipped_large,
             skipped_binary: raw.skipped_binary,
             hits,
-            effective_mode: request.mode,
+            effective_mode, // 0.11.2
             strategy,
             fallback_code,
             index_generation: Some(generation.generation.clone()),
@@ -1000,6 +1092,107 @@ impl ForkSearchBackend {
             Self::Builtin => SearchStrategy::ForkRgaiBuiltin,
         }
     }
+}
+
+/// 0.11.2: which fork `rgai` pass a search runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ForkSearchKind {
+    /// grepai first, then ripgrep and the builtin walker (semantic and auto).
+    Adaptive,
+    /// One verbatim, case-sensitive literal (`--literal`).
+    Literal,
+    /// Ranked terms without grepai (`--builtin`): the degraded pass for a prose query.
+    Lexical,
+}
+
+impl From<SearchMode> for ForkSearchKind {
+    fn from(mode: SearchMode) -> Self {
+        match mode {
+            SearchMode::Exact => Self::Literal,
+            SearchMode::Semantic | SearchMode::Auto => Self::Adaptive,
+        }
+    }
+}
+
+impl ForkSearchKind {
+    /// A literal pass for an identifier, a ranked builtin pass for prose: a literal
+    /// match of a sentence finds nothing, and ranking an identifier splits it apart.
+    fn degraded_for(query: &str) -> Self {
+        if auto_exact_literal(query).is_some() {
+            Self::Literal
+        } else {
+            Self::Lexical
+        }
+    }
+
+    /// The mode the response reports. A degraded prose pass is still the ranked term
+    /// model (strategy `fork_rgai_builtin`), exactly as when the fork itself falls back.
+    const fn effective_mode(self, requested: SearchMode) -> SearchMode {
+        match self {
+            Self::Literal => SearchMode::Exact,
+            Self::Adaptive | Self::Lexical => requested,
+        }
+    }
+}
+
+/// 0.11.2: the literal an `auto` query names when it is a code identifier or a quoted
+/// literal, so `multiply_numbers`, `CamelCase`, `foo::bar` and `"exact text"` are
+/// matched verbatim instead of being lowercased, split and stemmed.
+fn auto_exact_literal(query: &str) -> Option<&str> {
+    let query = query.trim();
+    for quote in ['"', '\'', '`'] {
+        if let Some(inner) = query
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            if !inner.trim().is_empty() && !inner.contains(quote) {
+                return Some(inner);
+            }
+        }
+    }
+    identifier_shaped(query).then_some(query)
+}
+
+fn identifier_shaped(token: &str) -> bool {
+    if token.is_empty()
+        || token.len() > 256
+        || token.chars().any(char::is_whitespace)
+        || !token
+            .chars()
+            .any(|character| character.is_ascii_alphanumeric())
+    {
+        return false;
+    }
+    let bytes = token.as_bytes();
+    token.contains('_')
+        || token.contains("::")
+        || token.contains("->")
+        || token.ends_with("()")
+        || (token.starts_with('-')
+            && token
+                .trim_start_matches('-')
+                .starts_with(|character: char| character.is_ascii_alphanumeric()))
+        || bytes
+            .windows(2)
+            .any(|pair| pair[0].is_ascii_lowercase() && pair[1].is_ascii_uppercase())
+        || bytes.windows(3).any(|triple| {
+            triple[1] == b'.'
+                && triple[0].is_ascii_alphanumeric()
+                && triple[2].is_ascii_alphabetic()
+        })
+}
+
+/// 0.11.2: failures of the semantic pass itself degrade; a bad request, missing runner
+/// or accounting failure would fail the builtin pass the same way, so it surfaces.
+const fn semantic_failure_degrades(error: &ContextError) -> bool {
+    matches!(
+        error,
+        ContextError::Index(_)
+            | ContextError::IndexNotReady(_)
+            | ContextError::Fork(_)
+            | ContextError::ForkCommand { .. }
+            | ContextError::InvalidForkOutput { .. }
+    )
 }
 
 const fn fork_backend_fallback_code(
@@ -1393,7 +1586,7 @@ fn fork_search_args(
     query: &str,
     path: &Path,
     workspace_root: &Path,
-    mode: SearchMode,
+    kind: ForkSearchKind, // 0.11.2: was SearchMode
     limit: usize,
     include_content: bool,
 ) -> Vec<String> {
@@ -1407,13 +1600,16 @@ fn fork_search_args(
         limit.to_string(),
         "--json".into(),
     ];
-    if mode == SearchMode::Exact {
+    if kind == ForkSearchKind::Literal {
         // `--literal` matches the query verbatim and case-sensitively, and implies
         // `--builtin`. Sending only `--builtin` handed the query to the ranked term
         // model, which lowercases it, splits it on non-alphanumerics, drops stop words
         // and stems the rest — so "exact" returned every file containing any one of the
         // surviving tokens, and agents learned to distrust the mode entirely.
         args.push("--literal".into());
+    } else if kind == ForkSearchKind::Lexical {
+        // 0.11.2: ranked terms without grepai — the degraded pass for a prose query.
+        args.push("--builtin".into());
     }
     if !include_content {
         args.push("--compact".into());
@@ -1996,7 +2192,7 @@ esac
                 "needle",
                 std::path::Path::new("crates/hzr-cli/src/mcp.rs"),
                 std::path::Path::new("/repo"),
-                mode,
+                mode.into(), // 0.11.2
                 10,
                 false,
             );
@@ -2118,7 +2314,7 @@ esac
             "fn handle_request",
             std::path::Path::new("."),
             std::path::Path::new("/repo"),
-            SearchMode::Exact,
+            SearchMode::Exact.into(), // 0.11.2
             10,
             true,
         );
@@ -2132,7 +2328,7 @@ esac
             "handle a request",
             std::path::Path::new("."),
             std::path::Path::new("/repo"),
-            SearchMode::Auto,
+            SearchMode::Auto.into(), // 0.11.2
             10,
             false,
         );
@@ -2382,5 +2578,185 @@ esac
         });
         let parsed = parse_fork_search_config(&output.to_string(), &managed).expect("typed config");
         assert!(parsed.validation.is_err());
+    }
+
+    // 0.11.2: auto routing — identifiers and quoted literals are exact, prose is ranked.
+    #[test]
+    fn test_auto_routes_identifiers_and_quoted_literals_to_exact() {
+        for (query, literal) in [
+            ("multiply_numbers", "multiply_numbers"),
+            ("CamelCase", "CamelCase"),
+            ("foo::bar", "foo::bar"),
+            ("  HZR_RAW_FIDELITY ", "HZR_RAW_FIDELITY"),
+            ("handle_request()", "handle_request()"),
+            ("main.rs", "main.rs"),
+            ("--outline", "--outline"),
+            (
+                "\"global memory topic must be\"",
+                "global memory topic must be",
+            ),
+            ("'unknown property'", "unknown property"),
+            ("`index_generation`", "index_generation"),
+        ] {
+            assert_eq!(super::auto_exact_literal(query), Some(literal), "{query}");
+        }
+        for query in [
+            "where is the ledger written",
+            "ledger",
+            "HTTP",
+            "v1.2",
+            "\"\"",
+            "\"unbalanced",
+            "fn handle_request",
+        ] {
+            assert_eq!(super::auto_exact_literal(query), None, "{query}");
+        }
+    }
+
+    // 0.11.2: a degraded pass keeps identifiers literal and prose ranked, never grepai.
+    #[test]
+    fn test_degraded_search_kind_follows_query_shape() {
+        use super::ForkSearchKind;
+        assert_eq!(
+            ForkSearchKind::degraded_for("multiply_numbers"),
+            ForkSearchKind::Literal
+        );
+        assert_eq!(
+            ForkSearchKind::degraded_for("where is the ledger written"),
+            ForkSearchKind::Lexical
+        );
+        let lexical = fork_search_args(
+            "where is the ledger written",
+            Path::new("."),
+            Path::new("/repo"),
+            ForkSearchKind::Lexical,
+            10,
+            false,
+        );
+        assert!(lexical.iter().any(|argument| argument == "--builtin"));
+        assert!(!lexical.iter().any(|argument| argument == "--literal"));
+        assert_eq!(
+            ForkSearchKind::Lexical.effective_mode(SearchMode::Semantic),
+            SearchMode::Semantic
+        );
+        assert_eq!(
+            ForkSearchKind::Literal.effective_mode(SearchMode::Semantic),
+            SearchMode::Exact
+        );
+    }
+
+    // 0.11.2: semantic failures degrade; request and runner failures still surface.
+    #[test]
+    fn test_semantic_failures_degrade_but_request_errors_surface() {
+        use crate::error::ContextError;
+        for error in [
+            ContextError::InvalidForkOutput {
+                operation: "rgai search",
+                detail: "failed to parse grepai JSON".into(),
+            },
+            ContextError::ForkCommand {
+                operation: "rgai search",
+                exit_code: Some(1),
+                stderr: "grepai: HTTP 503".into(),
+            },
+            ContextError::IndexNotReady("warming".into()),
+        ] {
+            assert!(super::semantic_failure_degrades(&error), "{error}");
+        }
+        for error in [
+            ContextError::InvalidRequest {
+                field: "path",
+                reason: "outside".into(),
+            },
+            ContextError::ForkUnavailable("missing".into()),
+            ContextError::Invariant("broken".into()),
+        ] {
+            assert!(!super::semantic_failure_degrades(&error), "{error}");
+        }
+    }
+
+    /// 0.11.2: end to end through a fake fork — an identifier never waits on the semantic
+    /// index, and prose without an index runs ranked builtin search instead of a literal.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_auto_search_routes_by_query_shape_and_index_readiness() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let workspace_root = directory.path().join("workspace");
+        fs::create_dir(&workspace_root).expect("workspace");
+        let log = directory.path().join("rgai-args");
+        let binary = directory.path().join("rtk");
+        let contract_json =
+            serde_json::to_string(&expected_engine_identity().expect("current engine identity"))
+                .expect("contract JSON");
+        let log_shell = log.to_string_lossy();
+        assert!(!log_shell.contains('\''));
+        let script = r#"#!/bin/sh
+case "$1" in
+  --version) printf '%s\n' 'rtk 0.50.0-fork.1' ;;
+  contract) printf '%s\n' '__CONTRACT_JSON__' ;;
+  rewrite) printf '%s\n' 'rtk rewrite - Raw command to rewrite' ;;
+  proxy) printf '%s\n' 'rtk proxy - execute without filtering' ;;
+  rgai)
+    printf '%s\n' "$*" >> '__LOG__'
+    printf '%s\n' '{"query":"q","total_hits":0,"hits":[],"backend":"builtin"}'
+    ;;
+  *) exit 67 ;;
+esac
+"#
+        .replace("__CONTRACT_JSON__", &contract_json)
+        .replace("__LOG__", &log_shell);
+        fs::write(&binary, script).expect("fake rtk");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).expect("permissions");
+
+        let mut config = Config {
+            data_dir: directory.path().join("data"),
+            ..Config::default()
+        };
+        config.engines.directory = Some(directory.path().to_path_buf());
+        config.ensure_layout().expect("HZR data layout");
+        let adapter = PinnedRtkAdapter::detect(ForkCoreConfig {
+            binary,
+            runtime_paths: Some(ForkRuntimePaths::from_data_root(&config.data_dir)),
+            probe_timeout_ms: 20_000,
+            ..ForkCoreConfig::default()
+        })
+        .await;
+        let planner = ContextPlanner::from_config(
+            &config,
+            unavailable_memory(directory.path()),
+            adapter.runner(),
+        );
+        let request = |query: &str| super::SearchRequest {
+            workspace: workspace_root.clone(),
+            query: query.to_owned(),
+            path: None,
+            limit: 5,
+            mode: SearchMode::Auto,
+            include_content: false,
+        };
+
+        let identifier = planner
+            .search_unaccounted(request("multiply_numbers"))
+            .await
+            .expect("identifier search");
+        assert_eq!(identifier.effective_mode, SearchMode::Exact);
+        assert_eq!(identifier.fallback_code, None, "{identifier:?}");
+        let prose = planner
+            .search_unaccounted(request("where numbers are multiplied"))
+            .await
+            .expect("prose search");
+        assert_eq!(prose.effective_mode, SearchMode::Semantic);
+        assert_eq!(prose.strategy, SearchStrategy::ForkRgaiBuiltin);
+        assert_eq!(
+            prose.fallback_code,
+            Some(SearchFallbackCode::SemanticIndexUnavailable)
+        );
+
+        let invocations = fs::read_to_string(&log).expect("rgai log");
+        let lines = invocations.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2, "{invocations}");
+        assert!(lines[0].contains("--literal") && lines[0].ends_with("multiply_numbers"));
+        assert!(lines[1].contains("--builtin") && !lines[1].contains("--literal"));
+        planner.shutdown().await.expect("index shutdown");
     }
 }

@@ -1234,7 +1234,8 @@ pub struct DashboardIndexObservatory {
     pub diagnostic_command: String,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+// 0.11.2: no longer `Eq`: `last_session.host_visible_reduction_pct` is a float.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DashboardLocalActivity {
     #[serde(default)]
     pub explicit_delivery: DashboardDeliverySummary,
@@ -1260,6 +1261,70 @@ pub struct DashboardLocalActivity {
     /// Savings by command for the selected project; empty for older daemons. // 0.9.1
     #[serde(default)]
     pub command_breakdown: Vec<DashboardCommandBreakdown>,
+    /// 0.11.2: the host-capped view `hzr stats --workspace <root>` prints for the same project
+    /// and lifetime window. Each operation is bounded by `host_ceiling_tokens` on both sides,
+    /// and the rows follow the CLI's accounting scope (typed v2 plus aggregate-compatible v1
+    /// fork rows), so these three figures equal the CLI's HOST-VISIBLE RAW / FILTERED / NET.
+    /// The uncapped fields above stay current-policy (v2) only, as before.
+    #[serde(default)]
+    pub host_visible_baseline_tokens_estimated: u64,
+    #[serde(default)]
+    pub host_visible_delivered_tokens_estimated: u64,
+    #[serde(default)]
+    pub host_visible_net_avoided_tokens_estimated: i64,
+    /// 0.11.2: per-operation ceiling in tokens; `None` when HZR_HOST_OUTPUT_CEILING=0.
+    #[serde(default)]
+    pub host_ceiling_tokens: Option<u64>,
+    /// 0.11.2: the newest attributed session of the project, as `hzr stats` prints it.
+    #[serde(default)]
+    pub last_session: Option<LastSession>,
+}
+
+/// 0.11.2: the newest attributed session in a scope — shared verbatim by `hzr stats --json`
+/// (`last_session`) and the dashboard (`local_activity.last_session`), so both surfaces carry
+/// the same figures under the same names.
+///
+/// Privacy: the session is named only by its keyed digest, routes only by privacy-safe labels.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LastSession {
+    pub session_hash: String,
+    /// Harness that wrote the session's rows (`claude-code`, `codex`, …), when recorded.
+    pub agent: Option<String>,
+    /// UTC `YYYY-MM-DD HH:MM:SS` of the first and last current-policy row of the session.
+    pub first_record_at: Option<String>,
+    pub last_record_at: Option<String>,
+    pub duration_seconds: u64,
+    /// Measured ratio rows; `optimized_operations + raw_operations == operations`.
+    pub operations: u64,
+    pub optimized_operations: u64,
+    pub raw_operations: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
+    pub host_visible_baseline_tokens_estimated: u64,
+    pub host_visible_delivered_tokens_estimated: u64,
+    pub host_visible_net_avoided_tokens_estimated: i64,
+    /// Host-capped net as a share of the host-capped baseline; `None` without a baseline.
+    pub host_visible_reduction_pct: Option<f64>,
+    pub host_ceiling_tokens: Option<u64>,
+    /// Repeats of an already-filtered command inside this session.
+    pub rerun_tax_operations: u64,
+    pub rerun_tax_tokens_estimated: u64,
+    /// Up to three routes by net avoided tokens.
+    pub top_routes: Vec<LastSessionRoute>,
+    /// Public-list value of the host-capped net, same shape as `session_roi`; absent without
+    /// an exact catalog row. Never an invoice.
+    pub raw_public_estimate: Option<DashboardRawPublicEstimate>,
+}
+
+/// 0.11.2: one privacy-safe route of the last session, e.g. `opt read:head/int`.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct LastSessionRoute {
+    pub route: String,
+    pub operations: u64,
+    pub baseline_tokens_estimated: u64,
+    pub delivered_tokens_estimated: u64,
+    pub net_avoided_tokens_estimated: i64,
 }
 
 /// One kind of command inside a project: how often it ran and what it saved. // 0.9.1

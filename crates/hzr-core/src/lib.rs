@@ -41,6 +41,7 @@ pub use ledger::agents::{
     MAX_USAGE_RECEIPTS_PER_IMPORT, SUPPORTED_USAGE_KIND, TOMBSTONE_COMPLETE_SCANS,
     agent_task_label,
 };
+pub use ledger::host_output_ceiling_tokens; // 0.11.2: stats/dashboard tests follow the same ceiling
 pub use ledger::{
     BypassSummary, BypassTool, BypassWindow, CURRENT_ACCOUNTING_POLICY_VERSION,
     CURRENT_PRODUCER_VERSION, DEFAULT_FIDELITY_OPERATION_ALLOWANCE,

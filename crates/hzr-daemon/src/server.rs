@@ -2,9 +2,10 @@ use std::future::Future;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
+use axum::extract::{Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
-use axum::middleware;
-use axum::response::IntoResponse;
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use hzr_core::Config;
 use tower_http::catch_panic::CatchPanicLayer;
@@ -22,6 +23,7 @@ use crate::{AppState, DaemonError};
 pub fn router(state: AppState, token: AuthToken) -> Router {
     let timeout = std::time::Duration::from_millis(state.config.daemon.request_timeout_ms);
     let limit = state.config.daemon.request_limit_bytes;
+    let bind = state.config.daemon.bind; // 0.11.2
 
     let authenticated = Router::new()
         .route("/v1/health", get(api::health))
@@ -102,6 +104,8 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
 
     router
         .layer(DefaultBodyLimit::max(limit))
+        // 0.11.2: DNS-rebinding guard for the static UI and every /v1 route.
+        .layer(middleware::from_fn_with_state(bind, require_loopback_host))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             timeout,
@@ -132,6 +136,73 @@ pub fn router(state: AppState, token: AuthToken) -> Router {
             HeaderValue::from_static("no-store"),
         ))
         .with_state(state)
+}
+
+/// 0.11.2: reject any request whose Host names something other than this loopback daemon.
+///
+/// The daemon binds loopback only, but a browser page on `evil.example` whose DNS rebinds
+/// to 127.0.0.1 reached the public dashboard routes with `Host: evil.example:<port>`. A
+/// browser always sends the page's host, so accepting only loopback literals closes that
+/// path; a request with no authority at all (HTTP/1.0, in-process) cannot come from a
+/// rebound page and is left to the existing authentication.
+async fn require_loopback_host(
+    State(bind): State<std::net::SocketAddr>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let host = match request.headers().get(header::HOST) {
+        Some(value) => value.to_str().ok(),
+        None => request
+            .uri()
+            .authority()
+            .map(|authority| authority.as_str()),
+    };
+    let allowed = match (request.headers().get(header::HOST), host) {
+        (Some(_), None) => false,
+        (_, Some(host)) => loopback_host_allowed(host, bind),
+        (None, None) => true,
+    };
+    if allowed {
+        return next.run(request).await;
+    }
+    (
+        StatusCode::MISDIRECTED_REQUEST,
+        "HZR daemon accepts only loopback Host headers (127.0.0.1, localhost, [::1])",
+    )
+        .into_response()
+}
+
+/// 0.11.2: `127.0.0.1`, `localhost`, `[::1]` or the configured loopback bind address,
+/// with no port or the configured one (any port when the daemon binds port 0).
+fn loopback_host_allowed(host: &str, bind: std::net::SocketAddr) -> bool {
+    let (name, port) = if host.starts_with('[') {
+        match host.split_once(']') {
+            Some((inside, "")) => (&host[..=inside.len()], None),
+            Some((inside, rest)) => match rest.strip_prefix(':') {
+                Some(port) => (&host[..=inside.len()], Some(port)),
+                None => return false,
+            },
+            None => return false,
+        }
+    } else {
+        match host.rsplit_once(':') {
+            Some((name, port)) => (name, Some(port)),
+            None => (host, None),
+        }
+    };
+    let bind_name = match bind.ip() {
+        std::net::IpAddr::V4(address) => address.to_string(),
+        std::net::IpAddr::V6(address) => format!("[{address}]"),
+    };
+    let name_allowed = name.eq_ignore_ascii_case("localhost")
+        || name == "127.0.0.1"
+        || name == "[::1]"
+        || name == bind_name;
+    let port_allowed = port.is_none_or(|port| {
+        port.parse::<u16>()
+            .is_ok_and(|port| bind.port() == 0 || port == bind.port())
+    });
+    name_allowed && port_allowed
 }
 
 async fn visualizer_unavailable() -> impl IntoResponse {
@@ -561,6 +632,27 @@ exit 64
         assert_eq!(payload["selected_worktree_id"], second_id);
         assert_eq!(payload["local_activity"]["operations"], 1);
         assert_eq!(payload["local_activity"]["project"], project_hash);
+        // 0.11.2: the CLI's host-capped view and last session ride on the same payload.
+        let activity = &payload["local_activity"];
+        // 0.11.2: expectations follow the host ceiling so the environment cannot flake them
+        let cap =
+            |tokens: u64| hzr_core::host_output_ceiling_tokens().map_or(tokens, |c| tokens.min(c));
+        assert_eq!(activity["host_visible_baseline_tokens_estimated"], cap(10));
+        assert_eq!(activity["host_visible_delivered_tokens_estimated"], cap(2));
+        assert_eq!(
+            activity["host_visible_net_avoided_tokens_estimated"],
+            cap(10) as i64 - cap(2) as i64
+        );
+        assert!(activity.get("host_ceiling_tokens").is_some());
+        assert_eq!(activity["last_session"]["operations"], 1);
+        assert_eq!(
+            activity["last_session"]["session_hash"],
+            payload["session_roi"]["session_hash"]
+        );
+        assert_eq!(
+            activity["last_session"]["top_routes"][0]["route"],
+            "opt cargo:legacy/int"
+        );
         assert_eq!(payload["index_observatory"]["project"], project_hash);
         assert_eq!(payload["memory_observatory"]["project"], project_hash);
         assert_eq!(payload["session_roi"]["operations"], 1);
@@ -1304,6 +1396,158 @@ exit 64
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// 0.11.2: `hzr memory recall --topic architecture --scope project` answered HTTP 400
+    /// because the global topic was built even for a project-only scope.
+    #[tokio::test]
+    async fn regression_project_scoped_topic_recall_never_builds_a_global_topic() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let (router, _) = test_router_with_workspace(&directory).await;
+        let workspace = directory.path().join("workspace");
+        for (scope, topic, rejected) in [
+            ("project", "architecture", false),
+            ("project_and_global", "architecture", false),
+            ("global", "preferences", false),
+            ("global", "architecture", true),
+        ] {
+            let body = serde_json::json!({
+                "workspace": workspace, "query": "decision", "topic": topic, "scope": scope
+            });
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/memory/recall")
+                        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body.to_string()))
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            let status = response.status();
+            let text = String::from_utf8(
+                to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("body")
+                    .to_vec(),
+            )
+            .expect("UTF-8 body");
+            assert_eq!(
+                status == StatusCode::BAD_REQUEST,
+                rejected,
+                "{scope}/{topic}: {status} {text}"
+            );
+            assert_eq!(
+                text.contains("global memory topic must be"),
+                rejected,
+                "{scope}/{topic}: {text}"
+            );
+        }
+    }
+
+    /// 0.11.2: a DNS-rebound page reached the dashboard with `Host: evil.example:<port>`.
+    #[tokio::test]
+    async fn test_foreign_host_is_rejected_on_every_route_class() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let router = test_router(&directory).await;
+        for uri in [
+            "/v1/dashboard/delegations",
+            "/v1/dashboard",
+            "/v1/health",
+            "/",
+        ] {
+            for host in [
+                "evil.example:47391",
+                "evil.example",
+                "127.0.0.1.evil.example",
+            ] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(uri)
+                            .header(header::HOST, host)
+                            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                            .body(Body::empty())
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("response");
+                assert_eq!(
+                    response.status(),
+                    StatusCode::MISDIRECTED_REQUEST,
+                    "{uri} with Host {host}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_loopback_hosts_pass_and_authentication_still_applies() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let router = test_router(&directory).await;
+        for host in [
+            "127.0.0.1:47391",
+            "127.0.0.1",
+            "localhost:47391",
+            "LOCALHOST",
+            "[::1]:47391",
+            "[::1]",
+        ] {
+            let dashboard = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/v1/dashboard/delegations")
+                        .header(header::HOST, host)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(dashboard.status(), StatusCode::OK, "Host {host}");
+            let unauthenticated = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/v1/health")
+                        .header(header::HOST, host)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(
+                unauthenticated.status(),
+                StatusCode::UNAUTHORIZED,
+                "Host {host}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_loopback_host_parsing_pins_the_configured_port() {
+        let bind = std::net::SocketAddr::from(([127, 0, 0, 1], 47_513));
+        for allowed in ["127.0.0.1:47513", "localhost", "[::1]:47513", "[::1]"] {
+            assert!(super::loopback_host_allowed(allowed, bind), "{allowed}");
+        }
+        for denied in [
+            "127.0.0.1:8080",
+            "localhost:",
+            "[::1]x",
+            "[::1",
+            "evil.example:47513",
+            "localhost.evil.example",
+            "127.0.0.2",
+            "",
+        ] {
+            assert!(!super::loopback_host_allowed(denied, bind), "{denied}");
+        }
+        let alternate = std::net::SocketAddr::from(([127, 0, 0, 2], 0));
+        assert!(super::loopback_host_allowed("127.0.0.2:5555", alternate));
     }
 
     #[tokio::test]

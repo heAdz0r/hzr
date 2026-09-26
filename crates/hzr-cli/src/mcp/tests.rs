@@ -507,6 +507,274 @@ fn test_representative_structured_content_conforms_to_every_output_schema() {
     }
 }
 
+/// 0.11.2: hand-written samples drifted from the handlers — `index_generation` was always
+/// emitted but never declared, so every live `hzr_search` failed its own contract. These
+/// payloads are the handlers' real Rust types with every optional field populated.
+#[test]
+fn acceptance_gate_typed_outputs_with_every_optional_field_conform() {
+    use hzr_protocol::{
+        CandidateDecision, CandidateSource, ContextCandidate, ContextPack, ContextPlanApiResponse,
+        ContextWarning, ContextWarningCode, EngineHealth, EngineState, ForkPlannerMetadata,
+        HealthResponse, MemoryMutationApiResponse, Provenance, RankingDiagnostic, ReadApiResponse,
+        ReadCostAdvice, ReadFileResult, SearchApiResponse, SearchHit, SearchLine, SearchPage,
+        SearchSnippet, SearchStrategy, SymbolUnavailableReason, TokenCount,
+    };
+
+    let record = |source| hzr_memory::MemoryRecord {
+        score: Some(0.5),
+        id: "memory-1".into(),
+        created_at: "2026-09-26T00:00:00Z".into(),
+        updated_at: "2026-09-26T00:00:00Z".into(),
+        last_accessed: "2026-09-26T00:00:00Z".into(),
+        access_count: 3,
+        weight: 0.7,
+        topic: "architecture-project".into(),
+        summary: "fact".into(),
+        raw_excerpt: Some("raw".into()),
+        keywords: vec!["ledger".into()],
+        importance: hzr_memory::Importance::High,
+        source,
+        related_ids: vec!["memory-0".into()],
+        scope: hzr_memory::MemoryScope::Project,
+    };
+    let every_warning = [
+        ContextWarningCode::PlannerFallback,
+        ContextWarningCode::PlannerUnavailable,
+        ContextWarningCode::SearchDegraded,
+        ContextWarningCode::SearchUnavailable,
+        ContextWarningCode::MemoryUnavailable,
+        ContextWarningCode::ContentUnavailable,
+        ContextWarningCode::OutlineUnavailable,
+        ContextWarningCode::WarningsTruncated,
+    ]
+    .map(|code| ContextWarning {
+        code,
+        message: "degraded".into(),
+    });
+    let search_page = || SearchPage {
+        snapshot_id: "snapshot".into(),
+        offset: 0,
+        available_hits: 1,
+        snapshot_complete: true,
+        next_cursor: Some("cursor".into()),
+        expires_at_ms: 1,
+    };
+    let search = |fallback_code| SearchApiResponse {
+        page: Some(search_page()),
+        query: "multiply_numbers".into(),
+        path: ".".into(),
+        total_hits: 2,
+        shown_hits: 1,
+        scanned_files: 3,
+        skipped_large: 0,
+        skipped_binary: 0,
+        hits: vec![SearchHit {
+            path: "src/lib.rs".into(),
+            score: 1.0,
+            matched_lines: 1,
+            snippets: vec![SearchSnippet {
+                lines: vec![SearchLine {
+                    line: 1,
+                    text: "fn multiply_numbers()".into(),
+                }],
+                matched_terms: vec!["multiply_numbers".into()],
+            }],
+        }],
+        effective_mode: SearchMode::Exact,
+        strategy: SearchStrategy::ForkRgaiBuiltin,
+        fallback_code: Some(fallback_code),
+        index_generation: Some("generation-1".into()),
+        fallback_reason: Some("warming".into()),
+        next_step: Some("narrow the query".into()),
+    };
+    let mut payloads = vec![
+        (
+            "hzr_memory_get",
+            serde_json::to_value(hzr_memory::MemoryContent {
+                id: "memory-1".into(),
+                topic: "architecture".into(),
+                updated_at: "2026-09-26".into(),
+                summary: "fact".into(),
+                raw_excerpt: Some("raw".into()),
+            }),
+        ),
+        (
+            "hzr_memory_recall",
+            serde_json::to_value(hzr_memory::MemoryRecallResponse {
+                count: 3,
+                total_matches: 3,
+                memories: vec![
+                    record(hzr_memory::MemorySource::ClaudeCode {
+                        session_id: "session".into(),
+                        file_path: Some("/repo/file".into()),
+                    }),
+                    record(hzr_memory::MemorySource::Conversation {
+                        thread_id: "thread".into(),
+                    }),
+                    record(hzr_memory::MemorySource::Manual),
+                ],
+            }),
+        ),
+        (
+            "hzr_memory_store",
+            serde_json::to_value(crate::client::MemoryStoreResponse {
+                transport: hzr_memory::MemoryTransport::StdioMcp,
+                memory: Some(record(hzr_memory::MemorySource::Manual)),
+            }),
+        ),
+        (
+            "hzr_context_plan",
+            serde_json::to_value(ContextPlanApiResponse {
+                pack: ContextPack {
+                    selected: vec![ContextCandidate {
+                        id: "candidate-1".into(),
+                        source: CandidateSource::Index,
+                        content_ref: "sha256:abc".into(),
+                        path: Some("src/lib.rs".into()),
+                        symbol: Some("multiply_numbers".into()),
+                        symbol_unavailable_reason: Some(SymbolUnavailableReason::NotApplicable),
+                        line_start: Some(1),
+                        line_end: Some(2),
+                        source_rank: 1,
+                        relevance: 0.5,
+                        tokens: TokenCount::estimate(4),
+                        freshness: "generation-1".into(),
+                        trust: "workspace:untrusted".into(),
+                        provenance: Provenance {
+                            source: "fork-core/rgai".into(),
+                            content_hash: "abc".into(),
+                            generation: Some("generation-1".into()),
+                            canonical_ref: Some("src/lib.rs#L1-L2".into()),
+                            derived_by: Some("planner".into()),
+                        },
+                    }],
+                    rejected: vec![CandidateDecision {
+                        candidate_id: "candidate-2".into(),
+                        reason: "budget".into(),
+                    }],
+                    used: TokenCount::estimate(4),
+                    hard_limit: 100,
+                    coverage: 1.0,
+                    confidence: 0.5,
+                    ranking: RankingDiagnostic::default(),
+                    budget_exceeded: false,
+                },
+                contents: [("sha256:abc".to_owned(), "fn multiply_numbers()".to_owned())]
+                    .into_iter()
+                    .collect(),
+                warnings: every_warning.to_vec(),
+                planner: Some(ForkPlannerMetadata {
+                    pipeline_version: Some("v1".into()),
+                    semantic_backend_used: Some("grepai".into()),
+                    graph_candidate_count: Some(1),
+                    semantic_hit_count: Some(1),
+                    candidates_total: 2,
+                    candidates_selected: 1,
+                    estimated_tokens_used: 4,
+                    token_budget: 100,
+                }),
+            }),
+        ),
+        (
+            "hzr_read",
+            serde_json::to_value(ReadApiResponse {
+                files: vec![ReadFileResult {
+                    cost_advice: Some(ReadCostAdvice {
+                        method: "estimate".into(),
+                        requests: 2,
+                        produced_tokens_estimated: 10,
+                        repeated_source_tokens_estimated: 5,
+                        full_result_tokens_estimated: 20,
+                        next_action: "read the rest".into(),
+                        next_missing_from: Some(3),
+                        next_missing_to: Some(4),
+                    }),
+                    path: "src/lib.rs".into(),
+                    source_sha256: "0".repeat(64),
+                    source_bytes: 10,
+                    total_lines: 4,
+                    from: 1,
+                    to: 2,
+                    next_line: Some(3),
+                    complete: false,
+                    content: "a\nb\n".into(),
+                }],
+                remaining_paths: vec!["src/main.rs".into()],
+                estimated_tokens: 10,
+                max_tokens: 8192,
+            }),
+        ),
+        (
+            "hzr_codec",
+            serde_json::to_value(hzr_codec::Transform {
+                content: "text".into(),
+                changed: false,
+                profile: hzr_protocol::CodecProfile::Shadow,
+                protected_spans: vec![hzr_protocol::ProtectedSpan {
+                    start: 0,
+                    end: 4,
+                    kind: "code".into(),
+                }],
+                counterfactual: Some(hzr_codec::CounterfactualSize {
+                    input_bytes: 4,
+                    output_bytes: 4,
+                    saved_bytes: 0,
+                    would_change: false,
+                }),
+                coverage_state: hzr_codec::ResponseCodecCoverageState::ShadowMeasured,
+                global_response_replacement_confirmed: false,
+                estimated_token_credit_eligible: false,
+            }),
+        ),
+        (
+            "hzr_observability",
+            serde_json::to_value(HealthResponse {
+                protocol_version: 1,
+                hzr_version: "0.11.2".into(),
+                state: EngineState::Degraded,
+                workspace_root: Some("/repo".into()),
+                engines: vec![EngineHealth {
+                    name: "grepai".into(),
+                    version: Some("1".into()),
+                    state: EngineState::Rebuilding,
+                    detail: Some("warming".into()),
+                }],
+                capabilities: vec!["search".into()],
+            }),
+        ),
+    ];
+    for name in ["hzr_memory_forget", "hzr_memory_update", "hzr_memory_prune"] {
+        payloads.push((
+            name,
+            serde_json::to_value(MemoryMutationApiResponse {
+                affected_ids: vec!["memory-1".into()],
+                dry_run: true,
+            }),
+        ));
+    }
+    for fallback_code in [
+        SearchFallbackCode::LegacyIndexRequiresMigration,
+        SearchFallbackCode::SemanticIndexUnavailable,
+        SearchFallbackCode::GrepaiUnavailable,
+        SearchFallbackCode::RipgrepUnavailable,
+    ] {
+        payloads.push(("hzr_search", serde_json::to_value(search(fallback_code))));
+    }
+    for (name, payload) in payloads {
+        let payload = payload.expect("typed payload serializes");
+        let result = super::tools::validate_tool_output(name, &payload);
+        assert!(result.is_ok(), "{name}: {result:?}\n{payload:#}");
+    }
+
+    // DoctorReport's `--fix` fields, which the schema must accept when present.
+    let mut doctor = representative_output("hzr_doctor").expect("doctor sample");
+    doctor["accounting_gap_repair"] = json!(2);
+    doctor["client_ownership_repair"] = json!([{"client": "codex"}]);
+    doctor["orphan_cleanup"] = json!([{"pid": 1}]);
+    let result = super::tools::validate_tool_output("hzr_doctor", &doctor);
+    assert!(result.is_ok(), "hzr_doctor: {result:?}");
+}
+
 /// The density codec was reachable only through `hzr codec compile`, so no agent ever
 /// used it: nothing in the hook path, the planner or the MCP surface called it. A
 /// capability the control plane advertises but never exposes is dead weight.
@@ -646,10 +914,50 @@ fn test_unavailable_backend_reports_an_error_not_a_fake_success() {
             .contains("nothing was written"),
         "a dead backend must never look like a successful store"
     );
-    let result = tool_success(&json!({"ok": true}));
+    // 0.11.2: the structured payload travels once; the text block is its compact view.
+    let result = tool_success("hzr_codec", &json!({"ok": true}), true);
     assert_eq!(result["isError"], false);
     assert_eq!(result["structuredContent"]["ok"], true);
-    assert_eq!(result["content"][0]["text"], r#"{"ok":true}"#);
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .expect("text")
+            .ends_with(r#"structuredContent): {"ok":true}"#)
+    );
+    // A pre-2025-06-18 client has no structuredContent: its text is the whole payload.
+    let legacy = tool_success("hzr_codec", &json!({"ok": true}), false);
+    assert_eq!(legacy["content"][0]["text"], r#"{"ok":true}"#);
+    assert!(legacy.get("structuredContent").is_none());
+}
+
+/// 0.11.2: a 28 KB `hzr_read` crossed the wire as 62 KB because the text block repeated
+/// the whole structured payload. The response must now carry the source once.
+#[test]
+fn regression_structured_read_carries_the_source_once() {
+    let content = "fn source_line() { let value = \"quoted\"; }\n".repeat(700);
+    assert!(content.len() > 28_000);
+    let value = json!({
+        "files": [{
+            "path": "src/lib.rs", "source_sha256": "a".repeat(64),
+            "source_bytes": content.len(), "total_lines": 700, "from": 1, "to": 700,
+            "next_line": null, "complete": true, "content": content
+        }],
+        "remaining_paths": [], "estimated_tokens": 7_000, "max_tokens": 8_192
+    });
+    let structured_bytes = value.to_string().len();
+    let before = json!({
+        "content": [{"type": "text", "text": value.to_string()}],
+        "structuredContent": value,
+        "isError": false,
+    })
+    .to_string()
+    .len();
+    let after = tool_success("hzr_read", &value, true).to_string().len();
+    assert!(before > 2 * structured_bytes, "before={before}");
+    assert!(
+        after < structured_bytes + 1_024,
+        "after={after} structured={structured_bytes} before={before}"
+    );
 }
 
 fn fork_response(

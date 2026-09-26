@@ -323,7 +323,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="!enrolled" class="empty-state agents-empty" role="status">
-      <span class="empty-icon"><AppIcon name="warning" :size="24" /></span>
+      <span class="empty-icon empty-icon-neutral"><AppIcon name="activity" :size="24" /></span><!-- 0.11.2: opt-in, not an error -->
       <span class="eyebrow">{{ stateLabel }}</span>
       <h3>No agtx project is enrolled.</h3>
       <p>
@@ -334,7 +334,7 @@ onBeforeUnmount(() => {
       <ol class="agents-onboarding">
         <li>
           <code>{{ AGENT_ONBOARD_COMMAND }}</code>
-          <button type="button" @click="copyCommand(AGENT_ONBOARD_COMMAND)">
+          <button class="secondary-action" type="button" @click="copyCommand(AGENT_ONBOARD_COMMAND)"><!-- 0.11.2 -->
             {{ copied === AGENT_ONBOARD_COMMAND ? "Copied" : "Copy" }}
           </button>
         </li>
@@ -617,7 +617,9 @@ onBeforeUnmount(() => {
             </dd>
             <dt>Observed time</dt>
             <dd>
-              working {{ Math.round(detail.economics.observed_wall_time_ms / 1000) }}s ·
+              <!-- 0.11.2: wall time includes blocked and idle; working is what remains -->
+              total {{ Math.round(detail.economics.observed_wall_time_ms / 1000) }}s ·
+              working {{ Math.round(Math.max(0, detail.economics.observed_wall_time_ms - detail.economics.observed_blocked_time_ms - detail.economics.observed_idle_time_ms) / 1000) }}s ·
               blocked {{ Math.round(detail.economics.observed_blocked_time_ms / 1000) }}s ·
               idle {{ Math.round(detail.economics.observed_idle_time_ms / 1000) }}s
               (observed intervals only)

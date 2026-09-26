@@ -488,3 +488,8 @@ tests/stderr_visibility.rs
 tests/upstream_pr_fixes.rs
 tests/w7_routes.rs
 tests/write_cli.rs
+tests/baseline_fidelity.rs
+tests/rgai_semantic_fallback.rs
+tests/fixtures/go_test_go121_pass_and_fail.json
+tests/fixtures/go_test_go121_pass_and_fail.plain.txt
+tests/fixtures/go_test_go121_pass_and_fail.verbose.txt

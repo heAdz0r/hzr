@@ -2160,7 +2160,9 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
             if let Some(embedder) = read_embedder_config(&workspace.join(".grepai/config.yaml")) {
                 checks.push(embedding_provider_check(&embedder).await);
             }
-            checks.push(workspace_hygiene_check(config, workspace));
+            // 0.11.2: the repository root, not the directory doctor ran in; from a subdirectory
+            // neither `.grepai` nor `.git` was found and the check passed vacuously.
+            checks.push(workspace_hygiene_check(config, &discovered.identity.root));
         }
         Err(error) => checks.push(check("grepai_ownership", CheckStatus::Error, error)),
     }
@@ -3169,6 +3171,7 @@ fn repair_workspace_hygiene_scoped(
     dry_run: bool,
     scan_lock_files: bool,
 ) -> anyhow::Result<WorkspaceHygieneRepair> {
+    let workspace = &hygiene_root(workspace); // 0.11.2: `hzr doctor --fix` from a subdirectory
     let mut repair = WorkspaceHygieneRepair {
         workspace: workspace.to_path_buf(),
         dry_run,
@@ -3178,11 +3181,10 @@ fn repair_workspace_hygiene_scoped(
         return Ok(repair);
     };
 
-    let grepai = workspace.join(".grepai");
-    let managed_link = std::fs::symlink_metadata(&grepai)
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
-        && std::fs::read_link(&grepai)
-            .is_ok_and(|target| target.starts_with(config.data_dir.join("workspaces")));
+    // 0.11.2: canonical comparison; a textual `starts_with(config.data_dir)` missed every link
+    // whose data_dir was spelled through a symlinked alias, and doctor reported PASS.
+    let managed_link =
+        hzr_index::is_managed_index_link(&workspace.join(".grepai"), &config.data_dir);
     if managed_link
         && ensure_local_exclude(&exclude, "/.grepai", "managed grepai index link", dry_run)?
     {
@@ -3232,6 +3234,32 @@ fn repair_workspace_hygiene_scoped(
     )
     .len();
     Ok(repair)
+}
+
+/// The working-tree root that owns `workspace`. (0.11.2)
+///
+/// Hygiene is about the entries HZR places at the root (`.grepai`, `.codex/config.toml`), and
+/// `hzr doctor` runs from wherever the operator stands. From a subdirectory neither the link nor
+/// `.git` was found, so the check passed vacuously and `--fix` repaired nothing.
+fn hygiene_root(workspace: &Path) -> PathBuf {
+    if workspace.join(".git").exists() {
+        return workspace.to_path_buf();
+    }
+    activation::git_probe(
+        workspace,
+        &[
+            std::ffi::OsStr::new("rev-parse"),
+            std::ffi::OsStr::new("--show-toplevel"),
+        ],
+        true,
+        "worktree-root probe",
+    )
+    .ok()
+    .filter(|output| output.status.success())
+    .and_then(|output| String::from_utf8(output.stdout).ok())
+    .map(|root| PathBuf::from(root.trim_end_matches(['\n', '\r'])))
+    .filter(|root| root.is_absolute() && root.join(".git").exists())
+    .unwrap_or_else(|| workspace.to_path_buf())
 }
 
 /// Undo the `.grepai/` line that `grepai init` appended to a tracked `.gitignore` before
@@ -4671,6 +4699,54 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         let committed = crate::diagnostics::repair_workspace_hygiene(&config, &repo, false)
             .expect("committed run");
         assert!(!committed.restored_gitignore);
+    }
+
+    // 0.11.2: `.grepai` stayed untracked and not excluded while `workspace_hygiene` passed. The
+    // link points at the canonical data root, and a data_dir spelled through a symlinked alias
+    // (`/tmp` vs `/private/tmp`, a moved home) never matched it textually.
+    #[cfg(unix)]
+    #[test]
+    fn workspace_hygiene_flags_a_managed_link_through_a_non_canonical_data_dir() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let repo = fixture.path().join("repo");
+        fs::create_dir_all(&repo).expect("repo");
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .expect("git");
+        assert!(status.success());
+        let real_data = fixture.path().join("data-real");
+        let store = real_data.join("workspaces/repository/worktree/index/grepai");
+        fs::create_dir_all(&store).expect("managed store");
+        let alias = fixture.path().join("data-alias");
+        std::os::unix::fs::symlink(&real_data, &alias).expect("data alias");
+        let canonical_store = fs::canonicalize(&store).expect("canonical store");
+        std::os::unix::fs::symlink(&canonical_store, repo.join(".grepai")).expect("link");
+        let config = Config {
+            data_dir: alias,
+            ..Config::default()
+        };
+
+        let plan = super::repair_workspace_hygiene(&config, &repo, true).expect("dry run");
+        assert_eq!(plan.excluded, vec!["/.grepai".to_owned()]);
+        let finding = super::workspace_hygiene_check(&config, &repo);
+        assert_eq!(finding.status, CheckStatus::Warning, "{}", finding.detail);
+        assert!(finding.detail.contains("/.grepai"), "{}", finding.detail);
+
+        let fixed = super::repair_workspace_hygiene(&config, &repo, false).expect("fix");
+        assert_eq!(fixed.excluded, vec!["/.grepai".to_owned()]);
+        let exclude = repo.join(".git/info/exclude");
+        let after_fix = fs::read_to_string(&exclude).expect("exclude");
+        assert_eq!(
+            after_fix.lines().filter(|line| *line == "/.grepai").count(),
+            1
+        );
+        let again = super::repair_workspace_hygiene(&config, &repo, false).expect("again");
+        assert!(!again.changed(), "a second fix changes nothing");
+        assert_eq!(fs::read_to_string(&exclude).expect("exclude"), after_fix);
+        let healthy = super::workspace_hygiene_check(&config, &repo);
+        assert_eq!(healthy.status, CheckStatus::Pass, "{}", healthy.detail);
     }
 
     #[tokio::test]

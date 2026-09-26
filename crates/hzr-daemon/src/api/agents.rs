@@ -373,10 +373,12 @@ pub async fn dashboard_agents(
         ));
     }
 
-    let known: BTreeSet<&str> = rows.iter().map(|row| row.task_key.as_str()).collect();
+    // 0.11.2: `resolved` is the projection's verdict. Also treating a task that is
+    // merely on another page of this board as unresolved reported every
+    // dependency on an off-page task as dangling once a board exceeded `limit`.
     let unresolved: Vec<String> = edges
         .iter()
-        .filter(|edge| !edge.resolved || !known.contains(edge.from_task_key.as_str()))
+        .filter(|edge| !edge.resolved) // 0.11.2
         .map(|edge| edge.from_task_key.clone())
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -783,7 +785,12 @@ pub async fn agents_sync(
             "that project is not enrolled for agtx monitoring",
         ));
     }
-    let outcome = state.agents.observe_once(&path).await;
+    let outcome = observe_after_in_flight(
+        || state.agents.observe_once(&path),
+        SYNC_IN_FLIGHT_WAIT,
+        SYNC_IN_FLIGHT_POLL,
+    )
+    .await; // 0.11.2
     Ok(Json(AgentSyncResponse {
         schema_version: AGENT_API_SCHEMA_VERSION,
         state: outcome.state,
@@ -796,6 +803,40 @@ pub async fn agents_sync(
         warnings: outcome.warnings,
         error_code: outcome.error_code,
     }))
+}
+
+/// 0.11.2: how long an explicit sync waits for an observation that is already
+/// running for the same project, and how often it looks. Two helper timeouts: the wait plus
+/// the sync's own full cycle (helper timeout × pages) must stay under the 30 s request timeout.
+const SYNC_IN_FLIGHT_WAIT: std::time::Duration =
+    std::time::Duration::from_millis(crate::agent_observer::HELPER_TIMEOUT.as_millis() as u64 * 2);
+const SYNC_IN_FLIGHT_POLL: std::time::Duration = std::time::Duration::from_millis(50); // 0.11.2
+
+/// 0.11.2: run one observation, waiting out one that is already in flight.
+///
+/// Enabling a project starts the background worker, whose first cycle takes the
+/// per-project lock; an explicit `hzr agents sync` issued right after used to
+/// fail with `observation_in_progress` and exit 1. The caller asked for a fresh
+/// observation, so it waits (bounded) and then runs its own.
+async fn observe_after_in_flight<F, Fut>(
+    mut observe: F,
+    wait: std::time::Duration,
+    poll: std::time::Duration,
+) -> crate::agent_observer::ObservationOutcome
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = crate::agent_observer::ObservationOutcome>,
+{
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let outcome = observe().await;
+        if outcome.error_code.as_deref() != Some("observation_in_progress")
+            || tokio::time::Instant::now() >= deadline
+        {
+            return outcome;
+        }
+        tokio::time::sleep(poll).await;
+    }
 }
 
 /// `POST /v1/agents/links`

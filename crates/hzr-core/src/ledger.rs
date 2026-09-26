@@ -126,6 +126,33 @@ pub struct HostVisibleEfficiencySummary {
     /// Rows whose host has no validated visible-output cap. Their raw values remain in the
     /// totals, so the summary is an upper bound and cannot support a monetary claim.
     pub uncapped_operations: u64,
+    /// 0.11.2: the per-operation ceiling applied to both sides; `None` when disabled.
+    pub ceiling_tokens: Option<u64>,
+}
+
+/// 0.11.2: the host output ceiling the fork-core engine applies to its receipts, as tokens.
+///
+/// Mirrors `rtk::tracking::host_output_ceiling_chars`: `HZR_HOST_OUTPUT_CEILING`, then
+/// `BASH_MAX_OUTPUT_LENGTH`, then Claude Code's 30 000-character default; `0` disables it.
+/// One model for every row, so historical rows written before the engine capped its
+/// receipts are bounded the same way as new ones instead of by a separate 2 KiB guess.
+///
+/// The ceiling is characters ÷ 4 while the engine counts bytes ÷ 4 of the visible prefix, so for
+/// multi-byte output (e.g. Cyrillic) the ledger caps lower than the engine credits — it errs
+/// conservative. Each process reads its own environment: a daemon started with another
+/// `BASH_MAX_OUTPUT_LENGTH` caps differently, which is why both surfaces report the ceiling.
+pub fn host_output_ceiling_tokens() -> Option<u64> {
+    const DEFAULT_HOST_OUTPUT_CEILING_CHARS: u64 = 30_000;
+    let configured = |name: &str| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    };
+    match configured("HZR_HOST_OUTPUT_CEILING").or_else(|| configured("BASH_MAX_OUTPUT_LENGTH")) {
+        Some(0) => None,
+        Some(chars) => Some(chars.div_ceil(4)),
+        None => Some(DEFAULT_HOST_OUTPUT_CEILING_CHARS.div_ceil(4)),
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -196,6 +223,10 @@ pub struct StatsSnapshot {
     /// Collected in the same snapshot as the project scope so the two money rows an operator
     /// compares can never come from two different reads of a moving ledger.
     pub global_economics: EconomicScopeSummary,
+    /// 0.11.2: the newest attributed session of the economics project (else of `project_path`,
+    /// else global), read in the same transaction as the headline. Unpriced here.
+    #[serde(default)]
+    pub last_session: Option<hzr_protocol::LastSession>,
 }
 
 pub const DEFAULT_FIDELITY_OPERATION_ALLOWANCE: u64 = 5;
@@ -331,6 +362,37 @@ pub struct PrivacySafeOperationKey {
     pub mode: Option<AccountingOperationMode>,
     pub stage: AccountingStage,
     pub route: OperationRoute,
+}
+
+impl PrivacySafeOperationKey {
+    /// 0.11.2: the compact route label `hzr stats` prints (`opt read:head/int`), moved here so
+    /// the dashboard's last-session routes use the identical, argument-free wording.
+    pub fn label(&self) -> String {
+        let route = match self.route {
+            OperationRoute::Optimized => "opt",
+            OperationRoute::Bypassed => "raw",
+            OperationRoute::NativeUnaccounted => "native",
+        };
+        let operation = self.operation.map(AccountingOperationKind::as_str);
+        let identity = match operation {
+            Some(operation) if operation != self.family => format!("{}>{operation}", self.family),
+            _ => self.family.clone(),
+        };
+        let mode = self.mode.map_or("legacy", |mode: AccountingOperationMode| {
+            let full = mode.as_str();
+            operation
+                .and_then(|operation| full.strip_prefix(operation))
+                .and_then(|suffix| suffix.strip_prefix('_'))
+                .unwrap_or(full)
+        });
+        let stage = match self.stage {
+            AccountingStage::InternalTransport => "int",
+            AccountingStage::FinalDelivery => "final",
+            AccountingStage::StandaloneDelivery => "direct",
+            AccountingStage::ControlPlane => "control",
+        };
+        format!("{route} {identity}:{mode}/{stage}")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1377,6 +1439,41 @@ impl Ledger {
         Self { connection }.project_activity(project_path)
     }
 
+    /// 0.11.2: the host-capped project totals and last session the dashboard shows beside
+    /// `project_activity`, computed by the same queries as `hzr stats --workspace <root>`
+    /// (lifetime window, typed v2 plus aggregate-compatible v1 rows), so both surfaces state
+    /// the same host-capped net for the same project.
+    pub fn project_host_accounting_read_only(
+        path: &Path,
+        project_path: &str,
+    ) -> Result<
+        (
+            HostVisibleEfficiencySummary,
+            Option<hzr_protocol::LastSession>,
+        ),
+        LedgerError,
+    > {
+        if !path.is_file() {
+            return Ok((
+                HostVisibleEfficiencySummary {
+                    ceiling_tokens: host_output_ceiling_tokens(),
+                    ..HostVisibleEfficiencySummary::default()
+                },
+                None,
+            ));
+        }
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(LedgerError::Database)?;
+        connection
+            .busy_timeout(std::time::Duration::from_millis(250))
+            .map_err(LedgerError::Database)?;
+        let ledger = Self { connection };
+        Ok((
+            ledger.host_visible_efficiency_summary(Some(project_path), None, false)?,
+            ledger.last_session_summary(Some(project_path))?,
+        ))
+    }
+
     /// Read one already-pseudonymized session selected from project-scoped dashboard activity.
     /// Raw session identifiers are never accepted or returned by this surface.
     pub fn session_roi_read_only(
@@ -2143,6 +2240,9 @@ impl Ledger {
                 )?,
                 project_economics: self.economic_scope_summary(query.economics_project_path)?,
                 global_economics: self.economic_scope_summary(None)?,
+                // 0.11.2
+                last_session: self
+                    .last_session_summary(query.economics_project_path.or(query.project_path))?,
             },
         };
         if let Some(transaction) = transaction {
@@ -2461,6 +2561,130 @@ impl Ledger {
         Ok(summary)
     }
 
+    /// 0.11.2: the newest attributed session in a scope, as `hzr stats` and the dashboard
+    /// print it.
+    ///
+    /// The session is the one that wrote the newest measured current-policy row in scope;
+    /// only keyed (`hmac-sha256:`) identities qualify, because earlier digests are not
+    /// suitable for session identity. Every figure is restricted to that session *and* the
+    /// scope, with the headline's measured-stage predicates and host ceiling.
+    pub fn last_session_summary(
+        &self,
+        project_path: Option<&str>,
+    ) -> Result<Option<hzr_protocol::LastSession>, LedgerError> {
+        let project_hash = project_path.map(|value| privacy_identity_hash("project", value));
+        let session_hash: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT session_hash FROM commands
+                  WHERE session_hash LIKE 'hmac-sha256:%'
+                    AND accounting_policy_version = ?1
+                    AND measurement = 'estimated'
+                    AND accounting_stage = 'internal_transport'
+                    AND (?2 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?2 || '|') > 0)
+                  ORDER BY id DESC
+                  LIMIT 1",
+                params![CURRENT_ACCOUNTING_POLICY_VERSION, project_hash],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(LedgerError::Database)?;
+        let Some(session_hash) = session_hash else {
+            return Ok(None);
+        };
+        let efficiency = self.session_efficiency_summary_for_hashes(
+            &session_hash,
+            &session_hash,
+            project_hash.as_deref(),
+        )?;
+        let host_visible = self.host_visible_efficiency_for(
+            project_hash.clone(),
+            None,
+            false,
+            Some(&session_hash),
+        )?;
+        let (rerun_tax_operations, rerun_tax_tokens_estimated) =
+            self.filter_induced_reruns(project_path, None, false, Some(&session_hash))?;
+        let mut routes =
+            self.operation_route_summaries(project_hash.clone(), None, false, Some(&session_hash))?;
+        routes.sort_by(|left, right| {
+            right
+                .net_avoided_tokens_estimated
+                .cmp(&left.net_avoided_tokens_estimated)
+                .then_with(|| right.executions.cmp(&left.executions))
+        });
+        let route_operations = |route: OperationRoute| {
+            routes
+                .iter()
+                .filter(|summary| summary.key.route == route)
+                .map(|summary| summary.executions)
+                .sum::<u64>()
+        };
+        let optimized_operations = route_operations(OperationRoute::Optimized);
+        let raw_operations = route_operations(OperationRoute::Bypassed);
+        let (first_record_at, last_record_at, duration_seconds, agent) = self
+            .connection
+            .query_row(
+                "SELECT datetime(MIN(CAST(strftime('%s', timestamp) AS INTEGER)), 'unixepoch'),
+                        datetime(MAX(CAST(strftime('%s', timestamp) AS INTEGER)), 'unixepoch'),
+                        COALESCE(MAX(CAST(strftime('%s', timestamp) AS INTEGER))
+                               - MIN(CAST(strftime('%s', timestamp) AS INTEGER)), 0),
+                        (SELECT agent FROM commands
+                          WHERE session_hash = ?1 AND agent IS NOT NULL AND agent != ''
+                            AND accounting_policy_version = ?2
+                          GROUP BY agent ORDER BY COUNT(*) DESC, agent LIMIT 1)
+                   FROM commands
+                  WHERE session_hash = ?1
+                    AND accounting_policy_version = ?2
+                    AND (?3 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?3 || '|') > 0)",
+                params![session_hash, CURRENT_ACCOUNTING_POLICY_VERSION, project_hash],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )
+            .map_err(LedgerError::Database)?;
+        Ok(Some(hzr_protocol::LastSession {
+            session_hash,
+            agent,
+            first_record_at,
+            last_record_at,
+            duration_seconds: u64::try_from(duration_seconds).unwrap_or_default(),
+            operations: efficiency.operations,
+            optimized_operations,
+            raw_operations,
+            baseline_tokens_estimated: efficiency.baseline_tokens_estimated,
+            delivered_tokens_estimated: efficiency.delivered_tokens_estimated,
+            net_avoided_tokens_estimated: efficiency.net_avoided_tokens_estimated,
+            host_visible_baseline_tokens_estimated: host_visible.baseline_tokens_estimated,
+            host_visible_delivered_tokens_estimated: host_visible.delivered_tokens_estimated,
+            host_visible_net_avoided_tokens_estimated: host_visible.net_avoided_tokens_estimated,
+            host_visible_reduction_pct: (host_visible.baseline_tokens_estimated > 0).then(|| {
+                host_visible.net_avoided_tokens_estimated as f64 * 100.0
+                    / host_visible.baseline_tokens_estimated as f64
+            }),
+            host_ceiling_tokens: host_visible.ceiling_tokens,
+            rerun_tax_operations,
+            rerun_tax_tokens_estimated,
+            top_routes: routes
+                .into_iter()
+                .take(3)
+                .map(|route| hzr_protocol::LastSessionRoute {
+                    route: route.key.label(),
+                    operations: route.executions,
+                    baseline_tokens_estimated: route.baseline_tokens_estimated,
+                    delivered_tokens_estimated: route.delivered_tokens_estimated,
+                    net_avoided_tokens_estimated: route.net_avoided_tokens_estimated,
+                })
+                .collect(),
+            raw_public_estimate: None,
+        }))
+    }
+
     pub fn session_evasion_summary(
         &self,
         session_id: &str,
@@ -2633,6 +2857,7 @@ impl Ledger {
         project_path: Option<&str>,
         since_unix_seconds: Option<i64>,
         include_legacy_versions: bool,
+        session_hash: Option<&str>, // 0.11.2: the last-session slice measures its own tax
     ) -> Result<(u64, u64), LedgerError> {
         let version_predicate = accounting_policy_predicate(include_legacy_versions);
         let query = format!(
@@ -2648,6 +2873,7 @@ impl Ledger {
                    AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
                    AND length(?2) = 1
                    AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
+                   AND (?4 IS NULL OR session_hash = ?4)
              ),
              filtered AS (
                 SELECT command_hash, session_hash, seq FROM scoped
@@ -2669,14 +2895,15 @@ impl Ledger {
                 params![
                     project_path.map(|value| privacy_identity_hash("project", value)),
                     std::path::MAIN_SEPARATOR.to_string(),
-                    since_unix_seconds
+                    since_unix_seconds,
+                    session_hash
                 ],
                 |row| Ok((row.get::<_, u64>(0)?, row.get::<_, u64>(1)?)),
             )
             .map_err(LedgerError::Database)
     }
 
-    /// Net avoided tokens for one scope, using the headline's own expression.
+    /// Net avoided tokens for one scope: the host-capped net the headline shows (0.11.2).
     ///
     /// The money block must never be able to state a different number of avoided tokens than the
     /// reduction panel a few lines below it. Sharing the SQL expression — rather than a second
@@ -2689,31 +2916,16 @@ impl Ledger {
         since_unix_seconds: Option<i64>,
         include_legacy_versions: bool,
     ) -> Result<i64, LedgerError> {
-        let neutral_predicate = savings_neutral_sql_predicate("rtk_cmd");
-        let version_predicate = accounting_policy_predicate(include_legacy_versions);
-        let query = format!(
-            "SELECT COALESCE(SUM(CASE WHEN ({neutral_predicate})
-                                      THEN 0 ELSE input_tokens - output_tokens END), 0)
-               FROM commands
-              WHERE measurement = 'estimated'
-                AND COALESCE(route, '') != 'native_unaccounted'
-                AND accounting_stage = 'internal_transport'
-                AND ({version_predicate})
-                AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
-                AND length(?2) = 1
-                AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
-        );
-        self.connection
-            .query_row(
-                &query,
-                params![
-                    project_path.map(|value| privacy_identity_hash("project", value)),
-                    std::path::MAIN_SEPARATOR.to_string(),
-                    since_unix_seconds
-                ],
-                |row| row.get(0),
-            )
-            .map_err(LedgerError::Database)
+        // 0.11.2: money is priced on what the host could have shown the model, not on the raw
+        // producer input. 1 371 August rows averaging 68k-token baselines — output no host ever
+        // delivered — made the priced figure four times the host-capped one.
+        Ok(self
+            .host_visible_efficiency_summary(
+                project_path,
+                since_unix_seconds,
+                include_legacy_versions,
+            )?
+            .net_avoided_tokens_estimated)
     }
 
     fn efficiency_summary_scoped(
@@ -2781,109 +2993,13 @@ impl Ledger {
                 },
             )
             .map_err(LedgerError::Database)?;
-        let legacy_raw_predicate = raw_route_sql_predicate("rtk_cmd");
-        let by_command_query = format!(
-            "WITH public_rows AS (
-                SELECT
-                    COALESCE(NULLIF(operation_family, ''), NULLIF(operation_kind, ''), 'other') AS family,
-                    CASE
-                        WHEN operation_kind IN ('search', 'read', 'write', 'context', 'memory',
-                                                'codec', 'exec', 'observability', 'doctor')
-                            THEN operation_kind
-                        WHEN operation_family IN ('search', 'read', 'write', 'context', 'memory',
-                                                  'codec', 'exec', 'observability', 'doctor')
-                            THEN operation_family
-                        WHEN operation_family IN ('rgai', 'rg', 'grep') THEN 'search'
-                        ELSE NULL
-                    END AS public_operation,
-                    CASE
-                        WHEN operation_mode IN (
-                            'search_auto', 'search_semantic', 'search_exact', 'search_builtin',
-                            'read_full', 'read_filtered', 'read_range', 'read_head', 'read_tail',
-                            'read_outline', 'read_symbols', 'read_changed', 'read_since', 'write',
-                            'context_plan', 'memory_recall', 'memory_store', 'memory_forget',
-                            'memory_update', 'memory_prune', 'codec_compile', 'exec_run',
-                            'observability_snapshot', 'doctor_check'
-                        ) THEN operation_mode
-                        ELSE NULL
-                    END AS public_mode,
-                    CASE accounting_stage
-                        WHEN 'final_delivery' THEN 'final_delivery'
-                        WHEN 'standalone_delivery' THEN 'standalone_delivery'
-                        WHEN 'control_plane' THEN 'control_plane'
-                        ELSE 'internal_transport'
-                    END AS public_stage,
-                    CASE
-                        WHEN route IN ('bypassed', 'raw') THEN 'bypassed'
-                        WHEN route = 'native_unaccounted' THEN 'native_unaccounted'
-                        WHEN route = 'optimized' THEN 'optimized'
-                        WHEN ({legacy_raw_predicate}) THEN 'bypassed'
-                        ELSE 'optimized'
-                    END AS public_route,
-                    CASE WHEN ({neutral_predicate}) THEN output_tokens ELSE input_tokens END AS baseline,
-                    output_tokens AS delivered,
-                    CASE WHEN NOT ({neutral_predicate}) AND input_tokens > output_tokens
-                         THEN input_tokens - output_tokens ELSE 0 END AS gross,
-                    CASE WHEN NOT ({neutral_predicate}) AND output_tokens > input_tokens
-                         THEN output_tokens - input_tokens ELSE 0 END AS regression,
-                    CASE WHEN ({neutral_predicate}) THEN 0 ELSE input_tokens - output_tokens END AS net,
-                    exec_time_ms
-                FROM commands
-                WHERE measurement = 'estimated'
-                  AND COALESCE(route, '') != 'native_unaccounted'
-                  AND accounting_stage = 'internal_transport'
-                  AND ({version_predicate})
-                  AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
-                  AND length(?2) = 1
-                  AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
-            )
-            SELECT family, public_operation, public_mode, public_stage, public_route,
-                   COUNT(*), COALESCE(SUM(baseline), 0), COALESCE(SUM(delivered), 0),
-                   COALESCE(SUM(gross), 0), COALESCE(SUM(regression), 0),
-                   COALESCE(SUM(net), 0), COALESCE(SUM(exec_time_ms) / COUNT(*), 0)
-              FROM public_rows
-             GROUP BY family, public_operation, public_mode, public_stage, public_route
-             ORDER BY SUM(net) DESC, family, public_operation, public_mode,
-                      public_stage, public_route"
-        );
-        let mut statement = self
-            .connection
-            .prepare_cached(&by_command_query)
-            .map_err(LedgerError::Database)?;
-        summary.by_command = statement
-            .query_map(
-                params![
-                    project_path.map(|value| privacy_identity_hash("project", value)),
-                    std::path::MAIN_SEPARATOR.to_string(),
-                    since_unix_seconds
-                ],
-                |row| {
-                    let family = row.get(0)?;
-                    let operation = row.get::<_, Option<String>>(1)?;
-                    let mode = row.get::<_, Option<String>>(2)?;
-                    let stage = row.get::<_, String>(3)?;
-                    let route = row.get::<_, String>(4)?;
-                    Ok(EfficiencyOperationSummary {
-                        key: privacy_safe_operation_key(
-                            family,
-                            operation.as_deref(),
-                            mode.as_deref(),
-                            &stage,
-                            &route,
-                        ),
-                        executions: row.get(5)?,
-                        baseline_tokens_estimated: row.get(6)?,
-                        delivered_tokens_estimated: row.get(7)?,
-                        gross_avoided_tokens_estimated: row.get(8)?,
-                        regression_tokens_estimated: row.get(9)?,
-                        net_avoided_tokens_estimated: row.get(10)?,
-                        avg_time_ms: row.get(11)?,
-                    })
-                },
-            )
-            .map_err(LedgerError::Database)?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(LedgerError::Database)?;
+        // 0.11.2: shared with the last-session slice, which filters the same rows by session.
+        summary.by_command = self.operation_route_summaries(
+            project_path.map(|value| privacy_identity_hash("project", value)),
+            since_unix_seconds,
+            include_legacy_versions,
+            None,
+        )?;
         let scope_separator = std::path::MAIN_SEPARATOR.to_string();
         let coverage_query = format!(
             "SELECT COUNT(*),
@@ -2944,8 +3060,12 @@ impl Ledger {
             .map_err(LedgerError::Database)?;
         summary.stage_excluded_operations = stage_excluded;
         summary.stage_excluded_delivered_tokens_estimated = stage_excluded_delivered;
-        let (rerun_operations, rerun_tokens) =
-            self.filter_induced_reruns(project_path, since_unix_seconds, include_legacy_versions)?;
+        let (rerun_operations, rerun_tokens) = self.filter_induced_reruns(
+            project_path,
+            since_unix_seconds,
+            include_legacy_versions,
+            None, // 0.11.2
+        )?;
         summary.filter_induced_rerun_operations = rerun_operations;
         summary.filter_induced_rerun_tokens_estimated = rerun_tokens;
         let channels_query = format!(
@@ -3057,76 +3177,205 @@ impl Ledger {
         Ok(summary)
     }
 
+    /// 0.11.2: privacy-safe route aggregates for a scope, optionally one pseudonymous session.
+    fn operation_route_summaries(
+        &self,
+        project_hash: Option<String>,
+        since_unix_seconds: Option<i64>,
+        include_legacy_versions: bool,
+        session_hash: Option<&str>,
+    ) -> Result<Vec<EfficiencyOperationSummary>, LedgerError> {
+        let neutral_predicate = savings_neutral_sql_predicate("rtk_cmd");
+        let version_predicate = accounting_policy_predicate(include_legacy_versions);
+        let legacy_raw_predicate = raw_route_sql_predicate("rtk_cmd");
+        let by_command_query = format!(
+            "WITH public_rows AS (
+                SELECT
+                    COALESCE(NULLIF(operation_family, ''), NULLIF(operation_kind, ''), 'other') AS family,
+                    CASE
+                        WHEN operation_kind IN ('search', 'read', 'write', 'context', 'memory',
+                                                'codec', 'exec', 'observability', 'doctor')
+                            THEN operation_kind
+                        WHEN operation_family IN ('search', 'read', 'write', 'context', 'memory',
+                                                  'codec', 'exec', 'observability', 'doctor')
+                            THEN operation_family
+                        WHEN operation_family IN ('rgai', 'rg', 'grep') THEN 'search'
+                        ELSE NULL
+                    END AS public_operation,
+                    CASE
+                        WHEN operation_mode IN (
+                            'search_auto', 'search_semantic', 'search_exact', 'search_builtin',
+                            'read_full', 'read_filtered', 'read_range', 'read_head', 'read_tail',
+                            'read_outline', 'read_symbols', 'read_changed', 'read_since', 'write',
+                            'context_plan', 'memory_recall', 'memory_store', 'memory_forget',
+                            'memory_update', 'memory_prune', 'codec_compile', 'exec_run',
+                            'observability_snapshot', 'doctor_check'
+                        ) THEN operation_mode
+                        ELSE NULL
+                    END AS public_mode,
+                    CASE accounting_stage
+                        WHEN 'final_delivery' THEN 'final_delivery'
+                        WHEN 'standalone_delivery' THEN 'standalone_delivery'
+                        WHEN 'control_plane' THEN 'control_plane'
+                        ELSE 'internal_transport'
+                    END AS public_stage,
+                    CASE
+                        WHEN route IN ('bypassed', 'raw') THEN 'bypassed'
+                        WHEN route = 'native_unaccounted' THEN 'native_unaccounted'
+                        WHEN route = 'optimized' THEN 'optimized'
+                        WHEN ({legacy_raw_predicate}) THEN 'bypassed'
+                        ELSE 'optimized'
+                    END AS public_route,
+                    CASE WHEN ({neutral_predicate}) THEN output_tokens ELSE input_tokens END AS baseline,
+                    output_tokens AS delivered,
+                    CASE WHEN NOT ({neutral_predicate}) AND input_tokens > output_tokens
+                         THEN input_tokens - output_tokens ELSE 0 END AS gross,
+                    CASE WHEN NOT ({neutral_predicate}) AND output_tokens > input_tokens
+                         THEN output_tokens - input_tokens ELSE 0 END AS regression,
+                    CASE WHEN ({neutral_predicate}) THEN 0 ELSE input_tokens - output_tokens END AS net,
+                    exec_time_ms
+                FROM commands
+                WHERE measurement = 'estimated'
+                  AND COALESCE(route, '') != 'native_unaccounted'
+                  AND accounting_stage = 'internal_transport'
+                  AND ({version_predicate})
+                  AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
+                  AND length(?2) = 1
+                  AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
+                  AND (?4 IS NULL OR session_hash = ?4)
+            )
+            SELECT family, public_operation, public_mode, public_stage, public_route,
+                   COUNT(*), COALESCE(SUM(baseline), 0), COALESCE(SUM(delivered), 0),
+                   COALESCE(SUM(gross), 0), COALESCE(SUM(regression), 0),
+                   COALESCE(SUM(net), 0), COALESCE(SUM(exec_time_ms) / COUNT(*), 0)
+              FROM public_rows
+             GROUP BY family, public_operation, public_mode, public_stage, public_route
+             ORDER BY SUM(net) DESC, family, public_operation, public_mode,
+                      public_stage, public_route"
+        );
+        let mut statement = self
+            .connection
+            .prepare_cached(&by_command_query)
+            .map_err(LedgerError::Database)?;
+        statement
+            .query_map(
+                params![
+                    project_hash,
+                    std::path::MAIN_SEPARATOR.to_string(),
+                    since_unix_seconds,
+                    session_hash
+                ],
+                |row| {
+                    let family = row.get(0)?;
+                    let operation = row.get::<_, Option<String>>(1)?;
+                    let mode = row.get::<_, Option<String>>(2)?;
+                    let stage = row.get::<_, String>(3)?;
+                    let route = row.get::<_, String>(4)?;
+                    Ok(EfficiencyOperationSummary {
+                        key: privacy_safe_operation_key(
+                            family,
+                            operation.as_deref(),
+                            mode.as_deref(),
+                            &stage,
+                            &route,
+                        ),
+                        executions: row.get(5)?,
+                        baseline_tokens_estimated: row.get(6)?,
+                        delivered_tokens_estimated: row.get(7)?,
+                        gross_avoided_tokens_estimated: row.get(8)?,
+                        regression_tokens_estimated: row.get(9)?,
+                        net_avoided_tokens_estimated: row.get(10)?,
+                        avg_time_ms: row.get(11)?,
+                    })
+                },
+            )
+            .map_err(LedgerError::Database)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(LedgerError::Database)
+    }
+
     fn host_visible_efficiency_summary(
         &self,
         project_path: Option<&str>,
         since_unix_seconds: Option<i64>,
         include_legacy_versions: bool,
     ) -> Result<HostVisibleEfficiencySummary, LedgerError> {
-        // Claude Code exposes a 2 KiB preview when command output is moved to a host-side file.
-        // HZR's v1 estimator is UTF-8 bytes / 4, so the matching visible-output cap is 512.
-        const CLAUDE_CODE_VISIBLE_TOKENS: u64 = 512;
+        // 0.11.2: the whole-scope view is the session view without a session filter.
+        self.host_visible_efficiency_for(
+            project_path.map(|value| privacy_identity_hash("project", value)),
+            since_unix_seconds,
+            include_legacy_versions,
+            None,
+        )
+    }
 
+    /// 0.11.2: host-capped totals, optionally for one pseudonymous session.
+    ///
+    /// The same ceiling the engine applies to its receipts, for every host. The former flat
+    /// 512-token "preview" cap cut a 5 000-token output that the host shows in full down to
+    /// 512, and left every non-Claude row uncapped, so the figure was neither a floor nor a
+    /// ceiling. The cap is applied per row in SQL, so the dashboard, `hzr stats` and the last-
+    /// session slice share one expression instead of streaming every row into Rust.
+    fn host_visible_efficiency_for(
+        &self,
+        project_hash: Option<String>,
+        since_unix_seconds: Option<i64>,
+        include_legacy_versions: bool,
+        session_hash: Option<&str>,
+    ) -> Result<HostVisibleEfficiencySummary, LedgerError> {
+        let ceiling = host_output_ceiling_tokens();
         let neutral_predicate = savings_neutral_sql_predicate("rtk_cmd");
         let version_predicate = accounting_policy_predicate(include_legacy_versions);
         let query = format!(
-            "SELECT agent,
-                    CASE WHEN ({neutral_predicate}) THEN output_tokens ELSE input_tokens END,
-                    output_tokens
-               FROM commands
-              WHERE measurement = 'estimated'
-                AND COALESCE(route, '') != 'native_unaccounted'
-                AND accounting_stage = 'internal_transport'
-                AND ({version_predicate})
-                AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
-                AND length(?2) = 1
-                AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)"
+            "WITH scoped AS (
+                SELECT CASE WHEN ({neutral_predicate}) THEN output_tokens ELSE input_tokens END
+                           AS baseline,
+                       output_tokens AS delivered
+                  FROM commands
+                 WHERE measurement = 'estimated'
+                   AND COALESCE(route, '') != 'native_unaccounted'
+                   AND accounting_stage = 'internal_transport'
+                   AND ({version_predicate})
+                   AND (?1 IS NULL OR instr('|' || project_scope_hashes || '|', '|' || ?1 || '|') > 0)
+                   AND length(?2) = 1
+                   AND (?3 IS NULL OR CAST(strftime('%s', timestamp) AS INTEGER) >= ?3)
+                   AND (?4 IS NULL OR session_hash = ?4)
+             )
+             SELECT COUNT(*),
+                    COALESCE(SUM(CASE WHEN ?5 IS NULL THEN baseline ELSE MIN(baseline, ?5) END), 0),
+                    COALESCE(SUM(CASE WHEN ?5 IS NULL THEN delivered ELSE MIN(delivered, ?5) END), 0)
+               FROM scoped"
         );
-        let mut statement = self
+        let (operations, baseline, delivered) = self
             .connection
-            .prepare(&query)
-            .map_err(LedgerError::Database)?;
-        let rows = statement
-            .query_map(
+            .query_row(
+                &query,
                 params![
-                    project_path.map(|value| privacy_identity_hash("project", value)),
+                    project_hash,
                     std::path::MAIN_SEPARATOR.to_string(),
-                    since_unix_seconds
+                    since_unix_seconds,
+                    session_hash,
+                    ceiling.map(|tokens| i64::try_from(tokens).unwrap_or(i64::MAX)),
                 ],
                 |row| {
                     Ok((
-                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, u64>(0)?,
                         row.get::<_, u64>(1)?,
                         row.get::<_, u64>(2)?,
                     ))
                 },
             )
             .map_err(LedgerError::Database)?;
-        let mut summary = HostVisibleEfficiencySummary::default();
-        for row in rows {
-            let (agent, baseline, delivered) = row.map_err(LedgerError::Database)?;
-            let cap = match agent.as_deref() {
-                Some("claude-code") => Some(CLAUDE_CODE_VISIBLE_TOKENS),
-                _ => None,
-            };
-            let (baseline, delivered) = match cap {
-                Some(cap) => (baseline.min(cap), delivered.min(cap)),
-                None => {
-                    summary.uncapped_operations = summary.uncapped_operations.saturating_add(1);
-                    (baseline, delivered)
-                }
-            };
-            summary.operations = summary.operations.saturating_add(1);
-            summary.baseline_tokens_estimated =
-                summary.baseline_tokens_estimated.saturating_add(baseline);
-            summary.delivered_tokens_estimated =
-                summary.delivered_tokens_estimated.saturating_add(delivered);
-            summary.net_avoided_tokens_estimated = summary
-                .net_avoided_tokens_estimated
-                .saturating_add(i64::try_from(baseline).unwrap_or(i64::MAX))
-                .saturating_sub(i64::try_from(delivered).unwrap_or(i64::MAX));
-        }
-        Ok(summary)
+        Ok(HostVisibleEfficiencySummary {
+            operations,
+            baseline_tokens_estimated: baseline,
+            delivered_tokens_estimated: delivered,
+            net_avoided_tokens_estimated: i64::try_from(baseline)
+                .unwrap_or(i64::MAX)
+                .saturating_sub(i64::try_from(delivered).unwrap_or(i64::MAX)),
+            uncapped_operations: if ceiling.is_some() { 0 } else { operations },
+            ceiling_tokens: ceiling,
+        })
     }
 
     fn operation_modes_summary(
@@ -6967,8 +7216,99 @@ mod tests {
         );
     }
 
+    /// 0.11.2: the last-session slice picks the newest attributed session *in scope*, bounds
+    /// it by the host ceiling, measures its own rerun tax, and the dashboard's read-only
+    /// helper returns exactly what `hzr stats` computes for the same project.
     #[test]
-    fn host_visible_summary_caps_claude_and_marks_unknown_hosts() {
+    fn last_session_is_scoped_host_capped_and_shared_with_the_dashboard() {
+        let directory = tempdir().expect("temporary directory");
+        let path = directory.path().join("ledger.sqlite");
+        let ledger = Ledger::open(&path).expect("ledger");
+        let record = |project: &str, session: &str, command: &str, input: u64, output: u64| {
+            ledger
+                .record_operation_attributed(
+                    command,
+                    &format!("rtk {command}"),
+                    input,
+                    output,
+                    1,
+                    OperationAttribution {
+                        project_path: project,
+                        agent: Some("claude-code"),
+                        session_id: Some(session),
+                        channel: OperationChannel::HookCli,
+                        measurement: OperationMeasurement::Estimated,
+                        route: OperationRoute::Optimized,
+                    },
+                )
+                .expect("operation");
+        };
+        record("/work/app", "older-session", "cargo test", 1_000, 100);
+        record("/work/app", "newest-session", "cargo test", 40_000, 1_000);
+        record("/work/app", "newest-session", "cargo test", 2_000, 2_000);
+        record("/work/app", "newest-session", "git status", 500, 100);
+        // Newer, but another project: must not be the app's last session.
+        record("/work/other", "foreign-session", "cargo build", 9_000, 10);
+
+        let session = ledger
+            .last_session_summary(Some("/work/app"))
+            .expect("last session")
+            .expect("an attributed session exists");
+        let ceiling = super::host_output_ceiling_tokens();
+        let cap = |tokens: u64| ceiling.map_or(tokens, |limit| tokens.min(limit));
+
+        assert!(session.session_hash.starts_with("hmac-sha256:"));
+        assert!(!session.session_hash.contains("newest-session"));
+        assert_eq!(session.agent.as_deref(), Some("claude-code"));
+        assert_eq!(session.operations, 3);
+        assert_eq!(session.optimized_operations + session.raw_operations, 3);
+        assert_eq!(session.baseline_tokens_estimated, 42_500);
+        assert_eq!(session.delivered_tokens_estimated, 3_100);
+        assert_eq!(
+            session.host_visible_baseline_tokens_estimated,
+            cap(40_000) + cap(2_000) + cap(500)
+        );
+        assert_eq!(
+            session.host_visible_net_avoided_tokens_estimated,
+            (cap(40_000) + cap(2_000) + cap(500)) as i64
+                - (cap(1_000) + cap(2_000) + cap(100)) as i64
+        );
+        assert_eq!(session.host_ceiling_tokens, ceiling);
+        // The second `cargo test` repeats a filtered run within the window.
+        assert_eq!(session.rerun_tax_operations, 1);
+        assert_eq!(session.rerun_tax_tokens_estimated, 2_000);
+        assert!(!session.top_routes.is_empty() && session.top_routes.len() <= 3);
+        assert!(
+            session
+                .top_routes
+                .iter()
+                .all(|route| route.route.starts_with("opt ") && !route.route.contains("status"))
+        );
+        assert!(
+            session.raw_public_estimate.is_none(),
+            "the ledger never prices"
+        );
+
+        // Globally, the foreign project's newer session is the last one.
+        let global = ledger
+            .last_session_summary(None)
+            .expect("global last session")
+            .expect("session");
+        assert_ne!(global.session_hash, session.session_hash);
+
+        let (host_visible, dashboard_session) =
+            Ledger::project_host_accounting_read_only(&path, "/work/app").expect("read-only");
+        assert_eq!(
+            host_visible,
+            ledger
+                .host_visible_efficiency_summary(Some("/work/app"), None, false)
+                .expect("stats host-visible")
+        );
+        assert_eq!(dashboard_session.as_ref(), Some(&session));
+    }
+
+    #[test]
+    fn host_visible_summary_applies_the_engine_ceiling_to_every_host() {
         let directory = tempdir().expect("temporary directory");
         let ledger = Ledger::open(&directory.path().join("ledger.sqlite")).expect("ledger");
         for (agent, baseline, delivered) in [("claude-code", 10_000, 2_000), ("codex", 1_000, 100)]
@@ -7001,11 +7341,22 @@ mod tests {
             .host_visible_efficiency_summary(None, None, false)
             .expect("host-visible summary");
 
+        // 0.11.2: every host is bounded by the engine's ceiling (7 500 tokens by default); the
+        // expectation follows the environment so a host-set BASH_MAX_OUTPUT_LENGTH cannot flake it.
+        let ceiling = crate::ledger::host_output_ceiling_tokens();
+        let cap = |tokens: u64| ceiling.map_or(tokens, |limit| tokens.min(limit));
         assert_eq!(summary.operations, 2);
-        assert_eq!(summary.baseline_tokens_estimated, 1_512);
-        assert_eq!(summary.delivered_tokens_estimated, 612);
-        assert_eq!(summary.net_avoided_tokens_estimated, 900);
-        assert_eq!(summary.uncapped_operations, 1);
+        assert_eq!(summary.ceiling_tokens, ceiling);
+        assert_eq!(summary.baseline_tokens_estimated, cap(10_000) + cap(1_000));
+        assert_eq!(summary.delivered_tokens_estimated, cap(2_000) + cap(100));
+        assert_eq!(
+            summary.net_avoided_tokens_estimated,
+            (cap(10_000) + cap(1_000)) as i64 - (cap(2_000) + cap(100)) as i64
+        );
+        assert_eq!(
+            summary.uncapped_operations,
+            if ceiling.is_some() { 0 } else { 2 }
+        );
     }
 
     #[test]

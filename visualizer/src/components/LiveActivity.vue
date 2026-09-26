@@ -17,6 +17,8 @@ const props = defineProps<{
   baseline?: number;
   delivered?: number;
   netAvoided?: number;
+  /** 0.11.2: the totals above are host-capped; per-command rows stay raw tool output. */
+  hostCapped?: boolean;
 }>();
 
 // 0.9.1: the one sentence a reader needs before any table — what HZR handed the
@@ -151,8 +153,8 @@ function routeDetail(operation: DashboardLocalOperation): string {
 <template>
   <div class="live-activity">
     <div class="live-activity-head">
-      <div><span class="live-beacon" aria-hidden="true"></span><strong>Recent HZR ledger activity</strong></div>
-      <span>Latest successful snapshot · not process liveness</span>
+      <div><span class="live-beacon" aria-hidden="true"></span><strong>Recent activity</strong></div><!-- 0.11.2 -->
+      <span>From the latest snapshot</span>
     </div>
 
     <div class="activity-context-grid">
@@ -179,20 +181,24 @@ function routeDetail(operation: DashboardLocalOperation): string {
         <div>
           <span class="eyebrow">What HZR saved here</span>
           <p class="savings-sentence">
-            Tools produced <strong>{{ formatCount(baseline ?? 0) }}</strong> tokens; HZR handed the model
-            <strong>{{ formatCount(delivered ?? 0) }}</strong>
+            <!-- 0.11.2: host-capped wording when the daemon supplies capped totals -->
+            <template v-if="hostCapped">The host would have shown the model <strong>{{ formatCount(baseline ?? 0) }}</strong> tokens; after HZR it saw
+            <strong>{{ formatCount(delivered ?? 0) }}</strong></template>
+            <template v-else>Tools produced <strong>{{ formatCount(baseline ?? 0) }}</strong> tokens; HZR handed the model
+            <strong>{{ formatCount(delivered ?? 0) }}</strong></template>
             <span v-if="savingsPct !== null" class="savings-pct" :class="{ negative: (netAvoided ?? 0) < 0 }">{{ savingsPct >= 0 ? "−" : "+" }}{{ Math.abs(savingsPct).toFixed(1) }}%</span>
           </p>
         </div>
         <div class="savings-brief-total" :class="{ negative: (netAvoided ?? 0) < 0 }">
           <strong>{{ formatSignedCount(netAvoided ?? 0) }}</strong>
-          <span>estimated tokens the model never had to read</span>
+          <span>{{ hostCapped ? "estimated tokens the model did not have to read" : "estimated tokens cut from tool output" }}</span><!-- 0.11.2 -->
         </div>
       </div>
       <div class="savings-scale" aria-hidden="true">
         <i class="savings-scale-baseline"></i>
         <i class="savings-scale-delivered" :style="{ width: tokenBarWidth(delivered ?? 0, baseline ?? 1) }"></i>
       </div>
+      <p v-if="hostCapped && breakdownRows.length" class="command-breakdown-note">Per-command rows are raw tool-output estimates, before the host cap.</p><!-- 0.11.2 -->
       <div v-if="breakdownRows.length" class="command-breakdown" role="table" aria-label="Savings by command">
         <div class="command-breakdown-row command-breakdown-head" role="row">
           <span role="columnheader">Command</span>

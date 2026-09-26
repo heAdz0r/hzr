@@ -11,7 +11,7 @@ use hzr_core::{
     ReplacementCapability, StatsQuery, load_pricing_catalog, price_avoided_input_tokens,
     privacy_identity_hash,
 };
-use hzr_protocol::{AccountingOperationKind, AccountingOperationMode, AccountingStage};
+use hzr_protocol::AccountingOperationKind; // 0.11.2: labels moved to hzr-core
 use serde::Serialize;
 
 use crate::cli::{AccountingVersion, StatsDuration};
@@ -175,6 +175,13 @@ pub struct StatsReport {
     pub economics: EconomicsReport,
     /// Why the headline reads zero, when it does.
     pub zero_reduction_cause: ZeroReductionCause,
+    /// 0.11.2: the newest attributed session of the current project (else of the scope),
+    /// host-capped and priced like the headline; the dashboard serves the same object.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_session: Option<hzr_protocol::LastSession>,
+    /// 0.11.2: `project hzr (~/Programming/hzr)` or `global`, naming the slice above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_session_scope: Option<String>,
     pub notes: Vec<&'static str>,
 }
 
@@ -252,7 +259,7 @@ pub struct DirectSavings {
     pub measurement: &'static str,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)] // 0.11.2: no longer Copy (method is a String)
 pub struct HostVisibleSavings {
     pub operations: u64,
     pub baseline_tokens_estimated: u64,
@@ -261,7 +268,7 @@ pub struct HostVisibleSavings {
     pub reduction_pct: f64,
     pub uncapped_operations: u64,
     pub complete: bool,
-    pub method: &'static str,
+    pub method: String, // 0.11.2: names the ceiling actually applied
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -298,6 +305,13 @@ pub async fn collect(
     since: Option<&StatsDuration>,
     accounting_version: AccountingVersion,
 ) -> Result<StatsReport> {
+    // 0.11.2: rows are scoped by the project root they were recorded under (and its
+    // ancestors), never by a subdirectory, so `hzr stats` run from `crates/` priced the project
+    // row at 0 tokens / USD 0.00. Resolve both scopes to the root the ledger actually uses.
+    let workspace = workspace.map(|path| resolve_project_root(config, path));
+    let economics_project = economics_project.map(|path| resolve_project_root(config, path));
+    let workspace = workspace.as_deref();
+    let economics_project = economics_project.as_deref();
     let ledger_path = config.data_dir.join("ledger/hzr.sqlite");
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
     let cutoff = since
@@ -329,7 +343,14 @@ pub async fn collect(
     let snapshot_global_avoided = snapshot.global_avoided_tokens_estimated;
     let snapshot_project_economics = snapshot.project_economics.clone();
     let snapshot_global_economics = snapshot.global_economics.clone();
-    let scope = match (workspace_identity.as_deref(), since) {
+    let snapshot_last_session = snapshot.last_session.clone(); // 0.11.2
+    // 0.11.2: a project is named by its directory, as the dashboard does; the digest stays the
+    // label only when the operator turned workspace names off.
+    let workspace_label = workspace
+        .filter(|_| config.privacy.publish_workspace_names)
+        .and_then(workspace_display_label)
+        .or_else(|| workspace_identity.clone());
+    let scope = match (workspace_label.as_deref(), since) {
         (Some(workspace_hash), Some(duration)) => {
             format!("project {workspace_hash} since {}", duration.label())
         }
@@ -379,7 +400,7 @@ pub async fn collect(
     // so the same unreachable block reproduced here. Price the estimate and label what is
     // missing, matching the daemon: a delivery qualifier, never a withheld number.
     let delivery_qualifier = (!report.explicit_delivery.complete).then(|| {
-        "Host delivery is unconfirmed: this prices producer-side reductions only, not a measured saving in the model's context.".to_owned()
+        "Priced on host-capped output (what the host could show the model); host delivery itself is unconfirmed.".to_owned() // 0.11.2
     });
     let catalog = if !config.billing.public_estimate_enabled {
         report.raw_public_estimate_unavailable_reason = Some(PRICING_OPT_IN_REASON.to_owned());
@@ -397,7 +418,7 @@ pub async fn collect(
         match price_scope(
             config,
             catalog,
-            report.direct_savings.net_avoided_tokens_estimated,
+            report.host_visible_savings.net_avoided_tokens_estimated, // 0.11.2: host-capped
         ) {
             Ok(estimate) => report.raw_public_estimate = Some(estimate),
             Err(error) => report.raw_public_estimate_unavailable_reason = Some(error.to_string()),
@@ -408,6 +429,7 @@ pub async fn collect(
         catalog.as_ref(),
         EconomicsInputs {
             project_resolved: economics_project_text.is_some(),
+            windowed: since.is_some(), // 0.11.2
             project_avoided: snapshot_project_avoided,
             global_avoided: snapshot_global_avoided,
             project_receipts: snapshot_project_economics,
@@ -416,7 +438,87 @@ pub async fn collect(
         report.raw_public_estimate_unavailable_reason.clone(),
         delivery_qualifier,
     );
+    // 0.11.2: the last session is priced exactly like the headline — host-capped net, same
+    // catalog row — and named by the project it was selected from.
+    let session_qualifier = report.economics.delivery_qualifier.clone();
+    report.last_session = snapshot_last_session.map(|mut session| {
+        session.raw_public_estimate = catalog.as_ref().and_then(|catalog| {
+            price_scope(
+                config,
+                catalog,
+                session.host_visible_net_avoided_tokens_estimated,
+            )
+            .ok()
+            .map(|estimate| hzr_protocol::DashboardRawPublicEstimate {
+                currency: estimate.currency,
+                savings_microunits: estimate.savings_microunits,
+                avoided_input_tokens_estimated: estimate.avoided_input_tokens_estimated,
+                pricing_basis: estimate.pricing_basis,
+                catalog_identity: estimate.price_table_identity,
+                entry_version: estimate.entry_version,
+                preliminary: estimate.preliminary,
+                disclaimer: estimate.disclaimer,
+                delivery_qualifier: session_qualifier.clone(),
+            })
+        });
+        session
+    });
+    report.last_session_scope = report.last_session.as_ref().map(|_| {
+        economics_project.or(workspace).map_or_else(
+            || "global".to_owned(),
+            |root| format!("project {}", project_label(config, root)),
+        )
+    });
     Ok(report)
+}
+
+/// 0.11.2: the project root the ledger scopes rows by, for a directory inside it.
+///
+/// The deepest registered workspace containing `requested` wins (the hook resolves the same
+/// way before recording); otherwise the nearest ancestor holding `.git`; otherwise the path
+/// itself. A root query is a superset of any subdirectory query, because every row carries its
+/// recorded directory *and* that directory's ancestors in `project_scope_hashes`.
+pub(crate) fn resolve_project_root(config: &Config, requested: &Path) -> std::path::PathBuf {
+    let canonical =
+        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let requested = canonical(requested);
+    let registry = hzr_index::registered_workspaces(&config.data_dir);
+    let registered = registry
+        .registrations
+        .iter()
+        .map(|registration| canonical(&registration.root))
+        .filter(|root| requested.starts_with(root))
+        .max_by_key(|root| root.components().count());
+    if let Some(root) = registered {
+        return root;
+    }
+    requested
+        .ancestors()
+        .find(|directory| directory.join(".git").exists())
+        .map_or_else(|| requested.clone(), Path::to_path_buf)
+}
+
+/// 0.11.2: the directory label when names may be published, else the pseudonymous digest.
+fn project_label(config: &Config, root: &Path) -> String {
+    Some(root)
+        .filter(|_| config.privacy.publish_workspace_names)
+        .and_then(workspace_display_label)
+        .unwrap_or_else(|| privacy_identity_hash("project", &root.to_string_lossy()))
+}
+
+/// 0.11.2: `hzr (~/Programming/hzr)` — the directory name, then the path as the user types it.
+fn workspace_display_label(root: &std::path::Path) -> Option<String> {
+    let name = root.file_name()?.to_str()?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let rendered = root.to_str()?;
+    let display = std::env::var("HOME")
+        .ok()
+        .filter(|home| !home.is_empty())
+        .and_then(|home| rendered.strip_prefix(&home).map(|rest| format!("~{rest}")))
+        .unwrap_or_else(|| rendered.to_owned());
+    Some(format!("{name} ({display})"))
 }
 
 const PRICING_OPT_IN_REASON: &str = "public pricing estimate is opt-in; run `hzr billing catalog`, then configure [billing] public_estimate_enabled, harness, provider, model, method, and pricing_basis in the HZR config";
@@ -445,6 +547,8 @@ fn billing_selection_configured(config: &Config) -> bool {
 
 struct EconomicsInputs {
     project_resolved: bool,
+    /// 0.11.2: both rows honour `--since`; the global row must not then say "lifetime".
+    windowed: bool,
     project_avoided: i64,
     global_avoided: i64,
     project_receipts: EconomicScopeSummary,
@@ -512,7 +616,11 @@ fn build_economics(
             price(inputs.project_avoided),
         ),
         economic_row(
-            "global lifetime",
+            if inputs.windowed {
+                "global window" // 0.11.2: same window as the project row
+            } else {
+                "global lifetime"
+            },
             true,
             inputs.global_avoided,
             &inputs.global_receipts,
@@ -792,7 +900,13 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
             ),
             uncapped_operations: host_visible_gain.uncapped_operations,
             complete: host_visible_gain.uncapped_operations == 0,
-            method: "known_host_visible_caps_v1; claude-code=512 tokens; unknown hosts remain raw upper bounds",
+            // 0.11.2: one engine-matching ceiling for every host
+            method: match host_visible_gain.ceiling_tokens {
+                Some(tokens) => format!(
+                    "host_output_ceiling_v2; {tokens} tokens per operation (HZR_HOST_OUTPUT_CEILING, BASH_MAX_OUTPUT_LENGTH or 30000 chars)"
+                ),
+                None => "host_output_ceiling_v2; disabled by HZR_HOST_OUTPUT_CEILING=0; raw upper bounds".to_owned(),
+            },
         },
         by_subsystem,
         by_mode,
@@ -841,6 +955,8 @@ fn build_report_with_command_limit(inputs: ReportInputs, options: ReportOptions)
             enable_steps: Vec::new(),
         },
         zero_reduction_cause,
+        last_session: None,       // 0.11.2: filled by `collect`
+        last_session_scope: None, // 0.11.2
         notes: provider_usage_notes(observed_model_usage_scope),
     }
 }
@@ -1017,30 +1133,7 @@ fn operation_subsystem(key: &PrivacySafeOperationKey) -> &'static str {
 }
 
 fn operation_label(key: &PrivacySafeOperationKey) -> String {
-    let route = match key.route {
-        OperationRoute::Optimized => "opt",
-        OperationRoute::Bypassed => "raw",
-        OperationRoute::NativeUnaccounted => "native",
-    };
-    let operation = key.operation.map(AccountingOperationKind::as_str);
-    let identity = match operation {
-        Some(operation) if operation != key.family => format!("{}>{operation}", key.family),
-        _ => key.family.clone(),
-    };
-    let mode = key.mode.map_or("legacy", |mode: AccountingOperationMode| {
-        let full = mode.as_str();
-        operation
-            .and_then(|operation| full.strip_prefix(operation))
-            .and_then(|suffix| suffix.strip_prefix('_'))
-            .unwrap_or(full)
-    });
-    let stage = match key.stage {
-        AccountingStage::InternalTransport => "int",
-        AccountingStage::FinalDelivery => "final",
-        AccountingStage::StandaloneDelivery => "direct",
-        AccountingStage::ControlPlane => "control",
-    };
-    format!("{route} {identity}:{mode}/{stage}")
+    key.label() // 0.11.2: one label implementation, shared with the dashboard
 }
 
 fn signed_percentage(part: i64, total: u64) -> f64 {
@@ -1088,6 +1181,7 @@ mod tests {
 
         let inputs = || EconomicsInputs {
             project_resolved: true,
+            windowed: false, // 0.11.2
             project_avoided: 10,
             global_avoided: 10,
             project_receipts: EconomicScopeSummary::default(),
@@ -1805,5 +1899,96 @@ mod tests {
             encoded.len()
         );
         assert!(!encoded.windows(12).any(|window| window == b"secret=value"));
+    }
+
+    /// 0.11.2 regression: `hzr stats` run from a subdirectory of a project priced the
+    /// "this project" row at 0 tokens / USD 0.00 and `--workspace .` showed an empty
+    /// headline, because rows are scoped by the recorded root and its *ancestors*, never by a
+    /// subdirectory. Both scopes now resolve to the project root first.
+    #[tokio::test]
+    async fn stats_from_a_project_subdirectory_reports_the_project_not_zero() {
+        use hzr_core::{
+            Config, Ledger, OperationAttribution, OperationChannel, OperationMeasurement,
+            OperationRoute,
+        };
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let data = directory.path().join("data");
+        let root = std::fs::canonicalize(directory.path())
+            .expect("canonical root")
+            .join("project");
+        let subdirectory = root.join("crates").join("inner");
+        std::fs::create_dir_all(root.join(".git")).expect("git marker");
+        std::fs::create_dir_all(&subdirectory).expect("subdirectory");
+        std::fs::create_dir_all(data.join("ledger")).expect("ledger directory");
+        let ledger = Ledger::open(&data.join("ledger/hzr.sqlite")).expect("ledger");
+        ledger
+            .record_operation_attributed(
+                "cargo test",
+                "rtk cargo test",
+                1_000,
+                100,
+                1,
+                OperationAttribution {
+                    project_path: root.to_str().expect("UTF-8 root"),
+                    agent: Some("claude-code"),
+                    session_id: Some("subdirectory-session"),
+                    channel: OperationChannel::HookCli,
+                    measurement: OperationMeasurement::Estimated,
+                    route: OperationRoute::Optimized,
+                },
+            )
+            .expect("operation");
+        drop(ledger);
+        let config = Config {
+            data_dir: data,
+            ..Config::default()
+        };
+
+        assert_eq!(super::resolve_project_root(&config, &subdirectory), root);
+        let report = super::collect(
+            &config,
+            None,
+            Some(&subdirectory),
+            false,
+            false,
+            None,
+            AccountingVersion::Current,
+        )
+        .await
+        .expect("stats from the subdirectory");
+        // 0.11.2: the expectation follows the host ceiling so BASH_MAX_OUTPUT_LENGTH cannot flake it
+        let cap =
+            |tokens: u64| hzr_core::host_output_ceiling_tokens().map_or(tokens, |c| tokens.min(c));
+        let expected_net = cap(1_000) - cap(100);
+        let project_row = &report.economics.rows[0];
+        assert_eq!(project_row.scope, "this project");
+        assert_eq!(project_row.avoided_input_tokens_estimated, expected_net);
+        let session = report
+            .last_session
+            .as_ref()
+            .expect("last session of the project");
+        assert_eq!(session.operations, 1);
+        assert_eq!(
+            session.host_visible_net_avoided_tokens_estimated,
+            expected_net as i64
+        ); // 0.11.2
+
+        let scoped = super::collect(
+            &config,
+            Some(&subdirectory),
+            None,
+            false,
+            false,
+            None,
+            AccountingVersion::Current,
+        )
+        .await
+        .expect("stats --workspace <subdirectory>");
+        assert_eq!(scoped.direct_savings.operations, 1);
+        assert_eq!(
+            scoped.host_visible_savings.net_avoided_tokens_estimated,
+            expected_net as i64 // 0.11.2
+        );
     }
 }

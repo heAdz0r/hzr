@@ -68,7 +68,7 @@
       "id": "exact_raw",
       "instead_of": "Exact unfiltered output",
       "command": "HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=<reason> hzr exec run '<command>'",
-      "guidance": "reason: binary, checksum, machine_protocol, complete_log, full_patch or verbatim_source. `cat`, `sed -n` and `head` through the hook are already exact.",
+      "guidance": "reason: binary, checksum, machine_protocol, complete_log, full_patch or verbatim_source. `cat` of a file up to 24 KB and `sed -n`, `head` or `tail` windows through the hook are exact; larger output is bounded and names its recovery command.",
       "managed_block": true
     }
   ],

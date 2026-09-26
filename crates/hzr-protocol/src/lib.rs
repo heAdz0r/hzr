@@ -86,6 +86,8 @@ pub use api::{
     HostExecutionGrant,
     HostGrantRejection,
     HostPermissionMode,
+    LastSession,      // 0.11.2
+    LastSessionRoute, // 0.11.2
     MemoryForgetApiRequest,
     MemoryGetApiRequest,
     MemoryImportance,

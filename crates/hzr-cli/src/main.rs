@@ -2322,6 +2322,10 @@ async fn initialize(
     let (backup, instruction_reports, project_mcp, initialized) = match applied {
         Ok(applied) => {
             transaction.commit();
+            // 0.11.2: after the commit, never inside the transaction (whose rollback restores
+            // `info/exclude`): keep the `.grepai` link and Codex pin out of `git status`, as
+            // SessionStart does. Best effort and idempotent.
+            let _ = diagnostics::repair_workspace_excludes(&config, &workspace_root);
             applied
         }
         Err(error) => {

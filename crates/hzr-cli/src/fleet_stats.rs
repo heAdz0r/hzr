@@ -64,9 +64,9 @@ fn window(
         (Some(duration), None) => until
             .checked_sub(i64::try_from(duration.seconds())?)
             .unwrap_or(-1),
-        (None, None) => {
-            anyhow::bail!("fleet snapshots require --since <duration> or --since-unix <seconds>")
-        }
+        // 0.11.2: no window means lifetime; the snapshot still records its exact bounds, so it
+        // stays reproducible, and a bare `hzr stats --fleet` no longer fails.
+        (None, None) => 0,
     };
     anyhow::ensure!(
         since >= 0 && until > since,
@@ -83,7 +83,7 @@ mod tests {
     fn explicit_window_is_independent_of_execution_time() -> Result<()> {
         assert_eq!(window(None, Some(100), Some(200), 999)?, (100, 200));
         assert_eq!(window(None, Some(100), Some(200), 1999)?, (100, 200));
-        assert!(window(None, None, None, 200).is_err());
+        assert_eq!(window(None, None, None, 200)?, (0, 200)); // 0.11.2: lifetime default
         assert!(window(None, Some(200), Some(100), 999).is_err());
         assert!(window(None, Some(-1), Some(100), 999).is_err());
         Ok(())

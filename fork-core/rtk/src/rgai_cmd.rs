@@ -584,12 +584,8 @@ fn try_grepai_delegation(
         match grepai::execute_search(binary, project_dir, query, max, path_filter) {
             Ok(output) => Ok(output),
             Err(e) => {
-                if verbose > 0 {
-                    crate::rtk_info!(
-                        "rgai: grepai search failed: {}, falling back to built-in",
-                        e
-                    );
-                }
+                // 0.11.2: always said, once — the answer below is exact, not semantic
+                crate::rtk_info!("rgai: semantic search unavailable ({e}); using exact search");
                 Ok(None)
             }
         }
@@ -637,6 +633,13 @@ fn try_grepai_delegation(
         Some(r) => r,
         None => return Ok(None),
     };
+    // 0.11.2: a backend that answered with something other than its JSON (an unreachable
+    // embedder prints an error and exits 0) falls through to the exact path, as HZR.md
+    // promises, instead of rendering a parse error as the search result.
+    if let Err(error) = grepai::parse_grepai_json(&raw) {
+        crate::rtk_info!("rgai: semantic search unavailable ({error}); using exact search");
+        return Ok(None);
+    }
 
     let filtered = filter_grepai_output(&raw, query, requested_path, max, json, compact);
     Ok(Some((raw, filtered)))

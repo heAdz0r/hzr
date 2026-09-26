@@ -151,6 +151,18 @@ async fn component_status(config: &Config, json: bool) -> Result<ExitCode> {
 }
 
 fn board(config: &Config, project: &Path, data_dir: &Path) -> Result<ExitCode> {
+    use std::io::IsTerminal; // 0.11.2
+    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal(); // 0.11.2
+    board_with_terminal(config, project, data_dir, interactive) // 0.11.2
+}
+
+/// 0.11.2: split out so the terminal requirement is testable without a TTY.
+fn board_with_terminal(
+    config: &Config,
+    project: &Path,
+    data_dir: &Path,
+    interactive: bool,
+) -> Result<ExitCode> {
     let project = canonical_existing(project, "--project")?;
     if !data_dir.is_absolute() {
         bail!("--agtx-data-dir must be an absolute path; agtx creates the store on first launch");
@@ -163,6 +175,17 @@ fn board(config: &Config, project: &Path, data_dir: &Path) -> Result<ExitCode> {
     let binary = directory.join("agtx");
     if !binary.is_file() {
         bail!("the HZR bundle is missing engines/agtx; reinstall or update HZR");
+    }
+    // 0.11.2: without a terminal the upstream TUI died with a raw
+    // "Device not configured (os error 6)" after already touching its log
+    // directory. Refuse before launching anything.
+    if !interactive {
+        bail!(
+            "`hzr agents board` opens the interactive agtx board and needs a terminal: run it from an \
+             interactive shell with stdin and stdout attached to a TTY (agtx also needs tmux and the \
+             chosen coding-agent executable). Read-only monitoring needs no terminal: \
+             `hzr agents onboard --project <worktree> --agtx-data-dir <store>`"
+        ); // 0.11.2
     }
     let status = Command::new(&binary)
         .arg(&project)
@@ -827,14 +850,45 @@ mod tests {
         config.engines.directory = Some(engines);
         let root = directory.path().canonicalize().expect("canonical root");
         assert_eq!(
-            board(&config, &root, &root.join("store with spaces")).expect("launch"),
+            board_with_terminal(&config, &root, &root.join("store with spaces"), true) // 0.11.2
+                .expect("launch"),
             ExitCode::from(7)
         );
         assert!(
             !root.join("store with spaces").exists(),
             "HZR does not initialize the store itself"
         );
-        assert!(board(&config, &root, Path::new("relative-store")).is_err());
+        assert!(board_with_terminal(&config, &root, Path::new("relative-store"), true).is_err()); // 0.11.2
+    }
+
+    /// 0.11.2 regression: without a TTY the bundled TUI was launched anyway and
+    /// failed with a raw os error 6; now nothing is launched and the error says why.
+    #[cfg(unix)]
+    #[test]
+    fn board_without_a_terminal_explains_and_launches_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().expect("tempdir");
+        let engines = directory.path().join("engines");
+        std::fs::create_dir(&engines).expect("engines");
+        let marker = directory.path().join("agtx-was-launched");
+        let binary = engines.join("agtx");
+        std::fs::write(
+            &binary,
+            format!("#!/bin/sh\ntouch '{}'\nexit 0\n", marker.display()),
+        )
+        .expect("stub");
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+            .expect("permissions");
+        let mut config = Config::default();
+        config.engines.directory = Some(engines);
+        let root = directory.path().canonicalize().expect("canonical root");
+        let error = board_with_terminal(&config, &root, &root.join("store"), false)
+            .expect_err("a non-interactive board must be refused");
+        let message = error.to_string();
+        assert!(message.contains("needs a terminal"), "{message}");
+        assert!(message.contains("hzr agents onboard"), "{message}");
+        assert!(!marker.exists(), "agtx must not be launched without a TTY");
+        assert!(!root.join("store").exists());
     }
 
     #[tokio::test]

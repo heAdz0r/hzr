@@ -1,7 +1,7 @@
-# HZR 0.11.1 — fork-core parity ledger
+# HZR 0.11.2 — fork-core parity ledger
 
 **Audit date:** 2026-09-03
-**Status:** HZR 0.11.1 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
+**Status:** HZR 0.11.2 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk` `0.50.0-fork.1`, derived from that complete baseline and synced selectively with upstream `rtk-ai/rtk` v0.50.0
 

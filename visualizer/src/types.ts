@@ -144,6 +144,46 @@ export interface DashboardLocalActivity {
   recent_operations: DashboardLocalOperation[];
   /** Savings by command for the selected project; absent from older daemons. 0.9.1 */
   command_breakdown?: DashboardCommandBreakdown[];
+  // 0.11.2: host-capped figures — what the host could actually show the model.
+  // Optional: older daemons omit them and the UI falls back to producer figures.
+  host_visible_baseline_tokens_estimated?: number;
+  host_visible_delivered_tokens_estimated?: number;
+  host_visible_net_avoided_tokens_estimated?: number;
+  /** 0.11.2: per-operation host output ceiling; null when no ceiling applies. */
+  host_ceiling_tokens?: number | null;
+  /** 0.11.2: the most recent session in this project; absent from older daemons. */
+  last_session?: DashboardLastSession | null;
+}
+
+/** 0.11.2: one route (or command family) inside the last session. */
+export interface DashboardLastSessionRoute {
+  route: string;
+  operations: number;
+  net_avoided_tokens_estimated?: number | null;
+}
+
+/**
+ * 0.11.2: the most recent session in the selected project. Every field except
+ * `operations` is optional so a partially populated payload still renders.
+ */
+export interface DashboardLastSession {
+  session_hash?: string | null;
+  agent?: string | null;
+  first_record_at?: string | null;
+  last_record_at?: string | null;
+  operations: number;
+  optimized_operations?: number;
+  raw_operations?: number;
+  /** Raw tool output (producer baseline) and filtered output, in estimated tokens. */
+  baseline_tokens_estimated?: number;
+  delivered_tokens_estimated?: number;
+  net_avoided_tokens_estimated?: number;
+  host_visible_baseline_tokens_estimated?: number;
+  host_visible_delivered_tokens_estimated?: number;
+  host_visible_net_avoided_tokens_estimated?: number;
+  host_visible_reduction_pct?: number | null;
+  top_routes?: DashboardLastSessionRoute[];
+  raw_public_estimate?: DashboardRawPublicEstimate | null;
 }
 
 /** One kind of command inside a project: how often it ran and what it saved. 0.9.1 */

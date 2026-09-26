@@ -90,6 +90,7 @@ fn write_stats(output: &mut impl Write, report: &StatsReport, color: bool) -> io
         style("// ZERO-REDUNDANCY LEDGER", "1;37", color)
     )?;
 
+    write_last_session(output, report, color)?; // 0.11.2: what the latest session did, first
     write_economics(output, &report.economics, color)?;
     write_local_reduction(output, report, color)?;
     write_optimizer_bypass(output, report, color)?;
@@ -100,6 +101,149 @@ fn write_stats(output: &mut impl Write, report: &StatsReport, color: bool) -> io
     write_hot_paths(output, report, color)?;
     write_provider_usage(output, report, color)?;
     write_integrity(output, report, color)
+}
+
+/// 0.11.2: section −1 — the newest attributed session, in the same terms as the headline
+/// (host-capped net, same ceiling and catalog row). No command, path or raw session id: the
+/// session is named by a digest prefix and routes by their privacy-safe labels.
+fn write_last_session(
+    output: &mut impl Write,
+    report: &StatsReport,
+    color: bool,
+) -> io::Result<()> {
+    let Some(session) = &report.last_session else {
+        return Ok(());
+    };
+    let scope = report.last_session_scope.as_deref().unwrap_or("global");
+    let digest = session
+        .session_hash
+        .strip_prefix("hmac-sha256:")
+        .map_or("unattributed", |hex| hex.get(..8).unwrap_or(hex));
+    writeln!(output)?;
+    writeln!(
+        output,
+        "{}  {}",
+        style("LAST SESSION", "1;38;5;208", color),
+        style(
+            &truncate(
+                &format!(
+                    "estimated · session {digest}{}",
+                    session
+                        .agent
+                        .as_deref()
+                        .map_or_else(String::new, |agent| format!(" · {agent}"))
+                ),
+                58
+            ),
+            "2;37",
+            color
+        )
+    )?;
+    let line = |output: &mut dyn Write, text: String| -> io::Result<()> {
+        writeln!(output, "│  {:<68}  │", truncate(&text, 68))
+    };
+    writeln!(output, "╭{}╮", "─".repeat(WIDTH))?;
+    line(output, scope.to_owned())?;
+    let when = match (&session.first_record_at, &session.last_record_at) {
+        (Some(first), Some(last)) => {
+            let last = match (first.get(..10), last.get(..10)) {
+                (Some(first_day), Some(last_day)) if first_day == last_day => {
+                    last.get(11..16).unwrap_or(last)
+                }
+                _ => last.get(..16).unwrap_or(last),
+            };
+            format!(
+                "{} → {last} UTC · {}",
+                first.get(..16).unwrap_or(first),
+                format_duration(session.duration_seconds)
+            )
+        }
+        _ => "time range unknown".to_owned(),
+    };
+    line(
+        output,
+        format!("{when} · {} operation(s)", format_count(session.operations)),
+    )?;
+    line(
+        output,
+        format!(
+            "{:<17}{} → {}",
+            "RAW → FILTERED",
+            format_count(session.baseline_tokens_estimated),
+            format_count(session.delivered_tokens_estimated)
+        ),
+    )?;
+    let host_pct = session.host_visible_reduction_pct.unwrap_or_default();
+    let ceiling = session.host_ceiling_tokens.map_or_else(
+        || "uncapped".to_owned(),
+        |tokens| format!("ceiling {} tok/op", format_count(tokens)),
+    );
+    let value = session
+        .raw_public_estimate
+        .as_ref()
+        .map_or_else(String::new, |estimate| {
+            format!(
+                " · {}",
+                format_money(&estimate.currency, estimate.savings_microunits)
+            )
+        });
+    line(
+        output,
+        format!(
+            "{:<17}{} → {} · {ceiling}",
+            "HOST-VISIBLE",
+            format_count(session.host_visible_baseline_tokens_estimated),
+            format_count(session.host_visible_delivered_tokens_estimated),
+        ),
+    )?;
+    line(
+        output,
+        format!(
+            "{:<17}{} avoided · {}{value}",
+            "HOST-CAPPED NET",
+            format_signed_count(session.host_visible_net_avoided_tokens_estimated),
+            format_truthful_percentage(host_pct)
+        ),
+    )?;
+    line(
+        output,
+        format!(
+            "{:<17}{} repeat(s) · {} token(s)",
+            "RERUN TAX",
+            format_count(session.rerun_tax_operations),
+            format_count(session.rerun_tax_tokens_estimated)
+        ),
+    )?;
+    for (index, route) in session.top_routes.iter().enumerate() {
+        let pct = if route.baseline_tokens_estimated == 0 {
+            0.0
+        } else {
+            route.net_avoided_tokens_estimated as f64 * 100.0
+                / route.baseline_tokens_estimated as f64
+        };
+        line(
+            output,
+            format!(
+                "{:<17}{:<26}{:>5} ops {:>7} {:>6}",
+                if index == 0 { "TOP ROUTES" } else { "" },
+                truncate(&route.route, 25),
+                format_count(route.operations),
+                format_signed_count(route.net_avoided_tokens_estimated),
+                format_truthful_percentage(pct)
+            ),
+        )?;
+    }
+    writeln!(output, "╰{}╯", "─".repeat(WIDTH))
+}
+
+/// 0.11.2: `12m`, `2h05m`, `3d04h` — a session length at a glance.
+fn format_duration(seconds: u64) -> String {
+    match seconds {
+        0..60 => format!("{seconds}s"),
+        60..3_600 => format!("{}m", seconds / 60),
+        3_600..86_400 => format!("{}h{:02}m", seconds / 3_600, seconds % 3_600 / 60),
+        _ => format!("{}d{:02}h", seconds / 86_400, seconds % 86_400 / 3_600),
+    }
 }
 
 /// Section 0 — what the reduction is worth, for the two scopes an operator compares.
@@ -307,19 +451,19 @@ fn write_operation_modes(
         style("estimated · stage-aware · top 12", "2;37", color)
     )?;
     let columns = [
-        Column::left(13),
-        Column::left(17),
-        Column::left(10),
+        // 0.11.2: every mode already starts with its family (`observability_snapshot`), so the
+        // separate FAMILY column only cost the MODE column its width (`observability_sn…`).
+        Column::left(25),
+        Column::left(11),
         Column::left(3),
-        Column::right(5),
-        Column::right(7),
+        Column::right(8),
+        Column::right(11),
     ];
     write_rule(output, '╭', '┬', '╮', &columns)?;
     write_row(
         output,
         &columns,
         &[
-            "FAMILY".into(),
             "MODE".into(),
             "STAGE".into(),
             "RAT".into(),
@@ -328,15 +472,24 @@ fn write_operation_modes(
         ],
     )?;
     write_rule(output, '├', '┼', '┤', &columns)?;
-    for mode in report.by_mode.iter().take(12) {
+    // 0.11.2: "top 12" now means the 12 largest by delivered tokens, not the first 12
+    // alphabetically.
+    let mut ranked = report.by_mode.iter().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .delivered_tokens_estimated
+            .cmp(&left.delivered_tokens_estimated)
+            .then_with(|| left.operation.as_str().cmp(right.operation.as_str()))
+            .then_with(|| left.mode.as_str().cmp(right.mode.as_str()))
+    });
+    for mode in ranked.into_iter().take(12) {
         let calls = format_count(mode.operations);
         let delivered = format_count(mode.delivered_tokens_estimated);
         write_row(
             output,
             &columns,
             &[
-                mode.operation.as_str().into(),
-                mode.mode.as_str().into(),
+                mode.mode.as_str().into(), // 0.11.2: the full mode names its family
                 short_stage(mode.stage).into(),
                 if stage_in_ratio(mode.stage) {
                     "yes"
@@ -411,9 +564,11 @@ fn write_operation_families(
         style("OPERATION FAMILIES", "1;38;5;208", color),
         style("estimated · arguments and content omitted", "2;37", color)
     )?;
+    // 0.11.2: families are short words; the route/capability pair is what got cut off
+    // (`optimized / avail…`), so the width moves to it.
     let columns = [
-        Column::left(22),
-        Column::left(18),
+        Column::left(12),
+        Column::left(28),
         Column::right(10),
         Column::right(11),
     ];
@@ -457,6 +612,27 @@ fn write_operation_families(
     write_rule(output, '╰', '┴', '╯', &columns)
 }
 
+// 0.11.2: the ceiling the host-visible figures were bounded by, per operation.
+fn host_ceiling_label(host_visible: &crate::stats::HostVisibleSavings) -> String {
+    if host_visible.complete {
+        host_visible
+            .method
+            .split(';')
+            .nth(1)
+            .and_then(|part| part.trim().split(' ').next())
+            .and_then(|tokens| tokens.parse::<u64>().ok())
+            .map_or_else(
+                || "applied".to_owned(),
+                |tokens| format!("{} tok/op", format_count(tokens)),
+            )
+    } else {
+        format!(
+            "{} uncapped",
+            format_count(host_visible.uncapped_operations)
+        )
+    }
+}
+
 /// Section 1 — locally estimated output reduction. Every figure here comes from the fork
 /// heuristic, so the provenance is stated in the header rather than a footnote.
 fn write_local_reduction(
@@ -483,7 +659,9 @@ fn write_local_reduction(
     writeln!(
         output,
         "│  {:<22}{:<22}{:<24}  │",
-        "PRODUCER INPUT", "PRODUCER OUTPUT", "PRODUCER OPERATIONS"
+        "RAW OUTPUT",
+        "FILTERED OUTPUT",
+        "OPERATIONS" // 0.11.2: plain names
     )?;
     writeln!(
         output,
@@ -495,14 +673,16 @@ fn write_local_reduction(
     writeln!(
         output,
         "│  {:<22}{:<22}{:<24}  │",
-        "MODELED CAPPED INPUT", "MODELED CAPPED OUTPUT", "UNCAPPED HOST OPS"
+        "HOST-VISIBLE RAW",
+        "HOST-VISIBLE FILTERED",
+        "HOST CEILING" // 0.11.2
     )?;
     writeln!(
         output,
         "│  {:<22}{:<22}{:<24}  │",
         format_count(host_visible.baseline_tokens_estimated),
         format_count(host_visible.delivered_tokens_estimated),
-        format_count(host_visible.uncapped_operations)
+        host_ceiling_label(host_visible)
     )?;
     writeln!(output, "│{}│", " ".repeat(WIDTH))?;
     let (avoided_line, ratio) = if !report.coverage.complete && savings.operations == 0 {
@@ -510,13 +690,26 @@ fn write_local_reduction(
             "ACCOUNTING UNKNOWN".to_owned(),
             "unknown · incomplete ledger".to_owned(),
         )
-    } else if !report.coverage.complete || !host_visible.complete {
+    } else if !host_visible.complete {
         (
-            format!("{} HOST-CAPPED NET (PARTIAL)", format_signed_count(avoided)),
+            format!(
+                "{} HOST-CAPPED NET (UPPER BOUND)",
+                format_signed_count(avoided)
+            ),
             format!(
                 "{} · {} uncapped op(s)",
                 format_truthful_percentage(host_visible.reduction_pct),
                 host_visible.uncapped_operations
+            ),
+        )
+    } else if !report.coverage.complete {
+        // 0.11.2: historical gaps are disclosed under ACCOUNTING COVERAGE; the headline says
+        // only what the measured rows show.
+        (
+            format!("{} HOST-CAPPED NET (PARTIAL)", format_signed_count(avoided)),
+            format!(
+                "{} · measured rows only",
+                format_truthful_percentage(host_visible.reduction_pct)
             ),
         )
     } else {
@@ -681,7 +874,14 @@ fn write_optimizer_bypass(
     // A free-form list rather than a table: the replacement is a command an operator
     // should be able to copy, and truncating it into a fixed column would defeat that.
     writeln!(output)?;
-    for tool in bypass.by_tool.iter().take(8) {
+    // 0.11.2: tools whose capability is unknown are historical rows written before the
+    // registry recorded it; one summary line states them instead of one repeated line each,
+    // so actionable (available / no-filter) tools lead the list.
+    let (unknown, known): (Vec<_>, Vec<_>) = bypass
+        .by_tool
+        .iter()
+        .partition(|tool| tool.replacement_capability == hzr_core::ReplacementCapability::Unknown);
+    for tool in known.into_iter().take(8) {
         writeln!(
             output,
             "   {:<10} {:>8} calls · {:>9} delivered",
@@ -713,16 +913,39 @@ fn write_optimizer_bypass(
                     color
                 )
             )?,
-            hzr_core::ReplacementCapability::Unknown => writeln!(
-                output,
-                "     {}",
-                style(
-                    "→ capability unknown; historical/redacted evidence was insufficient",
-                    "2;37",
-                    color
-                )
-            )?,
+            hzr_core::ReplacementCapability::Unknown => {} // 0.11.2: summarised below
         }
+    }
+    if !unknown.is_empty() {
+        // 0.11.2
+        let calls = unknown.iter().map(|tool| tool.executions).sum::<u64>();
+        let delivered = unknown
+            .iter()
+            .map(|tool| tool.delivered_tokens_estimated)
+            .sum::<u64>();
+        let names = unknown
+            .iter()
+            .take(4)
+            .map(|tool| tool.tool.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            output,
+            "   {:<10} {:>8} calls · {:>9} delivered  ({names}{})",
+            "unknown",
+            format_count(calls),
+            format_count(delivered),
+            if unknown.len() > 4 { ", …" } else { "" }
+        )?;
+        writeln!(
+            output,
+            "     {}",
+            style(
+                "→ capability unknown; historical/redacted evidence was insufficient",
+                "2;37",
+                color
+            )
+        )?;
     }
     if bypass.by_tool_total > 8 {
         writeln!(
@@ -1400,7 +1623,7 @@ mod tests {
                 reduction_pct: 80.0,
                 uncapped_operations: 0,
                 complete: true,
-                method: "fixture",
+                method: "fixture".into(), // 0.11.2
             },
             by_subsystem: vec![SubsystemSavings {
                 subsystem: "search",
@@ -1477,6 +1700,8 @@ mod tests {
                 detection_window_operations: 8,
             },
             zero_reduction_cause: ZeroReductionCause::NotZero,
+            last_session: None,       // 0.11.2
+            last_session_scope: None, // 0.11.2
             notes: Vec::new(),
         }
     }
@@ -1697,10 +1922,11 @@ mod tests {
             .expect("ratio line");
         assert!(ratio_line.contains("NET TOKEN CHANGE"));
         // And the inputs it derives from appear above it.
-        assert!(rendered.contains("PRODUCER INPUT"));
-        assert!(rendered.contains("PRODUCER OUTPUT"));
-        assert!(rendered.contains("MODELED CAPPED INPUT"));
-        assert!(rendered.contains("MODELED CAPPED OUTPUT"));
+        // 0.11.2: plain names for the same absolutes
+        assert!(rendered.contains("RAW OUTPUT"));
+        assert!(rendered.contains("FILTERED OUTPUT"));
+        assert!(rendered.contains("HOST-VISIBLE RAW"));
+        assert!(rendered.contains("HOST-VISIBLE FILTERED"));
     }
 
     #[test]
@@ -1994,6 +2220,56 @@ mod tests {
             "a stage column is useless unless the reader learns which stages count"
         );
         assert!(rendered.contains("1 more mode/stage groups"));
+        assert_aligned(&rendered);
+    }
+
+    /// 0.11.2: the last session leads the output, stays inside the frame, and names the
+    /// session only by a digest prefix and its routes only by privacy-safe labels.
+    #[test]
+    fn last_session_leads_the_output_and_stays_private_and_aligned() {
+        let mut report = report(LedgerSummary::default(), Vec::new());
+        report.last_session_scope = Some("project hzr (~/Programming/hzr)".into());
+        report.last_session = Some(hzr_protocol::LastSession {
+            session_hash: format!("hmac-sha256:{}", "ab12cd34".repeat(8)),
+            agent: Some("claude-code".into()),
+            first_record_at: Some("2026-09-26 16:51:17".into()),
+            last_record_at: Some("2026-09-26 17:03:53".into()),
+            duration_seconds: 756,
+            operations: 927,
+            optimized_operations: 900,
+            raw_operations: 27,
+            baseline_tokens_estimated: 520_230,
+            delivered_tokens_estimated: 269_100,
+            net_avoided_tokens_estimated: 251_130,
+            host_visible_baseline_tokens_estimated: 400_000,
+            host_visible_delivered_tokens_estimated: 260_000,
+            host_visible_net_avoided_tokens_estimated: 140_000,
+            host_visible_reduction_pct: Some(35.0),
+            host_ceiling_tokens: Some(7_500),
+            rerun_tax_operations: 12,
+            rerun_tax_tokens_estimated: 3_400,
+            top_routes: vec![hzr_protocol::LastSessionRoute {
+                route: "opt other>exec:run/int".into(),
+                operations: 781,
+                baseline_tokens_estimated: 300_000,
+                delivered_tokens_estimated: 136_000,
+                net_avoided_tokens_estimated: 164_000,
+            }],
+            raw_public_estimate: None,
+        });
+
+        let rendered = render(&report);
+
+        assert!(rendered.find("LAST SESSION") < rendered.find("ECONOMICS"));
+        assert!(rendered.contains("session ab12cd34"));
+        assert!(
+            !rendered.contains("hmac-sha256:"),
+            "only a digest prefix is shown"
+        );
+        assert!(rendered.contains("16:51 → 17:03 UTC · 12m"));
+        assert!(rendered.contains("140.0K avoided · 35.0%"));
+        assert!(rendered.contains("12 repeat(s)"));
+        assert!(rendered.contains("opt other>exec:run/int"));
         assert_aligned(&rendered);
     }
 

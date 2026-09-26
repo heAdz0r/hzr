@@ -19,6 +19,7 @@
 //!   backend can never look like a successful write.
 
 mod arguments;
+mod summary; // 0.11.2
 #[cfg(test)]
 mod tests;
 mod tools;
@@ -85,7 +86,13 @@ pub fn lifecycle_metadata() -> Value {
 #[derive(Default)]
 struct SessionState {
     initialized: bool,
+    /// 0.11.2: the negotiated revision defines `structuredContent` (2025-06-18+), so the
+    /// text block may be a compact view instead of a second copy of the payload.
+    structured_content: bool,
 }
+
+/// 0.11.2: first MCP revision whose tool results carry `structuredContent`.
+const STRUCTURED_CONTENT_MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// Whether the directory the client launched this server from can own a project memory
 /// namespace.
@@ -305,6 +312,7 @@ pub async fn serve(
                             let sender = completed_tx.clone();
                             let progress_sender = progress_tx.clone();
                             let completed_key = key.clone();
+                            let structured = session.structured_content; // 0.11.2
                             let handle = tokio::spawn(async move {
                                 let progress_token = request
                                     .pointer("/params/_meta/progressToken")
@@ -313,7 +321,7 @@ pub async fn serve(
                                     .pointer("/params/name")
                                     .and_then(Value::as_str)
                                     .is_some_and(|name| matches!(name, "hzr_search" | "hzr_context_plan"));
-                                let call = call_tool(&task_config, &task_config_path, &task_binding, id, &request);
+                                let call = call_tool(&task_config, &task_config_path, &task_binding, id, &request, structured); // 0.11.2
                                 tokio::pin!(call);
                                 let response = if progress_enabled && progress_token.is_some() {
                                     let mut ticks = tokio::time::interval_at(
@@ -482,6 +490,10 @@ async fn handle_line(
             match initialize_result(&request, binding) {
                 Ok(result) => {
                     session.initialized = true;
+                    // 0.11.2: ISO dates order lexically, so this is "negotiated >= 2025-06-18".
+                    session.structured_content = result["protocolVersion"]
+                        .as_str()
+                        .is_some_and(|version| version >= STRUCTURED_CONTENT_MCP_PROTOCOL_VERSION);
                     Some(success(id, result))
                 }
                 Err(error) => Some(error_response(id, INVALID_PARAMS, &error.to_string())),
@@ -498,6 +510,7 @@ async fn handle_line(
                 binding,
                 id,
                 &request,
+                session.structured_content, // 0.11.2
             )
             .await,
         ),
@@ -645,6 +658,7 @@ async fn call_tool(
     binding: &WorkspaceBinding,
     id: Value,
     request: &Value,
+    structured_content: bool, // 0.11.2
 ) -> Value {
     let Some(params) = request.get("params").and_then(Value::as_object) else {
         return error_response(id, INVALID_PARAMS, "tools/call requires object params");
@@ -744,7 +758,7 @@ async fn call_tool(
                     }
                 }
             }
-            success(id, tool_success(&value))
+            success(id, tool_success(name, &value, structured_content)) // 0.11.2
         }
         Err(error)
             if matches!(
@@ -1695,9 +1709,17 @@ pub fn registration_snippet(
     }
 }
 
-fn tool_success(value: &Value) -> Value {
+/// 0.11.2: a client on a revision with `structuredContent` gets the payload once, plus a
+/// compact text view; an older client gets the minified payload as its only text block.
+fn tool_success(name: &str, value: &Value, structured_content: bool) -> Value {
+    if !structured_content {
+        return json!({
+            "content": [{"type": "text", "text": value.to_string()}],
+            "isError": false,
+        });
+    }
     json!({
-        "content": [{"type": "text", "text": value.to_string()}],
+        "content": [{"type": "text", "text": summary::compact_text(name, value)}],
         "structuredContent": value,
         "isError": false,
     })

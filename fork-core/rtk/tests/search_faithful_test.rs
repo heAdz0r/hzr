@@ -346,3 +346,27 @@ fn rg_surfaces_regex_error_not_silent_zero() {
         "an rg regex parse error must surface as exit 2, not a silent 0/1"
     );
 }
+
+// 0.11.2: an agent harness runs commands with stdin on /dev/null. That is not piped
+// input — rg searches the working directory and must keep every file name.
+#[test]
+fn rg_without_path_and_null_stdin_keeps_file_names() {
+    if !rg_available() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir"); // 0.11.2
+    std::fs::write(dir.path().join("main.rs"), "fn main() {\n    println!(\"a\");\n}\n").expect("write"); // 0.11.2
+    std::fs::write(dir.path().join("lib.rs"), "println!(\"b\");\n").expect("write"); // 0.11.2
+    let out = rtk() // 0.11.2
+        .args(["rg", "-n", "println"])
+        .current_dir(dir.path())
+        .stdin(Stdio::null())
+        .output()
+        .expect("rtk rg");
+    let stdout = String::from_utf8_lossy(&out.stdout); // 0.11.2
+    assert_eq!(out.status.code(), Some(0), "{stdout}"); // 0.11.2
+    assert!(
+        stdout.contains("main.rs") && stdout.contains("lib.rs"),
+        "file names dropped with /dev/null stdin:\n{stdout}"
+    ); // 0.11.2
+}

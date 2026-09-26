@@ -115,3 +115,69 @@ export function filterProjects(
     return matchesState && matchesQuery;
   });
 }
+
+// 0.11.2: say what failed and what to run, instead of echoing a bare fetch error.
+export interface LoadFailure {
+  title: string;
+  detail: string;
+  command: string;
+}
+
+export function describeLoadFailure(message: string): LoadFailure {
+  const status = /HTTP (\d{3})/.exec(message)?.[1];
+  if (status === "404") {
+    return {
+      title: "This daemon does not serve the dashboard API.",
+      detail: `The request returned HTTP 404. The daemon may be older than this UI; restart it after upgrading HZR.`,
+      command: "hzr daemon service status",
+    };
+  }
+  if (status && status.startsWith("5")) {
+    return {
+      title: "The HZR daemon answered with an error.",
+      detail: `The dashboard request returned HTTP ${status}. The daemon may be restarting or not running behind this address.`,
+      command: "hzr doctor --workspace .",
+    };
+  }
+  if (status) {
+    return {
+      title: "The dashboard request was rejected.",
+      detail: `The request returned HTTP ${status}.`,
+      command: "hzr doctor --workspace .",
+    };
+  }
+  if (/fetch|network|load failed/i.test(message)) {
+    return {
+      title: "The HZR daemon is not reachable.",
+      detail: "No response from the local daemon. It may be stopped, or this page was opened from a different address.",
+      command: "hzr daemon service status",
+    };
+  }
+  if (/json|unexpected token/i.test(message)) {
+    return {
+      title: "The daemon sent a response this UI cannot read.",
+      detail: "The snapshot was not valid JSON. The daemon and UI versions may not match.",
+      command: "hzr doctor --workspace .",
+    };
+  }
+  return {
+    title: "HZR did not return a dashboard snapshot.",
+    detail: message || "The request failed without a reason.",
+    command: "hzr doctor --workspace .",
+  };
+}
+
+// 0.11.2: money for headline cards — two decimals, currency symbol when the code is known.
+export function formatMoney(currency: string, microunits: number): string {
+  const value = microunits / 1_000_000;
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: Math.abs(value) > 0 && Math.abs(value) < 0.01 ? 4 : 2,
+    }).format(value);
+  } catch {
+    return formatEconomicAmount(currency, microunits);
+  }
+}

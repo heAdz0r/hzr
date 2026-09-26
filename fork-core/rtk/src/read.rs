@@ -114,8 +114,17 @@ fn tail_window_seek(file: &mut std::fs::File, n: usize) -> std::io::Result<(Vec<
 /// one-line stderr note when the window actually cut something, so stdout stays
 /// identical to the native command. (0.11.0, US-005; Q1 option b)
 pub fn run_window(file: &Path, window: Window) -> Result<()> {
-    use std::io::Read as _;
-    let timer = tracking::TimedExecution::start();
+    let timer = tracking::TimedExecution::start(); // 0.11.2
+    let result = run_window_bytes(&timer, file, window); // 0.11.2
+    if let Err(error) = &result {
+        track_failed_read(&timer, "rtk read (window failed)", error, None); // 0.11.2
+    }
+    result // 0.11.2
+}
+
+// 0.11.2: the former body of `run_window`, which now owns the timer
+fn run_window_bytes(timer: &tracking::TimedExecution, file: &Path, window: Window) -> Result<()> {
+    use std::io::Read as _; // 0.11.2: timer passed in by run_window
     let (bytes, cut) = if file == Path::new("-") {
         let mut stdin = std::io::stdin().lock();
         match window {
@@ -235,8 +244,62 @@ fn shell_quote_path(path: &Path) -> String {
 /// than the round trip a digest invites. (0.10.0)
 const SPECIAL_DIGEST_MIN_BYTES: usize = 16 * 1024;
 
+/// 0.11.2: a read that failed still closes its accounting context — zero savings on the
+/// error text, the convention runners follow for a failed command.
+fn track_failed_read(
+    timer: &tracking::TimedExecution,
+    rtk_cmd: &str,
+    error: &anyhow::Error,
+    attribution: Option<tracking::OperationAttribution>,
+) {
+    let message = format!("Error: {error:#}\n"); // 0.11.2
+    match attribution {
+        Some(attribution) => {
+            timer.track_attributed("read <path omitted>", rtk_cmd, &message, &message, attribution); // 0.11.2
+        }
+        None => {
+            timer.track("read <path omitted>", rtk_cmd, &message, &message); // 0.11.2
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // changed: file read params bundle naturally together
 pub fn run(
+    file: &Path,
+    level: FilterLevel,
+    from: Option<usize>,
+    to: Option<usize>,
+    max_lines: Option<usize>,
+    default_output_budget: bool,
+    tail_lines: Option<usize>,
+    line_numbers: bool,
+    dedup: bool,
+    verbose: u8,
+) -> Result<()> {
+    let timer = tracking::TimedExecution::start(); // 0.11.2: shared with the failure receipt
+    let result = run_file( // 0.11.2
+        &timer,
+        file,
+        level,
+        from,
+        to,
+        max_lines,
+        default_output_budget,
+        tail_lines,
+        line_numbers,
+        dedup,
+        verbose,
+    ); // 0.11.2
+    if let Err(error) = &result {
+        let attribution = read_attribution(level, from, to, max_lines, tail_lines, None); // 0.11.2
+        track_failed_read(&timer, "rtk read (failed)", error, Some(attribution)); // 0.11.2
+    }
+    result // 0.11.2
+}
+
+#[allow(clippy::too_many_arguments)] // changed: file read params bundle naturally together
+fn run_file( // 0.11.2: the former body of `run`, which now owns the timer
+    timer: &tracking::TimedExecution, // 0.11.2
     file: &Path,
     level: FilterLevel,
     from: Option<usize>,
@@ -266,8 +329,6 @@ pub fn run(
         && !preserve_special_digest
         && !fits_default_window)
         .then_some(DEFAULT_READ_MAX_LINES));
-    let run_start = std::time::Instant::now();
-    let timer = tracking::TimedExecution::start();
     let attribution = read_attribution(
         level,
         from,
@@ -312,22 +373,19 @@ pub fn run(
             if !output.ends_with('\n') {
                 println!();
             }
-            let input_tokens = std::fs::metadata(file)
-                .ok()
-                .map(|meta| ((meta.len() as usize).saturating_add(3)) / 4)
-                .unwrap_or_else(|| tracking::estimate_tokens(&output));
-            let output_tokens = tracking::estimate_tokens(&output);
-            let elapsed_ms = run_start.elapsed().as_millis() as u64;
-            if let Ok(tracker) = tracking::Tracker::new() {
-                let _ = tracker.record_attributed(
-                    "read <path omitted>",
-                    "rtk read (cache)",
-                    input_tokens,
-                    output_tokens,
-                    elapsed_ms,
-                    attribution,
-                );
-            }
+            // 0.11.2: the cache serves unbounded reads only, so the baseline is the whole
+            // file; it goes through the timer so receipt mode reaches the HZR ledger instead
+            // of the engine's own history database.
+            let baseline = read_source::read_file_bytes(file, None, None)
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_else(|_| output.clone()); // 0.11.2
+            timer.track_attributed(
+                "read <path omitted>",
+                "rtk read (cache)",
+                &baseline,
+                &output,
+                attribution,
+            ); // 0.11.2
             return Ok(());
         }
     }
@@ -617,13 +675,15 @@ pub fn run(
     }
     print!("{delivered}");
     // Numbered reads must compare against the same presentation requested by the caller.
+    // 0.11.2: the baseline is what the equivalent raw command prints — a `tail -n N` prints N
+    // lines, so crediting the whole file as avoided claimed 99% on every filtered tail read.
     let baseline = if line_numbers {
         std::borrow::Cow::Owned(read_render::format_with_line_numbers_from(
-            &content,
+            &bounded_content,
             from.unwrap_or(1),
         ))
     } else {
-        std::borrow::Cow::Borrowed(content.as_str())
+        std::borrow::Cow::Borrowed(bounded_content.as_ref())
     };
     timer.track_attributed(
         "read <path omitted>",
@@ -636,6 +696,23 @@ pub fn run(
 }
 
 pub fn run_batch(
+    files: &[PathBuf],
+    max_tokens: usize,
+    per_file_tokens: Option<usize>,
+    verbose: u8,
+) -> Result<()> {
+    let timer = tracking::TimedExecution::start(); // 0.11.2
+    let result = run_batch_files(&timer, files, max_tokens, per_file_tokens, verbose); // 0.11.2
+    if let Err(error) = &result {
+        let attribution =
+            read_attribution(FilterLevel::None, None, None, Some(max_tokens), None, None); // 0.11.2
+        track_failed_read(&timer, "rtk read --batch (failed)", error, Some(attribution)); // 0.11.2
+    }
+    result // 0.11.2
+}
+
+fn run_batch_files( // 0.11.2: the former body of `run_batch`
+    timer: &tracking::TimedExecution, // 0.11.2
     files: &[PathBuf],
     max_tokens: usize,
     per_file_tokens: Option<usize>,
@@ -655,8 +732,8 @@ pub fn run_batch(
         anyhow::bail!("--per-file-tokens must be at least {MIN_BATCH_FILE_TOKENS}");
     }
 
-    let run_start = std::time::Instant::now();
     let mut output = String::new();
+    let mut baseline = String::new(); // 0.11.2: what `cat` of every file prints
     let mut source_bytes = 0u64;
     let default_per_file = max_tokens.div_ceil(files.len());
     let requested_per_file = per_file_tokens.unwrap_or(default_per_file);
@@ -664,6 +741,7 @@ pub fn run_batch(
     for (index, file) in files.iter().enumerate() {
         let bytes = read_source::read_file_bytes(file, None, None)?;
         source_bytes = source_bytes.saturating_add(bytes.len() as u64);
+        baseline.push_str(&String::from_utf8_lossy(&bytes)); // 0.11.2
         let used = tracking::estimate_tokens(&output);
         let remaining_total = max_tokens.saturating_sub(used);
         let remaining_files = files.len().saturating_sub(index + 1);
@@ -681,24 +759,22 @@ pub fn run_batch(
         );
     }
     print!("{output}");
-    if let Ok(tracker) = tracking::Tracker::new() {
-        let attribution = read_attribution(
-            FilterLevel::None,
-            None,
-            None,
-            Some(max_tokens),
-            None,
-            Some(source_bytes),
-        );
-        let _ = tracker.record_attributed(
-            "read batch <paths omitted>",
-            "rtk read --batch",
-            source_bytes.saturating_add(3).saturating_div(4) as usize,
-            tracking::estimate_tokens(&output),
-            run_start.elapsed().as_millis() as u64,
-            attribution,
-        );
-    }
+    let attribution = read_attribution(
+        FilterLevel::None,
+        None,
+        None,
+        Some(max_tokens),
+        None,
+        Some(source_bytes),
+    );
+    // 0.11.2: through the timer, so receipt mode reaches the HZR ledger
+    timer.track_attributed(
+        "read batch <paths omitted>",
+        "rtk read --batch",
+        &baseline,
+        &output,
+        attribution,
+    );
     Ok(())
 }
 

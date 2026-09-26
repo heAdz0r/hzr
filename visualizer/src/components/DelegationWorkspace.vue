@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
+import { formatCount, formatDuration, relativeTime } from "../utils"; // 0.11.2
 
 type DelegatedRun = {
   id: string; provider: string; model: string; status: string;
@@ -16,7 +17,13 @@ let request: AbortController | undefined;
 let active = false;
 const providerLabel = (provider: string) =>
   ({ "opencode-go": "OpenCode GO", openrouter: "OpenRouter", deepseek: "DeepSeek" })[provider] ?? provider;
-const count = (value: number | null) => value === null ? "—" : value.toLocaleString();
+// 0.11.2: the same en-US grouping as every other tab, not the browser locale.
+const count = (value: number | null) => value === null ? "—" : formatCount(value);
+const statusTone = (status: string) =>
+  status === "running" || status === "starting" ? "active"
+    : status === "completed" ? "done"
+      : status === "cancelled" ? "neutral" : "problem"; // 0.11.2
+const exactTime = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", hour12: false }); // 0.11.2
 const statusLabel = (status: string) => ({
   starting: "Starting", running: "Working", completed: "Worker finished",
   failed: "Failed", interrupted: "No heartbeat", timed_out: "Timed out", cancelled: "Cancelled",
@@ -55,8 +62,8 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer); request?.abort(); }
       <b aria-hidden="true">→</b>
       <div><span>03 · EXECUTOR</span><strong>Configured worker</strong><small>Exact provider and model below</small></div>
     </div>
-    <p v-if="error" role="status">{{ error }}</p>
-    <p v-if="!loaded && !error" role="status">Loading delegation activity…</p>
+    <p v-if="error" class="delegation-error" role="status">{{ error }}</p><!-- 0.11.2 -->
+    <p v-if="!loaded && !error" class="delegation-loading" role="status">Loading delegation activity…</p>
     <div v-if="loaded && !runs.length" class="delegation-empty">
       <h3>No delegated tasks observed yet</h3>
       <p>Choose your worker with <code>hzr settings</code>, then start a bounded task with <code>hzr delegate --file task.md</code>.</p>
@@ -65,9 +72,10 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer); request?.abort(); }
       <li v-for="run in runs" :key="run.id" :class="['delegation-run', { working: run.status === 'running' }]">
         <div class="run-heading">
           <div><span class="eyebrow">{{ providerLabel(run.provider) }} · Task {{ run.id.slice(7, 15) }}</span><h3>{{ run.model }}</h3></div>
-          <span class="run-status">{{ statusLabel(run.status) }}</span>
+          <span class="run-status" :class="`run-status-${statusTone(run.status)}`">{{ statusLabel(run.status) }}</span>
         </div>
-        <p class="run-activity">{{ run.current_tool ?? (run.status === 'running' ? 'Model is working' : 'No active tool') }}</p>
+        <!-- 0.11.2: only live runs have a current activity worth a line -->
+        <p v-if="run.status === 'running' || run.status === 'starting' || run.current_tool" class="run-activity">{{ run.current_tool ?? "Model is working" }}</p>
         <dl>
           <div><dt>Turns</dt><dd>{{ count(run.turns) }}</dd></div>
           <div><dt>Tool calls</dt><dd>{{ count(run.tool_calls) }}</dd></div>
@@ -76,8 +84,8 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer); request?.abort(); }
           <div><dt>Cache read</dt><dd>{{ count(run.actual_cache_read_tokens) }}</dd></div>
         </dl>
         <footer>
-          <time :datetime="new Date(run.started_at_ms).toISOString()">{{ new Date(run.started_at_ms).toLocaleString() }}</time>
-          <span>{{ Math.max(0, Math.round((run.updated_at_ms - run.started_at_ms) / 1000)) }} s · Parent acceptance not recorded</span>
+          <time :datetime="new Date(run.started_at_ms).toISOString()" :title="exactTime.format(run.started_at_ms)">Started {{ relativeTime(run.started_at_ms) }}</time><!-- 0.11.2 -->
+          <span>Ran {{ formatDuration(Math.max(0, run.updated_at_ms - run.started_at_ms)) }} · parent acceptance not recorded</span>
         </footer>
       </li>
     </ol>
@@ -101,13 +109,20 @@ onBeforeUnmount(() => { active = false; clearTimeout(timer); request?.abort(); }
 .delegation-run.working { border-color: #e9a06b80; }
 .run-heading, .delegation-run footer { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; align-items: center; }
 .run-status { font-size: .8rem; border: 1px solid #ffffff30; border-radius: 2rem; padding: .4rem .8rem; }
-.run-activity { font-family: monospace; color: #e9a06b; }
-.delegation-run dl { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; margin: 1.5rem 0; }
+/* 0.11.2: status reads at a glance — failures no longer look like successes */
+.run-status-done { color: var(--success); border-color: rgba(61, 220, 151, .35); }
+.run-status-active { color: var(--ember-300); border-color: rgba(255, 177, 90, .45); }
+.run-status-problem { color: var(--error); border-color: rgba(255, 98, 109, .45); }
+.delegation-error { color: var(--warning); margin: 0; }
+.delegation-loading { color: var(--text-secondary); margin: 0; }
+.run-activity { font-family: monospace; color: #e9a06b; margin: .5rem 0 0; }
+.delegation-run dl { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 1rem; margin: 1.25rem 0; }
 .delegation-run dt { font-size: .75rem; opacity: .7; }
-.delegation-run dd { margin: .4rem 0 0; font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+.delegation-run dd { margin: .4rem 0 0; font-size: 1.25rem; font-variant-numeric: tabular-nums; } /* 0.11.2 */
 .delegation-run footer, .delegation-note { font-size: .75rem; opacity: .7; }
 @media (max-width: 640px) {
-  .delegation-flow { grid-template-columns: 1fr; }
+  .delegation-flow { grid-template-columns: 1fr; padding: 1rem; } /* 0.11.2 */
+  .delegation-run, .delegation-empty { padding: 1rem; } /* 0.11.2 */
   .delegation-flow b { transform: rotate(90deg); justify-self: center; }
   .delegation-run dl { grid-template-columns: repeat(2, 1fr); }
 }

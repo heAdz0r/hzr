@@ -115,3 +115,24 @@ describe("project filtering", () => {
     expect(filterProjects(projects, "hzr", "warming")).toHaveLength(0);
   });
 });
+
+// 0.11.2: load failures name the cause and a recovery command.
+import { describeLoadFailure } from "./utils";
+
+test("load failures say what failed and what to run", () => {
+  expect(describeLoadFailure("Failed to fetch").title).toMatch(/not reachable/);
+  expect(describeLoadFailure("Failed to fetch").command).toBe("hzr daemon service status");
+  expect(describeLoadFailure("Dashboard returned HTTP 502").detail).toContain("HTTP 502");
+  expect(describeLoadFailure("Dashboard returned HTTP 404").title).toMatch(/does not serve/);
+  expect(describeLoadFailure("Unexpected token < in JSON").title).toMatch(/cannot read/);
+  expect(describeLoadFailure("").detail).toBe("The request failed without a reason.");
+});
+
+import { formatMoney } from "./utils";
+
+test("headline money is readable and never rounds a small saving to zero", () => {
+  expect(formatMoney("USD", 1_255_650)).toBe("$1.26");
+  expect(formatMoney("USD", 4_200)).toBe("$0.0042");
+  expect(formatMoney("USD", 0)).toBe("$0.00");
+  expect(formatMoney("not-a-code", 1_000_000)).toBe("not-a-code 1.000000");
+});

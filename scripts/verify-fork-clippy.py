@@ -17,10 +17,10 @@ from pathlib import Path
 
 
 EXPECTED_COUNT = 137
-# Recomputed for 0.11.0 (upstream RTK v0.50.0 sync, fork-core 0.50.0-fork.1): the ported
-# changes moved existing diagnostics' line numbers. A (code, message, file) multiset
-# comparison against 0.10.1 shows no warning added or removed; the new code is clean.
-EXPECTED_SHA256 = "4487753a213bfbe91919f06cf68fce495ec8820a7728b58d226e9973908bc0bf"
+# Recomputed for 0.11.2: the ls/read/search/go_cmd accounting fixes moved existing
+# diagnostics' line numbers. A (code, message, file) multiset comparison against 0.11.1
+# shows no warning added or removed; the new code is clean.
+EXPECTED_SHA256 = "00f41f1cf61e48c654f3a46ce4c7ab1d33af9bc3f9502adccd05f3bc80ad31d5"
 
 
 def main() -> int:

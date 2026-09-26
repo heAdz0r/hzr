@@ -65,11 +65,16 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
         .collect();
     if paths.len() > 1
         || short_flags.contains(['R', 'd'])
+        || short_flags.contains(['C', 'x', 'm']) // 0.11.2: column/comma layouts are native's
         || flags.contains(&"--recursive")
         || flags.contains(&"--directory")
     {
         return run_native(args);
     }
+    // 0.11.2: `-l` asks for the long columns; they are kept, only the padding is squeezed.
+    let long = short_flags.contains('l')
+        || flags.contains(&"--format=long")
+        || flags.contains(&"--format=verbose"); // 0.11.2
 
     // Build ls -la + any extra flags the user passed (e.g. -R)
     // Strip -l, -a, -h (we handle all of these ourselves)
@@ -91,7 +96,9 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
             let stripped = flag.trim_start_matches('-');
             let extra: String = stripped
                 .chars()
-                .filter(|c| *c != 'l' && *c != 'a' && *c != 'h')
+                // 0.11.2: -lh keeps human sizes; -1 (one per line) is dropped — it overrode
+                // the injected -l and every `ls -1` came back "(empty)".
+                .filter(|c| *c != 'l' && *c != 'a' && *c != '1' && (*c != 'h' || long))
                 .collect();
             if !extra.is_empty() {
                 cmd.arg(format!("-{}", extra));
@@ -118,7 +125,13 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
 
     let raw = String::from_utf8_lossy(&output.stdout).to_string();
     let target = paths.first().copied().unwrap_or(".");
-    let filtered = compact_ls(&raw, show_all, show_dot, std::io::stdout().is_terminal(), target);
+    let filtered = if long {
+        compact_long(&raw, show_all, show_dot, target) // 0.11.2
+    } else {
+        compact_ls(&raw, show_all, show_dot, std::io::stdout().is_terminal(), target) // 0.11.2
+    };
+    // 0.11.2: the baseline is what the caller's own `ls` prints, not rtk's internal `ls -la`.
+    let baseline = native_view(&raw, long, show_all, show_dot);
 
     if verbose > 0 {
         eprintln!(
@@ -138,12 +151,15 @@ pub fn run(args: &[String], verbose: u8) -> Result<()> {
     } else {
         paths.join(" ")
     };
-    print!("{}", filtered);
+    // 0.11.2: never more than the caller's own `ls` prints. A small directory's compact
+    // form (sizes, noise footer) is larger than its plain names, so the names win there.
+    let shown = crate::guard::never_worse_content(&baseline, &filtered);
+    print!("{}", shown); // 0.11.2
     timer.track(
         &format!("ls -la {}", target_display),
         "rtk ls",
-        &raw,
-        &filtered,
+        &baseline, // 0.11.2
+        shown,     // 0.11.2
     );
 
     Ok(())
@@ -174,6 +190,105 @@ fn run_native(args: &[String]) -> Result<()> {
         std::process::exit(code);
     }
     Ok(())
+}
+
+/// 0.11.2: the eight metadata columns of an `ls -l` line and the name as printed.
+fn split_long_line(line: &str) -> Option<(Vec<&str>, &str)> {
+    let mut columns = Vec::with_capacity(8); // 0.11.2
+    let mut rest = line; // 0.11.2
+    for _ in 0..8 {
+        let trimmed = rest.trim_start(); // 0.11.2
+        let end = trimmed.find(char::is_whitespace)?; // 0.11.2
+        columns.push(&trimmed[..end]); // 0.11.2
+        rest = &trimmed[end..]; // 0.11.2
+    }
+    let name = rest.trim_start(); // 0.11.2
+    (!name.is_empty()).then_some((columns, name)) // 0.11.2
+}
+
+/// 0.11.2: the listing the caller's own command prints, rendered from rtk's `ls -la`:
+/// the long lines for `-l`, otherwise one name per line (ls's captured-output form).
+fn native_view(raw: &str, long: bool, show_all: bool, show_dot: bool) -> String {
+    let mut view = String::new(); // 0.11.2
+    for line in raw.lines() {
+        if line.starts_with("total ") {
+            if long {
+                view.push_str(line); // 0.11.2
+                view.push('\n'); // 0.11.2
+            }
+            continue;
+        }
+        let Some((columns, name)) = split_long_line(line) else {
+            continue; // 0.11.2
+        };
+        let listed = if show_all {
+            true // 0.11.2: -a
+        } else if show_dot {
+            name != "." && name != ".." // 0.11.2: -A
+        } else {
+            !name.starts_with('.') // 0.11.2
+        };
+        if !listed {
+            continue;
+        }
+        if long {
+            view.push_str(line); // 0.11.2
+        } else if columns[0].starts_with('l') {
+            view.push_str(name.split(" -> ").next().unwrap_or(name)); // 0.11.2
+        } else {
+            view.push_str(name); // 0.11.2
+        }
+        view.push('\n'); // 0.11.2
+    }
+    view // 0.11.2
+}
+
+/// 0.11.2: `ls -l` keeps every column the caller asked for, in ls's own order (so `-t`
+/// and `-S` still sort); only the padding is squeezed and noise directories are named.
+fn compact_long(raw: &str, show_all: bool, show_dot: bool, target: &str) -> String {
+    let ignore_dirs = crate::config::Config::merged_ignore_dirs(NOISE_DIRS); // 0.11.2
+    let mut out = String::new(); // 0.11.2
+    let mut hidden_names: Vec<&str> = Vec::new(); // 0.11.2
+    let (mut listed, mut total) = (0usize, 0usize); // 0.11.2
+    for line in raw.lines() {
+        let Some((columns, name)) = split_long_line(line) else {
+            continue; // 0.11.2: the `total` line
+        };
+        if name == "." || name == ".." || (!show_dot && name.starts_with('.')) {
+            continue; // 0.11.2
+        }
+        if !show_all && ignore_dirs.iter().any(|dir| dir == name) {
+            hidden_names.push(name); // 0.11.2
+            continue;
+        }
+        total += 1; // 0.11.2
+        if listed == LS_MAX_ENTRIES {
+            continue;
+        }
+        out.push_str(&columns.join(" ")); // 0.11.2
+        out.push(' '); // 0.11.2
+        out.push_str(name); // 0.11.2
+        out.push('\n'); // 0.11.2
+        listed += 1; // 0.11.2
+    }
+    if total == 0 && hidden_names.is_empty() {
+        return "(empty)\n".to_string(); // 0.11.2
+    }
+    if listed < total {
+        out.push_str(&format!(
+            "+{} more; full listing: HZR_RAW_FIDELITY=1 HZR_RAW_FIDELITY_REASON=complete_log hzr exec run 'ls -la {}'\n",
+            total - listed,
+            target.replace('\'', "'\\''")
+        )); // 0.11.2
+    }
+    if !hidden_names.is_empty() {
+        out.push_str(&format!(
+            "({} noise hidden: {}; -a shows)\n",
+            hidden_names.len(),
+            hidden_names.join(", ")
+        )); // 0.11.2
+    }
+    out // 0.11.2
 }
 
 /// Entries listed before the rest goes behind the recovery line. (0.11.0, US-014)
@@ -331,6 +446,52 @@ drwxr-xr-x  3 u g   96 Jan  1 00:00 .github\n\
 drwxr-xr-x  3 u g   96 Jan  1 00:00 node_modules\n\
 drwxr-xr-x  3 u g   96 Jan  1 00:00 src\n\
 -rw-r--r--  1 u g  100 Jan  1 00:00 main.rs\n";
+
+    // 0.11.2: the recorded baseline is what the caller's own `ls` prints.
+    #[cfg(unix)]
+    fn real_ls(args: &[&str], dir: &std::path::Path) -> String {
+        let output = Command::new("ls").args(args).arg(dir).output().expect("ls"); // 0.11.2
+        String::from_utf8(output.stdout).expect("utf-8 listing") // 0.11.2
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn baseline_is_what_the_callers_ls_prints() {
+        let dir = tempfile::tempdir().expect("tempdir"); // 0.11.2
+        std::fs::write(dir.path().join("a.txt"), "x").expect("file"); // 0.11.2
+        std::fs::write(dir.path().join(".env"), "x").expect("dotfile"); // 0.11.2
+        std::fs::write(dir.path().join("my file.rs"), "x").expect("spaced"); // 0.11.2
+        std::fs::create_dir(dir.path().join("src")).expect("dir"); // 0.11.2
+        std::os::unix::fs::symlink("a.txt", dir.path().join("link")).expect("symlink"); // 0.11.2
+        let internal = real_ls(&["-la"], dir.path()); // 0.11.2
+        assert_eq!(native_view(&internal, false, false, false), real_ls(&[], dir.path())); // 0.11.2
+        assert_eq!(native_view(&internal, false, false, true), real_ls(&["-A"], dir.path())); // 0.11.2
+        assert_eq!(native_view(&internal, false, true, true), real_ls(&["-a"], dir.path())); // 0.11.2
+        let entries = |listing: &str| -> Vec<String> {
+            listing
+                .lines()
+                .filter(|l| !l.starts_with("total "))
+                .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect()
+        }; // 0.11.2: column padding depends on the widest row, `..` included
+        assert_eq!(
+            entries(&native_view(&internal, true, false, false)),
+            entries(&real_ls(&["-l"], dir.path()))
+        ); // 0.11.2
+        assert!(internal.len() > 3 * real_ls(&[], dir.path()).len(), "fixture shows the inflation"); // 0.11.2
+    }
+
+    #[test]
+    fn long_format_keeps_permissions_owner_size_and_dates() {
+        let out = compact_long(LS_WITH_DOTS, false, false, "."); // 0.11.2
+        assert!(out.contains("-rw-r--r-- 1 u g 100 Jan 1 00:00 main.rs"), "{out}"); // 0.11.2
+        assert!(out.contains("drwxr-xr-x 3 u g 96 Jan 1 00:00 src"), "{out}"); // 0.11.2
+        assert!(!out.contains(".env") && !out.contains("total"), "{out}"); // 0.11.2
+        assert!(out.contains("(1 noise hidden: node_modules; -a shows)"), "{out}"); // 0.11.2
+        let all = compact_long(LS_WITH_DOTS, true, true, "."); // 0.11.2
+        assert!(all.contains("-rw-r--r-- 1 u g 12 Jan 1 00:00 .env"), "{all}"); // 0.11.2
+        assert!(all.contains("node_modules") && !all.contains("noise hidden"), "{all}"); // 0.11.2
+    }
 
     #[test]
     fn plain_ls_hides_dot_entries_and_names_hidden_noise() {

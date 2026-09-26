@@ -349,6 +349,14 @@ pub fn execute_search(
     };
 
     if !output.status.success() {
+        // 0.11.2: name the failure once; the caller falls through to exact search
+        let stderr = String::from_utf8_lossy(&output.stderr); // 0.11.2
+        let reason = stderr.lines().find(|line| !line.trim().is_empty()).unwrap_or("no message"); // 0.11.2
+        crate::rtk_info!(
+            "rgai: semantic search unavailable (grepai exited {}: {}); using exact search",
+            output.status.code().unwrap_or(-1),
+            reason.trim()
+        ); // 0.11.2
         return Ok(None);
     }
 

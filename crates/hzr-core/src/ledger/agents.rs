@@ -835,13 +835,13 @@ impl Ledger {
         // Edges are keyed by task_key on both ends so an unresolved reference
         // still has a stable identity to render and to resolve later.
         for edge in &envelope.edges {
-            let from_key = identity.task_key("", &edge.from_source_task_id);
-            let from_key = resolve_edge_endpoint(
-                &transaction,
-                identity,
-                &edge.from_source_task_id,
-                &from_key,
-            )?;
+            // 0.11.2: the helper resolves a reference against its own page only, so a
+            // dependency on a task from an earlier page arrives as unresolved. The
+            // projection knows every task seen so far and is the better judge.
+            let known_from = find_task_key(&transaction, identity, &edge.from_source_task_id)?; // 0.11.2
+            let resolved = edge.resolved || known_from.is_some(); // 0.11.2
+            let from_key =
+                known_from.unwrap_or_else(|| identity.task_key("", &edge.from_source_task_id)); // 0.11.2
             let to_key = resolve_edge_endpoint(
                 &transaction,
                 identity,
@@ -862,13 +862,38 @@ impl Ledger {
                         from_key,
                         to_key,
                         "depends_on",
-                        i64::from(edge.resolved),
+                        i64::from(resolved), // 0.11.2
                         agent_task_label(&from_key),
                         observed_at_ms
                     ],
                 )
                 .map_err(LedgerError::Database)?;
             applied.edges_recorded += 1;
+        }
+
+        // 0.11.2: a dependency the source stopped declaring leaves the graph. Every
+        // edge into a task on this page was refreshed above, so an edge into one
+        // of these tasks that still carries an older observation time is one the
+        // source no longer has — including the placeholder edge of a reference
+        // that has since resolved to a real task. A page that hit the helper's
+        // edge limit is incomplete evidence and removes nothing.
+        let edges_truncated = envelope
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "edge_limit_reached"); // 0.11.2
+        if !edges_truncated {
+            let mut retire = transaction
+                .prepare(
+                    "DELETE FROM agent_edges
+                      WHERE source_key = ?1 AND to_task_key = ?2 AND last_observed_at_ms <> ?3",
+                )
+                .map_err(LedgerError::Database)?; // 0.11.2
+            for task in &envelope.tasks {
+                let task_key = identity.task_key(&task.source_project_id, &task.source_task_id); // 0.11.2
+                retire
+                    .execute(params![identity.source_key, task_key, observed_at_ms])
+                    .map_err(LedgerError::Database)?; // 0.11.2
+            }
         }
 
         // Upstream notifications carry stable ids, so they dedupe on their own
@@ -1073,6 +1098,19 @@ fn resolve_edge_endpoint(
     source_task_id: &str,
     fallback: &str,
 ) -> Result<String, LedgerError> {
+    // 0.11.2: the lookup moved into `find_task_key` so edges can also learn whether it hit.
+    Ok(
+        find_task_key(connection, identity, source_task_id)?
+            .unwrap_or_else(|| fallback.to_string()),
+    ) // 0.11.2
+}
+
+/// The stored key of a task the projection already knows, or `None`. // 0.11.2
+fn find_task_key(
+    connection: &Connection,
+    identity: &AgentSourceIdentity,
+    source_task_id: &str,
+) -> Result<Option<String>, LedgerError> {
     // A task's key includes its source project id, which an edge reference does
     // not carry. Resolve through the stored projection when the task is known
     // and fall back to the project-less key when it is not, so an unresolved
@@ -1087,10 +1125,10 @@ fn resolve_edge_endpoint(
         .map_err(LedgerError::Database)?;
     for row in rows.flatten() {
         if row.0 == identity.task_key(&row.1, source_task_id) {
-            return Ok(row.0);
+            return Ok(Some(row.0)); // 0.11.2
         }
     }
-    Ok(fallback.to_string())
+    Ok(None) // 0.11.2
 }
 
 fn upsert_link(
@@ -2218,6 +2256,23 @@ impl Ledger {
                 economics.observed_blocked_time_ms = task.blocked_ms.max(0) as u64;
                 economics.observed_idle_time_ms = task.idle_ms.max(0) as u64;
             }
+        } else {
+            // 0.11.2: the project scope reported a flat zero while its tasks had
+            // accrued time. It is the sum of the same per-task totals.
+            let (observed, blocked, idle): (i64, i64, i64) = self
+                .connection
+                .query_row(
+                    "SELECT COALESCE(SUM(MAX(observed_ms, 0)), 0),
+                            COALESCE(SUM(MAX(blocked_ms, 0)), 0),
+                            COALESCE(SUM(MAX(idle_ms, 0)), 0)
+                       FROM agent_tasks WHERE project_hash = ?1",
+                    [query.project_hash],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .map_err(LedgerError::Database)?; // 0.11.2
+            economics.observed_wall_time_ms = observed.max(0) as u64; // 0.11.2
+            economics.observed_blocked_time_ms = blocked.max(0) as u64; // 0.11.2
+            economics.observed_idle_time_ms = idle.max(0) as u64; // 0.11.2
         }
 
         // Done, Review, a Ready phase and a process exit are all *not*

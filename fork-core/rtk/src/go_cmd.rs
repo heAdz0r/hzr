@@ -83,13 +83,21 @@ pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
         raw.clone()
     };
     let filtered = crate::guard::guard_exit(&raw, exit_code, "go test", &summary);
+    // 0.11.2: the caller ran `go test`, not `go test -json`; the counterfactual is the plain
+    // text go prints without -json, rebuilt from the events' Output fields.
+    let baseline = if inject_json {
+        let verbose_run = args.iter().any(|a| a == "-v" || a.starts_with("-v=")); // 0.11.2
+        crate::utils::make_raw(plain_go_test_text(&stdout, verbose_run), &stderr) // 0.11.2
+    } else {
+        raw.clone() // 0.11.2
+    };
 
     let hint = crate::tee::tee_and_hint(&raw, "go_test", exit_code);
     // 0.10.0: NDJSON that rtk injected is not the caller's machine protocol, and its test
     // output words are not a failure signal (guard_exit owns the exit verdict). The plain
     // guard returned all of it — 5.4 MB on a red Go 1.26 module.
     let shown = if inject_json {
-        crate::runner::emit_guarded_rendered(&filtered, hint.as_deref(), &raw)
+        crate::runner::emit_guarded_rendered(&filtered, hint.as_deref(), &baseline) // 0.11.2: never worse than plain go test
     } else {
         crate::runner::emit_guarded(&filtered, hint.as_deref(), &raw)
     };
@@ -102,7 +110,7 @@ pub fn run_test(args: &[String], verbose: u8) -> Result<()> {
     timer.track(
         &format!("go test {}", args.join(" ")),
         &format!("rtk go test {}", args.join(" ")),
-        &raw,
+        &baseline, // 0.11.2: what plain `go test` prints, not the injected -json stream
         &shown,
     );
 
@@ -321,6 +329,92 @@ pub fn run_other(args: &[OsString], verbose: u8) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// 0.11.2: the text `go test` prints without `-json`, rebuilt from the event stream.
+///
+/// `-json` runs the tests verbosely, so a non-verbose run shows only package lines and the
+/// output of tests that failed (or never finished), without the `=== RUN` framing. Lines
+/// that are not events (a toolchain message) are kept as printed.
+fn plain_go_test_text(json_stdout: &str, verbose: bool) -> String {
+    let mut plain = String::new(); // 0.11.2
+    // 0.11.2: go prints each package as one block when it finishes; the stream interleaves.
+    let mut blocks: HashMap<String, String> = HashMap::new();
+    let mut block_order: Vec<String> = Vec::new(); // 0.11.2
+    let mut pending: Vec<(String, String, String)> = Vec::new(); // 0.11.2: (package, test, text)
+    for line in json_stdout.lines() {
+        let Ok(event) = serde_json::from_str::<GoTestEvent>(line) else {
+            if !line.trim().is_empty() {
+                plain.push_str(line); // 0.11.2
+                plain.push('\n'); // 0.11.2
+            }
+            continue;
+        };
+        let output = event.output.as_deref().unwrap_or(""); // 0.11.2
+        let Some(package) = event.package.clone() else {
+            plain.push_str(output); // 0.11.2: build output, keyed by ImportPath
+            continue;
+        };
+        let block = blocks.entry(package.clone()).or_insert_with(|| {
+            block_order.push(package.clone()); // 0.11.2
+            String::new()
+        });
+        let position = |pending: &[(String, String, String)], test: &str| {
+            pending.iter().position(|(p, t, _)| *p == package && t == test)
+        }; // 0.11.2
+        match (event.test.as_deref(), event.action.as_str()) {
+            (_, "output") if verbose => block.push_str(output), // 0.11.2
+            (None, "output") => {
+                if output != "PASS\n" {
+                    block.push_str(output); // 0.11.2: package lines
+                }
+            }
+            (Some(test), "output") => {
+                let framing = ["=== RUN", "=== PAUSE", "=== CONT", "=== NAME"]
+                    .iter()
+                    .any(|prefix| output.starts_with(prefix)); // 0.11.2
+                if framing {
+                    continue;
+                }
+                match position(&pending, test) {
+                    Some(index) => pending[index].2.push_str(output), // 0.11.2
+                    None => pending.push((package.clone(), test.to_string(), output.to_string())), // 0.11.2
+                }
+            }
+            (Some(test), "fail") => {
+                if let Some(index) = position(&pending, test) {
+                    block.push_str(&pending.remove(index).2); // 0.11.2
+                }
+            }
+            (Some(test), "pass" | "skip") => {
+                if let Some(index) = position(&pending, test) {
+                    pending.remove(index); // 0.11.2
+                }
+            }
+            (None, "pass" | "fail" | "skip") => {
+                // 0.11.2: tests that never reported (panic, timeout) print with their package
+                let (unfinished, rest): (Vec<_>, Vec<_>) =
+                    pending.drain(..).partition(|(p, _, _)| *p == package);
+                pending = rest; // 0.11.2
+                for (_, _, text) in unfinished {
+                    block.push_str(&text); // 0.11.2
+                }
+                if let Some(text) = blocks.remove(&package) {
+                    plain.push_str(&text); // 0.11.2
+                }
+            }
+            _ => {}
+        }
+    }
+    for (package, _, text) in pending {
+        blocks.entry(package).or_default().push_str(&text); // 0.11.2: stream cut short
+    }
+    for package in block_order {
+        if let Some(text) = blocks.remove(&package) {
+            plain.push_str(&text); // 0.11.2
+        }
+    }
+    plain // 0.11.2
 }
 
 /// Parse go test -json output (NDJSON format)
@@ -658,6 +752,27 @@ fn compact_package_name(package: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 0.11.2: real go1.21 output of one module, captured three ways. The recorded baseline
+    // must be what the caller's `go test` prints, not the -json stream rtk injected.
+    fn within_ten_percent(estimate: &str, actual: &str) -> bool {
+        let (estimate, actual) = (estimate.len() as f64, actual.len() as f64); // 0.11.2
+        (estimate - actual).abs() <= actual * 0.10 // 0.11.2
+    }
+
+    #[test]
+    fn plain_baseline_matches_what_go_test_prints_without_json() {
+        let json = include_str!("../tests/fixtures/go_test_go121_pass_and_fail.json"); // 0.11.2
+        let plain = include_str!("../tests/fixtures/go_test_go121_pass_and_fail.plain.txt"); // 0.11.2
+        let verbose = include_str!("../tests/fixtures/go_test_go121_pass_and_fail.verbose.txt"); // 0.11.2
+        let rebuilt = plain_go_test_text(json, false); // 0.11.2
+        assert!(within_ten_percent(&rebuilt, plain), "{rebuilt}\n---\n{plain}"); // 0.11.2
+        assert!(rebuilt.contains("--- FAIL: TestBad") && rebuilt.contains("want 1 got 2")); // 0.11.2
+        assert!(!rebuilt.contains("hidden unless verbose") && !rebuilt.contains("=== RUN")); // 0.11.2
+        let rebuilt_verbose = plain_go_test_text(json, true); // 0.11.2
+        assert!(within_ten_percent(&rebuilt_verbose, verbose), "{rebuilt_verbose}"); // 0.11.2
+        assert!(json.len() > plain.len() * 20, "fixture must show the -json inflation"); // 0.11.2
+    }
 
     // 0.10.0: real `go test -json` from go1.25.1 — one package fails to compile, one test
     // fails, one package passes. The 0.44 parser ignored the build events entirely.

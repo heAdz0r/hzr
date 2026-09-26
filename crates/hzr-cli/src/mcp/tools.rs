@@ -368,7 +368,10 @@ fn doctor_schema() -> Value {
             "repair": {"type": ["object", "null"]},
             "fidelity_reconcile": {"type": ["object", "null"]},
             "fleet_reconcile": {"type": ["object", "null"]},
-            "orphan_cleanup": {"type": ["array", "null"], "items": {"type": "object"}}
+            "orphan_cleanup": {"type": ["array", "null"], "items": {"type": "object"}},
+            // 0.11.2: `--fix` report fields DoctorReport already serializes.
+            "accounting_gap_repair": {"type": ["integer", "null"], "minimum": 0},
+            "client_ownership_repair": {"type": ["array", "null"], "items": {"type": "object"}}
         }),
         &[
             "hzr_version",
@@ -760,6 +763,9 @@ fn raw_tool_definitions() -> Vec<ToolDefinition> {
                             "type": "string",
                             "enum": ["legacy_index_requires_migration", "semantic_index_unavailable", "grepai_unavailable", "ripgrep_unavailable"]
                         },
+                        // 0.11.2: the daemon always reports the index generation it searched;
+                        // the strict contract rejected every hzr_search call until it was declared.
+                        "index_generation": {"type": "string"},
                         "fallback_reason": {"type": "string"},
                         "next_step": {"type": "string"},
                     },

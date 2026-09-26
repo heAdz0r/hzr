@@ -322,3 +322,145 @@ async fn an_empty_projection_answers_with_unavailable_rather_than_fabricated_zer
     assert_eq!(body["source_observed_at_ms"], Value::Null);
     assert_eq!(body["lag_ms"], Value::Null);
 }
+
+/// 0.11.2 regression: `hzr agents sync` right after `enable` raced the worker's
+/// first cycle and failed with `observation_in_progress`. It now waits for the
+/// in-flight observation and then runs its own.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_explicit_sync_waits_for_an_observation_already_in_flight() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = TempDir::new().expect("temp dir");
+    let (router, _, state) = agents_router(&directory, true).await;
+    let engines = directory.path().join("missing-engines");
+    std::fs::create_dir_all(&engines).expect("engines directory");
+    let helper = engines.join("hzr-agtx-observer");
+    // Identifies as the pinned build, then takes a while and fails a snapshot.
+    std::fs::write(
+        &helper,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  echo 'hzr-agtx-observer 1.0.4 schema=1 patch=hzr-agtx-readonly-observer-2'\n  exit 0\nfi\nsleep 1\nexit 1\n",
+    )
+    .expect("helper stub");
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).expect("permissions");
+
+    // The harness stopped the worker task; an explicit observation still runs.
+    state.agents.resume();
+    let project = directory.path().join("work/repo");
+    let in_flight = {
+        let state = state.clone();
+        let project = project.clone();
+        tokio::spawn(async move { state.agents.observe_once(&project).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/agents/sync")
+                .header("authorization", format!("Bearer {TOKEN}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({ "project_path": project.to_string_lossy() }).to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("body");
+    let body: Value = serde_json::from_slice(&bytes).expect("json");
+    let first = in_flight.await.expect("in-flight observation");
+    assert_ne!(
+        first.error_code.as_deref(),
+        Some("observation_in_progress"),
+        "the background cycle held the lock first"
+    );
+    assert_eq!(
+        body["error_code"], "helper_exit_failed",
+        "the sync ran its own observation instead of reporting the lock: {body}"
+    );
+}
+
+/// 0.11.2: the wait is bounded; a lock that never frees still answers.
+#[tokio::test]
+async fn waiting_for_an_in_flight_observation_is_bounded() {
+    let calls = std::sync::atomic::AtomicU32::new(0);
+    let outcome = super::observe_after_in_flight(
+        || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            async {
+                crate::agent_observer::ObservationOutcome {
+                    error_code: Some("observation_in_progress".into()),
+                    ..Default::default()
+                }
+            }
+        },
+        std::time::Duration::from_millis(120),
+        std::time::Duration::from_millis(20),
+    )
+    .await;
+    assert_eq!(
+        outcome.error_code.as_deref(),
+        Some("observation_in_progress")
+    );
+    let calls = calls.load(std::sync::atomic::Ordering::SeqCst);
+    assert!((2..=10).contains(&calls), "polled {calls} times");
+}
+
+/// 0.11.2 regression: `unresolved_task_ids` treated every dependency whose
+/// prerequisite sat on another page of the board as dangling.
+#[tokio::test]
+async fn an_off_page_dependency_is_not_reported_as_unresolved() {
+    let directory = TempDir::new().expect("temp dir");
+    let (router, project_id, state) = agents_router(&directory, true).await;
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../integrations/agtx/fixtures/snapshot-v1-ready.json");
+    let mut envelope: hzr_protocol::agents::AgentSnapshotEnvelope =
+        serde_json::from_slice(&std::fs::read(fixture).expect("fixture")).expect("envelope");
+    envelope.observed_at_ms = crate::agent_observer::now_ms();
+    let project = state.agents.enrollments().await.projects[0].clone();
+    let identity = hzr_core::AgentSourceIdentity::new(
+        &crate::agent_observer::enrollment_id(&project),
+        &envelope.source_instance_id,
+        &project_id,
+    );
+    state
+        .ledger
+        .record_agent_snapshot(identity, envelope, 15_000, 30_000)
+        .await
+        .expect("fixture snapshot records");
+
+    // The fixture has one dangling reference (7ac3ffff) and two real ones.
+    let (status, full) = get(
+        &router,
+        &format!("/v1/dashboard/agents?project_id={project_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let dangling = full["unresolved_task_ids"].clone();
+    assert_eq!(dangling.as_array().map(Vec::len), Some(1), "{full}");
+
+    let mut cursor: Option<String> = None;
+    for _ in 0..3 {
+        let uri = match &cursor {
+            Some(cursor) => {
+                format!("/v1/dashboard/agents?project_id={project_id}&limit=1&cursor={cursor}")
+            }
+            None => format!("/v1/dashboard/agents?project_id={project_id}&limit=1"),
+        };
+        let (status, page) = get(&router, &uri).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            page["unresolved_task_ids"], dangling,
+            "a one-task page must not turn off-page prerequisites into dangling ones"
+        );
+        cursor = page["next_cursor"].as_str().map(str::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+}

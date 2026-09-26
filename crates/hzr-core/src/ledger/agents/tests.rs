@@ -1161,3 +1161,179 @@ fn an_empty_session_set_reads_no_usage() {
         .expect("fixture step succeeds");
     assert!(rows.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// 0.11.2: dependency reconciliation and project-scope time
+// ---------------------------------------------------------------------------
+
+// 0.11.2
+fn depends(from: &str, to: &str, resolved: bool) -> AgentSnapshotEdge {
+    AgentSnapshotEdge {
+        from_source_task_id: from.into(),
+        to_source_task_id: to.into(),
+        kind: "depends_on".into(),
+        resolved,
+    }
+}
+
+// 0.11.2
+fn edge_pairs(ledger: &Ledger, identity: &AgentSourceIdentity) -> Vec<(String, String, bool)> {
+    ledger
+        .agent_edges_for_project(&identity.project_hash, 100)
+        .expect("edges")
+        .into_iter()
+        .map(|edge| (edge.from_task_key, edge.to_task_key, edge.resolved))
+        .collect()
+}
+
+/// 0.11.2 regression: a dependency removed in agtx stayed on the board forever,
+/// because edges were only ever upserted.
+#[test]
+fn a_dependency_the_source_drops_leaves_the_graph() {
+    let (_dir, mut ledger) = ledger();
+    let identity = identity(&ledger, "gen-1");
+    let tasks = || {
+        vec![
+            task("t1", "running", "claude"),
+            task("t2", "backlog", "codex"),
+        ]
+    };
+    let mut first = envelope(tasks(), NOW_MS);
+    first.edges = vec![depends("t1", "t2", true), depends("ghost", "t2", false)];
+    apply(&mut ledger, &identity, &first);
+    assert_eq!(edge_pairs(&ledger, &identity).len(), 2);
+
+    // An identical replay removes nothing.
+    let mut replay = first.clone();
+    replay.observed_at_ms = NOW_MS + 5_000;
+    apply(&mut ledger, &identity, &replay);
+    assert_eq!(edge_pairs(&ledger, &identity).len(), 2);
+
+    let mut dropped = envelope(tasks(), NOW_MS + 10_000);
+    dropped.edges = vec![depends("t1", "t2", true)];
+    apply(&mut ledger, &identity, &dropped);
+    let t1 = identity.task_key("proj-1", "t1");
+    let t2 = identity.task_key("proj-1", "t2");
+    assert_eq!(edge_pairs(&ledger, &identity), vec![(t1, t2, true)]);
+
+    apply(&mut ledger, &identity, &envelope(tasks(), NOW_MS + 15_000));
+    assert!(edge_pairs(&ledger, &identity).is_empty());
+}
+
+/// 0.11.2: a page whose edges were cut at the helper's limit is incomplete
+/// evidence and must not retire anything.
+#[test]
+fn a_page_that_hit_the_edge_limit_retires_nothing() {
+    let (_dir, mut ledger) = ledger();
+    let identity = identity(&ledger, "gen-1");
+    let tasks = || {
+        vec![
+            task("t1", "running", "claude"),
+            task("t2", "backlog", "codex"),
+        ]
+    };
+    let mut first = envelope(tasks(), NOW_MS);
+    first.edges = vec![depends("t1", "t2", true)];
+    apply(&mut ledger, &identity, &first);
+
+    let mut truncated = envelope(tasks(), NOW_MS + 5_000);
+    truncated.warnings = vec![hzr_protocol::agents::AgentSnapshotWarning {
+        code: "edge_limit_reached".into(),
+        count: 1,
+    }];
+    apply(&mut ledger, &identity, &truncated);
+    assert_eq!(edge_pairs(&ledger, &identity).len(), 1);
+}
+
+/// 0.11.2 regression: the helper resolves references against its own page, so
+/// a dependency on a task from an earlier page arrived — and stayed — unresolved.
+#[test]
+fn a_dependency_on_an_earlier_page_is_resolved_by_the_projection() {
+    let (_dir, mut ledger) = ledger();
+    let identity = identity(&ledger, "gen-1");
+    let mut page_one = envelope(vec![task("t1", "running", "claude")], NOW_MS);
+    page_one.complete = false;
+    page_one.next_cursor = Some("t1".into());
+    apply(&mut ledger, &identity, &page_one);
+
+    let mut page_two = envelope(vec![task("t2", "backlog", "codex")], NOW_MS + 10);
+    page_two.edges = vec![depends("t1", "t2", false)];
+    apply(&mut ledger, &identity, &page_two);
+
+    assert_eq!(
+        edge_pairs(&ledger, &identity),
+        vec![(
+            identity.task_key("proj-1", "t1"),
+            identity.task_key("proj-1", "t2"),
+            true
+        )]
+    );
+}
+
+/// 0.11.2: once a dangling reference resolves, its placeholder node goes away
+/// instead of rendering beside the real task forever.
+#[test]
+fn a_resolved_placeholder_does_not_linger() {
+    let (_dir, mut ledger) = ledger();
+    let identity = identity(&ledger, "gen-1");
+    let mut before = envelope(vec![task("t2", "backlog", "codex")], NOW_MS);
+    before.edges = vec![depends("t9", "t2", false)];
+    apply(&mut ledger, &identity, &before);
+    assert!(!edge_pairs(&ledger, &identity)[0].2);
+
+    let mut after = envelope(
+        vec![
+            task("t9", "running", "claude"),
+            task("t2", "backlog", "codex"),
+        ],
+        NOW_MS + 5_000,
+    );
+    after.edges = vec![depends("t9", "t2", true)];
+    apply(&mut ledger, &identity, &after);
+    assert_eq!(
+        edge_pairs(&ledger, &identity),
+        vec![(
+            identity.task_key("proj-1", "t9"),
+            identity.task_key("proj-1", "t2"),
+            true
+        )]
+    );
+}
+
+/// 0.11.2 regression: project-scope economics reported zero observed time while
+/// its tasks had accrued some.
+#[test]
+fn project_economics_sums_observed_task_time() {
+    let (_dir, mut ledger) = ledger();
+    let identity = identity(&ledger, "gen-1");
+    let working = |at: i64| {
+        let mut value = task("t1", "running", "claude");
+        value.runtime = Some(AgentSnapshotRuntime {
+            phase_status: "working".into(),
+            unknown_phase_status: None,
+            updated_at_ms: Some(at - 100),
+            pane_changed_at_ms: None,
+        });
+        envelope(vec![value, task("t2", "backlog", "codex")], at)
+    };
+    apply(&mut ledger, &identity, &working(NOW_MS));
+    apply(&mut ledger, &identity, &working(NOW_MS + 5_000));
+
+    let project = ledger
+        .agent_economics(
+            AgentEconomicsQuery {
+                project_hash: &identity.project_hash,
+                task_key: None,
+                from_ms: 0,
+                to_ms: i64::MAX,
+            },
+            &fixture_catalog(),
+        )
+        .expect("project economics");
+    assert_eq!(project.observed_wall_time_ms, 5_000);
+    assert_eq!(
+        project.observed_wall_time_ms,
+        economics(&ledger, &identity).observed_wall_time_ms,
+        "the only task with time accounts for the whole project"
+    );
+}

@@ -365,10 +365,22 @@ pub async fn dashboard(
             || Ok(hzr_core::ProjectActivitySummary::default()),
             |project| Ledger::project_activity_read_only(&ledger_path, project),
         )?;
-        let session = activity
-            .recent_operations
-            .iter()
-            .find_map(|operation| operation.session_hash.as_deref())
+        // 0.11.2: host-capped totals and the last session, from the queries `hzr stats` uses.
+        let (host_visible, last_session) = ledger_project_path.as_deref().map_or_else(
+            || Ok((hzr_core::HostVisibleEfficiencySummary::default(), None)),
+            |project| Ledger::project_host_accounting_read_only(&ledger_path, project),
+        )?;
+        // 0.11.2: the session ROI card follows the same last-session selection as the CLI;
+        // the recent-operation window stays as the fallback for an unattributed newest row.
+        let session = last_session
+            .as_ref()
+            .map(|session| session.session_hash.as_str())
+            .or_else(|| {
+                activity
+                    .recent_operations
+                    .iter()
+                    .find_map(|operation| operation.session_hash.as_deref())
+            })
             .filter(|hash| hash.starts_with("hmac-sha256:"))
             .map(|session_hash| {
                 Ledger::session_roi_read_only(
@@ -379,22 +391,40 @@ pub async fn dashboard(
                 .map(|summary| (session_hash.to_owned(), summary))
             })
             .transpose()?;
-        Ok::<_, hzr_core::LedgerError>((summaries.0, summaries.1, activity, session))
+        Ok::<_, hzr_core::LedgerError>((
+            summaries.0,
+            summaries.1,
+            activity,
+            session,
+            host_visible, // 0.11.2
+            last_session, // 0.11.2
+        ))
     })
     .await
     .map_err(|error| ApiError::internal(format!("dashboard ledger task failed: {error}")))?;
-    let (observed, estimated, activity, session, ledger_error) = match ledger {
-        Ok((observed, estimated, activity, session)) => {
-            (observed, estimated, activity, session, None)
-        }
-        Err(error) => (
-            hzr_core::LedgerSummary::default(),
-            hzr_core::EfficiencySummary::default(),
-            hzr_core::ProjectActivitySummary::default(),
-            None,
-            Some(error.to_string()),
-        ),
-    };
+    // 0.11.2: host-capped totals and the last session ride along with the activity read.
+    let (observed, estimated, activity, session, host_visible, last_session, ledger_error) =
+        match ledger {
+            Ok((observed, estimated, activity, session, host_visible, last_session)) => (
+                observed,
+                estimated,
+                activity,
+                session,
+                host_visible,
+                last_session,
+                None,
+            ),
+            Err(error) => (
+                hzr_core::LedgerSummary::default(),
+                hzr_core::EfficiencySummary::default(),
+                hzr_core::ProjectActivitySummary::default(),
+                None,
+                hzr_core::HostVisibleEfficiencySummary::default(),
+                None,
+                Some(error.to_string()),
+            ),
+        };
+    let last_session = last_session.map(|session| price_last_session(&state.config, session)); // 0.11.2
 
     let search_activity = dashboard_search_activity(&activity.recent_operations);
     let (memory_observatory, index_observatory) = tokio::join!(
@@ -500,6 +530,13 @@ pub async fn dashboard(
             estimated.excluded_legacy_operations,
             activity.excluded_legacy_operations,
         ));
+    }
+    // 0.11.2: say why the two project figures differ instead of leaving two numbers to argue.
+    if selected.is_some() && ledger_error.is_none() {
+        notes.push(
+            "Project host-visible figures match `hzr stats --workspace <root>`: each operation is bounded by the host output ceiling, over typed v2 and aggregate-compatible v1 rows. The uncapped producer reduction beside them counts current-policy v2 rows only."
+                .into(),
+        );
     }
     let session_roi = dashboard_session_roi(&state.config, session.as_ref());
 
@@ -614,6 +651,12 @@ pub async fn dashboard(
             } else {
                 Vec::new()
             }, // 0.9.1
+            // 0.11.2: the CLI's host-capped view of the same project and lifetime window.
+            host_visible_baseline_tokens_estimated: host_visible.baseline_tokens_estimated,
+            host_visible_delivered_tokens_estimated: host_visible.delivered_tokens_estimated,
+            host_visible_net_avoided_tokens_estimated: host_visible.net_avoided_tokens_estimated,
+            host_ceiling_tokens: host_visible.ceiling_tokens,
+            last_session,
         },
         observability,
         provider_receipts: DashboardProviderReceipts {
@@ -638,6 +681,50 @@ pub async fn dashboard(
         help: dashboard_help(),
         notes,
     }))
+}
+
+/// 0.11.2: price the last session's host-capped net at the configured catalog row, exactly as
+/// `hzr stats` does; an unpriceable selection leaves `potential_saved` absent, never zero.
+fn price_last_session(
+    config: &hzr_core::Config,
+    mut session: hzr_protocol::LastSession,
+) -> hzr_protocol::LastSession {
+    if !config.billing.public_estimate_enabled {
+        return session;
+    }
+    let Ok(catalog) = load_pricing_catalog(config.billing.pricing_file.as_deref()) else {
+        return session;
+    };
+    session.raw_public_estimate = price_avoided_input_tokens(
+        &catalog,
+        RawPublicEstimateRequest {
+            harness: &config.billing.harness,
+            provider: &config.billing.provider,
+            model: &config.billing.model,
+            method: &config.billing.method,
+            request_input_tokens: config.billing.request_input_tokens,
+            basis: config.billing.effective_pricing_basis(),
+            avoided_tokens: session
+                .host_visible_net_avoided_tokens_estimated
+                .max(0)
+                .unsigned_abs(),
+        },
+    )
+    .ok()
+    .map(|estimate| DashboardRawPublicEstimate {
+        currency: estimate.currency,
+        savings_microunits: estimate.savings_microunits,
+        avoided_input_tokens_estimated: estimate.avoided_input_tokens_estimated,
+        pricing_basis: estimate.pricing_basis,
+        catalog_identity: estimate.price_table_identity,
+        entry_version: estimate.entry_version,
+        preliminary: estimate.preliminary,
+        disclaimer: estimate.disclaimer,
+        delivery_qualifier: Some(
+            "Priced on host-capped output (what the host could show the model); host delivery itself is unconfirmed.".into(),
+        ),
+    });
+    session
 }
 
 fn dashboard_delivery_summary(
@@ -1894,12 +1981,17 @@ pub async fn memory_recall(
         .map(|kind| namespaced_topic(kind, &project))
         .transpose()
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let global_topic = request
-        .topic
-        .as_deref()
-        .map(global_topic)
-        .transpose()
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    // 0.11.2: build the global topic only when the scope reaches global memory. A
+    // project-only kind (`architecture`) made `--scope project` fail with HTTP 400, and in
+    // project_and_global it now skips the global half instead of failing the recall.
+    let global_topic = match (request.scope, request.topic.as_deref()) {
+        (MemoryScopeSelector::Project, _) | (_, None) => None,
+        (MemoryScopeSelector::Global, Some(kind)) => {
+            Some(global_topic(kind).map_err(|error| ApiError::bad_request(error.to_string()))?)
+        }
+        (MemoryScopeSelector::ProjectAndGlobal, Some(kind)) => global_topic(kind).ok(),
+    };
+    let skip_global = request.topic.is_some() && global_topic.is_none(); // 0.11.2
     let candidate_limit = recall_candidate_limit(request.limit);
     let mut base = RecallRequest::new(request.query);
     base.limit = candidate_limit;
@@ -1930,6 +2022,14 @@ pub async fn memory_recall(
                 &project,
                 MemoryNamespace::Global,
                 global_topic.as_deref(),
+                candidate_limit,
+            ),
+            // 0.11.2: a kind that cannot be global recalls this repository only.
+            MemoryScopeSelector::ProjectAndGlobal if skip_global => isolate_memories(
+                client.recall(&project_recall).await.map_err(unavailable)?,
+                &project,
+                MemoryNamespace::Project,
+                project_topic.as_deref(),
                 candidate_limit,
             ),
             MemoryScopeSelector::ProjectAndGlobal => {

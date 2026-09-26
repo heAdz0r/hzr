@@ -32,6 +32,8 @@ pub use registry::{
     WorkspaceRegistryWarning, registered_workspaces,
 };
 pub use watch::WatchHandle;
+// 0.11.2: `is_managed_index_link` joins the workspace exports
 pub use workspace::{
     IndexLayout, IndexPlacement, IndexPlacementPolicy, Workspace, WorkspaceIdentity,
+    is_managed_index_link,
 };

@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::bounded_file::{BoundedFileError, read_bounded_regular_file};
 
-pub const BUILTIN_PRICING_CATALOG_IDENTITY: &str = "hzr-public-api-pricing-2026-09-10-v1";
+pub const BUILTIN_PRICING_CATALOG_IDENTITY: &str = "hzr-public-api-pricing-2026-09-26-v1"; // 0.11.2: catalog re-read 2026-09-26 (Opus 5.5 and current models)
 pub const PRICING_CATALOG_SCHEMA_VERSION: u16 = 1;
 pub const PRICING_OVERRIDE_MAX_BYTES: u64 = 1_048_576;
 pub const PROVIDER_RECEIPT_MAX_AGE_MS: u64 = 366 * 24 * 60 * 60 * 1_000;
@@ -238,7 +238,7 @@ pub enum BillingError {
 
 pub fn builtin_pricing_catalog() -> Result<PricingCatalog, BillingError> {
     let mut catalog: PricingCatalog = serde_json::from_str(include_str!(
-        "../../../data/pricing/public-api-pricing-2026-09-10-v1.json"
+        "../../../data/pricing/public-api-pricing-2026-09-26-v1.json" // 0.11.2: dated catalog file moves with its identity
     ))
     .map_err(|source| BillingError::CatalogParse {
         path: Path::new("<embedded-public-pricing>").to_path_buf(),
@@ -875,6 +875,135 @@ mod tests {
         assert_eq!(original.amount.baseline_microunits, 1_000_000);
         assert_eq!(updated.amount.baseline_microunits, 250_000);
         assert_eq!(original.classification, "public_estimate");
+    }
+
+    // 0.11.2: every current OpenAI Codex model prices in both context tiers, and the GPT-5.x
+    // rows no longer invent a cache-write rate the official pages do not publish.
+    #[test]
+    fn current_codex_models_price_in_both_tiers_without_invented_cache_writes() {
+        let catalog = builtin_pricing_catalog().expect("catalog");
+        for model in [
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-6-astra",
+            "gpt-6",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-5.6-luna",
+            "gpt-5.5",
+            "gpt-5.4",
+        ] {
+            let mut short = receipt(model);
+            let priced = price_receipt(&catalog, &short)
+                .map_err(|error| format!("{model} short context: {error}"))
+                .expect("short-context price");
+            assert!(priced.amount.baseline_microunits > 0, "{model}");
+            short.method = "standard_long_context_gt_272k".into();
+            short.request_input_tokens = Some(300_000);
+            price_receipt(&catalog, &short)
+                .map_err(|error| format!("{model} long context: {error}"))
+                .expect("long-context price");
+        }
+        let mut mini = receipt("gpt-5.4-mini");
+        mini.method = "standard".into();
+        mini.request_input_tokens = None;
+        price_receipt(&catalog, &mini).expect("gpt-5.4-mini");
+
+        for model in ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] {
+            let rows = catalog
+                .entries
+                .iter()
+                .filter(|entry| entry.model == model)
+                .collect::<Vec<_>>();
+            assert!(!rows.is_empty(), "{model}");
+            assert!(
+                rows.iter()
+                    .all(|entry| entry.rates.cache_write_microunits_per_million.is_none()),
+                "{model} must not carry an unpublished cache-write rate"
+            );
+        }
+    }
+
+    // 0.11.2: the embedded catalog carries the identity the constant advertises.
+    #[test]
+    fn builtin_catalog_identity_matches_the_advertised_constant() {
+        let catalog = builtin_pricing_catalog().expect("catalog"); // 0.11.2
+        assert_eq!(catalog.identity, BUILTIN_PRICING_CATALOG_IDENTITY); // 0.11.2
+    }
+
+    // 0.11.2: a config selecting claude-opus-5-5 prices at Opus 5.5 rates, never Opus 5.
+    #[test]
+    fn opus_5_5_config_model_resolves_to_its_own_row() {
+        let catalog = builtin_pricing_catalog().expect("catalog"); // 0.11.2
+        let estimate = |model, basis| {
+            // 0.11.2: same request shape as `hzr stats` price_scope
+            price_avoided_input_tokens(
+                &catalog,
+                RawPublicEstimateRequest {
+                    harness: "claude_code",
+                    provider: "anthropic",
+                    model,
+                    method: "standard",
+                    request_input_tokens: None,
+                    basis,
+                    avoided_tokens: 1_000_000,
+                },
+            )
+        };
+        let opus_5_5 = estimate("claude-opus-5-5", "input").expect("Opus 5.5"); // 0.11.2
+        assert_eq!(opus_5_5.savings_microunits, 4_000_000); // 0.11.2: $4 / MTok input
+        assert_eq!(
+            opus_5_5.entry_version,
+            "anthropic-claude-opus-5.5-standard-2026-09-26"
+        ); // 0.11.2
+        assert_eq!(opus_5_5.retrieved_at, "2026-09-26"); // 0.11.2
+        assert_eq!(
+            opus_5_5.source_url,
+            "https://platform.claude.com/docs/en/about-claude/pricing"
+        ); // 0.11.2
+        let cached = estimate("claude-opus-5-5", "cache_read").expect("Opus 5.5 cache"); // 0.11.2
+        assert_eq!(cached.savings_microunits, 200_000); // 0.11.2: 0.05x input
+        let dotted = estimate("claude-opus-5.5", "input").expect("dotted alias"); // 0.11.2
+        assert_eq!(dotted.entry_version, opus_5_5.entry_version); // 0.11.2
+        let opus_5 = estimate("claude-opus-5", "input").expect("Opus 5"); // 0.11.2
+        assert_eq!(opus_5.savings_microunits, 5_000_000); // 0.11.2
+    }
+
+    // 0.11.2: documented dated API IDs and legacy names resolve to their pricing rows.
+    #[test]
+    fn documented_api_ids_resolve_to_current_rows() {
+        let catalog = builtin_pricing_catalog().expect("catalog"); // 0.11.2
+        let entry = |harness, provider, model, method| {
+            find_entry(&catalog, harness, provider, model, method, None)
+                .map(|entry| entry.version.clone())
+        }; // 0.11.2
+        assert_eq!(
+            entry(
+                "claude_code",
+                "anthropic",
+                "claude-haiku-4-5-20251001",
+                "standard"
+            )
+            .expect("dated Haiku 4.5 ID"),
+            entry("claude_code", "anthropic", "claude-haiku-4-5", "standard").expect("Haiku 4.5")
+        ); // 0.11.2
+        for model in [
+            "claude-sonnet-5",
+            "claude-fable-5-1",
+            "claude-opus-4-8",
+            "claude-opus-4-5-20251101",
+            "claude-sonnet-4-5-20250929",
+        ] {
+            assert!(
+                entry("claude_code", "anthropic", model, "standard").is_ok(),
+                "{model}"
+            ); // 0.11.2
+        }
+        assert_eq!(
+            entry("openai_compatible", "deepseek", "deepseek-v4-flash", "peak")
+                .expect("legacy DeepSeek Flash name"),
+            "deepseek-flash-peak-2026-09-26"
+        ); // 0.11.2: legacy name is billed at the V4.1 Flash price
     }
 
     #[test]

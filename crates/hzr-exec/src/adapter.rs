@@ -17,6 +17,9 @@ use crate::{CanonicalCommand, ExecError, RewriteDecision, RewriteSource};
 
 pub const PINNED_RTK_VERSION: &str = "0.50.0-fork.1"; // 0.11.0 (US-018): upstream v0.50.0 sync
 pub use hzr_engine_contract::INTERNAL_EVASION_ENV;
+/// 0.11.2: the pinned engine the `rtk` shim execs; set by the managed shell prelude.
+pub const RTK_SHIM_BINARY_ENV: &str = "HZR_FORK_CORE_BINARY";
+const RTK_SHIM_DIRECTORY: &str = "shim"; // 0.11.2
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ForkRuntimePaths {
@@ -89,11 +92,7 @@ impl ForkRuntimePaths {
 
     fn apply_to_command(&self, command: &mut Command, binary: &Path) -> Result<(), ExecError> {
         let accounting = self.new_accounting_context()?;
-        let binary_directory = binary
-            .parent()
-            .ok_or_else(|| ExecError::InvalidForkBinaryPath {
-                path: binary.to_owned(),
-            })?;
+        require_binary_directory(binary)?; // 0.11.2: the binary is named absolutely; PATH is the caller's
         command
             .env("RTK_MEM_DB_PATH", &self.memory_db)
             .env_remove("RTK_DB_PATH")
@@ -105,8 +104,7 @@ impl ForkRuntimePaths {
             .env("RTK_TEE", "0")
             .env("RTK_HISTORY_DAYS", "0")
             .env("RTK_TRACKING_DISABLED", "0")
-            .env("RTK_TELEMETRY_DISABLED", "1")
-            .env("PATH", prefixed_path(binary_directory)?);
+            .env("RTK_TELEMETRY_DISABLED", "1"); // 0.11.2: no engines-directory PATH prefix
         Ok(())
     }
 
@@ -116,11 +114,7 @@ impl ForkRuntimePaths {
         binary: &Path,
         accounting: &ForkAccountingHandle,
     ) -> Result<(), ExecError> {
-        let binary_directory = binary
-            .parent()
-            .ok_or_else(|| ExecError::InvalidForkBinaryPath {
-                path: binary.to_owned(),
-            })?;
+        require_binary_directory(binary)?; // 0.11.2: the binary is named absolutely; PATH is the caller's
         for (key, value) in [
             ("RTK_MEM_DB_PATH", path_text(&self.memory_db)?),
             ("RTK_TEE_DIR", path_text(&self.tee_dir)?),
@@ -149,13 +143,8 @@ impl ForkRuntimePaths {
         {
             environment.remove.push("RTK_DB_PATH".to_owned());
         }
-        let path = prefixed_path(binary_directory)?;
-        let path = path
-            .into_string()
-            .map_err(|path| ExecError::NonUtf8ForkRuntimePath {
-                path: PathBuf::from(path),
-            })?;
-        environment.set.insert("PATH".to_owned(), path);
+        // 0.11.2: PATH is left to the caller. Prefixing the engines directory (which also ships
+        // node, grepai, icm and agtx) made managed commands run HZR's bundled Node.
         Ok(())
     }
 
@@ -165,11 +154,7 @@ impl ForkRuntimePaths {
         binary: &Path,
         accounting: &ForkAccountingHandle,
     ) -> Result<(), ExecError> {
-        let binary_directory = binary
-            .parent()
-            .ok_or_else(|| ExecError::InvalidForkBinaryPath {
-                path: binary.to_owned(),
-            })?;
+        require_binary_directory(binary)?; // 0.11.2: the binary is named absolutely; PATH is the caller's
         command
             .env("RTK_MEM_DB_PATH", &self.memory_db)
             .env_remove("RTK_DB_PATH")
@@ -181,34 +166,84 @@ impl ForkRuntimePaths {
             .env("RTK_TEE", "0")
             .env("RTK_HISTORY_DAYS", "0")
             .env("RTK_TRACKING_DISABLED", "0")
-            .env("RTK_TELEMETRY_DISABLED", "1")
-            .env("PATH", prefixed_path(binary_directory)?);
+            .env("RTK_TELEMETRY_DISABLED", "1"); // 0.11.2: no engines-directory PATH prefix
         Ok(())
     }
 
+    /// 0.11.2: the private directory whose only entry is the `rtk` shim.
+    ///
+    /// fork-core rewrites name its engine as the bare word `rtk`, also behind prefixes and inside
+    /// nested wrappers (`timeout 5 rtk …`, `sh -c 'rtk …'`), so that word must resolve through
+    /// PATH. Until 0.11.2 the engines directory was prepended, and it also ships `node`, `grepai`,
+    /// `icm` and `agtx`: a managed `node --version` ran HZR's bundled Node. This directory holds
+    /// nothing but the shim, and the shim removes its own directory from PATH before it execs the
+    /// pinned engine named by [`RTK_SHIM_BINARY_ENV`], so fork-core and every command it runs see
+    /// the caller's PATH exactly.
+    pub fn rtk_shim_directory(&self) -> Result<PathBuf, ExecError> {
+        Ok(parent_or_error(&self.tee_dir)?.join(RTK_SHIM_DIRECTORY))
+    }
+
+    // 0.11.2: write the shim when it is missing or stale; atomic, so concurrent writers are safe.
+    fn ensure_rtk_shim(&self) -> Result<String, ExecError> {
+        let directory = self.rtk_shim_directory()?;
+        let directory_text = path_text(&directory)?.to_owned();
+        if directory_text.contains(':') {
+            return Err(ExecError::InvalidForkPathEnvironment {
+                reason: format!("{directory_text} contains the PATH separator"),
+            });
+        }
+        let prepare = |source| ExecError::PrepareForkRuntime {
+            path: directory.clone(),
+            source,
+        };
+        fs::create_dir_all(&directory).map_err(prepare)?;
+        set_private_directory_permissions(&directory)?;
+        let script = rtk_shim_script(&directory_text);
+        let shim = directory.join("rtk");
+        let current = fs::read(&shim).ok();
+        if current.as_deref() != Some(script.as_bytes()) || !is_executable(&shim) {
+            let temporary = directory.join(format!(".rtk-{}.tmp", uuid::Uuid::new_v4().simple()));
+            fs::write(&temporary, &script).map_err(prepare)?;
+            set_private_executable_permissions(&temporary)?;
+            fs::rename(&temporary, &shim).map_err(prepare)?;
+        }
+        Ok(directory_text)
+    }
+
+    // 0.11.2: `shim` is `Some(binary)` only for the shell route, whose rewritten text names the
+    // engine as the word `rtk`; the proxy route names the binary absolutely and touches no PATH.
     fn shell_exports(
         &self,
-        binary_directory: &Path,
+        shim: Option<&Path>,
         accounting: &ForkAccountingHandle,
     ) -> Result<String, ExecError> {
         self.validate_shell_paths()?;
-        let binary_directory =
-            binary_directory
-                .to_str()
-                .ok_or_else(|| ExecError::NonUtf8ForkRuntimePath {
-                    path: binary_directory.to_owned(),
-                })?;
+        let resolution = match shim {
+            Some(binary) => {
+                let binary = binary
+                    .to_str()
+                    .ok_or_else(|| ExecError::NonUtf8ForkRuntimePath {
+                        path: binary.to_owned(),
+                    })?;
+                let directory = self.ensure_rtk_shim()?;
+                format!(
+                    "{RTK_SHIM_BINARY_ENV}={}\nPATH={}${{PATH:+\":$PATH\"}}\nexport {RTK_SHIM_BINARY_ENV} PATH\n",
+                    shell_quote(binary),
+                    shell_quote(&directory),
+                )
+            }
+            None => String::new(),
+        };
         // 0.8.3: the first line says what this block is. A host that inspects the approved
         // command sees an environment prelude for a managed engine, not an anonymous script.
         Ok(format!(
-            "# HZR managed route: engine environment for the command that follows; accounting is attributed by correlation, output is filtered by fork-core.\nunset RTK_DB_PATH\nRTK_MEM_DB_PATH={}\nRTK_TEE_DIR={}\nRTK_AUDIT_DIR={}\n{ACCOUNTING_RECEIPT_JOURNAL_ENV}={}\n{ACCOUNTING_FAILURE_JOURNAL_ENV}={}\n{ACCOUNTING_CORRELATION_ENV}={}\nRTK_TEE=0\nRTK_HISTORY_DAYS=0\nRTK_TRACKING_DISABLED=0\nRTK_TELEMETRY_DISABLED=1\nPATH={}${{PATH:+\":$PATH\"}}\nexport RTK_MEM_DB_PATH RTK_TEE_DIR RTK_AUDIT_DIR {ACCOUNTING_RECEIPT_JOURNAL_ENV} {ACCOUNTING_FAILURE_JOURNAL_ENV} {ACCOUNTING_CORRELATION_ENV} RTK_TEE RTK_HISTORY_DAYS RTK_TRACKING_DISABLED RTK_TELEMETRY_DISABLED PATH\n",
+            "# HZR managed route: engine environment for the command that follows; accounting is attributed by correlation, output is filtered by fork-core.\nunset RTK_DB_PATH\nRTK_MEM_DB_PATH={}\nRTK_TEE_DIR={}\nRTK_AUDIT_DIR={}\n{ACCOUNTING_RECEIPT_JOURNAL_ENV}={}\n{ACCOUNTING_FAILURE_JOURNAL_ENV}={}\n{ACCOUNTING_CORRELATION_ENV}={}\nRTK_TEE=0\nRTK_HISTORY_DAYS=0\nRTK_TRACKING_DISABLED=0\nRTK_TELEMETRY_DISABLED=1\nexport RTK_MEM_DB_PATH RTK_TEE_DIR RTK_AUDIT_DIR {ACCOUNTING_RECEIPT_JOURNAL_ENV} {ACCOUNTING_FAILURE_JOURNAL_ENV} {ACCOUNTING_CORRELATION_ENV} RTK_TEE RTK_HISTORY_DAYS RTK_TRACKING_DISABLED RTK_TELEMETRY_DISABLED\n{resolution}", // 0.11.2: PATH only via the rtk shim
             shell_quote(path_text(&self.memory_db)?),
             shell_quote(path_text(&self.tee_dir)?),
             shell_quote(path_text(&self.audit_dir)?),
             shell_quote(path_text(&accounting.receipt_journal)?),
             shell_quote(path_text(&accounting.failure_journal)?),
             shell_quote(&accounting.correlation_id),
-            shell_quote(binary_directory),
         ))
     }
 
@@ -966,17 +1001,11 @@ impl PinnedRtkAdapter {
             .runtime_paths
             .as_ref()
             .ok_or(ExecError::MissingForkRuntimePaths)?;
-        let binary_directory =
-            self.config
-                .binary
-                .parent()
-                .ok_or_else(|| ExecError::InvalidForkBinaryPath {
-                    path: self.config.binary.clone(),
-                })?;
+        require_binary_directory(&self.config.binary)?; // 0.11.2
         let accounting = runtime.new_accounting_context()?;
         let script = format!(
             "{}{}",
-            runtime.shell_exports(binary_directory, &accounting)?,
+            runtime.shell_exports(Some(&self.config.binary), &accounting)?, // 0.11.2: rtk shim
             rewritten
         );
         Ok((CanonicalCommand::with_shell(shell, script)?, accounting))
@@ -1006,13 +1035,7 @@ impl PinnedRtkAdapter {
             .runtime_paths
             .as_ref()
             .ok_or(ExecError::MissingForkRuntimePaths)?;
-        let binary_directory =
-            self.config
-                .binary
-                .parent()
-                .ok_or_else(|| ExecError::InvalidForkBinaryPath {
-                    path: self.config.binary.clone(),
-                })?;
+        require_binary_directory(&self.config.binary)?; // 0.11.2
         let binary =
             self.config
                 .binary
@@ -1026,7 +1049,7 @@ impl PinnedRtkAdapter {
         let accounting = runtime.new_accounting_context()?;
         let script = format!(
             "{}{}",
-            runtime.shell_exports(binary_directory, &accounting)?,
+            runtime.shell_exports(None, &accounting)?, // 0.11.2: absolute binary, caller's PATH
             render_argv(&argv)
         );
         Ok((
@@ -1240,6 +1263,11 @@ fn set_private_directory_permissions(_path: &Path) -> Result<(), ExecError> {
     Ok(())
 }
 
+// 0.11.2: the rtk shim is owner-only and executable, the same mode as a private directory.
+fn set_private_executable_permissions(path: &Path) -> Result<(), ExecError> {
+    set_private_directory_permissions(path)
+}
+
 fn parse_version(stdout: &[u8]) -> Option<String> {
     String::from_utf8_lossy(stdout)
         .split_whitespace()
@@ -1320,14 +1348,23 @@ fn path_text(path: &Path) -> Result<&str, ExecError> {
         })
 }
 
-fn prefixed_path(binary_directory: &Path) -> Result<OsString, ExecError> {
-    let mut paths = vec![binary_directory.to_owned()];
-    if let Some(path) = std::env::var_os("PATH") {
-        paths.extend(std::env::split_paths(&path));
-    }
-    std::env::join_paths(paths).map_err(|error| ExecError::InvalidForkPathEnvironment {
-        reason: error.to_string(),
-    })
+// 0.11.2: replaces `prefixed_path`; a managed binary must still be a path with a parent.
+fn require_binary_directory(binary: &Path) -> Result<&Path, ExecError> {
+    binary
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| ExecError::InvalidForkBinaryPath {
+            path: binary.to_owned(),
+        })
+}
+
+// 0.11.2: the `rtk` shim. POSIX sh builtins only; it strips every occurrence of its own directory
+// from PATH (keeping any entry the command added itself) and execs the pinned engine.
+fn rtk_shim_script(directory: &str) -> String {
+    format!(
+        "#!/bin/sh\n# HZR managed fork-core shim: resolves `rtk` in a managed command, then runs the pinned engine under the caller's PATH.\nshim={}\nwhile :; do\n  case $PATH in\n    \"$shim\") PATH= ;;\n    \"$shim\":*) PATH=${{PATH#\"$shim\":}} ;;\n    *:\"$shim\") PATH=${{PATH%:\"$shim\"}} ;;\n    *:\"$shim\":*) PATH=${{PATH%%:\"$shim\":*}}:${{PATH#*:\"$shim\":}} ;;\n    *) break ;;\n  esac\ndone\nexport PATH\nexec \"${{{RTK_SHIM_BINARY_ENV}:?HZR managed fork-core binary is not set}}\" \"$@\"\n",
+        shell_quote(directory)
+    )
 }
 
 fn output_text(output: &Output) -> String {
