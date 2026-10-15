@@ -4,6 +4,19 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.11.3] - 2026-10-15
+
+### Fixed
+
+- Claude Code asked for approval in `bypassPermissions` mode for hook-managed commands that
+  fork-core sent to its raw proxy (for example anything running `rm`): the proxy wrapped the
+  agent's command as `rtk proxy <shell> -c '<command>'`, and Claude Code cannot inspect a
+  `-c` script, so it prompted with "This shell -c script runs rm and could not be checked"
+  despite the hook's `allow`. A plain word list is now proxied as argv (`rtk proxy rm -f x`,
+  still tracked); a command that only the shell can interpret (operators, quoting,
+  expansions, assignments, builtins) follows the engine exports verbatim. No managed command
+  hides the agent's command inside `-c` on POSIX hosts; an end-to-end hook test enforces it.
+
 ## [0.11.2] - 2026-09-26
 
 ### Fixed

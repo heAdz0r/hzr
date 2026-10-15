@@ -1015,20 +1015,18 @@ impl PinnedRtkAdapter {
         &self,
         original: &CanonicalCommand,
     ) -> Result<(CanonicalCommand, ForkAccountingHandle), ExecError> {
-        let proxy_args = match original {
-            CanonicalCommand::Argv { program, args } => {
-                let mut proxy = Vec::with_capacity(args.len() + 2);
-                proxy.push("proxy".to_owned());
-                proxy.push(program.clone());
-                proxy.extend(args.iter().cloned());
-                proxy
+        // 0.11.3: a shell command is no longer hidden inside `<shell> -c '…'`. Claude Code cannot
+        // inspect such a script and asks even in bypassPermissions mode ("This shell -c script
+        // runs rm and could not be checked"). A plain word list keeps the tracked proxy as argv;
+        // anything only the shell can interpret runs verbatim, exactly as the agent wrote it.
+        // `Err` carries a shell command that only its shell can interpret. // 0.11.3
+        let proxied = match original {
+            CanonicalCommand::Argv { program, args } => Ok(std::iter::once(program.clone())
+                .chain(args.iter().cloned())
+                .collect::<Vec<_>>()),
+            CanonicalCommand::Shell { shell, command } => {
+                shell_proxy_words(shell, command).ok_or(command) // 0.11.3
             }
-            CanonicalCommand::Shell { shell, command } => vec![
-                "proxy".to_owned(),
-                shell.clone(),
-                shell_command_flag().to_owned(),
-                command.clone(),
-            ],
         };
         let runtime = self
             .config
@@ -1043,14 +1041,21 @@ impl PinnedRtkAdapter {
                 .ok_or_else(|| ExecError::NonUtf8ForkBinaryPath {
                     path: self.config.binary.clone(),
                 })?;
-        let mut argv = Vec::with_capacity(proxy_args.len() + 1);
-        argv.push(binary.to_owned());
-        argv.extend(proxy_args);
+        let invocation = match proxied {
+            Ok(words) => {
+                let mut argv = Vec::with_capacity(words.len() + 2);
+                argv.push(binary.to_owned());
+                argv.push("proxy".to_owned());
+                argv.extend(words);
+                render_argv(&argv)
+            }
+            Err(verbatim) => verbatim.clone(), // 0.11.3: follows the exports as written
+        };
         let accounting = runtime.new_accounting_context()?;
         let script = format!(
             "{}{}",
             runtime.shell_exports(None, &accounting)?, // 0.11.2: absolute binary, caller's PATH
-            render_argv(&argv)
+            invocation                                 // 0.11.3
         );
         Ok((
             CanonicalCommand::with_shell(execution_shell(original), script)?,
@@ -1323,9 +1328,48 @@ const fn default_shell() -> &'static str {
     "cmd.exe"
 }
 
+// 0.11.3: builtins and keywords mean something only inside the shell; argv would exec a binary.
 #[cfg(unix)]
-const fn shell_command_flag() -> &'static str {
-    "-c"
+const SHELL_ONLY_WORDS: &[&str] = &[
+    ".", ":", "[", "[[", "alias", "bg", "builtin", "cd", "command", "declare", "echo", "eval",
+    "exec", "exit", "export", "false", "fc", "fg", "getopts", "hash", "jobs", "kill", "let",
+    "local", "noglob", "popd", "print", "printf", "pushd", "pwd", "read", "readonly", "return",
+    "set", "setopt", "shift", "source", "test", "time", "times", "trap", "true", "type", "typeset",
+    "ulimit", "umask", "unalias", "unset", "unsetopt", "wait", "whence", "which",
+];
+
+/// Words to proxy for a shell command, or `None` when it must run verbatim. // 0.11.3
+///
+/// Only a plain word list — no quoting, expansion, operators, assignments or builtins — means
+/// the same as argv, so only it is proxied; nothing is wrapped in `<shell> -c`, which a host
+/// cannot inspect and therefore re-prompts for even in bypass mode.
+#[cfg(unix)]
+fn shell_proxy_words(_shell: &str, command: &str) -> Option<Vec<String>> {
+    let words = command
+        .split([' ', '\t'])
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let program = *words.first()?;
+    let plain = words.iter().all(|word| {
+        !word.starts_with('=')
+            && word
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || "_+-./:=,@%".contains(ch))
+    });
+    if !plain || program.contains('=') || SHELL_ONLY_WORDS.contains(&program) {
+        return None;
+    }
+    Some(words.into_iter().map(str::to_owned).collect())
+}
+
+// 0.11.3: Windows keeps the `cmd.exe /C` proxy; the bypass re-prompt is a POSIX-host issue.
+#[cfg(windows)]
+fn shell_proxy_words(shell: &str, command: &str) -> Option<Vec<String>> {
+    Some(vec![
+        shell.to_owned(),
+        shell_command_flag().to_owned(),
+        command.to_owned(),
+    ])
 }
 
 #[cfg(windows)]

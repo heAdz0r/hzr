@@ -1,80 +1,28 @@
-# HZR 0.11.2
+# HZR 0.11.3
 
-`hzr stats` counts what the model could actually have read, and the last session is now at the
-top. Current models (Claude Opus 5.5, GPT-6) are priced. An end-to-end audit of the orchestration
-found ten defects, all fixed here with regression tests, and the agtx observatory was re-verified
-end to end.
+Bypass mode no longer asks for approval on hook-managed commands such as `rm`.
 
-## `hzr stats`: honest numbers, last session first
+## The hook no longer hides commands inside `<shell> -c`
 
-- **One host ceiling for every row.** The host-visible figures used a flat 512-token cap for
-  Claude Code rows only, and left every other row uncapped. That cut a 5,000-token output the host
-  shows in full down to 512, and let uncapped rows through. Now the same ceiling the engine applies
-  to its receipts is used for every row: `HZR_HOST_OUTPUT_CEILING`, then `BASH_MAX_OUTPUT_LENGTH`,
-  then 30,000 characters (≈7,500 tokens).
-- **Money is priced on the host-capped net.** The raw producer net was inflated by old rows
-  (1,371 August operations averaging 68k-token baselines, output no host ever delivered). Global
-  lifetime on the maintainer's machine: 38.49M → 7.07M avoided tokens.
-- **0% from a subdirectory is fixed.** Run from `crates/hzr-cli`, `hzr stats` matched ledger rows
-  only for that directory and showed `this project 0 / USD 0.00`. Both the project row and
-  `--workspace .` now resolve to the project root.
-- **LAST SESSION** comes first: time range, operations, raw → filtered, host-capped net and its
-  priced value, rerun tax, top routes. Also in `--json` (`last_session`) and on the dashboard.
-- Projects are named by directory (`hzr (~/Programming/hzr)`) instead of a digest, unless
-  `publish_workspace_names = false`. `hzr stats --fleet` without `--since` covers the whole
-  lifetime instead of failing. Truncated table cells are gone.
-- The dashboard shows the same host-capped figures as the CLI (one query, one test asserting it).
+When fork-core has no filter for a command (`rm`, `mv`, compound commands and the like) it
+selects its tracked raw proxy. Until now that proxy wrapped the agent's command as
+`rtk proxy /bin/zsh -c '<command>'`. Claude Code cannot inspect a `-c` script, so in
+`bypassPermissions` mode it still stopped and asked — "This shell -c script runs rm and could
+not be checked" — even though the HZR hook had answered `allow`. Without HZR the same command
+ran without a prompt, so the prompt was a regression HZR introduced.
 
-## Pricing catalog `hzr-public-api-pricing-2026-09-26-v1`
+The proxy route now keeps the agent's command visible to the host:
 
-- Added Claude Opus 5.5 (`claude-opus-5-5`), Mythos 5 / 5.1, Opus 4.5–4.8, Sonnet 4.5, OpenAI
-  `gpt-6-sol` / `gpt-6-luna`, xAI `grok-4.7` / `grok-build-0.1`, DeepSeek `deepseek-flash`
-  (replaces the retired `deepseek-v4-flash`, kept as an alias) and Qwen 3.6 / 3.7 Plus. Every
-  price comes from the provider's official page, retrieved 2026-09-26.
-- GPT-5.5, GPT-5.4 and GPT-5.4-mini no longer carry a cache-write rate: the official pages list
-  none.
-- To price with Opus 5.5, set `model = "claude-opus-5-5"` under `[billing]`.
+- **A plain word list is proxied as argv** — `rm -f build/out.txt` becomes
+  `rtk proxy rm -f build/out.txt`, so the raw output is still tracked.
+- **Anything only the shell can interpret runs verbatim** after the engine exports:
+  operators (`&&`, `;`, `|`), quoting, expansions, assignments (`FOO=1 cmd`) and builtins
+  (`cd`, `exit`, `echo`, …). It runs in the same shell, exactly as written.
+- Windows keeps the `cmd.exe /C` proxy; the prompt is specific to POSIX hosts.
 
-## Orchestration audit: ten defects fixed
-
-1. **MCP `hzr_search` failed every call** with a contract violation (`index_generation` missing
-   from the output schema). All tool schemas were checked; a new test calls every MCP tool once.
-2. **MCP responses carried the payload twice.** With `structuredContent`, the text block is now a
-   compact summary that keeps recovery fields (30 KB file: 68.6 KB → 33 KB response).
-3. **`hzr memory recall --topic X` in project scope returned HTTP 400.**
-4. **Hook-managed commands ran HZR's bundled Node** instead of the user's: the whole engines
-   directory was put first on `PATH`. rtk now runs by absolute path; the shell route adds only a
-   directory holding an `rtk` shim, so child processes see the caller's `PATH`.
-5. **`rg` dropped file names** when stdin was `/dev/null` (agent harnesses).
-6. **Read-cache hits, batch reads and failed reads skipped the HZR ledger** (and wrote to the
-   engine's local history database instead).
-7. **Inflated baselines:** `ls` measured against its internal `ls -la`, `go test` against the
-   injected `-json` stream. Baselines are now what the user's command would print. This exposed
-   that `rtk ls` printed more than plain `ls` in ordinary directories; it now never prints more
-   (`rtk ls -1`, which printed `(empty)`, is fixed too). `ls -l` keeps permissions, owner and dates.
-8. **Search did not fall back when semantic search failed.** Identifier-like queries route to
-   exact search; an unavailable or empty semantic index degrades with a notice.
-9. **The daemon accepted any `Host` header** (DNS rebinding). Non-loopback hosts get 421.
-10. **`hzr init` left `.grepai` untracked while doctor reported PASS.** It is excluded after init;
-    doctor compares the managed link canonically and works from subdirectories.
-
-Also: `hzr write` creates new files with the umask applied (was 0600), and the managed instruction
-block states exactly when `cat` through the hook is exact (files up to 24 KB).
-
-## agtx observatory
-
-Verified end to end on a seeded store (onboard, sync, disable, re-enable; the store is never
-written). Fixed: dependencies removed in agtx now leave the board, cross-page dependencies resolve,
-project observed time is summed, `sync` right after `enable` waits for the first cycle, and
-`hzr agents board` without a terminal refuses before launching anything.
-
-## Dashboard
-
-Layout fixed at every width (the tab bar was covered at ~800px), a host-capped headline and a Last
-session card, clear loading and error states, plain-language labels with the measurement details
-behind one expandable section, and readable Agents and Delegation tabs.
+Two regression tests guard it: an adapter test and an end-to-end `hooks dispatch` test in
+`bypassPermissions` mode that fails if any managed command wraps the agent's command in `-c`.
 
 ## Upgrade
 
-`hzr update` (or the installer). The post-upgrade `hzr doctor --reconcile-fleet --fix` refreshes
-managed instruction blocks and excludes `.grepai` in registered workspaces.
+`hzr update` (or the installer). No data or configuration changes.

@@ -755,3 +755,39 @@ async fn test_runner_and_std_command_leave_path_to_the_caller() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn test_proxy_route_never_hides_a_shell_command_inside_dash_c() -> Result<()> {
+    // 0.11.3: Claude Code re-prompts in bypass mode for `<shell> -c` scripts it cannot inspect
+    // ("This shell -c script runs rm and could not be checked").
+    let _guard = TEST_LOCK.lock().await;
+    let fork = FakeFork::new(PINNED_RTK_VERSION, r#"printf '{"decision":"proxy"}'"#)?;
+    let adapter = PinnedRtkAdapter::detect(fork.config()).await;
+    let script = |command: &str| {
+        let adapter = &adapter;
+        let command = command.to_owned();
+        async move {
+            match adapter.decide(&CanonicalCommand::shell(command)).await {
+                RewriteDecision::AllowRewrite {
+                    command: CanonicalCommand::Shell { command, .. },
+                    ..
+                } => Ok(command),
+                other => Err(anyhow!("expected a managed shell rewrite, got {other:?}")),
+            }
+        }
+    };
+
+    let plain = script("rm -f build/out.txt").await?;
+    assert!(plain.ends_with(" proxy rm -f build/out.txt"), "{plain}");
+    let compound = script("cd build && rm -rf 'old dir'").await?;
+    assert!(
+        compound.ends_with("\ncd build && rm -rf 'old dir'"),
+        "{compound}"
+    );
+    let builtin = script("exit 7").await?;
+    assert!(builtin.ends_with("\nexit 7"), "{builtin}");
+    for rendered in [&plain, &compound, &builtin] {
+        assert!(!rendered.contains(" -c "), "{rendered}");
+    }
+    Ok(())
+}
