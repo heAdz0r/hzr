@@ -731,6 +731,63 @@ async fn failed_watcher_status_polling_does_not_extend_its_tombstone_ttl() {
     coordinator.shutdown().await.expect("coordinator shutdown");
 }
 
+// 0.11.4: reaping a watcher that already exited must not ask grepai to stop it. The stop
+// command fails for a dead process (and for a deleted worktree), which used to turn every
+// tombstone reap into a `watcher_maintenance_failed` event.
+#[tokio::test]
+async fn reaping_an_exited_watcher_does_not_run_the_stop_command() {
+    let repo = git_repo();
+    let data = tempfile::tempdir().expect("managed data root");
+    write_source(repo.path(), "pub fn coordinated() {}\n");
+    fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    fs::write(repo.path().join("fake-watch-fast-failure"), b"enabled")
+        .expect("fast failure marker");
+    let coordinator = IndexCoordinator::with_watcher_limits(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        fake_grepai(repo.path(), "0.37.0"),
+        deadlines(),
+        true,
+        2,
+        Duration::from_millis(200),
+    );
+
+    coordinator.prepare(repo.path()).await.expect("prepare");
+    fs::write(repo.path().join("fake-stop-fails"), b"enabled").expect("stop failure marker");
+    fs::write(repo.path().join("fake-watch-die"), b"die").expect("watcher failure sentinel");
+    let mut failed = false;
+    for _ in 0..200 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let snapshot = coordinator.registry_snapshot().await.expect("registry");
+        if snapshot
+            .watchers
+            .iter()
+            .any(|watcher| watcher.state == IndexWatcherState::Failed)
+        {
+            failed = true;
+            break;
+        }
+    }
+    assert!(failed, "watcher failure was not observed");
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        coordinator
+            .reap_idle_watchers()
+            .await
+            .expect("reaping an exited watcher succeeds"),
+        1
+    );
+    assert!(
+        coordinator
+            .registry_snapshot()
+            .await
+            .expect("registry")
+            .watchers
+            .is_empty()
+    );
+}
+
 #[tokio::test]
 async fn test_concurrent_prepares_never_exceed_watcher_budget() {
     let data = tempfile::tempdir().expect("managed data root");
@@ -903,6 +960,49 @@ async fn initialization_pins_search_dedup_off() {
         config.contains("search:\n    dedup:\n        enabled: false\n"),
         "{config}"
     );
+}
+
+// 0.11.4: Claude Code agent worktrees under `.claude/worktrees/` stay out of new indexes, and
+// an existing index picks the entry up when its watcher next starts.
+#[tokio::test]
+async fn managed_index_ignores_agent_worktrees() {
+    let repo = git_repo();
+    let engine = connect(repo.path(), fake_grepai(repo.path(), "0.37.0")).await;
+    engine
+        .initialize(&InitOptions::default())
+        .await
+        .expect("initialization");
+    let config_path = repo.path().join(".grepai/config.yaml");
+    let config = fs::read_to_string(&config_path).expect("managed config");
+    assert!(config.contains("\n    - .claude/worktrees\n"), "{config}");
+
+    let repo = git_repo();
+    write_source(repo.path(), "pub fn coordinated() {}\n");
+    fs::write(repo.path().join("fake-grepai-capable"), b"enabled").expect("capability marker");
+    let data = tempfile::tempdir().expect("managed data root");
+    let coordinator = IndexCoordinator::with_watcher_limits(
+        data.path().to_path_buf(),
+        PathBuf::from("git"),
+        fake_grepai(repo.path(), "0.37.0"),
+        deadlines(),
+        true,
+        2,
+        Duration::from_secs(60),
+    );
+    let prepared = coordinator.prepare(repo.path()).await.expect("prepare");
+    coordinator.shutdown().await.expect("coordinator shutdown");
+    let config_path = prepared.workspace.index.config.clone();
+    fs::write(&config_path, "version: 1\nignore:\n    - .git\n").expect("legacy config");
+    coordinator
+        .prepare(repo.path())
+        .await
+        .expect("prepare again");
+    let config = fs::read_to_string(&config_path).expect("migrated config");
+    assert!(
+        config.starts_with("version: 1\nignore:\n    - .git\n    - .claude/worktrees\n"),
+        "{config}"
+    );
+    coordinator.shutdown().await.expect("coordinator shutdown");
 }
 
 // 0.11.0 (heAdz0r/hzr#22): initialization leaves the tracked `.gitignore` untouched.

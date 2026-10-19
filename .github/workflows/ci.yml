@@ -132,7 +132,9 @@ jobs:
       - run: git -C /tmp/hzr-grepai checkout --detach ad90c4216282a434eeb2e28df4a1ea175a5470aa
       - run: git -C /tmp/hzr-grepai apply --check "$GITHUB_WORKSPACE/patches/grepai/0.37.0-disable-worktree-discovery.patch"
       - run: git -C /tmp/hzr-grepai apply "$GITHUB_WORKSPACE/patches/grepai/0.37.0-disable-worktree-discovery.patch"
-      - run: go test ./cli
+      - run: git -C /tmp/hzr-grepai apply --check "$GITHUB_WORKSPACE/patches/grepai/0.37.0-event-queue-backpressure.patch"
+      - run: git -C /tmp/hzr-grepai apply "$GITHUB_WORKSPACE/patches/grepai/0.37.0-event-queue-backpressure.patch"
+      - run: go test ./cli ./watcher
         working-directory: /tmp/hzr-grepai
 
   agtx-observer:

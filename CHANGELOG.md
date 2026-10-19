@@ -4,6 +4,30 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-10-19
+
+### Fixed
+
+- `hzr delegate` failed in every workspace with `HZR grepai is not available on demand:
+  degraded` whenever any workspace's grepai watcher had died: grepai health aggregates all
+  watchers and the bridge refused anything but `ready`/`stopped`. A degraded grepai is now a
+  preflight warning; the workspace's watcher restarts on the worker's first search.
+- The grepai watcher exited with `file event queue is full` on any debounced burst above 100
+  events (new worktrees, checkouts, builds writing sources). New patch
+  `patches/grepai/0.37.0-event-queue-backpressure.patch` makes delivery wait, in order.
+- Claude Code agent worktrees under `.claude/worktrees/` were indexed as part of the parent
+  repository. HZR adds `.claude/worktrees` to the managed grepai `ignore:` list at
+  initialization and whenever a watcher starts.
+- Reaping an exited watcher ran `grepai watch --stop`, which failed and recorded
+  `watcher_maintenance_failed` on every maintenance sweep.
+- `hzr doctor --reconcile-fleet --fix` reported registered roots emptied by a temp-directory
+  cleaner (only the `.grepai` link left) as identity mismatches forever; they are now pruned.
+
+### Added
+
+- `POST /v1/index/watchers/clear-failed`; `hzr doctor --fix` uses it to drop failed watchers
+  at once. The `daemon` doctor check names each degraded engine with its detail and remedy.
+
 ## [0.11.3] - 2026-10-15
 
 ### Fixed

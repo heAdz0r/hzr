@@ -297,6 +297,30 @@ impl IndexCoordinator {
         })
     }
 
+    /// Drop every watcher whose process has exited, without waiting for its tombstone TTL.
+    /// Grepai health aggregates all workspaces, so one dead watcher keeps the daemon
+    /// `Degraded` for the whole TTL; `hzr doctor --fix` clears it. Each workspace restarts
+    /// its watcher on its next routed search. (0.11.4)
+    pub async fn clear_failed_watchers(&self) -> Result<usize> {
+        let _lifecycle = self.watcher_lifecycle.read().await;
+        let _budget = self.watcher_budget.lock().await;
+        let failed = {
+            let mut watchers = self.watchers.lock().await;
+            let mut keys = Vec::new();
+            for (key, entry) in watchers.iter_mut() {
+                if !entry.handle.is_running()? {
+                    keys.push(key.clone());
+                }
+            }
+            keys.into_iter()
+                .filter_map(|key| watchers.remove(&key).map(|entry| (key, entry.handle)))
+                .collect::<Vec<_>>()
+        };
+        let count = failed.len();
+        shutdown_watchers(failed).await?;
+        Ok(count)
+    }
+
     pub async fn reap_idle_watchers(&self) -> Result<usize> {
         let _lifecycle = self.watcher_lifecycle.read().await;
         let _budget = self.watcher_budget.lock().await;

@@ -171,6 +171,14 @@ impl ContextPlanner {
             .map_err(ContextError::Index)
     }
 
+    /// 0.11.4: see [`IndexCoordinator::clear_failed_watchers`].
+    pub async fn clear_failed_indexes(&self) -> Result<usize> {
+        self.indexes
+            .clear_failed_watchers()
+            .await
+            .map_err(ContextError::Index)
+    }
+
     pub async fn reap_idle_indexes(&self) -> Result<usize> {
         self.indexes
             .reap_idle_watchers()

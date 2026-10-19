@@ -1,28 +1,44 @@
-# HZR 0.11.3
+# HZR 0.11.4
 
-Bypass mode no longer asks for approval on hook-managed commands such as `rm`.
+`hzr delegate` no longer fails everywhere because one index watcher died, and the watcher
+no longer dies on a burst of file changes.
 
-## The hook no longer hides commands inside `<shell> -c`
+## What broke
 
-When fork-core has no filter for a command (`rm`, `mv`, compound commands and the like) it
-selects its tracked raw proxy. Until now that proxy wrapped the agent's command as
-`rtk proxy /bin/zsh -c '<command>'`. Claude Code cannot inspect a `-c` script, so in
-`bypassPermissions` mode it still stopped and asked — "This shell -c script runs rm and could
-not be checked" — even though the HZR hook had answered `allow`. Without HZR the same command
-ran without a prompt, so the prompt was a regression HZR introduced.
+A new repository started three Claude Code agents. Claude Code keeps agent worktrees under
+`.claude/worktrees/` inside the repository, so the grepai watcher indexed three more full
+checkouts, and creating them was a burst of file events. Upstream grepai 0.37.0 delivers
+debounced events into a 100-slot queue with a non-blocking send and treats a full queue as
+fatal: the watcher exited with `file event queue is full`.
 
-The proxy route now keeps the agent's command visible to the host:
+HZR kept the dead watcher as a tombstone for its 15-minute idle TTL, and grepai health — which
+aggregates every workspace — reported `degraded`. The delegation bridge refused to start a
+worker while grepai was anything but `ready` or `stopped`, so every `hzr delegate` in every
+repository failed with `HZR grepai is not available on demand: degraded`, including a fresh
+worktree created only for the worker. `hzr doctor` said only `state Degraded`, and
+`hzr doctor --reconcile-fleet --fix` could not finish clean either: it reported four
+"identity mismatch" errors for temporary workspaces a cleaner had emptied.
 
-- **A plain word list is proxied as argv** — `rm -f build/out.txt` becomes
-  `rtk proxy rm -f build/out.txt`, so the raw output is still tracked.
-- **Anything only the shell can interpret runs verbatim** after the engine exports:
-  operators (`&&`, `;`, `|`), quoting, expansions, assignments (`FOO=1 cmd`) and builtins
-  (`cd`, `exit`, `echo`, …). It runs in the same shell, exactly as written.
-- Windows keeps the `cmd.exe /C` proxy; the prompt is specific to POSIX hosts.
+## What changed
 
-Two regression tests guard it: an adapter test and an end-to-end `hooks dispatch` test in
-`bypassPermissions` mode that fails if any managed command wraps the agent's command in `-c`.
+- **The watcher survives bursts.** A new grepai patch
+  (`patches/grepai/0.37.0-event-queue-backpressure.patch`) makes delivery wait for queue
+  space, in order, until the watcher stops, instead of exiting.
+- **Agent worktrees stay out of the index.** HZR adds `.claude/worktrees` to the managed
+  grepai `ignore:` list — for new indexes at initialization and for existing ones when their
+  watcher next starts. Your own entries are kept.
+- **A degraded index does not block delegation.** The worker starts with a warning; HZR
+  restarts the workspace's watcher on the worker's first search.
+- **`hzr doctor --fix` clears failed watchers** through a new daemon route, so the daemon is
+  healthy at once instead of after the TTL. The `daemon` check now names each degraded engine
+  with its detail and remedy.
+- **No more `watcher_maintenance_failed` noise.** Reaping a watcher that already exited no
+  longer asks grepai to stop it.
+- **Fleet reconciliation prunes vacated roots.** A registered root whose repository was removed
+  and which holds only HZR's `.grepai` link is pruned like a deleted root, link included.
 
 ## Upgrade
 
-`hzr update` (or the installer). No data or configuration changes.
+`hzr update` (or the installer), then `hzr doctor --fix` once to clear any failed watcher the
+old daemon still holds. Existing index configs gain one `ignore:` entry the next time their
+watcher starts; nothing else in your data or configuration changes.

@@ -1880,6 +1880,29 @@ pub async fn semantic_readiness(
     }))
 }
 
+/// 0.11.4: drop exited grepai watchers so one dead watcher stops degrading daemon health.
+pub async fn clear_failed_watchers(
+    State(state): State<AppState>,
+) -> Result<Json<hzr_protocol::ClearFailedWatchersApiResponse>, ApiError> {
+    let cleared = state
+        .context
+        .clear_failed_indexes()
+        .await
+        .map_err(context_error)?;
+    if cleared > 0 {
+        state.observability.record_lifecycle(
+            "grepai",
+            hzr_protocol::DashboardLifecycleKind::Reaped,
+            None,
+            "failed_watchers_cleared",
+            None,
+        );
+    }
+    Ok(Json(hzr_protocol::ClearFailedWatchersApiResponse {
+        cleared,
+    }))
+}
+
 pub async fn context_plan(
     State(state): State<AppState>,
     Json(request): Json<ContextPlanApiRequest>,

@@ -893,6 +893,7 @@ mod tests {
             orphan_cleanup: None,
             client_ownership_repair: None,
             accounting_gap_repair: None,
+            failed_watcher_repair: None,
         }
     }
 

@@ -20,6 +20,8 @@ pub(crate) async fn start(
     isolated_worktree: bool,
 ) -> Result<WatchHandle> {
     let owner = IndexOwner::acquire(workspace)?;
+    // 0.11.4: existing indexes pick up the managed ignore list before the watcher reads it.
+    crate::grepai::ensure_managed_ignores_in_config(&workspace.index.config)?;
     let runtime_dir = watch_runtime_dir(workspace);
     std::fs::create_dir_all(&runtime_dir).map_err(|source| IndexError::Io {
         operation: "create grepai watch runtime",
@@ -132,6 +134,13 @@ impl WatchHandle {
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
+        // 0.11.4: a watcher that already exited has nothing to stop. Asking grepai to stop
+        // it fails (no process, and its workspace may be gone), which turned every reap of a
+        // failed tombstone into a `watcher_maintenance_failed` event.
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
+            self.stopped = true;
+            return remove_runtime_dir(&self.runtime_dir);
+        }
         let args = [
             OsString::from("watch"),
             OsString::from("--stop"),

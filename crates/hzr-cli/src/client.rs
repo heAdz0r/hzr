@@ -111,6 +111,14 @@ impl DaemonClient {
         self.post("/v1/search", request).await
     }
 
+    /// 0.11.4: used by `hzr doctor --fix`.
+    pub async fn clear_failed_watchers(
+        &self,
+    ) -> Result<hzr_protocol::ClearFailedWatchersApiResponse, ClientError> {
+        self.post("/v1/index/watchers/clear-failed", &serde_json::json!({}))
+            .await
+    }
+
     pub async fn semantic_readiness(
         &self,
         workspace: &Path,

@@ -113,6 +113,9 @@ pub struct DoctorReport {
     // 0.9.8: `--fix` closed this many stale open daemon-unreachable accounting gaps.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accounting_gap_repair: Option<usize>,
+    // 0.11.4: `--fix` dropped this many exited grepai watchers that kept the daemon `Degraded`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_watcher_repair: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_ownership_repair: Option<Vec<client_config::ClientOwnershipRepair>>,
 }
@@ -191,6 +194,36 @@ pub async fn repair_accounting_gaps(
         recovered_at_unix,
     )?;
     Ok(Some(daemon_unreachable + stale))
+}
+
+/// `hzr doctor --fix`: drop exited grepai watchers. Grepai health aggregates every workspace,
+/// so one dead watcher — a deleted worktree, a crashed watch — kept the daemon `Degraded` and
+/// refused delegation until its 15-minute tombstone expired. (0.11.4)
+pub async fn clear_failed_index_watchers(config: &Config) -> Result<usize, String> {
+    DaemonClient::from_config(config)
+        .map_err(|error| error.to_string())?
+        .clear_failed_watchers()
+        .await
+        .map(|response| response.cleared)
+        .map_err(|error| error.to_string())
+}
+
+/// Name each engine behind a `Degraded` daemon, with the remedy where one exists. The check
+/// used to say only `state Degraded`, which gave the operator nothing to act on. (0.11.4)
+fn degraded_engines_detail(engines: &[hzr_protocol::EngineHealth]) -> String {
+    engines
+        .iter()
+        .filter(|engine| engine.state == EngineState::Degraded)
+        .map(|engine| {
+            let detail = engine.detail.as_deref().unwrap_or("no detail");
+            let remedy = if engine.name == "grepai" {
+                "; run `hzr doctor --fix` to clear failed index watchers"
+            } else {
+                ""
+            };
+            format!("; {} degraded: {detail}{remedy}", engine.name)
+        })
+        .collect()
 }
 
 fn hook_ownership_check(status: adoption::HookStatus) -> DoctorCheck {
@@ -801,6 +834,11 @@ pub async fn reconcile_fleet_contracts(
             reconcile_stale_registration(config, registration, dry_run, &mut report);
             continue;
         }
+        if vacated_root(&registration) {
+            // 0.11.4: a temp-directory cleaner removed the repository but not HZR's link.
+            reconcile_vacated_registration(config, registration, dry_run, &mut report);
+            continue;
+        }
         let verified = match Workspace::discover_managed_fast(
             &registration.root,
             Path::new("git"),
@@ -1012,6 +1050,49 @@ pub async fn reconcile_fleet_contracts(
 /// Only the exact `workspaces/<repository>/<worktree>` directory named by the registration is
 /// removed, and only when the root's parent still exists (so the root was deleted rather than
 /// unmounted). The index inside it indexed a tree that no longer exists.
+/// A git-backed root whose repository is gone and whose only remaining entry is HZR's own
+/// `.grepai` link into this registration's index — what a temporary-directory cleaner leaves
+/// behind. Without this the registration failed fleet reconciliation forever as an identity
+/// mismatch, and `hzr doctor --reconcile-fleet --fix` could never finish clean. (0.11.4)
+fn vacated_root(registration: &hzr_index::WorkspaceRegistration) -> bool {
+    if !registration.git_backed {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(&registration.root) else {
+        return false;
+    };
+    let mut managed_link = false;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return false;
+        };
+        if entry.file_name() != ".grepai" {
+            return false;
+        }
+        match std::fs::read_link(entry.path()) {
+            Ok(target) if target == registration.index_directory => managed_link = true,
+            _ => return false,
+        }
+    }
+    managed_link
+}
+
+/// Prune a [`vacated_root`] registration: its registry directory, then the dangling link.
+/// The emptied root directory itself is left to whoever created it. (0.11.4)
+fn reconcile_vacated_registration(
+    config: &Config,
+    registration: hzr_index::WorkspaceRegistration,
+    dry_run: bool,
+    report: &mut FleetReconcileReport,
+) {
+    let reason = format!(
+        "repository at {} was removed; only HZR's index link remained",
+        registration.root.display()
+    );
+    let link = registration.root.join(".grepai");
+    prune_registration(config, registration, reason, Some(&link), dry_run, report);
+}
+
 fn reconcile_stale_registration(
     config: &Config,
     registration: hzr_index::WorkspaceRegistration,
@@ -1031,11 +1112,6 @@ fn reconcile_stale_registration(
         });
         return;
     }
-    let registry_directory = config
-        .data_dir
-        .join("workspaces")
-        .join(&registration.repository_id)
-        .join(&registration.worktree_id);
     let reason = format!(
         "root directory {} was deleted while {} remains",
         registration.root.display(),
@@ -1044,6 +1120,24 @@ fn reconcile_stale_registration(
             .parent()
             .map_or_else(String::new, |parent| parent.display().to_string())
     );
+    prune_registration(config, registration, reason, None, dry_run, report);
+}
+
+/// Remove a stale registration's registry directory and, when given, HZR's link that pointed
+/// into it. Dry runs only report. (0.8.1; link removal 0.11.4)
+fn prune_registration(
+    config: &Config,
+    registration: hzr_index::WorkspaceRegistration,
+    reason: String,
+    managed_link: Option<&Path>,
+    dry_run: bool,
+    report: &mut FleetReconcileReport,
+) {
+    let registry_directory = config
+        .data_dir
+        .join("workspaces")
+        .join(&registration.repository_id)
+        .join(&registration.worktree_id);
     if !registration
         .index_directory
         .starts_with(&registry_directory)
@@ -1068,7 +1162,9 @@ fn reconcile_stale_registration(
         });
         return;
     }
-    let (state, error) = match std::fs::remove_dir_all(&registry_directory) {
+    let removed = std::fs::remove_dir_all(&registry_directory)
+        .and_then(|()| managed_link.map_or(Ok(()), std::fs::remove_file));
+    let (state, error) = match removed {
         Ok(()) => ("pruned", None),
         Err(error) => ("failed", Some(error.to_string())),
     };
@@ -2230,8 +2326,11 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
                         "daemon",
                         status,
                         format!(
-                            "HZR {}, protocol {}, state {:?}",
-                            health.hzr_version, health.protocol_version, health.state
+                            "HZR {}, protocol {}, state {:?}{}",
+                            health.hzr_version,
+                            health.protocol_version,
+                            health.state,
+                            degraded_engines_detail(&health.engines) // 0.11.4
                         ),
                     ));
                     match client.semantic_readiness(workspace).await {
@@ -2285,6 +2384,7 @@ pub async fn doctor(config_path: &Path, config: &Config, workspace: &Path) -> Do
         orphan_cleanup: None, // 0.8.1
         client_ownership_repair: None,
         accounting_gap_repair: None, // 0.9.8
+        failed_watcher_repair: None, // 0.11.4
     }
 }
 
@@ -4920,6 +5020,110 @@ justification = "This repository measures upstream RTK as the explicit benchmark
         assert!(!outside.join("CLAUDE.md").exists());
         assert!(!outside.join("AGENTS.md").exists());
         assert!(!outside.join(".codex/config.toml").exists());
+    }
+
+    // 0.11.4: a `Degraded` daemon check names the engine and its remedy.
+    #[test]
+    fn degraded_daemon_detail_names_the_engine_and_remedy() {
+        let engine = |name: &str, state, detail: &str| hzr_protocol::EngineHealth {
+            name: name.into(),
+            version: None,
+            state,
+            detail: Some(detail.into()),
+        };
+        use super::{EngineState, degraded_engines_detail};
+        let detail = degraded_engines_detail(&[
+            engine(
+                "grepai",
+                EngineState::Degraded,
+                "0 active watcher(s), 2 failed",
+            ),
+            engine("icm", EngineState::Ready, "ready"),
+            engine("rtk", EngineState::Degraded, "Unavailable"),
+        ]);
+        assert_eq!(
+            detail,
+            "; grepai degraded: 0 active watcher(s), 2 failed; run `hzr doctor --fix` to clear failed index watchers; rtk degraded: Unavailable"
+        );
+        assert_eq!(
+            degraded_engines_detail(&[engine("icm", EngineState::Ready, "ready")]),
+            ""
+        );
+    }
+
+    // 0.11.4: a temp-directory cleaner removes the repository but leaves HZR's `.grepai`
+    // link. The registration used to fail reconciliation forever as an identity mismatch.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fleet_reconcile_prunes_a_root_vacated_down_to_the_index_link() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let workspace = fixture.path().join("scratch");
+        fs::create_dir_all(&workspace).expect("workspace root");
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&workspace)
+                .status()
+                .expect("git init")
+                .success()
+        );
+        let config = Config {
+            data_dir: fixture.path().canonicalize().expect("fixture").join("data"),
+            ..Config::default()
+        };
+        let discovered = Workspace::discover_managed(
+            &workspace,
+            Path::new("git"),
+            &config.data_dir,
+            Deadlines::default().version,
+        )
+        .await
+        .expect("workspace discovery");
+        discovered.register().expect("workspace registration");
+        std::os::unix::fs::symlink(&discovered.index.directory, workspace.join(".grepai"))
+            .expect("managed index link");
+        let registry = discovered
+            .index
+            .directory
+            .ancestors()
+            .nth(2)
+            .expect("registry directory")
+            .to_path_buf();
+        assert!(registry.join("workspace.json").is_file());
+        fs::remove_dir_all(workspace.join(".git")).expect("cleaner removes the repository");
+        let contract = fixture.path().join("current/share/hzr/HZR.md");
+        fs::create_dir_all(contract.parent().expect("contract parent")).expect("bundle layout");
+        fs::write(&contract, "contract").expect("contract fixture");
+        let binary = fixture.path().join("bin/hzr");
+        fs::create_dir_all(binary.parent().expect("binary parent")).expect("binary layout");
+        fs::write(&binary, "binary").expect("binary fixture");
+
+        let planned = reconcile_fleet_contracts(&config, &contract, &binary, true, false).await;
+        assert!(
+            planned.workspace_errors.is_empty(),
+            "{:?}",
+            planned.workspace_errors
+        );
+        assert_eq!(planned.stale_registrations.len(), 1);
+        assert_eq!(planned.stale_registrations[0].state, "would_prune");
+        assert!(registry.is_dir(), "a dry run prunes nothing");
+
+        let applied = reconcile_fleet_contracts(&config, &contract, &binary, false, false).await;
+        assert!(
+            applied.workspace_errors.is_empty(),
+            "{:?}",
+            applied.workspace_errors
+        );
+        assert_eq!(applied.stale_registrations[0].state, "pruned");
+        assert!(!registry.exists());
+        assert!(fs::symlink_metadata(workspace.join(".grepai")).is_err());
+        assert!(
+            workspace.is_dir(),
+            "the emptied root belongs to whoever created it"
+        );
+
+        let again = reconcile_fleet_contracts(&config, &contract, &binary, false, false).await;
+        assert_eq!(again.completion_check().status, CheckStatus::Pass);
     }
 
     #[cfg(unix)]

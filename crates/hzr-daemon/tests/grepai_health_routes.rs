@@ -132,6 +132,28 @@ async fn live_and_failed_grepai_watcher_are_visible_through_health_and_dashboard
     )
     .await;
 
+    // 0.11.4: `hzr doctor --fix` clears the tombstone instead of waiting out its TTL.
+    let response = application
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/index/watchers/clear-failed")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from("{}"))
+                .expect("clear request"),
+        )
+        .await
+        .expect("clear response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1_048_576)
+        .await
+        .expect("clear body");
+    let cleared: Value = serde_json::from_slice(&bytes).expect("clear JSON");
+    assert_eq!(cleared["cleared"], 1);
+    assert_grepai_health(&application, "stopped", "0 active watcher(s), 0 failed").await;
+
     state.index_maintenance_stop.store(true, Ordering::Release);
     if let Some(task) = state.index_maintenance_task.lock().await.take() {
         task.abort();

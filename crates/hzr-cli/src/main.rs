@@ -533,6 +533,12 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             // 0.10.1: `--fix` closes stale open daemon-unreachable accounting gaps left by an
             // earlier outage, so `hzr stats` stops reporting `▲ LIVE DEGRADED` for a condition
             // the operator has already fixed by restoring the daemon.
+            // 0.11.4: `--fix` drops exited grepai watchers that keep the daemon `Degraded`.
+            let failed_watcher_repair = if fix && !dry_run {
+                Some(diagnostics::clear_failed_index_watchers(&config).await)
+            } else {
+                None
+            };
             let accounting_gap_repair = if fix && !dry_run {
                 diagnostics::repair_accounting_gaps(&config).await?
             } else {
@@ -584,6 +590,9 @@ async fn run(cli: Cli) -> Result<ExitCode> {
             report.fleet_reconcile = fleet_reconcile;
             report.orphan_cleanup = orphan_cleanup; // 0.8.3
             report.accounting_gap_repair = accounting_gap_repair; // 0.10.1
+            report.failed_watcher_repair = failed_watcher_repair
+                .as_ref()
+                .and_then(|repair| repair.as_ref().ok().copied()); // 0.11.4
             if let Some(fleet) = &report.fleet_reconcile {
                 let completion = fleet.completion_check();
                 if completion.status == diagnostics::CheckStatus::Error {
@@ -632,6 +641,14 @@ async fn run(cli: Cli) -> Result<ExitCode> {
                 }
                 if let Some(count) = report.accounting_gap_repair {
                     output::print_accounting_gap_repair(count)?; // 0.10.1
+                }
+                match &failed_watcher_repair {
+                    Some(Ok(0)) => println!("index watchers: no failed watcher to clear"), // 0.11.4
+                    Some(Ok(count)) => {
+                        println!("index watchers: {count} failed watcher(s) cleared")
+                    }
+                    Some(Err(error)) => println!("index watchers not cleared: {error}"),
+                    None => {}
                 }
                 match &instruction_repair {
                     Some(Ok(application)) => {

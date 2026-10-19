@@ -15,6 +15,7 @@ import {
   instructionHead,
   loadProjectInstructions,
   persistUsageOutbox,
+  preflightHealth,
   prepareManagedRuntime,
   replayUsageOutbox,
   stripManagedHzrContract,
@@ -534,4 +535,32 @@ test("fork results reach the worker as text, failures with their status", async 
   const failed = JSON.stringify({ stdout: "", stderr: "Error: file exists; pass --force\n", termination: "exited", exit_code: 1 });
   assert.equal(renderForkResult(failed), "exit 1\nError: file exists; pass --force");
   assert.equal(renderForkResult("not json"), "not json");
+});
+
+// 0.11.4: a failed watcher elsewhere degrades grepai health; delegation proceeds with a warning.
+test("preflight keeps delegating when grepai is degraded", async () => {
+  const health = (grepai, rtk = "ready") => async () =>
+    JSON.stringify({
+      protocol_version: 1,
+      hzr_version: BRIDGE_MANIFEST.version,
+      engines: [
+        { name: "rtk", state: rtk },
+        grepai,
+        { name: "icm", state: "ready" },
+      ],
+    });
+  const degraded = await preflightHealth(
+    health({ name: "grepai", state: "degraded", detail: "0 active watcher(s), 2 failed" }),
+    BRIDGE_MANIFEST.version,
+  );
+  assert.deepEqual(degraded.warnings, ["grepai degraded: 0 active watcher(s), 2 failed"]);
+  const stopped = await preflightHealth(
+    health({ name: "grepai", state: "stopped" }),
+    BRIDGE_MANIFEST.version,
+  );
+  assert.deepEqual(stopped.warnings, []);
+  await assert.rejects(
+    preflightHealth(health({ name: "grepai", state: "ready" }, "degraded"), BRIDGE_MANIFEST.version),
+    /fork-core is not ready/,
+  );
 });

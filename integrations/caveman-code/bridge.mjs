@@ -573,7 +573,7 @@ function exactlyOneEngine(health, name) {
   return matches[0];
 }
 
-async function preflightHealth(callHzr, expectedHzrVersion) {
+export async function preflightHealth(callHzr, expectedHzrVersion) {
   const text = await callHzr(
     "/v1/health",
     undefined,
@@ -599,12 +599,17 @@ async function preflightHealth(callHzr, expectedHzrVersion) {
   if (rtk.state !== "ready") {
     throw new Error(`HZR fork-core is not ready: ${String(rtk.state)}`);
   }
+  // 0.11.4: grepai health aggregates every workspace's watcher. One failed watcher in an
+  // unrelated repository used to refuse delegation everywhere for its 15-minute tombstone,
+  // although HZR restarts this workspace's watcher on the worker's first search.
   const grepai = exactlyOneEngine(health, "grepai");
+  const warnings = [];
   if (grepai.state !== "ready" && grepai.state !== "stopped") {
-    throw new Error(`HZR grepai is not available on demand: ${String(grepai.state)}`);
+    warnings.push(
+      `grepai ${String(grepai.state)}: ${String(grepai.detail ?? "no detail")}`.slice(0, 512),
+    );
   }
   const icm = exactlyOneEngine(health, "icm");
-  const warnings = [];
   if (icm.state !== "ready") {
     warnings.push(`ICM ${String(icm.state)}: ${String(icm.detail ?? "no detail")}`.slice(0, 512));
   }

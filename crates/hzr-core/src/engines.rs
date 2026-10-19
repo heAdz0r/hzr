@@ -68,11 +68,17 @@ mod tests {
         assert_eq!(grepai.tag, "v0.37.0");
         assert_eq!(
             grepai.patches,
-            ["patches/grepai/0.37.0-disable-worktree-discovery.patch"]
+            [
+                "patches/grepai/0.37.0-disable-worktree-discovery.patch",
+                "patches/grepai/0.37.0-event-queue-backpressure.patch", // 0.11.4
+            ]
         );
         assert_eq!(
             grepai.patch_sha256,
-            ["4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f"]
+            [
+                "4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f",
+                "e5b1e807bfe95fe3bbf4a89a2b965ececc5c0de96cfb432436813e7b42dd5668", // 0.11.4
+            ]
         );
 
         let icm = manifest

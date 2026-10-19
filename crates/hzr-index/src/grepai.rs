@@ -16,6 +16,11 @@ use crate::workspace::{IndexPlacement, Workspace};
 
 pub const SUPPORTED_GREPAI_VERSION: &str = "0.37.0"; // 0.11.1: atomic-write indexing fix (#295)
 pub const SINGLE_WORKTREE_WATCH_FLAG: &str = "--no-worktree-discovery";
+/// Directories HZR always keeps out of a managed index. Claude Code creates agent worktrees
+/// under `.claude/worktrees/` inside the repository: each is a full checkout of the same
+/// code, so indexing it duplicates every file, and creating one is a burst of thousands of
+/// file events that used to kill the grepai watcher. (0.11.4)
+pub const MANAGED_INDEX_IGNORES: &[&str] = &[".claude/worktrees"];
 static CONFIG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug)]
@@ -219,6 +224,7 @@ impl GrepAi {
         process::require_success(output, "initialize grepai")?;
         self.workspace.require_initialized()?;
         disable_search_dedup_in_config(&self.workspace.index.config)?; // 0.11.1 (grepai 0.37.0)
+        ensure_managed_ignores_in_config(&self.workspace.index.config)?; // 0.11.4
         if options.repository_graph {
             enable_repository_graph_in_config(&self.workspace.index.config)?;
         }
@@ -393,6 +399,90 @@ fn write_managed_config(path: &Path, updated: &str) -> Result<()> {
     write_result
 }
 
+/// Add every [`MANAGED_INDEX_IGNORES`] entry missing from the top-level `ignore:` list,
+/// keeping the user's own entries and their order. Returns whether the file changed.
+/// Callers hold the index owner lock; a running watcher reads the list at its next start.
+/// (0.11.4)
+pub fn ensure_managed_ignores_in_config(path: &Path) -> Result<bool> {
+    let config = read_managed_config(path)?;
+    let Some(updated) = config_with_managed_ignores(&config) else {
+        return Ok(false);
+    };
+    write_managed_config(path, &updated)?;
+    Ok(true)
+}
+
+fn config_with_managed_ignores(config: &str) -> Option<String> {
+    let mut lines: Vec<String> = config.split_inclusive('\n').map(str::to_owned).collect();
+    if lines.last().is_some_and(|line| !line.ends_with('\n')) {
+        lines.last_mut().expect("last line").push('\n');
+    }
+    let top_level = |line: &str| !line.starts_with([' ', '\t']) && !line.trim().is_empty();
+    let section = lines
+        .iter()
+        .position(|line| top_level(line) && line.trim_end().starts_with("ignore:"));
+    let mut header_rewritten = false;
+    let (insert_at, indent, present) = match section {
+        Some(start) => {
+            // An inline list (`ignore: [a, b]`) becomes a block list with the same entries.
+            let inline = lines[start].trim_end()["ignore:".len()..].trim().to_owned();
+            if !inline.is_empty() {
+                let entries = inline
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|entry| !entry.is_empty())
+                    .map(|entry| format!("    - {entry}\n"));
+                let block = std::iter::once("ignore:\n".to_owned()).chain(entries);
+                lines.splice(start..=start, block);
+                header_rewritten = true;
+            }
+            let end = lines
+                .iter()
+                .enumerate()
+                .skip(start + 1)
+                .find_map(|(index, line)| top_level(line).then_some(index))
+                .unwrap_or(lines.len());
+            let items: Vec<&String> = lines[start + 1..end]
+                .iter()
+                .filter(|line| line.trim_start().starts_with("- "))
+                .collect();
+            let indent = items.first().map_or_else(
+                || "    ".to_owned(),
+                |line| line[..line.len() - line.trim_start().len()].to_owned(),
+            );
+            let present = items
+                .iter()
+                .map(|line| {
+                    line.trim()
+                        .trim_start_matches("- ")
+                        .trim()
+                        .trim_matches(['\'', '"'])
+                        .trim_end_matches('/')
+                        .to_owned()
+                })
+                .collect::<Vec<_>>();
+            (end, indent, present)
+        }
+        None => {
+            lines.push("ignore:\n".to_owned());
+            header_rewritten = true;
+            (lines.len(), "    ".to_owned(), Vec::new())
+        }
+    };
+    let missing: Vec<String> = MANAGED_INDEX_IGNORES
+        .iter()
+        .filter(|entry| !present.iter().any(|item| item == *entry))
+        .map(|entry| format!("{indent}- {entry}\n"))
+        .collect();
+    if missing.is_empty() && !header_rewritten {
+        return None;
+    }
+    lines.splice(insert_at..insert_at, missing);
+    Some(lines.concat())
+}
+
 /// grepai 0.36+ writes `search.dedup.enabled: true` into a fresh config, which keeps
 /// one chunk per file. Indexes created by earlier grepai have no such key and keep
 /// every chunk. HZR pins the earlier behaviour so every workspace — new or existing —
@@ -497,4 +587,53 @@ async fn verify_version(binary: &Path, root: &Path, deadline: Duration) -> Resul
         });
     }
     Ok(found.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::config_with_managed_ignores;
+
+    // 0.11.4: agent worktrees under `.claude/worktrees/` stay out of every managed index.
+    #[test]
+    fn managed_ignores_are_appended_to_the_existing_block() {
+        let config =
+            "version: 1\nignore:\n    - .git\n    - target\nupdate:\n    check_on_startup: false\n";
+        let updated = config_with_managed_ignores(config).expect("entry added");
+        assert_eq!(
+            updated,
+            "version: 1\nignore:\n    - .git\n    - target\n    - .claude/worktrees\nupdate:\n    check_on_startup: false\n"
+        );
+        assert_eq!(config_with_managed_ignores(&updated), None, "idempotent");
+    }
+
+    #[test]
+    fn managed_ignores_respect_an_equivalent_user_entry() {
+        assert_eq!(
+            config_with_managed_ignores("ignore:\n  - \".claude/worktrees/\"\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn managed_ignores_create_a_missing_section() {
+        assert_eq!(
+            config_with_managed_ignores("version: 1").as_deref(),
+            Some("version: 1\nignore:\n    - .claude/worktrees\n")
+        );
+    }
+
+    #[test]
+    fn managed_ignores_keep_inline_entries() {
+        assert_eq!(
+            config_with_managed_ignores("ignore: [.git, target]\nrpg:\n    enabled: true\n")
+                .as_deref(),
+            Some(
+                "ignore:\n    - .git\n    - target\n    - .claude/worktrees\nrpg:\n    enabled: true\n"
+            )
+        );
+        assert_eq!(
+            config_with_managed_ignores("ignore: []\n").as_deref(),
+            Some("ignore:\n    - .claude/worktrees\n")
+        );
+    }
 }

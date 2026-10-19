@@ -66,6 +66,12 @@ the sole index owner. Modified-source distributions must retain grepai's MIT lic
 this change. Patch SHA-256:
 `4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f`.
 
+HZR applies `patches/grepai/0.37.0-event-queue-backpressure.patch` to the pinned grepai source. Upstream's
+watcher treated a debounced burst larger than its 100-event queue — a checkout, a new worktree, a
+build writing generated sources — as fatal and exited. The patch makes delivery wait for queue
+space, in order, until the watcher stops. Patch SHA-256:
+`e5b1e807bfe95fe3bbf4a89a2b965ececc5c0de96cfb432436813e7b42dd5668`.
+
 HZR applies `patches/icm/0.10.61-refresh-workspace-lock.patch` to the pinned ICM source. The patch
 only brings the `icm-cli` package version in upstream's committed `Cargo.lock` from `0.10.54` to the
 source package version `0.10.61`, allowing the otherwise unchanged source to build under `--locked`.

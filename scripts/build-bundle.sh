@@ -245,12 +245,17 @@ HZR_NPM_BINARY="${HZR_NODE_BUILD_ROOT}/bin/npm"
 verify_sha256 \
   "4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f" \
   "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
+# 0.11.4: a burst larger than the event queue waits instead of killing the watcher.
+verify_sha256 \
+  "e5b1e807bfe95fe3bbf4a89a2b965ececc5c0de96cfb432436813e7b42dd5668" \
+  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-event-queue-backpressure.patch"
 hzr_build_stage "Building the pinned grepai engine"
 HZR_BUILD_SCRIPT_SHA256="$(sha256_file "${BASH_SOURCE[0]}")"
 HZR_GREPAI_LICENSE_SOURCE="${HZR_BUILD_TEMP}/grepai.LICENSE"
 HZR_GREPAI_CACHE_KEY="$(component_cache_key \
   grepai 0.37.0 ad90c4216282a434eeb2e28df4a1ea175a5470aa \
   4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f \
+  e5b1e807bfe95fe3bbf4a89a2b965ececc5c0de96cfb432436813e7b42dd5668 \
   "${HZR_PLATFORM}" "$(go version)" "${HZR_BUILD_SCRIPT_SHA256}")"
 if restore_cached_component \
   grepai "${HZR_GREPAI_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/grepai" \
@@ -268,9 +273,13 @@ else
     "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
   git -C "${HZR_BUILD_TEMP}/grepai" apply \
     "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
+  git -C "${HZR_BUILD_TEMP}/grepai" apply --check \
+    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-event-queue-backpressure.patch"
+  git -C "${HZR_BUILD_TEMP}/grepai" apply \
+    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-event-queue-backpressure.patch"
   (
     cd "${HZR_BUILD_TEMP}/grepai"
-    go test ./cli
+    go test ./cli ./watcher
     go build -trimpath -ldflags "-s -w -X main.version=0.37.0" \
       -o "${HZR_ENGINE_OUTPUT}/grepai" ./cmd/grepai
   )
@@ -568,6 +577,9 @@ install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/claude-code/hzr-awareness-c
 install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
+install -m 0644 \
+  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-event-queue-backpressure.patch" \
+  "${HZR_PROVENANCE_OUTPUT}/patches/grepai/0.37.0-event-queue-backpressure.patch"
 install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/icm/0.10.61-refresh-workspace-lock.patch"

@@ -21,6 +21,7 @@ mod api;
 
 pub use api::{
     COMPLETENESS_CONTRACTS,
+    ClearFailedWatchersApiResponse, // 0.11.4
     CodecApiRequest,
     CommandTermination,
     CompletenessContract,

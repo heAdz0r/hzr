@@ -159,6 +159,9 @@ retains architecture, security decisions, review and final acceptance. Workers u
 the existing managed HZR runtime; no separate index or memory engine is started.
 There is no automatic fallback to another model/provider. One delegated worker per
 HZR data directory is allowed at a time; workers must not delegate recursively.
+A `Degraded` grepai — a failed index watcher in any workspace — does not refuse delegation;
+the worker gets a warning and HZR restarts this workspace's watcher on its first search.
+`hzr doctor --fix` clears failed watchers at once.
 
 The worker inherits the target workspace's own `AGENTS.md` and `CLAUDE.md` with HZR's
 managed block removed, up to a 24 KiB preload budget shared between them. A repository

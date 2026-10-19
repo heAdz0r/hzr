@@ -121,6 +121,12 @@ pub struct SemanticReadinessApiResponse {
     pub detail: String,
 }
 
+/// 0.11.4: outcome of `POST /v1/index/watchers/clear-failed`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ClearFailedWatchersApiResponse {
+    pub cleared: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ContextPlanApiRequest {
     pub workspace: String,
