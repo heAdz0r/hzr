@@ -28,6 +28,12 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 - `POST /v1/index/watchers/clear-failed`; `hzr doctor --fix` uses it to drop failed watchers
   at once. The `daemon` doctor check names each degraded engine with its detail and remedy.
 
+### Security
+
+- Managed agent runtime dependencies: `undici` 7.30.1 and other transitive updates clear nine
+  high-severity advisories; `basic-ftp` is overridden to 6.2.3 (GHSA-c475-qrg2-pj4r), which
+  `get-uri` still pins to ^5. `npm audit --omit=dev` reports no vulnerabilities.
+
 ## [0.11.3] - 2026-10-15
 
 ### Fixed

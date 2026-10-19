@@ -37,6 +37,12 @@ worktree created only for the worker. `hzr doctor` said only `state Degraded`, a
 - **Fleet reconciliation prunes vacated roots.** A registered root whose repository was removed
   and which holds only HZR's `.grepai` link is pruned like a deleted root, link included.
 
+## Dependencies
+
+The managed agent runtime's transitive dependencies were refreshed (`undici` 7.30.1 among
+them) and `basic-ftp` is overridden to 6.2.3, clearing every high-severity `npm audit`
+advisory that had turned CI red since 0.11.3.
+
 ## Upgrade
 
 `hzr update` (or the installer), then `hzr doctor --fix` once to clear any failed watcher the

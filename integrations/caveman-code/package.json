@@ -16,6 +16,7 @@
     "adm-zip": "$adm-zip",
     "@juliusbrussee/caveman-code": {
       "extract-zip": "$extract-zip"
-    }
+    },
+    "basic-ftp": "6.2.3"
   }
 }
