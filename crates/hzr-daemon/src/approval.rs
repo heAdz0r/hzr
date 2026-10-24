@@ -37,6 +37,14 @@ pub struct ApprovalStore {
 }
 
 impl ApprovalStore {
+    pub(crate) fn is_pending(&self, decision_id: &str) -> bool {
+        self.pending.try_lock().map_or(true, |approvals| {
+            approvals
+                .get(decision_id)
+                .is_some_and(|approval| approval.created_at.elapsed() < APPROVAL_TTL)
+        })
+    }
+
     pub async fn insert(&self, pending: PendingApproval) -> String {
         let mut approvals = self.pending.lock().await;
         prune_expired(&mut approvals);

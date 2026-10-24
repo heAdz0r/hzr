@@ -53,6 +53,15 @@ impl ApiError {
         }
     }
 
+    pub(crate) fn gone(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::GONE,
+            code,
+            message: message.into(),
+            recoverable: false,
+        }
+    }
+
     pub fn service(code: &'static str, message: impl Into<String>, recoverable: bool) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,

@@ -476,13 +476,9 @@ mod tests {
         // Bind on port 0 = OS assigns a free port
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().unwrap().port();
-        drop(listener); // release so serve() can re-bind — test uses direct connection approach
-
-        // Spawn a minimal ad-hoc server for one request
-        let listener2 = TcpListener::bind(format!("127.0.0.1:{port}")).expect("rebind");
-        listener2.set_nonblocking(false).ok();
+        // Keep ownership of the assigned port while concurrent tests open sockets.
         let handle = std::thread::spawn(move || {
-            if let Ok((stream, _)) = listener2.accept() {
+            if let Ok((stream, _)) = listener.accept() {
                 handle_connection(stream, 0);
             }
         });

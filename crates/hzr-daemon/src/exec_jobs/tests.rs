@@ -1,6 +1,121 @@
 use std::fs;
 
 #[tokio::test]
+async fn terminal_history_at_twenty_thousand_entries_allows_a_new_command() {
+    let (directory, state) = fixture().await;
+    let workspace = directory.path().canonicalize().expect("workspace");
+    let modified = std::time::SystemTime::now() - Duration::from_secs(7200);
+    let approval = state
+        .approvals
+        .insert(crate::approval::PendingApproval {
+            channel: None,
+            requested: hzr_exec::CanonicalCommand::shell("printf pending"),
+            approved_decision: hzr_exec::RewriteDecision::allow_raw("fixture"),
+            evasion: None,
+            accounting_correlation_id: None,
+            cwd: workspace.clone(),
+            timeout_ms: None,
+            caller_path: None,
+            agent: None,
+            session_id: None,
+            trace_hash: "fixture".into(),
+        })
+        .await;
+    let output = state
+        .exec_jobs
+        .directory
+        .join(format!("{}.output", uuid::Uuid::from_u128(4)));
+    fs::create_dir(&output).expect("output directory");
+    fs::write(output.join("stdout"), "old output").expect("captured output");
+    for index in 1..=super::MAX_RECORDS {
+        if index == super::MAX_RECORDS {
+            state
+                .exec_jobs
+                .reserve_record_capacity(0, &state.approvals)
+                .expect("output directories and SQLite files are not execution records");
+        }
+        let record = JobRecord {
+            workspace: workspace.clone(),
+            request_hash: "bound-command".into(),
+            snapshot: hzr_exec::ExecJobSnapshot {
+                delivery: None,
+                operation_id: uuid::Uuid::from_u128(index as u128).to_string(),
+                state: if index == 1 {
+                    ExecJobState::Running
+                } else {
+                    ExecJobState::Completed
+                },
+                revision: 2,
+                outcome: (index == 3).then(|| hzr_exec::ExecutionOutcome::NotStarted {
+                    disposition: hzr_exec::NotStarted::ApprovalRequired {
+                        decision_id: Some(approval.clone()),
+                        requested: hzr_exec::CanonicalCommand::shell("printf pending"),
+                        proposed: None,
+                        reason: "fixture".into(),
+                    },
+                }),
+                error: None,
+            },
+        };
+        let path = state
+            .exec_jobs
+            .path(&record.snapshot.operation_id)
+            .expect("path");
+        fs::write(&path, serde_json::to_vec(&record).expect("JSON")).expect("terminal record");
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("record")
+            .set_modified(if index == 2 {
+                std::time::SystemTime::now()
+            } else {
+                modified
+            })
+            .expect("age record");
+    }
+    let command = request(&directory, "printf recovered > capacity-recovered");
+    let _ = start(State(state.clone()), Json(command.clone()))
+        .await
+        .expect("terminal history must not block dispatch");
+    assert_eq!(
+        wait(State(state.clone()), Json(poll(&command)))
+            .await
+            .expect("completion")
+            .0
+            .state,
+        ExecJobState::Completed
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join("capacity-recovered")).expect("side effect"),
+        "recovered"
+    );
+    for index in 1..=3 {
+        assert!(
+            state
+                .exec_jobs
+                .path(&uuid::Uuid::from_u128(index).to_string())
+                .expect("protected path")
+                .exists()
+        );
+    }
+    assert!(!output.exists());
+    let retired = state
+        .exec_jobs
+        .read_record(
+            &state
+                .exec_jobs
+                .path(&uuid::Uuid::from_u128(4).to_string())
+                .expect("retired path"),
+        )
+        .expect("durable replay receipt");
+    assert_eq!(
+        retired.snapshot.error.expect("expired result").code,
+        "execution_result_expired"
+    );
+    assert!(state.approvals.is_pending(&approval));
+}
+
+#[tokio::test]
 async fn spilled_output_is_bounded_hash_bound_and_confined_to_its_job() {
     let (directory, state) = fixture().await;
     let request = request(&directory, "head -c 300000 /dev/zero | tr '\\000' x");
@@ -238,7 +353,7 @@ fn output_budget_omission_is_explicit_and_larger_fetch_is_exact() {
 }
 
 #[test]
-fn execution_record_read_rejects_symlink_and_store_quota_reserves_completions() {
+fn execution_record_read_and_quota_scan_reject_symlinks() {
     let directory = tempfile::tempdir().expect("valid execution fixture");
     let jobs = ExecJobs::new(directory.path()).expect("valid execution fixture");
     let id = uuid::Uuid::new_v4().to_string();
@@ -250,7 +365,10 @@ fn execution_record_read_rejects_symlink_and_store_quota_reserves_completions() 
         jobs.read_record(&jobs.path(&id).expect("valid execution fixture"))
             .is_err()
     );
-    assert!(jobs.reserve_record_capacity(32).is_err());
+    assert!(
+        jobs.reserve_record_capacity(0, &crate::approval::ApprovalStore::default())
+            .is_err()
+    );
 }
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
@@ -266,7 +384,7 @@ use tempfile::TempDir;
 use super::{ExecJobs, JobRecord, cancel, start, wait};
 use crate::AppState;
 
-async fn fixture() -> (TempDir, AppState) {
+pub(super) async fn fixture() -> (TempDir, AppState) {
     let directory = tempfile::tempdir().expect("temporary fixture");
     let engines = directory.path().join("engines");
     fs::create_dir(&engines).expect("engines");
@@ -300,7 +418,7 @@ esac
     (directory, state)
 }
 
-fn request(directory: &TempDir, command: &str) -> ExecStartApiRequest {
+pub(super) fn request(directory: &TempDir, command: &str) -> ExecStartApiRequest {
     ExecStartApiRequest {
         operation_id: uuid::Uuid::new_v4().to_string(),
         request: ExecApiRequest {
@@ -318,7 +436,7 @@ fn request(directory: &TempDir, command: &str) -> ExecStartApiRequest {
     }
 }
 
-fn poll(request: &ExecStartApiRequest) -> ExecJobApiRequest {
+pub(super) fn poll(request: &ExecStartApiRequest) -> ExecJobApiRequest {
     ExecJobApiRequest {
         operation_id: request.operation_id.clone(),
         cwd: request.request.cwd.clone(),

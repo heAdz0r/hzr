@@ -16,6 +16,8 @@ use uuid::Uuid;
 use crate::{AppState, api, error::ApiError};
 
 mod output;
+mod receipts;
+mod retention;
 pub(crate) use output::read_output;
 
 #[cfg(all(test, unix))]
@@ -33,6 +35,7 @@ const DEFAULT_OUTPUT_BYTES: u64 = 64 * 1024;
 #[derive(Clone)]
 pub(crate) struct ExecJobs {
     directory: PathBuf,
+    receipts: receipts::ReceiptStore,
     active: Arc<Mutex<HashMap<String, watch::Sender<bool>>>>,
 }
 
@@ -53,13 +56,17 @@ impl ExecJobs {
                 "execution store must be a real directory",
             ));
         }
+        // SQLite NOFOLLOW also rejects macOS's /var -> /private/var ancestor alias.
+        let directory = fs::canonicalize(directory)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
         }
+        let receipts = receipts::ReceiptStore::new(&directory)?;
         let jobs = Self {
             directory,
+            receipts,
             active: Arc::default(),
         };
         // Daemon lifetime ownership is acquired before initialization. Never replay a
@@ -70,7 +77,7 @@ impl ExecJobs {
                 .extension()
                 .is_some_and(|extension| extension == "json")
             {
-                let mut record = jobs.read_record(&path)?;
+                let mut record = jobs.read_full_record(&path)?;
                 if record.snapshot.state == ExecJobState::Running {
                     record.snapshot.state = ExecJobState::Interrupted;
                     record.snapshot.revision += 1;
@@ -78,6 +85,7 @@ impl ExecJobs {
                 }
             }
         }
+        jobs.recover_compaction()?;
         Ok(jobs)
     }
 
@@ -93,6 +101,32 @@ impl ExecJobs {
     }
 
     fn read_record(&self, path: &Path) -> io::Result<JobRecord> {
+        match self.read_full_record(path) {
+            Ok(record) => {
+                if let Some(receipt) = self.receipts.read(&record.snapshot.operation_id)? {
+                    if record.workspace != receipt.workspace
+                        || record.request_hash != receipt.request_hash
+                    {
+                        return Err(io::Error::other(
+                            "execution record conflicts with its replay receipt",
+                        ));
+                    }
+                }
+                Ok(record)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let id = path.file_stem().and_then(|id| id.to_str()).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "invalid execution identity")
+                })?;
+                self.path(id)
+                    .map_err(|_| io::Error::other("invalid execution operation identity"))?;
+                self.receipts.read(id)?.ok_or(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn read_full_record(&self, path: &Path) -> io::Result<JobRecord> {
         let mut options = fs::OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
@@ -170,49 +204,6 @@ impl ExecJobs {
             ));
         }
         Ok(record)
-    }
-
-    fn reserve_record_capacity(&self, active_count: usize) -> Result<(), ApiError> {
-        let entries =
-            fs::read_dir(&self.directory).map_err(|error| ApiError::internal(error.to_string()))?;
-        let mut bytes = 0u64;
-        let mut count = 0usize;
-        for entry in entries {
-            let entry = entry.map_err(|error| ApiError::internal(error.to_string()))?;
-            let metadata = fs::symlink_metadata(entry.path())
-                .map_err(|error| ApiError::internal(error.to_string()))?;
-            if metadata.file_type().is_symlink() {
-                return Err(ApiError::internal("execution store contains a symlink"));
-            }
-            if metadata.is_dir() {
-                // Capture spill files live one level below their owning operation ID.
-                for child in fs::read_dir(entry.path())
-                    .map_err(|error| ApiError::internal(error.to_string()))?
-                {
-                    let child = child.map_err(|error| ApiError::internal(error.to_string()))?;
-                    let stored = fs::symlink_metadata(child.path())
-                        .map_err(|error| ApiError::internal(error.to_string()))?;
-                    if !stored.is_file() || stored.file_type().is_symlink() {
-                        return Err(ApiError::internal("invalid execution output storage"));
-                    }
-                    bytes = bytes.saturating_add(stored.len());
-                }
-            } else {
-                bytes = bytes.saturating_add(metadata.len());
-            }
-            count += 1;
-        }
-        // Reserve each active completion's worst-case record. Never evict an ID and replay effects.
-        let reserved =
-            (active_count as u64 + 1).saturating_mul(MAX_RECORD_BYTES + MAX_JOB_OUTPUT_BYTES);
-        if count >= MAX_RECORDS || bytes.saturating_add(reserved) > MAX_STORE_BYTES {
-            return Err(ApiError::service(
-                "execution_store_capacity",
-                "execution history capacity reached; records were retained to prevent replay",
-                false,
-            ));
-        }
-        Ok(())
     }
 
     fn inactive_snapshot(&self, mut record: JobRecord, active: bool) -> ExecJobSnapshot {
@@ -298,7 +289,7 @@ pub(crate) async fn start(
             true,
         ));
     }
-    jobs.reserve_record_capacity(active.len())?;
+    jobs.reserve_record_capacity(active.len(), &state.approvals)?;
     let record = JobRecord {
         workspace,
         request_hash,
@@ -449,7 +440,7 @@ pub(crate) async fn cancel(
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             // A cancelled HTTP start may still arrive later. Its ID must never execute.
-            jobs.reserve_record_capacity(active.len())?;
+            jobs.reserve_record_capacity(active.len(), &state.approvals)?;
             let record = JobRecord {
                 workspace,
                 request_hash: String::new(),

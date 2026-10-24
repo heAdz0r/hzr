@@ -4,6 +4,31 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.11.5] - 2026-10-24
+
+### Fixed
+
+- Execution history no longer permanently blocks `hzr exec` at 20,000 entries.
+  Only JSON execution records count toward that limit; output directories do not.
+- Capacity pressure reclaims terminal results older than one hour, preserving recent
+  completions, live approvals and running jobs. A durable compact replay receipt is
+  committed before any result or output is removed, retaining request/workspace
+  binding and cancellation protection across restarts.
+- Output reads hold the execution-store lease through hashing and retrieval.
+  Reclaimed output reports non-recoverable `execution_result_expired` (HTTP 410).
+- The fork health-check regression retains its ephemeral-port listener instead
+  of releasing and rebinding the port, avoiding intermittent `AddrInUse` failures
+  when the complete source gate runs concurrently with other socket users.
+- The private 256 MiB replay registry is included in the unchanged 2 GiB execution
+  storage budget. Missing, incompatible or corrupt registries fail closed; receipt
+  capacity never causes old operation IDs to be forgotten.
+
+### Security
+
+- Compatible lockfile updates to `zod` 4.6.7 and `fast-uri` 3.1.9 resolve
+  GHSA-mrhx-c7xc-m3w5 and the reported URI normalization advisories. Production
+  `npm audit` reports no vulnerabilities.
+
 ## [0.11.4] - 2026-10-19
 
 ### Fixed
@@ -2165,3 +2190,4 @@ First public HZR release.
 [0.9.8]: https://github.com/heAdz0r/hzr/compare/v0.9.7...v0.9.8
 [0.11.2]: https://github.com/heAdz0r/hzr/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/heAdz0r/hzr/compare/v0.11.0...v0.11.1
+[0.11.5]: https://github.com/heAdz0r/hzr/compare/v0.11.4...v0.11.5

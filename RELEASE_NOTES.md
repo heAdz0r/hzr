@@ -1,50 +1,50 @@
-# HZR 0.11.4
+# HZR 0.11.5
 
-`hzr delegate` no longer fails everywhere because one index watcher died, and the watcher
-no longer dies on a burst of file changes.
+`hzr exec` keeps accepting new commands when old execution history reaches its
+20,000-record limit. Old operation IDs remain protected against duplicate execution.
 
 ## What broke
 
-A new repository started three Claude Code agents. Claude Code keeps agent worktrees under
-`.claude/worktrees/` inside the repository, so the grepai watcher indexed three more full
-checkouts, and creating them was a burst of file events. Upstream grepai 0.37.0 delivers
-debounced events into a 100-slot queue with a non-blocking send and treats a full queue as
-fatal: the watcher exited with `file event queue is full`.
-
-HZR kept the dead watcher as a tombstone for its 15-minute idle TTL, and grepai health — which
-aggregates every workspace — reported `degraded`. The delegation bridge refused to start a
-worker while grepai was anything but `ready` or `stopped`, so every `hzr delegate` in every
-repository failed with `HZR grepai is not available on demand: degraded`, including a fresh
-worktree created only for the worker. `hzr doctor` said only `state Degraded`, and
-`hzr doctor --reconcile-fleet --fix` could not finish clean either: it reported four
-"identity mismatch" errors for temporary workspaces a cleaner had emptied.
+The daemon kept every full command result forever and counted output directories
+toward the record limit. Once the history reached 20,000 entries, every new execution
+failed with `HTTP 503 execution_store_capacity`, even with no commands running and
+space left within the disk quota. Restarting the daemon did not reclaim anything.
 
 ## What changed
 
-- **The watcher survives bursts.** A new grepai patch
-  (`patches/grepai/0.37.0-event-queue-backpressure.patch`) makes delivery wait for queue
-  space, in order, until the watcher stops, instead of exiting.
-- **Agent worktrees stay out of the index.** HZR adds `.claude/worktrees` to the managed
-  grepai `ignore:` list — for new indexes at initialization and for existing ones when their
-  watcher next starts. Your own entries are kept.
-- **A degraded index does not block delegation.** The worker starts with a warning; HZR
-  restarts the workspace's watcher on the worker's first search.
-- **`hzr doctor --fix` clears failed watchers** through a new daemon route, so the daemon is
-  healthy at once instead of after the TTL. The `daemon` check now names each degraded engine
-  with its detail and remedy.
-- **No more `watcher_maintenance_failed` noise.** Reaping a watcher that already exited no
-  longer asks grepai to stop it.
-- **Fleet reconciliation prunes vacated roots.** A registered root whose repository was removed
-  and which holds only HZR's `.grepai` link is pruned like a deleted root, link included.
+- Under record or disk pressure, the daemon reclaims terminal results older than one
+  hour. It keeps the newest 1,000 full records when the disk budget permits; running
+  commands, recent completions and live approval capabilities remain protected.
+- Before removing any result or captured output, it commits a compact replay receipt
+  containing the operation ID, workspace, request hash and terminal state. Retrying
+  the same ID cannot execute the command again; a changed request is still rejected.
+- A reclaimed result retains its existing terminal state and reports
+  `execution_result_expired`. Captured-output requests return HTTP 410 with the same
+  code and `recoverable=false`. Existing clients report the job error instead of
+  rerunning the command or waiting indefinitely.
+- Recovery handles interruption between committing a receipt and removing its files.
+  Output readers hold a lease through the complete read and hash check, so reclamation
+  cannot remove a file they are reading.
+- Replay receipts use a private SQLite database capped at 256 MiB, counted within the
+  existing 2 GiB execution-store budget. The existing worst-case active-command
+  reservation remains in force. A full, missing, incompatible or damaged receipt
+  store fails closed; HZR never deletes replay protection to accept a new command.
 
-## Dependencies
+## Security
 
-The managed agent runtime's transitive dependencies were refreshed (`undici` 7.30.1 among
-them) and `basic-ftp` is overridden to 6.2.3, clearing every high-severity `npm audit`
-advisory that had turned CI red since 0.11.3.
+The managed runtime lockfile updates `zod` to 4.6.7 and `fast-uri` to 3.1.9,
+fixing the new high-severity constrained-collection validation advisory and URI
+normalization advisories reported by `npm audit`. Production dependency auditing
+reports no vulnerabilities with this lockfile.
 
-## Upgrade
+## Upgrade and data retention
 
-`hzr update` (or the installer), then `hzr doctor --fix` once to clear any failed watcher the
-old daemon still holds. Existing index configs gain one `ignore:` entry the next time their
-watcher starts; nothing else in your data or configuration changes.
+Run `hzr update` or use the installer. Existing execution records are adopted without
+rerunning commands; old result payloads are reclaimed only when capacity is needed.
+Save output you need to retain independently of execution history. The accounting
+ledger, memory, index and project files are unchanged.
+
+After the first compaction, do not downgrade to a version before 0.11.5: older
+daemons do not understand the compact replay receipts. Keep `replay.sqlite` and
+`replay-required` together with the execution store; deleting either is not a safe
+cleanup procedure.

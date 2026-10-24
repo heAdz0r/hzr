@@ -336,6 +336,15 @@ Do not choose `raw` merely because a command uses SSH, JSON, pipes, redirects, o
 arguments. If no filter exists, `hzr exec run` still performs the tracked fallback; agents do not
 need to select `raw` themselves.
 
+Execution operation IDs remain bound to their original workspace and request even
+after their captured result is reclaimed. Under capacity pressure, terminal payloads
+older than one hour may be removed; running jobs, recent completions and live approval
+capabilities stay protected. `execution_result_expired` means the operation will not
+run again under that ID and its old output cannot be recovered from HZR. Inspect side
+effects before choosing a new operation ID. Do not remove `runtime/exec-jobs/replay.sqlite`
+or `replay-required` to clear capacity: they preserve replay protection. A daemon older
+than 0.11.5 cannot safely use an execution store after compaction.
+
 The policy recursively inspects POSIX shell launchers and environment prefixes. Wrapping a managed
 command in `/bin/sh`, `bash`, `zsh`, or a simple Python file/JSON/subprocess script does not turn it
 into an allowed proxy: HZR rewrites the proven leaf or returns an explicit policy `Ask`. Opaque

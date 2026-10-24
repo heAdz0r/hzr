@@ -25,6 +25,8 @@ fn read_page(
     state: &AppState,
     request: ExecOutputApiRequest,
 ) -> Result<Json<ExecOutputApiResponse>, ApiError> {
+    // Keep the manifest and spill files alive throughout hashing, not just lookup.
+    let _active = state.exec_jobs.active.blocking_lock();
     let limit = request.max_bytes.unwrap_or(DEFAULT_BYTES);
     if !(1..=MAX_BYTES).contains(&limit) {
         return Err(ApiError::bad_request(
@@ -43,6 +45,17 @@ fn read_page(
             "execution_output_pending",
             "wait for command completion before reading captured output",
             true,
+        ));
+    }
+    if record
+        .snapshot
+        .error
+        .as_ref()
+        .is_some_and(|error| error.code == "execution_result_expired")
+    {
+        return Err(ApiError::gone(
+            "execution_result_expired",
+            "captured output was reclaimed; this operation ID remains bound and will not execute again",
         ));
     }
     let result = match record.snapshot.outcome.as_ref() {
