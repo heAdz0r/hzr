@@ -120,13 +120,26 @@ mod tests {
         use std::os::unix::process::CommandExt;
         let directory = tempfile::tempdir().expect("fixture");
         let binary = directory.path().join("icm");
-        std::os::unix::fs::symlink("/bin/sleep", &binary).expect("fixture executable");
+        // 1.1.0: the fixture child is `/bin/sh` running a script, not `/bin/sleep`. On
+        // multicall coreutils (uutils, Ubuntu 26.04 runners) `sleep` picks its applet from
+        // argv[0], so a `sleep` reached through a link named `icm` exited at once and the
+        // child was never visible.
+        std::os::unix::fs::symlink("/bin/sh", &binary).expect("fixture executable");
+        let sleeper = directory.path().join("sleeper.sh");
+        std::fs::write(&sleeper, "while :; do sleep 1; done\n").expect("sleeper script");
         let script = directory.path().join("parent.sh");
-        std::fs::write(&script, "\"$1\" 30 & wait\n").expect("parent script");
+        std::fs::write(&script, "\"$1\" \"$2\" & wait\n").expect("parent script");
         let mut parent = Command::new("/bin/sh");
-        parent.arg0("opencode").arg(&script).arg(&binary);
+        parent
+            .arg0("opencode")
+            .arg(&script)
+            .arg(&binary)
+            .arg(&sleeper);
         let mut child = parent.spawn().expect("fixture parent");
-        let launches = vec![vec![binary.to_string_lossy().into_owned(), "30".into()]];
+        let launches = vec![vec![
+            binary.to_string_lossy().into_owned(),
+            sleeper.to_string_lossy().into_owned(),
+        ]];
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
             let current = snapshot().expect("process snapshot");
