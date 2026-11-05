@@ -67,7 +67,7 @@ HZR_PARENT_SNAPSHOT_SHA256="$(hzr_baseline_string snapshot_sha256)"
 {
   printf 'schema_version = 1\n'
   printf 'engine_version = "%s"\n' "${HZR_CORE_VERSION}"
-  printf 'hzr_release_line = "0.11.x"\n'
+  printf 'hzr_release_line = "0.12.x"\n'
   printf 'parent_snapshot_sha256 = "%s"\n' "${HZR_PARENT_SNAPSHOT_SHA256}"
   printf 'manifest = "CURRENT_ENGINE_V1.tsv"\n'
   printf 'manifest_sha256 = "%s"\n' "${HZR_CURRENT_MANIFEST_SHA256}"

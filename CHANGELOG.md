@@ -4,6 +4,54 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-05
+
+### Security
+
+- The Bash hook no longer auto-approves a command that an operator's deny rule
+  forbids when the command is wrapped. fork-core's permission gate now matches deny
+  and ask rules past assignments (`HUSKY=0`), `env`, `timeout`, `nice`, `nohup`,
+  `time`, `stdbuf`, `command`, `builtin`, `exec`, `noglob`, `sudo`, a bare `xargs`,
+  `uv run` and configured transparent prefixes, and inside quoted `sh -c` scripts.
+  Before, `timeout 30 git push` under `allow timeout:*` and `deny git push:*` was
+  answered with `allow`, and the rewritten `… rtk git push` no longer matched the
+  host's own rule.
+- A leading redirect (`2>&1 git push`), `{ … }` grouping, heredocs and an ANSI-C
+  quote whose `\'` the lexer read differently from bash no longer hide a command
+  from the gate; such constructs are never auto-allowed.
+- A Claude settings file that exists but cannot be read or parsed now asks for every
+  command instead of being skipped; a UTF-8 BOM is tolerated and
+  `CLAUDE_CONFIG_DIR` is honoured.
+- Under `bypassPermissions`, a command that matches an operator ask rule is left
+  unchanged for the host to apply its own rule instead of being approved in its
+  managed form.
+- grepai 1.2.0 sends environment API keys only to the provider's official HTTPS
+  endpoint and no longer runs a project file named by `framework_processing.node_path`.
+
+### Fixed
+
+- `cat` of a file or stream that is not valid UTF-8, or that uses CRLF, returns the
+  original bytes; `cat -n` numbers them exactly as `cat -n` does.
+- `-h`, `--help` and `help` after a wrapped tool (`git log --help`,
+  `cargo test --help`) show that tool's help instead of rtk's.
+- Command rewrites keep the author's spacing, line breaks and operators between
+  segments; a `case` terminator `;;` is no longer split into `; ;`.
+- Date-bound billing and hook tests no longer fail as the calendar passes the
+  built-in pricing catalog's age limit; test builds price on the catalog's
+  retrieval day, release builds keep the wall clock.
+
+### Changed
+
+- fork-core is `1.1.0-fork.1`, synced selectively with upstream RTK v1.1.0 from its
+  Apache-2.0 `src/` tree only. Plan and evidence:
+  `docs/PRD_HZR_UPSTREAM_RTK_SYNC_1_1_0.md`.
+- grepai 0.37.0 → 1.2.0: watcher and crash-safety fixes, incremental re-embedding of
+  changed chunks only, embedder metadata that refuses to mix vectors of different
+  models. Existing indexes are adopted without re-indexing. The event-queue
+  backpressure patch is now upstream; the worktree-discovery flag patch is rebased.
+- ICM stays at 0.10.61. 0.11.5 is verified compatible but deferred until the build
+  host has a macOS 14.4+ SDK.
+
 ## [0.11.5] - 2026-10-24
 
 ### Fixed
@@ -2190,4 +2238,5 @@ First public HZR release.
 [0.9.8]: https://github.com/heAdz0r/hzr/compare/v0.9.7...v0.9.8
 [0.11.2]: https://github.com/heAdz0r/hzr/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/heAdz0r/hzr/compare/v0.11.0...v0.11.1
+[0.12.0]: https://github.com/heAdz0r/hzr/compare/v0.11.5...v0.12.0
 [0.11.5]: https://github.com/heAdz0r/hzr/compare/v0.11.4...v0.11.5

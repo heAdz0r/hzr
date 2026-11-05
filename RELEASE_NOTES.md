@@ -1,50 +1,49 @@
-# HZR 0.11.5
+# HZR 0.12.0
 
-`hzr exec` keeps accepting new commands when old execution history reaches its
-20,000-record limit. Old operation IDs remain protected against duplicate execution.
+The Bash hook stops approving commands your deny rules forbid when they arrive
+wrapped, and fork-core moves to upstream RTK v1.1.0. grepai moves to 1.2.0.
 
 ## What broke
 
-The daemon kept every full command result forever and counted output directories
-toward the record limit. Once the history reached 20,000 entries, every new execution
-failed with `HTTP 503 execution_store_capacity`, even with no commands running and
-space left within the disk quota. Restarting the daemon did not reclaim anything.
+HZR rewrites a Bash command into a managed form the host's own `Bash(...)` rules
+cannot match, so fork-core's permission verdict is the only place an operator's deny
+rule meets that command. The gate matched each segment only as written. With
+`allow: Bash(timeout:*)` and `deny: Bash(git push:*)`, `timeout 30 git push` was
+answered with `allow`; so were `env FOO=1 git push`, `bash -c 'git push'` and, under
+`bypassPermissions`, `HUSKY=0 git push` and `nohup git push`. A quoted `$'\''` could
+also hide `; rm -rf /` inside an allowed `ls`, and a settings file with a UTF-8 BOM
+had its deny rules silently skipped.
 
 ## What changed
 
-- Under record or disk pressure, the daemon reclaims terminal results older than one
-  hour. It keeps the newest 1,000 full records when the disk budget permits; running
-  commands, recent completions and live approval capabilities remain protected.
-- Before removing any result or captured output, it commits a compact replay receipt
-  containing the operation ID, workspace, request hash and terminal state. Retrying
-  the same ID cannot execute the command again; a changed request is still rejected.
-- A reclaimed result retains its existing terminal state and reports
-  `execution_result_expired`. Captured-output requests return HTTP 410 with the same
-  code and `recoverable=false`. Existing clients report the job error instead of
-  rerunning the command or waiting indefinitely.
-- Recovery handles interruption between committing a receipt and removing its files.
-  Output readers hold a lease through the complete read and hash check, so reclamation
-  cannot remove a file they are reading.
-- Replay receipts use a private SQLite database capped at 256 MiB, counted within the
-  existing 2 GiB execution-store budget. The existing worst-case active-command
-  reservation remains in force. A full, missing, incompatible or damaged receipt
-  store fails closed; HZR never deletes replay protection to accept a new command.
+- Deny and ask rules match every reading of a segment the rewrite can look through:
+  assignments, `env`, `timeout`, `nice`, `nohup`, `time`, `stdbuf`, keyword
+  prefixes, `uv run`, your configured transparent prefixes, `sudo` and a bare
+  `xargs`. Allow rules still match only the command as written, so no reading can
+  widen an approval.
+- A deny rule that matches inside a quoted `sh -c`, `bash -c` or `zsh -c` script
+  denies the whole command. A wrapper is never auto-approved by an outer allow rule.
+- Leading redirects, `{ … }` grouping, heredocs and ANSI-C quoting no longer hide a
+  command. Constructs the gate cannot read are never auto-approved.
+- A settings file that cannot be read or parsed asks for every command. A BOM is
+  tolerated; `CLAUDE_CONFIG_DIR` is honoured.
+- Under `bypassPermissions`, a command matching one of your ask rules runs
+  unchanged so the host applies the rule itself. That run is unfiltered.
+- `cat` returns the original bytes of non-UTF-8 and CRLF files, a wrapped tool's
+  `--help` is the tool's own, and rewrites keep your spacing between commands.
 
-## Security
+## Engines
 
-The managed runtime lockfile updates `zod` to 4.6.7 and `fast-uri` to 3.1.9,
-fixing the new high-severity constrained-collection validation advisory and URI
-normalization advisories reported by `npm audit`. Production dependency auditing
-reports no vulnerabilities with this lockfile.
+- fork-core `1.1.0-fork.1`: fixes re-implemented from upstream RTK v1.1.0's
+  Apache-2.0 `src/` tree. Upstream's BUSL-1.1 engine, proxy and plugin crates are not
+  used.
+- grepai 1.2.0: watcher, crash-safety and security fixes, and only changed chunks are
+  re-embedded. Existing indexes are adopted on first watch without re-indexing.
+- ICM stays at 0.10.61.
 
-## Upgrade and data retention
+## Upgrade
 
-Run `hzr update` or use the installer. Existing execution records are adopted without
-rerunning commands; old result payloads are reclaimed only when capacity is needed.
-Save output you need to retain independently of execution history. The accounting
-ledger, memory, index and project files are unchanged.
-
-After the first compaction, do not downgrade to a version before 0.11.5: older
-daemons do not understand the compact replay receipts. Keep `replay.sqlite` and
-`replay-required` together with the execution store; deleting either is not a safe
-cleanup procedure.
+Run `hzr update` or use the installer. No data migration is needed. Commands that
+used to be approved through a wrapper may now be denied or prompt; that is the rule
+you wrote taking effect. Savings on those commands and on `cat` of non-UTF-8 files
+fall, because they now run unfiltered or byte-exact.
