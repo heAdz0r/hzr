@@ -343,7 +343,7 @@ capabilities stay protected. `execution_result_expired` means the operation will
 run again under that ID and its old output cannot be recovered from HZR. Inspect side
 effects before choosing a new operation ID. Do not remove `runtime/exec-jobs/replay.sqlite`
 or `replay-required` to clear capacity: they preserve replay protection. A daemon older
-than 0.12.0 cannot safely use an execution store after compaction.
+than 0.12.1 cannot safely use an execution store after compaction.
 
 The policy recursively inspects POSIX shell launchers and environment prefixes. Wrapping a managed
 command in `/bin/sh`, `bash`, `zsh`, or a simple Python file/JSON/subprocess script does not turn it

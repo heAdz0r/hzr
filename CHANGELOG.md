@@ -4,6 +4,17 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-05
+
+### Fixed
+
+- `cat` of a non-UTF-8 or CRLF file that was read before upgrading to 0.12.0 no
+  longer returns the old, decoded text from the read cache. 0.12.0 consulted the
+  cache before its byte-exact path, and entries written by 0.11.x (U+FFFD in place
+  of invalid bytes, LF in place of CRLF) never expire. The cache format moves to
+  version 6, which retires those entries, and the cache is never used for a file
+  whose bytes must be returned exactly.
+
 ## [0.12.0] - 2026-11-05
 
 ### Security
@@ -2238,5 +2249,6 @@ First public HZR release.
 [0.9.8]: https://github.com/heAdz0r/hzr/compare/v0.9.7...v0.9.8
 [0.11.2]: https://github.com/heAdz0r/hzr/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/heAdz0r/hzr/compare/v0.11.0...v0.11.1
+[0.12.1]: https://github.com/heAdz0r/hzr/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/heAdz0r/hzr/compare/v0.11.5...v0.12.0
 [0.11.5]: https://github.com/heAdz0r/hzr/compare/v0.11.4...v0.11.5
