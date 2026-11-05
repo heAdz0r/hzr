@@ -414,7 +414,16 @@ fn run_file(
     };
 
     if let Some(key) = cache_key.as_deref() {
-        if let Some(output) = read_cache::load_read_cache(key) {
+        // 1.1.0 (US-006): the cache holds decoded text, so it never answers for bytes that
+        // must be served exactly; the bytes are read here anyway for the baseline.
+        let source = read_source::read_file_bytes(file, None, None).ok();
+        let cacheable = source
+            .as_deref()
+            .is_none_or(|bytes| !needs_exact_bytes(bytes, level, dedup));
+        if let Some(output) = cacheable
+            .then(|| read_cache::load_read_cache(key))
+            .flatten()
+        {
             print!("{output}");
             if !output.ends_with('\n') {
                 println!();
@@ -422,9 +431,10 @@ fn run_file(
             // 0.11.2: the cache serves unbounded reads only, so the baseline is the whole
             // file; it goes through the timer so receipt mode reaches the HZR ledger instead
             // of the engine's own history database.
-            let baseline = read_source::read_file_bytes(file, None, None)
-                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                .unwrap_or_else(|_| output.clone()); // 0.11.2
+            let baseline = source
+                .as_deref()
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+                .unwrap_or_else(|| output.clone()); // 0.11.2, 1.1.0: bytes read once
             timer.track_attributed(
                 "read <path omitted>",
                 "rtk read (cache)",

@@ -807,3 +807,41 @@ fn read_batch_rejects_a_budget_that_cannot_cover_every_file() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("at least 128"));
 }
+
+// 1.1.0 (US-006): a cached decoded read never answers for bytes that must be exact.
+#[test]
+fn read_cache_never_serves_text_for_bytes_that_need_exact_output() {
+    let home = tempfile::tempdir().expect("home");
+    let file = write_temp(".txt", b"cafe\n");
+    let path = file.path().to_path_buf();
+    let original_mtime = std::fs::metadata(&path)
+        .expect("meta")
+        .modified()
+        .expect("mtime");
+    let read = || {
+        rtk_bin()
+            .args(["read", path.to_str().expect("utf-8 path")])
+            .env("HOME", home.path())
+            .env("XDG_CACHE_HOME", home.path().join("cache"))
+            .env("RTK_TELEMETRY_DISABLED", "1")
+            .env("RTK_TRACKING_DISABLED", "1")
+            .output()
+            .expect("run rtk read")
+    };
+    assert_eq!(read().stdout, b"cafe\n", "first read fills the cache");
+
+    // Same length, same inode, same mtime: the cache key cannot tell the files apart.
+    std::fs::write(&path, b"caf\xe9\n").expect("rewrite");
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .expect("reopen")
+        .set_modified(original_mtime)
+        .expect("restore mtime");
+
+    assert_eq!(
+        read().stdout,
+        b"caf\xe9\n",
+        "the bytes on disk, not the cached text"
+    );
+}

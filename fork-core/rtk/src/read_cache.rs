@@ -12,7 +12,9 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-const READ_CACHE_VERSION: u32 = 5;
+// 1.1.0 (US-006): 6 retires entries written before byte-exact reads, which held U+FFFD in
+// place of non-UTF-8 bytes and LF in place of CRLF and were served unchanged after an upgrade.
+const READ_CACHE_VERSION: u32 = 6;
 const READ_CACHE_MAX_ENTRIES: usize = 512;
 
 // ── Public API ──────────────────────────────────────────────
