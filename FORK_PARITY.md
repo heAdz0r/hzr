@@ -3,7 +3,7 @@
 **Audit date:** 2026-09-03
 **Status:** HZR 0.11.5 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
-**Current runtime core:** HZR-owned evolvable `fork-core/rtk` `0.50.0-fork.1`, derived from that complete baseline and synced selectively with upstream `rtk-ai/rtk` v0.50.0
+**Current runtime core:** HZR-owned evolvable `fork-core/rtk` `1.1.0-fork.1`, derived from that complete baseline and synced selectively with upstream `rtk-ai/rtk` v1.1.0 (Apache-2.0 `src/` only)
 
 This ledger distinguishes between four verifiable assertions:
 
@@ -19,7 +19,7 @@ This ledger distinguishes between four verifiable assertions:
 | Source | `https://github.com/heAdz0r/rtk.git` |
 | Branch at capture | `feat/upstream-0.42-fork.1` |
 | Source HEAD | `5f403c465cbdbe148e9ca03e0ac8e856eef0bfee` |
-| Effective version | `0.50.0-fork.1` (current engine; the `v0.1.0` import was `0.44.1-fork.1`) |
+| Effective version | `1.1.0-fork.1` (current engine; the `v0.1.0` import was `0.44.1-fork.1`) |
 | Included files | 516 existing tracked/untracked non-ignored files |
 | Recorded tracked deletions | 4 |
 | Canonical snapshot schema | `hzr-fork-snapshot-v2-tsv`, hex-encoded paths |
@@ -41,6 +41,26 @@ The 0.6.0 gate verified current engine manifest
 `be0459b8d4dde1a76dcfe836afd77fe0432cf5cb22e83845c522c4568f6a3f53`, 1,940 passed tests,
 one intentionally ignored test, a 528-file current-engine set, and the reviewed 141-warning
 inherited Clippy ratchet, whose count and recorded hash are both unchanged from 0.5.0.
+
+### 1.1.0 upstream v1.1.0 sync delta (fork-core `1.1.0-fork.1`)
+
+Selective re-implementation of upstream `rtk-ai/rtk` work between tag `v0.50.0` (`1d87b8e`) and
+`develop@690616d` (after `v1.1.0`, `753a3b0e`), taken only from the Apache-2.0 `src/` tree; the
+BUSL-1.1 `engine/`, `proxy/` and `plugin/` crates are out of bounds. Analysis, decisions and
+deviations: [`docs/PRD_HZR_UPSTREAM_RTK_SYNC_1_1_0.md`](docs/PRD_HZR_UPSTREAM_RTK_SYNC_1_1_0.md).
+
+Permission gate (reproduced as hook auto-approvals on `0.50.0-fork.1` first): deny and ask rules
+now match past assignments, `env`, `timeout`/`nice`/`nohup`/`time`/`stdbuf`, keyword and
+configured transparent prefixes, `sudo` and bare `xargs`, and inside quoted `sh -c` scripts; a
+leading redirect, `{ … }` residue, heredocs and an ANSI-C `\'` no longer hide a command; settings
+that cannot be read or parsed fail closed, a BOM is tolerated, `CLAUDE_CONFIG_DIR` is honoured.
+The hook keeps an operator ask rule with the host under `bypassPermissions`. Fidelity: plain
+`cat`/`cat -n`/stdin reads of non-UTF-8 or CR bytes are byte-exact; a wrapped tool's `--help` is
+the tool's; rewrites copy the author's text between segments (`;;` intact). Regression:
+`tests/permission_gate_matrix.rs`, parity probe 22 → 27. Clippy ratchet 137 → 134 (three
+dead_code warnings resolved; none added). Engines moved with it: grepai 0.37.0 → 1.2.0 (the
+backpressure patch is upstream; the worktree-discovery flag patch is rebased). ICM stays 0.10.61
+pending a macOS 14.4+ SDK for `embeddings-static`.
 
 ### 0.11.0 upstream v0.50.0 sync delta (fork-core `0.50.0-fork.1`)
 
@@ -304,11 +324,11 @@ failure-first filtering cannot change a failing verification command into succes
 | Surface |Actual HZR route|Check/bound|Status|
 |---|---|---|---|
 | Exact source snapshot | `fork-core/rtk` + manifest v2 |528 files, modes/types/bytes/deletions/exclusions; verifier before build| ✅ |
-| Exact fork build |`cargo build --locked --release` inside snapshot|Bundle only accepts output `rtk 0.50.0-fork.1`| ✅ |
+| Exact fork build |`cargo build --locked --release` inside snapshot|Bundle only accepts output `rtk 1.1.0-fork.1`| ✅ |
 | Fork regression suite | Synthetic temporary Git history + `cargo test --locked --all-targets` |Git history is needed by the staff `git_churn`; `.git` is not included in the snapshot| ✅ |
 | No stock RTK fallback | Runtime pin — fork; upstream RTK — `reference-only` |Bundle not fetch/build/install stock RTK| ✅ |
 | Full fork CLI |`hzr rtk -- <args>` and `bin/rtk -> bin/hzr`|Unix passthrough saves argv, non-UTF8, cwd, stdio, signals, PID and exit| ✅ |
-| Runtime detection |`PinnedRtkAdapter` requires exact version `0.50.0-fork.1`|Binary is built only after snapshot verification; runtime separately does not re-hash-it compiled executable| 🟡 |
+| Runtime detection |`PinnedRtkAdapter` requires exact version `1.1.0-fork.1`|Binary is built only after snapshot verification; runtime separately does not re-hash-it compiled executable| 🟡 |
 | Raw shell rewrite |The complete line is passed to fork `rewrite`| Pipes, redirects, heredoc, multiline, quoting, `&&/||`, xargs are covered by tests| ✅ |
 | Exit `0/1/2/3` | rewrite / raw / deny / one-time approval |Approval ID bounded, TTL and single-use; approve/deny CLI/API| ✅ |
 | Command filters/guards |Fork rewrite selects exact command, HZR transport executes it|Private PATH resolves `rtk` again in exact fork; no generic replacement table| ✅ |
@@ -344,7 +364,7 @@ bin/hzr                    public product CLI
 bin/hzrd                   local control plane
 bin/rtk -> hzr             invocation compatibility alias
 engines/rtk                exact private fork-core executable
-engines/grepai             HZR-owned patched 0.37.0
+engines/grepai             HZR-owned patched 1.2.0
 engines/icm                HZR-owned pinned 0.10.61
 engines/caveman-code/      managed bridge + exact npm production tree
 ```

@@ -1,0 +1,91 @@
+diff --git a/cli/tui_watch.go b/cli/tui_watch.go
+index d9951a4..776f0f2 100644
+--- a/cli/tui_watch.go
++++ b/cli/tui_watch.go
+@@ -1088,7 +1088,8 @@ func runWatchUIWorker(ctx context.Context, p *tea.Program) (err error) {
+ 		return fmt.Errorf("failed to load configuration: %w", err)
+ 	}
+ 
+-	initialLinked := discoverWorktreesForWatch(projectRoot)
++	discoverWorktrees := watchWorktreeDiscovery() // HZR
++	initialLinked := discoverWorktrees(projectRoot)
+ 
+ 	registerLogSource, resolveLogSource := newWatchUILogSourceResolver(projectRoot)
+ 	for _, linkedRoot := range initialLinked {
+@@ -1139,6 +1140,7 @@ func runWatchUIWorker(ctx context.Context, p *tea.Program) (err error) {
+ 		emb,
+ 		withWatchSupervisorBackgroundChild(true),
+ 		withWatchSupervisorInitialLinkedWorktrees(initialLinked),
++		withWatchSupervisorDiscoverWorktrees(discoverWorktrees), // HZR
+ 		withWatchSupervisorScopeObserver(func(totalProjects int) {
+ 			p.Send(watchUIScopeMsg{totalProjects: totalProjects})
+ 		}),
+diff --git a/cli/watch.go b/cli/watch.go
+index ae34af3..2876d76 100644
+--- a/cli/watch.go
++++ b/cli/watch.go
+@@ -32,12 +32,13 @@ import (
+ )
+ 
+ var (
+-	watchBackground bool
+-	watchLogDir     string
+-	watchStatus     bool
+-	watchStop       bool
+-	watchWorkspace  string
+-	watchNoUI       bool
++	watchBackground          bool
++	watchLogDir              string
++	watchStatus              bool
++	watchStop                bool
++	watchWorkspace           string
++	watchNoUI                bool
++	watchNoWorktreeDiscovery bool // HZR: watch only the current worktree
+ )
+ 
+ var (
+@@ -103,6 +104,16 @@ func init() {
+ 	watchCmd.Flags().BoolVar(&watchStop, "stop", false, "Stop the background watcher")
+ 	watchCmd.Flags().StringVar(&watchWorkspace, "workspace", "", "Workspace name for multi-project mode")
+ 	watchCmd.Flags().BoolVar(&watchNoUI, "no-ui", false, "Disable interactive UI in foreground mode")
++	watchCmd.Flags().BoolVar(&watchNoWorktreeDiscovery, "no-worktree-discovery", false, "Watch only the current worktree") // HZR
++}
++
++// HZR: the worktree discovery a watch uses; `--no-worktree-discovery` turns it off without
++// writing `watch.discover_worktrees` into the project's own config.
++func watchWorktreeDiscovery() func(string) []string {
++	if watchNoWorktreeDiscovery {
++		return func(string) []string { return nil }
++	}
++	return discoverWorktreesForWatch
+ }
+ 
+ func runWatch(cmd *cobra.Command, args []string) error {
+@@ -375,6 +386,9 @@ func startBackgroundWatch(logDir, worktreeID string) error {
+ 	if watchLogDir != "" {
+ 		args = append(args, "--log-dir", watchLogDir)
+ 	}
++	if watchNoWorktreeDiscovery { // HZR
++		args = append(args, "--no-worktree-discovery")
++	}
+ 
+ 	// Spawn background process
+ 	var childPID int
+@@ -2211,7 +2225,8 @@ func runWatchForeground() error {
+ 	}
+ 
+ 	// Discover linked worktrees (only from main worktree) for initial ready semantics.
+-	linkedWorktrees := discoverWorktreesForWatch(projectRoot)
++	discoverWorktrees := watchWorktreeDiscovery() // HZR
++	linkedWorktrees := discoverWorktrees(projectRoot)
+ 	initialTotalProjects := 1 + len(linkedWorktrees)
+ 	if len(linkedWorktrees) > 0 {
+ 		if !isBackgroundChild {
+@@ -2296,6 +2311,7 @@ func runWatchForeground() error {
+ 		emb,
+ 		withWatchSupervisorBackgroundChild(isBackgroundChild),
+ 		withWatchSupervisorInitialLinkedWorktrees(linkedWorktrees),
++		withWatchSupervisorDiscoverWorktrees(discoverWorktrees), // HZR
+ 		withWatchSupervisorInitialReadyObserver(func(_ int) error {
+ 			return initialReadyObserver(initialTotalProjects)
+ 		}),

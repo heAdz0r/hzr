@@ -1058,7 +1058,8 @@ fn line_has_unbalanced_test_brackets(code: &str) -> bool {
 
 // Only `\'` inside `$'…'` diverges: bash keeps the string open, the lexer closes
 // it — an extra split point the newline-count check cannot see.
-fn ansi_c_quote_defeats_lexer(cmd: &str) -> bool {
+pub(crate) fn ansi_c_quote_defeats_lexer(cmd: &str) -> bool {
+    // 1.1.0 (US-003): the gate consults it too
     let bytes = cmd.as_bytes();
     let mut ansi_span = false;
     let mut backslash_run = 0u32;
@@ -1385,10 +1386,11 @@ fn rewrite_pipeline_final_stage(
     )
     .filter(|rewritten| rewritten != final_stage)
     .map(|rewritten| {
+        // 1.1.0 (US-008, upstream 05e7f801): the producer and the gaps around `|` are copied.
         format!(
-            "{} {}",
-            cmd[segment_start..final_stage_start].trim(),
-            rewritten
+            "{}{}",
+            &cmd[segment_start..final_stage_start],
+            splice(cmd, final_stage_start, analysis.end_offset, &rewritten)
         )
     })
 }
@@ -1414,7 +1416,10 @@ fn rewrite_pipeline_producer(
         .first()
         .map(|word| executable_name(word).to_string())
         .unwrap_or_default();
-    if matches!(program.as_str(), "ls" | "find" | "tree" | "wc" | "grep" | "rg" | "du") {
+    if matches!(
+        program.as_str(),
+        "ls" | "find" | "tree" | "wc" | "grep" | "rg" | "du"
+    ) {
         return None;
     }
     rewrite_segment_inner(
@@ -1426,12 +1431,22 @@ fn rewrite_pipeline_producer(
     )
     .filter(|rewritten| rewritten != producer)
     .map(|rewritten| {
+        // 1.1.0 (US-008): the producer's gaps and everything from `|` on are copied.
         format!(
-            "{} {}",
-            rewritten,
-            cmd[first_pipe_offset..analysis.end_offset].trim()
+            "{}{}",
+            splice(cmd, segment_start, first_pipe_offset, &rewritten),
+            &cmd[first_pipe_offset..analysis.end_offset]
         )
     })
+}
+
+/// 1.1.0 (US-008, upstream 05e7f801): `cmd[start..end]` with its trimmed text replaced by
+/// `rewritten` and its own leading and trailing whitespace kept byte for byte.
+fn splice(cmd: &str, start: usize, end: usize, rewritten: &str) -> String {
+    let region = &cmd[start..end];
+    let lead = region.len() - region.trim_start().len();
+    let body_end = region.trim_end().len().max(lead);
+    format!("{}{}{}", &region[..lead], rewritten, &region[body_end..])
 }
 
 fn rewrite_compound(
@@ -1460,25 +1475,16 @@ fn rewrite_compound(
         }
         match tok.kind {
             TokenKind::Operator => {
+                // 1.1.0 (US-008, upstream 05e7f801 + 5e92ea47): a segment is emitted as its own
+                // whitespace around its rewrite, and the operator is copied from the source. The
+                // emitter used to rebuild ` && ` and `; `, so `;;` came back as `; ;`.
                 let seg = cmd[seg_start..tok.offset].trim();
                 let rewritten = rewrite_segment(seg, excluded, transparent_prefixes)
                     .unwrap_or_else(|| seg.to_string());
                 any_changed |= rewritten != seg;
-                result.push_str(&rewritten);
-                if tok.value == ";" {
-                    result.push(';');
-                    if tok.offset + tok.value.len() < cmd.len() {
-                        result.push(' ');
-                    }
-                } else {
-                    result.push(' ');
-                    result.push_str(&tok.value);
-                    result.push(' ');
-                }
+                result.push_str(&splice(cmd, seg_start, tok.offset, &rewritten));
+                result.push_str(&tok.value);
                 seg_start = tok.offset + tok.value.len();
-                while cmd.as_bytes().get(seg_start) == Some(&b' ') {
-                    seg_start += 1;
-                }
             }
             TokenKind::Pipe(_) => {
                 let analysis = analyze_pipeline(cmd, &tokens, seg_start, tok.offset);
@@ -1502,9 +1508,10 @@ fn rewrite_compound(
                 });
                 if let Some(rewritten) = rewritten {
                     any_changed = true;
-                    result.push_str(&rewritten);
+                    result.push_str(&rewritten); // 1.1.0 (US-008): gaps already copied
                 } else {
-                    result.push_str(pipeline);
+                    let _ = pipeline;
+                    result.push_str(&cmd[seg_start..analysis.end_offset]); // 1.1.0 (US-008)
                 }
                 match analysis.next_clause_offset {
                     Some(next) => {
@@ -1519,12 +1526,9 @@ fn rewrite_compound(
                 let rewritten = rewrite_segment(seg, excluded, transparent_prefixes)
                     .unwrap_or_else(|| seg.to_string());
                 any_changed |= rewritten != seg;
-                result.push_str(&rewritten);
-                result.push_str(" & ");
+                result.push_str(&splice(cmd, seg_start, tok.offset, &rewritten)); // 1.1.0 (US-008)
+                result.push_str(&tok.value); // 1.1.0 (US-008)
                 seg_start = tok.offset + tok.value.len();
-                while cmd.as_bytes().get(seg_start) == Some(&b' ') {
-                    seg_start += 1;
-                }
             }
             _ => {}
         }
@@ -1534,7 +1538,7 @@ fn rewrite_compound(
     let rewritten =
         rewrite_segment(seg, excluded, transparent_prefixes).unwrap_or_else(|| seg.to_string());
     any_changed |= rewritten != seg;
-    result.push_str(&rewritten);
+    result.push_str(&splice(cmd, seg_start, cmd.len(), &rewritten)); // 1.1.0 (US-008)
     any_changed.then_some(result)
 }
 
@@ -1572,7 +1576,8 @@ fn is_single_file_operand(word: &str) -> bool {
                     return false;
                 };
                 let name = &word[i + 2..i + close];
-                if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                {
                     return false;
                 }
                 i += close + 1;
@@ -1677,7 +1682,8 @@ fn parse_sed_read_span(value: &str) -> Option<(&str, &str)> {
 }
 
 /// Built-in wrappers stripped before routing and restored after rewriting.
-const BUILTIN_TRANSPARENT_PREFIXES: &[&str] = &[
+pub(crate) const BUILTIN_TRANSPARENT_PREFIXES: &[&str] = &[
+    // 1.1.0 (US-001): read by the permission gate
     "uv run",
     "noglob",
     "command",
@@ -1703,7 +1709,8 @@ fn executable_name(program: &str) -> &str {
     program
 }
 
-fn execution_prefix(command: &str) -> Option<(&str, &str)> {
+pub(crate) fn execution_prefix(command: &str) -> Option<(&str, &str)> {
+    // 1.1.0 (US-001): shared with the permission gate
     let args: Vec<_> = tokenize(command)
         .into_iter()
         .filter(|token| token.kind == TokenKind::Arg)
@@ -1847,7 +1854,8 @@ fn compile_exclude_patterns(patterns: &[String]) -> Vec<ExcludePattern> {
         .collect()
 }
 
-fn normalize_transparent_prefixes(prefixes: &[String]) -> Vec<String> {
+pub(crate) fn normalize_transparent_prefixes(prefixes: &[String]) -> Vec<String> {
+    // 1.1.0 (US-001)
     let mut normalized: Vec<String> = prefixes
         .iter()
         .map(|prefix| prefix.trim())
@@ -2508,7 +2516,8 @@ fn shell_segment_is_ambiguous(
 
 /// Strip a command prefix with word-boundary check.
 /// Returns the remainder of the command after the prefix, or `None` if no match.
-fn strip_word_prefix<'a>(cmd: &'a str, prefix: &str) -> Option<&'a str> {
+pub(crate) fn strip_word_prefix<'a>(cmd: &'a str, prefix: &str) -> Option<&'a str> {
+    // 1.1.0 (US-001)
     if cmd == prefix {
         Some("")
     } else if cmd.len() > prefix.len()
@@ -2956,11 +2965,11 @@ mod tests {
         fn cross_line_operators_join_before_rewrite() {
             assert_eq!(
                 rewrite_command_no_prefixes("git status &&\ngit log -3", &[]),
-                Some("rtk git status && rtk git log -3".into())
+                Some("rtk git status &&\nrtk git log -3".into()) // 1.1.0 (US-008): author's newline kept
             );
             assert_eq!(
                 rewrite_command_no_prefixes("git log |\ngrep feat", &[]),
-                Some("git log | rtk grep feat".into())
+                Some("git log |\nrtk grep feat".into()) // 1.1.0 (US-008)
             );
             assert_eq!(
                 rewrite_command_no_prefixes("cargo test |&\ngrep FAILED", &[]),
@@ -6763,5 +6772,31 @@ mod tests {
             collapse_line_continuations("git diff HEAD~1"),
             std::borrow::Cow::<str>::Borrowed("git diff HEAD~1"),
         );
+    }
+    // 1.1.0 (US-008, upstream 05e7f801 + 5e92ea47): the author's text between commands survives.
+    #[test]
+    fn rewrite_copies_the_text_between_segments() {
+        for (input, expected) in [
+            ("ls -la  &&  ls", "rtk ls -la  &&  rtk ls"),
+            ("ls ; ls", "rtk ls ; rtk ls"),
+            ("ls;ls", "rtk ls;rtk ls"),
+            ("git status||git log -3", "rtk git status||rtk git log -3"),
+            ("git log -5  |  head -3", "rtk git log -5  |  head -3"),
+            (
+                "cargo build  &  git status",
+                "rtk cargo build  &  rtk git status",
+            ),
+        ] {
+            assert_eq!(
+                rewrite_command(input, &[], &[]).as_deref(),
+                Some(expected),
+                "{input}"
+            );
+        }
+        // `;;` stays one terminator: never `; ;`.
+        let case = rewrite_command("git status; case x in a) echo 1;; esac", &[], &[]);
+        if let Some(rewritten) = case {
+            assert!(rewritten.contains("echo 1;; esac"), "{rewritten}");
+        }
     }
 }

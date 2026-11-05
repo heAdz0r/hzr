@@ -264,7 +264,7 @@ pub(crate) fn normalize_search(
                         line_start.unwrap_or_default(),
                         line_end.unwrap_or_default()
                     )),
-                    derived_by: Some("rtk-rgai-0.50.0-fork.1".into()), // 0.11.0 (US-018)
+                    derived_by: Some("rtk-rgai-1.1.0-fork.1".into()), // 1.1.0 (US-014): upstream v1.1.0 sync
                 },
             },
             content,

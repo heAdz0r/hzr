@@ -205,11 +205,8 @@ verify_sha256 "${HZR_CURRENT_MANIFEST_SHA256}" \
 verify_sha256 "${HZR_CURRENT_CONTENT_SHA256}" \
   "${HZR_PROVENANCE_ROOT}/fork-core/CURRENT_SHA256SUMS"
 verify_matches_repository \
-  "${HZR_PROVENANCE_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch" \
-  "patches/grepai/0.37.0-disable-worktree-discovery.patch"
-verify_matches_repository \
-  "${HZR_PROVENANCE_ROOT}/patches/grepai/0.37.0-event-queue-backpressure.patch" \
-  "patches/grepai/0.37.0-event-queue-backpressure.patch"
+  "${HZR_PROVENANCE_ROOT}/patches/grepai/1.2.0-disable-worktree-discovery.patch" \
+  "patches/grepai/1.2.0-disable-worktree-discovery.patch"
 verify_matches_repository \
   "${HZR_PROVENANCE_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch" \
   "patches/icm/0.10.61-refresh-workspace-lock.patch"
@@ -274,10 +271,10 @@ verify_matches_repository \
 )
 
 "${HZR_BINARY_ROOT}/hzr" --version | grep -Fx "hzr 0.11.5" >/dev/null
-"${HZR_ENGINE_ROOT}/grepai" version | grep -F "0.37.0" >/dev/null
+"${HZR_ENGINE_ROOT}/grepai" version | grep -F "1.2.0" >/dev/null
 "${HZR_ENGINE_ROOT}/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_NODE_BINARY}" --version | grep -Fx "v22.17.1" >/dev/null
-"${HZR_ENGINE_ROOT}/rtk" --version | grep -Fx "rtk 0.50.0-fork.1" >/dev/null
+"${HZR_ENGINE_ROOT}/rtk" --version | grep -Fx "rtk 1.1.0-fork.1" >/dev/null
 
 HZR_SMOKE_TEMP="$(mktemp -d "${TMPDIR:-/tmp}/hzr-bundle-smoke.XXXXXX")"
 HZR_DAEMON_PID=""
@@ -402,7 +399,7 @@ HZR_DOCTOR_JSON="$(
 HZR_FORK_VERSION="$(
   "${HZR_BINARY_ROOT}/hzr" --config "${HZR_SMOKE_CONFIG}" rtk -- --version
 )"
-if [[ "${HZR_FORK_VERSION}" != "rtk 0.50.0-fork.1" ]]; then
+if [[ "${HZR_FORK_VERSION}" != "rtk 1.1.0-fork.1" ]]; then
   echo "assembled HZR-to-fork passthrough failed: ${HZR_FORK_VERSION}" >&2
   exit 1
 fi
@@ -410,7 +407,7 @@ fi
 HZR_COMPAT_FORK_VERSION="$(
   "${HZR_BINARY_ROOT}/rtk" --version
 )"
-if [[ "${HZR_COMPAT_FORK_VERSION}" != "rtk 0.50.0-fork.1" ]]; then
+if [[ "${HZR_COMPAT_FORK_VERSION}" != "rtk 1.1.0-fork.1" ]]; then
   echo "bin/rtk argv0 compatibility routing failed: ${HZR_COMPAT_FORK_VERSION}" >&2
   exit 1
 fi
@@ -450,7 +447,7 @@ if (report.protocol_version !== 1 || report.hzr_version !== "0.11.5") {
     process.exit(1);
   }
   const rtk = report.engines.find((engine) => engine.name === "rtk");
-  if (!rtk || rtk.version !== "0.50.0-fork.1" || rtk.state.toLowerCase() !== "ready") {
+  if (!rtk || rtk.version !== "1.1.0-fork.1" || rtk.state.toLowerCase() !== "ready") {
     console.error("assembled daemon did not load exact fork-core", rtk);
     process.exit(1);
   }

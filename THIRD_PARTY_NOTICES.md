@@ -23,10 +23,10 @@ additional pinned engines plus a private Node.js runtime without removing their 
 
 | Component | Version | License | Source | Role |
 |---|---:|---|---|---|
-| heAdz0r RTK fork-core | 0.50.0-fork.1 | MIT | https://github.com/heAdz0r/rtk | HZR-owned runtime; immutable v0.1.0 baseline plus versioned current engine |
-| upstream RTK | 0.44.1 | Apache-2.0 | https://github.com/rtk-ai/rtk | provenance/reference pin only; never built as HZR runtime |
+| heAdz0r RTK fork-core | 1.1.0-fork.1 | MIT | https://github.com/heAdz0r/rtk | HZR-owned runtime; immutable v0.1.0 baseline plus versioned current engine |
+| upstream RTK | 0.44.1 (import), 1.1.0 (selective re-implementation) | Apache-2.0 | https://github.com/rtk-ai/rtk | provenance/reference pin; never built as HZR runtime; fixes re-implemented only from the Apache-2.0 `src/` tree, never from the BUSL-1.1 `engine/`, `proxy/` or `plugin/` crates |
 | ICM | 0.10.61 | Apache-2.0 | https://github.com/rtk-ai/icm | lockfile-corrected runtime |
-| grepai | 0.37.0 | MIT | https://github.com/yoanbernabeu/grepai | patched runtime |
+| grepai | 1.2.0 | MIT | https://github.com/yoanbernabeu/grepai | patched runtime |
 | Caveman design-derived codec | 1.9.1 reference | MIT | https://github.com/JuliusBrussee/caveman | design reference |
 | caveman-code managed SDK | 0.65.2 | MIT | https://github.com/JuliusBrussee/caveman-code | managed runtime |
 | extract-zip hardened compatibility fork | 2.0.2 | BSD-2-Clause | https://github.com/max-mapper/extract-zip | rejects archive path and symlink escape in the managed Caveman runtime |
@@ -60,17 +60,14 @@ Node.js distribution license file, including its bundled dependency notices, is 
 bundle as `licenses/Node.js-MIT-and-dependencies.txt`. Node.js is private runtime infrastructure and
 is not represented as a separately installed system dependency.
 
-HZR applies `patches/grepai/0.37.0-disable-worktree-discovery.patch` to the pinned grepai source.
+HZR applies `patches/grepai/1.2.0-disable-worktree-discovery.patch` to the pinned grepai source.
 The patch adds an opt-out for upstream watcher's automatic linked-worktree discovery so HZR remains
 the sole index owner. Modified-source distributions must retain grepai's MIT license and identify
 this change. Patch SHA-256:
-`4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f`.
+`8bae4bbd060cfa44d8b1cbcfe917800e822f5f36d2d4ff4e8b5dd63c44b692d1`.
 
-HZR applies `patches/grepai/0.37.0-event-queue-backpressure.patch` to the pinned grepai source. Upstream's
-watcher treated a debounced burst larger than its 100-event queue — a checkout, a new worktree, a
-build writing generated sources — as fatal and exited. The patch makes delivery wait for queue
-space, in order, until the watcher stops. Patch SHA-256:
-`e5b1e807bfe95fe3bbf4a89a2b965ececc5c0de96cfb432436813e7b42dd5668`.
+grepai 1.2.0 ships the event-queue backpressure fix upstream (0.38.0, #326), so HZR no longer
+patches it.
 
 HZR applies `patches/icm/0.10.61-refresh-workspace-lock.patch` to the pinned ICM source. The patch
 only brings the `icm-cli` package version in upstream's committed `Cargo.lock` from `0.10.54` to the

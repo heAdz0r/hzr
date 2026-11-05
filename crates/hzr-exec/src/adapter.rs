@@ -15,7 +15,7 @@ use tokio::process::Command;
 
 use crate::{CanonicalCommand, ExecError, RewriteDecision, RewriteSource};
 
-pub const PINNED_RTK_VERSION: &str = "0.50.0-fork.1"; // 0.11.0 (US-018): upstream v0.50.0 sync
+pub const PINNED_RTK_VERSION: &str = "1.1.0-fork.1"; // 1.1.0 (US-014): upstream v1.1.0 sync
 pub use hzr_engine_contract::INTERNAL_EVASION_ENV;
 /// 0.11.2: the pinned engine the `rtk` shim execs; set by the managed shell prelude.
 pub const RTK_SHIM_BINARY_ENV: &str = "HZR_FORK_CORE_BINARY";

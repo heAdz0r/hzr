@@ -25,7 +25,7 @@ pub fn run(cmd: &str) -> anyhow::Result<()> {
         .map(|c| (c.hooks.exclude_commands, c.hooks.transparent_prefixes))
         .unwrap_or_default();
 
-    let verdict = check_command(cmd);
+    let verdict = check_command(cmd, &transparent_prefixes); // 1.1.0 (US-001): gate reads past the same prefixes
     if verdict == PermissionVerdict::Deny {
         std::process::exit(2);
     }
@@ -76,9 +76,9 @@ pub fn run_plan(cmd: &str) -> anyhow::Result<()> {
             )
         })
         .unwrap_or_default();
-    let verdict = check_command(cmd);
-    // 0.9.4: the host's own verdict for the operator's command travels with the plan, because the
-    // host cannot re-derive it from the rewritten form.
+    let verdict = check_command(cmd, &transparent_prefixes); // 1.1.0 (US-001): gate reads past the same prefixes
+                                                             // 0.9.4: the host's own verdict for the operator's command travels with the plan, because the
+                                                             // host cannot re-derive it from the rewritten form.
     let host_permission = Some(host_permission_verdict(&verdict));
     let byte_fidelity =
         std::env::var_os(BYTE_FIDELITY_ENV).as_deref() == Some(std::ffi::OsStr::new("1"));

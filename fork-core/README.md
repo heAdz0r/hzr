@@ -11,7 +11,7 @@ Snapshot identity:
 - branch: `feat/upstream-0.42-fork.1`;
 - source HEAD: `5f403c465cbdbe148e9ca03e0ac8e856eef0bfee`;
 - package version: `0.44.1-fork.1` (import baseline; the current HZR-owned engine is
-  `0.50.0-fork.1`, synced selectively with upstream `rtk-ai/rtk` v0.50.0 — see
+  `1.1.0-fork.1`, synced selectively with upstream `rtk-ai/rtk` v1.1.0 (Apache-2.0 `src/` only) — see
   `docs/PRD_HZR_UPSTREAM_RTK_SYNC_0_50_0.md`);
 - included files: 516;
 - tracked deletions: 4;

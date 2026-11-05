@@ -2,6 +2,7 @@
 # 0.11.0 (FR-9): differential probe for the upstream RTK v0.50.0 sync.
 #
 # Reproduces the fidelity cases E1-E14 of docs/PRD_HZR_UPSTREAM_RTK_SYNC_0_50_0.md
+# and F1-F3 of docs/PRD_HZR_UPSTREAM_RTK_SYNC_1_1_0.md (1.1.0)
 # against the native tools on throwaway fixtures, and exits non-zero on the first
 # regression class it finds. Every comparison is byte-exact on stdout plus the
 # exit code unless the case documents an intentional rendering (a bounded window,
@@ -89,6 +90,16 @@ if [[ "${out}" == *"hidden/gitignored, not searched"* ]]; then pass "E8 find dis
 # E9-E10: head/tail windows are byte-exact on stdout
 same_as_native "E9 head, latin-1"           head -n 2 latin.txt -- read latin.txt --head-lines 2
 same_as_native "E10 tail, CRLF no EOL"      tail -n 2 crlf.txt -- read crlf.txt --tail-lines 2
+
+# 1.1.0 (US-006, PRD_HZR_UPSTREAM_RTK_SYNC_1_1_0 F1-F2): plain `cat` reads are byte-exact
+same_as_native "F1 cat, latin-1"            cat latin.txt -- read latin.txt
+same_as_native "F2 cat, CRLF no EOL"        cat crlf.txt -- read crlf.txt
+same_as_native "F1 cat -n, latin-1"         cat -n latin.txt -- read -n latin.txt
+n_out="$(od -An -c < latin.txt)"; r_out="$("${RTK}" read - < latin.txt 2>/dev/null | od -An -c)"
+if [[ "${n_out}" == "${r_out}" ]]; then pass "F1 stdin, latin-1"; else fail "F1 stdin, latin-1" "stdout differs"; fi
+
+# 1.1.0 (US-007, F3): a wrapped tool's help is the tool's own
+same_as_native "F3 git log --help"          git log -h -- git log -h
 
 # E11: ls without -a lists no dot entries
 out="$("${RTK}" ls src 2>&1)"

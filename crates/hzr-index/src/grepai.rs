@@ -14,7 +14,7 @@ use crate::process;
 use crate::watch::{self, WatchHandle};
 use crate::workspace::{IndexPlacement, Workspace};
 
-pub const SUPPORTED_GREPAI_VERSION: &str = "0.37.0"; // 0.11.1: atomic-write indexing fix (#295)
+pub const SUPPORTED_GREPAI_VERSION: &str = "1.2.0"; // 1.1.0: grepai 0.38-1.2 fixes (watcher, crash safety, index meta)
 pub const SINGLE_WORKTREE_WATCH_FLAG: &str = "--no-worktree-discovery";
 /// Directories HZR always keeps out of a managed index. Claude Code creates agent worktrees
 /// under `.claude/worktrees/` inside the repository: each is a full checkout of the same

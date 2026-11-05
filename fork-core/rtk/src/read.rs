@@ -172,6 +172,43 @@ fn run_window_bytes(timer: &tracking::TimedExecution, file: &Path, window: Windo
     Ok(())
 }
 
+/// 1.1.0 (US-006, upstream 95452556 + e5c79f48): whether a read must return the source bytes.
+///
+/// Every filter works on decoded lines, so a file that is not valid UTF-8 loses bytes to
+/// `U+FFFD` and a CRLF file loses its `\r` to `str::lines`. Neither is a saving: it is a
+/// different file. Such a read is served byte-exact unless the caller asked for a transform
+/// that has no byte form (the aggressive level, deduplication).
+fn needs_exact_bytes(bytes: &[u8], level: FilterLevel, dedup: bool) -> bool {
+    level != FilterLevel::Aggressive
+        && !dedup
+        && (std::str::from_utf8(bytes).is_err() || memchr::memchr(b'\r', bytes).is_some())
+}
+
+/// 1.1.0 (US-006): `cat -n` bytes — a six-wide right-aligned number, a tab, the line as is.
+fn number_lines_bytes(bytes: &[u8], first: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len() + bytes.len() / 8 + 8);
+    let mut number = first;
+    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+        out.extend_from_slice(format!("{number:>6}\t").as_bytes());
+        out.extend_from_slice(line);
+        number += 1;
+    }
+    out
+}
+
+/// 1.1.0 (US-006): write the exact bytes of a read, numbered when asked.
+fn write_exact_bytes(bytes: &[u8], line_numbers: bool, first_line: usize) -> Result<Vec<u8>> {
+    let shown = if line_numbers {
+        number_lines_bytes(bytes, first_line)
+    } else {
+        bytes.to_vec()
+    };
+    let mut stdout = std::io::stdout().lock();
+    stdout.write_all(&shown).context("Failed to write output")?;
+    stdout.flush().context("Failed to flush output")?;
+    Ok(shown)
+}
+
 const MIN_BATCH_FILE_TOKENS: usize = 64;
 pub const DEFAULT_READ_MAX_LINES: usize = 400;
 /// A plain read of a file up to this size is returned whole: it fits the 30,000-character
@@ -255,7 +292,13 @@ fn track_failed_read(
     let message = format!("Error: {error:#}\n"); // 0.11.2
     match attribution {
         Some(attribution) => {
-            timer.track_attributed("read <path omitted>", rtk_cmd, &message, &message, attribution); // 0.11.2
+            timer.track_attributed(
+                "read <path omitted>",
+                rtk_cmd,
+                &message,
+                &message,
+                attribution,
+            ); // 0.11.2
         }
         None => {
             timer.track("read <path omitted>", rtk_cmd, &message, &message); // 0.11.2
@@ -277,7 +320,8 @@ pub fn run(
     verbose: u8,
 ) -> Result<()> {
     let timer = tracking::TimedExecution::start(); // 0.11.2: shared with the failure receipt
-    let result = run_file( // 0.11.2
+    let result = run_file(
+        // 0.11.2
         &timer,
         file,
         level,
@@ -292,13 +336,15 @@ pub fn run(
     ); // 0.11.2
     if let Err(error) = &result {
         let attribution = read_attribution(level, from, to, max_lines, tail_lines, None); // 0.11.2
-        track_failed_read(&timer, "rtk read (failed)", error, Some(attribution)); // 0.11.2
+        track_failed_read(&timer, "rtk read (failed)", error, Some(attribution));
+        // 0.11.2
     }
     result // 0.11.2
 }
 
 #[allow(clippy::too_many_arguments)] // changed: file read params bundle naturally together
-fn run_file( // 0.11.2: the former body of `run`, which now owns the timer
+fn run_file(
+    // 0.11.2: the former body of `run`, which now owns the timer
     timer: &tracking::TimedExecution, // 0.11.2
     file: &Path,
     level: FilterLevel,
@@ -435,6 +481,30 @@ fn run_file( // 0.11.2: the former body of `run`, which now owns the timer
             "rtk read",
             &input_marker,
             &preview,
+            attribution,
+        );
+        return Ok(());
+    }
+
+    // ── 1.1.0 (US-006): non-UTF-8 or CR bytes are served exactly ──
+    if tail_lines.is_none() && needs_exact_bytes(&content_bytes, level, dedup) {
+        let shown = write_exact_bytes(&content_bytes, line_numbers, from.unwrap_or(1))?;
+        if head_bounded {
+            if let (Some(max), Some(total)) = (max_lines, full_line_count) {
+                if total > max {
+                    eprintln!(
+                        "[lines 1-{max} of {total}; read more with --from {} --to {total}]",
+                        max + 1
+                    );
+                }
+            }
+        }
+        let shown = String::from_utf8_lossy(&shown);
+        timer.track_attributed(
+            "read <path omitted>",
+            "rtk read",
+            &shown,
+            &shown,
             attribution,
         );
         return Ok(());
@@ -706,12 +776,18 @@ pub fn run_batch(
     if let Err(error) = &result {
         let attribution =
             read_attribution(FilterLevel::None, None, None, Some(max_tokens), None, None); // 0.11.2
-        track_failed_read(&timer, "rtk read --batch (failed)", error, Some(attribution)); // 0.11.2
+        track_failed_read(
+            &timer,
+            "rtk read --batch (failed)",
+            error,
+            Some(attribution),
+        ); // 0.11.2
     }
     result // 0.11.2
 }
 
-fn run_batch_files( // 0.11.2: the former body of `run_batch`
+fn run_batch_files(
+    // 0.11.2: the former body of `run_batch`
     timer: &tracking::TimedExecution, // 0.11.2
     files: &[PathBuf],
     max_tokens: usize,
@@ -1039,6 +1115,15 @@ pub fn run_stdin(
         return Ok(());
     }
 
+    // 1.1.0 (US-006, upstream e5c79f48): stdin goes through the same byte gate as a file.
+    if max_lines.is_none() && tail_lines.is_none() && needs_exact_bytes(&bytes, level, false) {
+        let ranged = read_source::apply_line_range_bytes(&bytes, from, to)?;
+        let shown = write_exact_bytes(&ranged, line_numbers, from.unwrap_or(1))?;
+        let shown = String::from_utf8_lossy(&shown);
+        timer.track_attributed("read stdin", "rtk read -", &shown, &shown, attribution);
+        return Ok(());
+    }
+
     let content = read_source::apply_line_range(&String::from_utf8_lossy(&bytes), from, to)?;
 
     let lang = Language::Unknown;
@@ -1132,10 +1217,18 @@ mod tests {
     fn reference(bytes: &[u8], window: Window) -> Vec<u8> {
         let lines: Vec<&[u8]> = bytes.split_inclusive(|b| *b == b'\n').collect();
         match window {
-            Window::Head(n) => lines.iter().take(n).flat_map(|l| l.iter().copied()).collect(),
+            Window::Head(n) => lines
+                .iter()
+                .take(n)
+                .flat_map(|l| l.iter().copied())
+                .collect(),
             Window::Tail(n) => {
                 let skip = lines.len().saturating_sub(n);
-                lines.iter().skip(skip).flat_map(|l| l.iter().copied()).collect()
+                lines
+                    .iter()
+                    .skip(skip)
+                    .flat_map(|l| l.iter().copied())
+                    .collect()
             }
         }
     }
@@ -1318,5 +1411,32 @@ fn main() {{
 
         assert!(output.contains("docs/agent'\"'\"'s notes.md"));
         assert!(tracking::estimate_tokens(&output) <= MIN_BATCH_FILE_TOKENS);
+    }
+    // ---- 1.1.0 (US-006) ----
+    #[test]
+    fn exact_bytes_gate_catches_non_utf8_and_cr() {
+        assert!(needs_exact_bytes(b"caf\xe9\n", FilterLevel::Minimal, false));
+        assert!(needs_exact_bytes(
+            b"a\r\nb\r\n",
+            FilterLevel::Minimal,
+            false
+        ));
+        assert!(needs_exact_bytes(b"caf\xe9\n", FilterLevel::None, false));
+        assert!(!needs_exact_bytes(b"plain\n", FilterLevel::Minimal, false));
+        assert!(!needs_exact_bytes(
+            b"caf\xe9\n",
+            FilterLevel::Aggressive,
+            false
+        ));
+        assert!(!needs_exact_bytes(b"caf\xe9\n", FilterLevel::Minimal, true));
+    }
+
+    #[test]
+    fn numbered_bytes_match_cat_n() {
+        assert_eq!(
+            number_lines_bytes(b"caf\xe9\r\nb", 1),
+            b"     1\tcaf\xe9\r\n     2\tb".to_vec()
+        );
+        assert_eq!(number_lines_bytes(b"x\n", 41), b"    41\tx\n".to_vec());
     }
 }

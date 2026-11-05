@@ -145,8 +145,8 @@ run_hzr() {
 }
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.11.5" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
-  | grep -Fx "rtk 0.50.0-fork.1" >/dev/null
-"${HZR_INSTALLED_ROOT}/engines/grepai" version | grep -F "0.37.0" >/dev/null
+  | grep -Fx "rtk 1.1.0-fork.1" >/dev/null
+"${HZR_INSTALLED_ROOT}/engines/grepai" version | grep -F "1.2.0" >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_INSTALLED_ROOT}/engines/node" --version | grep -Fx "v22.17.1" >/dev/null
 for HZR_VISUALIZER_FILE in index.html assets/app.css assets/app.js hzr-hero.png; do
@@ -604,9 +604,9 @@ fi
 
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" hzr --version | grep -Fx "hzr 0.11.5" >/dev/null
 PATH="${HZR_INSTALLED_BIN}:/usr/bin:/bin" rtk --version \
-  | grep -Fx "rtk 0.50.0-fork.1" >/dev/null
-"${HZR_CURRENT_LINK}/engines/rtk" --version | grep -Fx "rtk 0.50.0-fork.1" >/dev/null
-"${HZR_CURRENT_LINK}/engines/grepai" version | grep -F "0.37.0" >/dev/null
+  | grep -Fx "rtk 1.1.0-fork.1" >/dev/null
+"${HZR_CURRENT_LINK}/engines/rtk" --version | grep -Fx "rtk 1.1.0-fork.1" >/dev/null
+"${HZR_CURRENT_LINK}/engines/grepai" version | grep -F "1.2.0" >/dev/null
 "${HZR_CURRENT_LINK}/engines/icm" --version | grep -F "0.10.61" >/dev/null
 "${HZR_CURRENT_LINK}/engines/node" --version | grep -Fx "v22.17.1" >/dev/null
 

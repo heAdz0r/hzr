@@ -64,20 +64,17 @@ mod tests {
             .find(|engine| engine.name == "grepai")
             .expect("grepai pin");
 
-        assert_eq!(grepai.version, "0.37.0");
-        assert_eq!(grepai.tag, "v0.37.0");
+        assert_eq!(grepai.version, "1.2.0"); // 1.1.0: grepai upgrade
+        assert_eq!(grepai.tag, "v1.2.0"); // 1.1.0
         assert_eq!(
             grepai.patches,
-            [
-                "patches/grepai/0.37.0-disable-worktree-discovery.patch",
-                "patches/grepai/0.37.0-event-queue-backpressure.patch", // 0.11.4
-            ]
+            // 1.1.0: upstream 0.38.0 ships the event-queue backpressure fix (#326)
+            ["patches/grepai/1.2.0-disable-worktree-discovery.patch"]
         );
         assert_eq!(
             grepai.patch_sha256,
             [
-                "4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f",
-                "e5b1e807bfe95fe3bbf4a89a2b965ececc5c0de96cfb432436813e7b42dd5668", // 0.11.4
+                "8bae4bbd060cfa44d8b1cbcfe917800e822f5f36d2d4ff4e8b5dd63c44b692d1", // 1.1.0
             ]
         );
 

@@ -9,9 +9,9 @@ mod config;
 mod constants; // fork: shared constants (TOML filter engine)
 mod container;
 mod curl_cmd;
+mod deno_cmd; // 0.11.0 (US-009)
 mod deps;
 mod diag_summary;
-mod deno_cmd; // 0.11.0 (US-009)
 mod diff_cmd;
 mod discover;
 mod display_helpers;
@@ -1993,6 +1993,64 @@ fn run_fallback(parse_error: clap::Error) -> Result<()> {
     Ok(())
 }
 
+/// 1.1.0 (US-007, upstream #4348): subcommands whose name is the program they run directly.
+/// Package-runner wrappers (`tsc`, `vitest`, `next`, …) resolve their program and are left out.
+const HELP_HANDOFF_TOOLS: &[&str] = &[
+    "git",
+    "gh",
+    "cargo",
+    "go",
+    "golangci-lint",
+    "npm",
+    "pnpm",
+    "bun",
+    "deno",
+    "pytest",
+    "ruff",
+    "pip",
+    "mypy",
+    "docker",
+    "kubectl",
+    "oc",
+    "curl",
+    "wget",
+    "ssh",
+    "tar",
+    "aws",
+    "psql",
+    "sqlite3",
+    "gt",
+];
+/// Tools where `-h` is an option of their own (`tar -h` dereferences, `psql -h` names a host).
+const SHORT_H_NOT_HELP: &[&str] = &["tar", "psql", "sqlite3", "ssh"];
+
+/// 1.1.0 (US-007): `rtk <tool> … --help` → `rtk proxy <tool> … --help`.
+///
+/// `rtk git log --help` printed rtk's own clap help ("One-line commit history"), so an agent
+/// that asked git for its manual got rtk's. Proxy runs the argv exactly, so a false positive
+/// (`git commit -m --help`) only costs the filter, never fidelity.
+fn help_handoff(argv: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    let Some(tool) = argv.get(1).and_then(|arg| arg.to_str()) else {
+        return argv;
+    };
+    if !HELP_HANDOFF_TOOLS.contains(&tool) {
+        return argv;
+    }
+    let rest = &argv[2..];
+    let asks_help = rest.first().is_some_and(|arg| arg == "help")
+        || rest
+            .iter()
+            .any(|arg| arg == "--help" || (arg == "-h" && !SHORT_H_NOT_HELP.contains(&tool)));
+    if !asks_help {
+        return argv;
+    }
+    let mut handed = Vec::with_capacity(argv.len() + 1);
+    handed.push(argv[0].clone());
+    handed.push("proxy".into());
+    handed.extend(argv[1..].iter().cloned());
+    handed
+}
+
 fn main() -> Result<()> {
     tracking::initialize_internal_evasion();
 
@@ -2016,7 +2074,8 @@ fn main() -> Result<()> {
     }
 
     // fix #200: graceful fallback when Clap cannot parse the command
-    let cli = match Cli::try_parse() {
+    // 1.1.0 (US-007): a wrapped tool's own help is the tool's, not rtk's.
+    let cli = match Cli::try_parse_from(help_handoff(std::env::args_os().collect())) {
         Ok(cli) => cli,
         Err(e) => {
             if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
@@ -2080,9 +2139,9 @@ fn main() -> Result<()> {
                     return read::run_window(&file, read::Window::Head(n));
                 }
                 let exact_level = level.is_none_or(|l| l == filter::FilterLevel::None);
-                if let Some(n) = tail_lines.filter(|_| {
-                    exact_level && from.is_none() && to.is_none() && !line_numbers
-                }) {
+                if let Some(n) = tail_lines
+                    .filter(|_| exact_level && from.is_none() && to.is_none() && !line_numbers)
+                {
                     return read::run_window(&file, read::Window::Tail(n));
                 }
             }
@@ -2610,7 +2669,11 @@ fn main() -> Result<()> {
                 globals.extend(["--dir".to_string(), d.clone()]);
             }
             let with_globals = |args: &[String]| -> Vec<String> {
-                globals.iter().cloned().chain(args.iter().cloned()).collect()
+                globals
+                    .iter()
+                    .cloned()
+                    .chain(args.iter().cloned())
+                    .collect()
             };
             let passthrough = |sub: &str, args: &[String]| -> Result<()> {
                 let argv: Vec<OsString> = globals
@@ -2623,13 +2686,25 @@ fn main() -> Result<()> {
             };
             match command {
                 PnpmCommands::List { depth, args } => {
-                    pnpm_cmd::run(pnpm_cmd::PnpmCommand::List { depth }, &with_globals(&args), cli.verbose)?;
+                    pnpm_cmd::run(
+                        pnpm_cmd::PnpmCommand::List { depth },
+                        &with_globals(&args),
+                        cli.verbose,
+                    )?;
                 }
                 PnpmCommands::Outdated { args } => {
-                    pnpm_cmd::run(pnpm_cmd::PnpmCommand::Outdated, &with_globals(&args), cli.verbose)?;
+                    pnpm_cmd::run(
+                        pnpm_cmd::PnpmCommand::Outdated,
+                        &with_globals(&args),
+                        cli.verbose,
+                    )?;
                 }
                 PnpmCommands::Install { args } => {
-                    pnpm_cmd::run(pnpm_cmd::PnpmCommand::Install, &with_globals(&args), cli.verbose)?; // 0.11.0 (US-008)
+                    pnpm_cmd::run(
+                        pnpm_cmd::PnpmCommand::Install,
+                        &with_globals(&args),
+                        cli.verbose,
+                    )?; // 0.11.0 (US-008)
                 }
                 // With a workspace flag `build`/`typecheck` are pnpm scripts run in
                 // several packages, not a single next/tsc run.
@@ -2972,7 +3047,8 @@ fn main() -> Result<()> {
         }
 
         Commands::Vitest { args } => {
-            vitest_cmd::run(vitest_cmd::VitestCommand::Run, &args, cli.verbose)?; // 0.11.0
+            vitest_cmd::run(vitest_cmd::VitestCommand::Run, &args, cli.verbose)?;
+            // 0.11.0
         }
 
         Commands::Prisma { command } => match command {
@@ -3766,7 +3842,8 @@ mod rgai_arg_tests {
     // 0.11.0 (US-010): pnpm global flags parse before the subcommand.
     #[test]
     fn test_pnpm_global_flags_parse() {
-        let cli = Cli::try_parse_from(["rtk", "pnpm", "--filter", "web", "-r", "install", "x"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["rtk", "pnpm", "--filter", "web", "-r", "install", "x"]).unwrap();
         match cli.command {
             Commands::Pnpm {
                 filter,
@@ -3804,8 +3881,8 @@ mod rgai_arg_tests {
     // 0.11.0 (US-002): rtk's own options stay reachable in their long form.
     #[test]
     fn test_grep_long_rtk_options() {
-        let cli = Cli::try_parse_from(["rtk", "grep", "--max-len", "40", "--max", "5", "p"])
-            .unwrap();
+        let cli =
+            Cli::try_parse_from(["rtk", "grep", "--max-len", "40", "--max", "5", "p"]).unwrap();
         match cli.command {
             Commands::Grep {
                 max_len,
@@ -3947,5 +4024,37 @@ mod rgai_arg_tests {
                 _ => panic!("Expected Git command"),
             }
         }
+    }
+    // 1.1.0 (US-007)
+    #[test]
+    fn help_is_handed_to_the_wrapped_tool() {
+        let os = |words: &[&str]| -> Vec<std::ffi::OsString> {
+            words.iter().map(std::ffi::OsString::from).collect()
+        };
+        assert_eq!(
+            help_handoff(os(&["rtk", "git", "log", "--help"])),
+            os(&["rtk", "proxy", "git", "log", "--help"])
+        );
+        assert_eq!(
+            help_handoff(os(&["rtk", "cargo", "test", "-h"])),
+            os(&["rtk", "proxy", "cargo", "test", "-h"])
+        );
+        assert_eq!(
+            help_handoff(os(&["rtk", "git", "help", "log"])),
+            os(&["rtk", "proxy", "git", "help", "log"])
+        );
+        for unchanged in [
+            &["rtk", "ls", "-h"][..],
+            &["rtk", "grep", "-h", "x"][..],
+            &["rtk", "tar", "-h", "-cf", "a.tar", "d"][..],
+            &["rtk", "git", "log", "-5"][..],
+            &["rtk", "go", "test", "./help"][..],
+            &["rtk", "--help"][..],
+        ] {
+            assert_eq!(help_handoff(os(unchanged)), os(unchanged));
+        }
+        let cli = Cli::try_parse_from(help_handoff(os(&["rtk", "git", "log", "--help"])))
+            .expect("parses");
+        assert!(matches!(cli.command, Commands::Proxy { .. }));
     }
 }

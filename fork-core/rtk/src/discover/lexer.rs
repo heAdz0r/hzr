@@ -517,6 +517,14 @@ fn contains_substitution(cmd: &str) -> bool {
 // `>word 2>&1` — a file target.
 fn redirect_has_file_target(tokens: &[ParsedToken], i: usize) -> bool {
     let value = &tokens[i].value;
+    // 1.1.0 (US-003, upstream 3c2b4d0a): a heredoc (`<<`, `<<-`, `3<<`) has a delimiter, not a
+    // file target; its body is inline data the gate cannot read, so `/dev/null` never exempts it.
+    if value
+        .trim_start_matches(|ch: char| ch.is_ascii_digit())
+        .starts_with("<<")
+    {
+        return true;
+    }
     if let Some(pos) = value.find(">&") {
         let tail = &value[pos + 2..];
         if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit() || c == '-') {
@@ -554,8 +562,13 @@ pub fn split_for_permissions(cmd: &str) -> Vec<&str> {
     let mut results = Vec::new();
     let mut seg_start: usize = 0;
     let mut seg_end: Option<usize> = None;
+    // 1.1.0 (US-003, upstream 3992e0ab): a redirect may precede its command (`2>&1 git push`).
+    // Truncating there left no segment at all, so no deny rule ran. A redirect seen before any
+    // command word is stepped over together with its file operand; later ones still truncate.
+    let mut seen_word = false;
+    let mut skip_operand = false;
 
-    for tok in &tokens {
+    for (index, tok) in tokens.iter().enumerate() {
         let is_boundary = match tok.kind {
             TokenKind::Operator | TokenKind::Pipe(_) => true,
             TokenKind::Shellism => matches!(tok.value.as_str(), "&" | "(" | ")"),
@@ -569,8 +582,23 @@ pub fn split_for_permissions(cmd: &str) -> Vec<&str> {
                 results.push(segment);
             }
             seg_start = tok.offset + tok.value.len();
+            seen_word = false; // 1.1.0 (US-003)
+            skip_operand = false; // 1.1.0 (US-003)
+        } else if tok.kind == TokenKind::Redirect && !seen_word && seg_end.is_none() {
+            // 1.1.0 (US-003): leading redirect — step over it (and its operand, if it has one).
+            skip_operand = redirect_has_file_target(&tokens, index)
+                && tokens
+                    .get(index + 1)
+                    .is_some_and(|next| next.kind == TokenKind::Arg);
+            seg_start = tok.offset + tok.value.len();
+        } else if skip_operand && tok.kind == TokenKind::Arg {
+            // 1.1.0 (US-003): the leading redirect's file operand is not the command.
+            skip_operand = false;
+            seg_start = tok.offset + tok.value.len();
         } else if tok.kind == TokenKind::Redirect && seg_end.is_none() {
             seg_end = Some(tok.offset);
+        } else if seg_end.is_none() && tok.kind != TokenKind::Redirect {
+            seen_word = true; // 1.1.0 (US-003)
         }
     }
 
@@ -1376,6 +1404,45 @@ mod tests {
     fn test_split_on_operators_empty() {
         assert!(split_on_operators("", false).is_empty());
         assert!(split_on_operators("  ", true).is_empty());
+    }
+
+    // 1.1.0 (US-003, upstream 3c2b4d0a / 3992e0ab)
+    #[test]
+    fn heredoc_is_never_exempted_by_dev_null() {
+        for cmd in [
+            "git status << /dev/null",
+            "git status <</dev/null",
+            "git status <<-EOF",
+            "git status <<- /dev/null",
+            "git status 3<< /dev/null",
+            "git status 3<</dev/null",
+        ] {
+            assert!(contains_unattestable_construct(cmd), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn leading_redirect_is_stepped_over_not_truncated() {
+        assert_eq!(
+            split_for_permissions("2>&1 git push --force"),
+            vec!["git push --force"]
+        );
+        assert_eq!(
+            split_for_permissions(">/tmp/log git push"),
+            vec!["git push"]
+        );
+        assert_eq!(
+            split_for_permissions("> /tmp/log git push"),
+            vec!["git push"]
+        );
+        assert_eq!(
+            split_for_permissions("ls; 2>&1 rm -rf x"),
+            vec!["ls", "rm -rf x"]
+        );
+        assert_eq!(
+            split_for_permissions("git push 2>&1 >out"),
+            vec!["git push"]
+        );
     }
 
     // --- contains_unattestable_construct (security) -------------------------

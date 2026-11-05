@@ -360,6 +360,8 @@ async fn rewrite(config: &Config, input: &Value) -> Result<()> {
     // A command rewrite shapes the one tool result this call is about to append; it never
     // rewrites content the provider already cached, so it is append-class at every turn position.
     let decision = apply_filter_placement(config, input, PrefixEffect::Append, decision);
+    // 1.1.0 (US-005): an operator ask rule must survive a granting permission mode.
+    let decision = keep_operator_ask_rules(input, host_permission, decision);
     let decision = honor_host_permission_mode(input, decision);
     // 0.9.4: the host's own Bash rules, evaluated on the operator's command, drive the answer.
     let decision = reconcile_host_permission_rules(input, host_permission, decision);
@@ -885,6 +887,33 @@ fn reconcile_host_permission_rules(
             "Claude permission for the original command is not confirmed; leave its input \
              unchanged for the host to evaluate; this run is unfiltered and earns no savings credit",
         ),
+        other => other,
+    }
+}
+
+/// 1.1.0 (US-005): keep an operator's ask rule visible to the host under a granting mode.
+///
+/// A granting mode (`bypassPermissions`) turns an `Ask` that proposes a managed command into an
+/// approved rewrite. When the ask came from the operator's own `Bash(...)` rule — fork-core read
+/// it past wrappers and assignments, or capped an unreadable construct — the managed form would
+/// hide the command from that rule for good: no host rule can match the environment prelude.
+/// Leaving the original command raw and undecided lets the host apply its own rule to it. The
+/// cost is the filtering of that one command; the rule is worth more than the savings.
+fn keep_operator_ask_rules(
+    input: &Value,
+    host_permission: Option<HostPermissionVerdict>,
+    decision: RewriteDecision,
+) -> RewriteDecision {
+    if !host_grants_execution(input) || host_permission != Some(HostPermissionVerdict::Ask) {
+        return decision;
+    }
+    match decision {
+        RewriteDecision::Ask { .. } | RewriteDecision::AllowRewrite { .. } => {
+            RewriteDecision::allow_raw(
+                "an operator ask rule matches the original command; leave it unchanged for the \
+                 host to apply its own rule; this run is unfiltered and earns no savings credit",
+            )
+        }
         other => other,
     }
 }

@@ -16,11 +16,15 @@ import sys
 from pathlib import Path
 
 
-EXPECTED_COUNT = 137
+EXPECTED_COUNT = 134  # 1.1.0 (US-014)
 # Recomputed for 0.11.2: the ls/read/search/go_cmd accounting fixes moved existing
 # diagnostics' line numbers. A (code, message, file) multiset comparison against 0.11.1
 # shows no warning added or removed; the new code is clean.
-EXPECTED_SHA256 = "00f41f1cf61e48c654f3a46ce4c7ab1d33af9bc3f9502adccd05f3bc80ad31d5"
+# 1.1.0 (US-014): the permission gate now uses the lexer's `split_for_permissions` and
+# `contains_unattestable_construct`, so their three dead_code warnings (and
+# `contains_substitution`'s) are gone: 137 -> 134. No warning was added; other entries only
+# moved lines in the files the upstream v1.1.0 sync edited.
+EXPECTED_SHA256 = "a204e29a5e8912f5927da57800b06490f136c9034160c1596749eb43f0d48422"  # 1.1.0 (US-014)
 
 
 def main() -> int:

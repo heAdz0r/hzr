@@ -9,7 +9,7 @@ HZR_EXPECTED_SNAPSHOT_SHA256="f4296ec404f461d6fc03c966c0dc79caee6c3118a73d1ed1a0
 HZR_EXPECTED_CONTENT_MANIFEST_SHA256="072a62adc754b728ec99a507d2c1a223d83077d067a9249a26d357eec890b4cc"
 # 0.11.0 (US-018): only the HZR-owned current engine version is a requirement; the
 # immutable import baseline is verified by its snapshot digests, not by a version pin.
-HZR_EXPECTED_CORE_VERSION="0.50.0-fork.1"
+HZR_EXPECTED_CORE_VERSION="1.1.0-fork.1"
 
 # shellcheck source=scripts/fork-snapshot-v2.sh
 source "${HZR_REPOSITORY_ROOT}/scripts/fork-snapshot-v2.sh"

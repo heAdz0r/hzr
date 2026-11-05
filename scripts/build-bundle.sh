@@ -242,45 +242,38 @@ HZR_NODE_BINARY="${HZR_NODE_BUILD_ROOT}/bin/node"
 HZR_NPM_BINARY="${HZR_NODE_BUILD_ROOT}/bin/npm"
 "${HZR_NODE_BINARY}" --version | grep -Fx "v${HZR_NODE_VERSION}" >/dev/null
 
+# 1.1.0: grepai 1.2.0 ships the event-queue backpressure fix itself (#326); only the
+# single-worktree watch flag remains an HZR patch.
 verify_sha256 \
-  "4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f" \
-  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
-# 0.11.4: a burst larger than the event queue waits instead of killing the watcher.
-verify_sha256 \
-  "e5b1e807bfe95fe3bbf4a89a2b965ececc5c0de96cfb432436813e7b42dd5668" \
-  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-event-queue-backpressure.patch"
+  "8bae4bbd060cfa44d8b1cbcfe917800e822f5f36d2d4ff4e8b5dd63c44b692d1" \
+  "${HZR_REPOSITORY_ROOT}/patches/grepai/1.2.0-disable-worktree-discovery.patch"
 hzr_build_stage "Building the pinned grepai engine"
 HZR_BUILD_SCRIPT_SHA256="$(sha256_file "${BASH_SOURCE[0]}")"
 HZR_GREPAI_LICENSE_SOURCE="${HZR_BUILD_TEMP}/grepai.LICENSE"
 HZR_GREPAI_CACHE_KEY="$(component_cache_key \
-  grepai 0.37.0 ad90c4216282a434eeb2e28df4a1ea175a5470aa \
-  4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f \
-  e5b1e807bfe95fe3bbf4a89a2b965ececc5c0de96cfb432436813e7b42dd5668 \
+  grepai 1.2.0 d86397d5f0c94ea31b96d1bb8b4da6966e26f5ef \
+  8bae4bbd060cfa44d8b1cbcfe917800e822f5f36d2d4ff4e8b5dd63c44b692d1 \
   "${HZR_PLATFORM}" "$(go version)" "${HZR_BUILD_SCRIPT_SHA256}")"
 if restore_cached_component \
   grepai "${HZR_GREPAI_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/grepai" \
   "${HZR_GREPAI_LICENSE_SOURCE}" \
   "49966552514373129de9faea43a890bf6a8b04f158b2966876a57fdf915980e5" && \
-  "${HZR_ENGINE_OUTPUT}/grepai" version | grep -F "0.37.0" >/dev/null && \
+  "${HZR_ENGINE_OUTPUT}/grepai" version | grep -F "1.2.0" >/dev/null && \
   "${HZR_ENGINE_OUTPUT}/grepai" watch --help | grep -F -- "--no-worktree-discovery" >/dev/null; then
   :
 else
   clone_at_commit \
     "https://github.com/yoanbernabeu/grepai" \
-    "ad90c4216282a434eeb2e28df4a1ea175a5470aa" \
+    "d86397d5f0c94ea31b96d1bb8b4da6966e26f5ef" \
     "${HZR_BUILD_TEMP}/grepai"
   git -C "${HZR_BUILD_TEMP}/grepai" apply --check \
-    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
+    "${HZR_REPOSITORY_ROOT}/patches/grepai/1.2.0-disable-worktree-discovery.patch"
   git -C "${HZR_BUILD_TEMP}/grepai" apply \
-    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
-  git -C "${HZR_BUILD_TEMP}/grepai" apply --check \
-    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-event-queue-backpressure.patch"
-  git -C "${HZR_BUILD_TEMP}/grepai" apply \
-    "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-event-queue-backpressure.patch"
+    "${HZR_REPOSITORY_ROOT}/patches/grepai/1.2.0-disable-worktree-discovery.patch"
   (
     cd "${HZR_BUILD_TEMP}/grepai"
     go test ./cli ./watcher
-    go build -trimpath -ldflags "-s -w -X main.version=0.37.0" \
+    go build -trimpath -ldflags "-s -w -X main.version=1.2.0" \
       -o "${HZR_ENGINE_OUTPUT}/grepai" ./cmd/grepai
   )
   install -m 0644 "${HZR_BUILD_TEMP}/grepai/LICENSE" "${HZR_GREPAI_LICENSE_SOURCE}"
@@ -288,7 +281,7 @@ else
     grepai "${HZR_GREPAI_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/grepai" \
     "${HZR_GREPAI_LICENSE_SOURCE}"
 fi
-"${HZR_ENGINE_OUTPUT}/grepai" version | grep -F "0.37.0" >/dev/null
+"${HZR_ENGINE_OUTPUT}/grepai" version | grep -F "1.2.0" >/dev/null
 "${HZR_ENGINE_OUTPUT}/grepai" watch --help | grep -F -- "--no-worktree-discovery" >/dev/null
 
 verify_sha256 \
@@ -349,12 +342,12 @@ fi
 
 hzr_build_stage "Building the managed RTK fork-core"
 HZR_FORK_CACHE_KEY="$(component_cache_key \
-  rtk 0.50.0-fork.1 "$(sha256_file "${HZR_REPOSITORY_ROOT}/fork-core/CURRENT_ENGINE_V1.tsv")" \
+  rtk 1.1.0-fork.1 "$(sha256_file "${HZR_REPOSITORY_ROOT}/fork-core/CURRENT_ENGINE_V1.tsv")" \
   "$(sha256_file "${HZR_REPOSITORY_ROOT}/fork-core/rtk/Cargo.lock")" \
   "${HZR_PLATFORM}" "${HZR_RUST_TOOLCHAIN_KEY}" "${HZR_BUILD_SCRIPT_SHA256}")"
 if restore_cached_component \
   rtk "${HZR_FORK_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/rtk" "" "" && \
-  "${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 0.50.0-fork.1" >/dev/null; then
+  "${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 1.1.0-fork.1" >/dev/null; then
   :
 else
   HZR_FORK_TARGET="${HZR_BUILD_TEMP}/rtk-target"
@@ -364,7 +357,7 @@ else
   install -m 0755 "${HZR_FORK_TARGET}/release/rtk" "${HZR_ENGINE_OUTPUT}/rtk"
   store_cached_component rtk "${HZR_FORK_CACHE_KEY}" "${HZR_ENGINE_OUTPUT}/rtk" ""
 fi
-"${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 0.50.0-fork.1" >/dev/null
+"${HZR_ENGINE_OUTPUT}/rtk" --version | grep -Fx "rtk 1.1.0-fork.1" >/dev/null
 
 hzr_build_stage "Building the pinned agtx runtime and observer"
 HZR_AGTX_COMMIT="d307c4c182dff19a65370a50403185cb826f7f49"
@@ -575,11 +568,8 @@ install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/claude-code/hzr-awareness.m
 install -m 0644 "${HZR_REPOSITORY_ROOT}/integrations/claude-code/hzr-awareness-codex.md" \
   "${HZR_PROVENANCE_OUTPUT}/integrations/claude-code/hzr-awareness-codex.md"
 install -m 0644 \
-  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-disable-worktree-discovery.patch" \
-  "${HZR_PROVENANCE_OUTPUT}/patches/grepai/0.37.0-disable-worktree-discovery.patch"
-install -m 0644 \
-  "${HZR_REPOSITORY_ROOT}/patches/grepai/0.37.0-event-queue-backpressure.patch" \
-  "${HZR_PROVENANCE_OUTPUT}/patches/grepai/0.37.0-event-queue-backpressure.patch"
+  "${HZR_REPOSITORY_ROOT}/patches/grepai/1.2.0-disable-worktree-discovery.patch" \
+  "${HZR_PROVENANCE_OUTPUT}/patches/grepai/1.2.0-disable-worktree-discovery.patch"
 install -m 0644 \
   "${HZR_REPOSITORY_ROOT}/patches/icm/0.10.61-refresh-workspace-lock.patch" \
   "${HZR_PROVENANCE_OUTPUT}/patches/icm/0.10.61-refresh-workspace-lock.patch"

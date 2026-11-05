@@ -7,7 +7,7 @@ fork-core binary; this crate verifies and invokes that binary.
 
 ## Hard fork-core contract
 
-- The only accepted runtime is `rtk 0.50.0-fork.1` with both the fork `rewrite`
+- The only accepted runtime is `rtk 1.1.0-fork.1` with both the fork `rewrite`
   and `proxy` CLI contracts. Stock upstream RTK is rejected.
 - Missing runtime paths, missing binary, version drift, capability drift,
   timeout, invalid UTF-8, empty rewrite output, and unknown exit status produce

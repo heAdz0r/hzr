@@ -65,6 +65,10 @@ fn bash_dispatch_keeps_original_permission_surface_without_a_confirmed_grant() {
             let hook = &response["hookSpecificOutput"];
             if verdict == Some("deny") {
                 assert_eq!(hook["permissionDecision"], "deny", "{response}");
+            } else if verdict == Some("ask") && mode == Some("bypassPermissions") {
+                // 1.1.0 (US-005): an operator ask rule stays the host's to apply — raw, undecided.
+                assert!(hook.get("updatedInput").is_none(), "{response}");
+                assert!(hook.get("permissionDecision").is_none(), "{response}");
             } else if verdict == Some("ask") && mode != Some("bypassPermissions") {
                 assert_eq!(hook["permissionDecision"], "ask", "{response}");
             } else if verdict == Some("allow") || mode == Some("bypassPermissions") {

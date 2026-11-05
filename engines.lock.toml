@@ -36,19 +36,17 @@ artifact_sha256 = [
 
 [[engine]]
 name = "grepai"
-version = "0.37.0"
-tag = "v0.37.0"
-commit = "ad90c4216282a434eeb2e28df4a1ea175a5470aa"
+version = "1.2.0"
+tag = "v1.2.0"
+commit = "d86397d5f0c94ea31b96d1bb8b4da6966e26f5ef"
 repository = "https://github.com/yoanbernabeu/grepai"
 license = "MIT"
 binary = "grepai"
 patches = [
-  "patches/grepai/0.37.0-disable-worktree-discovery.patch",
-  "patches/grepai/0.37.0-event-queue-backpressure.patch",
+  "patches/grepai/1.2.0-disable-worktree-discovery.patch",
 ]
 patch_sha256 = [
-  "4fd11f509114e3dbe176b20292066ef2d7eea99a59becdebf8e2a227272b7d0f",
-  "e5b1e807bfe95fe3bbf4a89a2b965ececc5c0de96cfb432436813e7b42dd5668",
+  "8bae4bbd060cfa44d8b1cbcfe917800e822f5f36d2d4ff4e8b5dd63c44b692d1",
 ]
 
 [[engine]]
@@ -72,7 +70,7 @@ patch_sha256 = [
 
 [[engine]]
 name = "rtk"
-version = "0.50.0-fork.1"
+version = "1.1.0-fork.1"
 tag = "worktree-snapshot"
 commit = "5f403c465cbdbe148e9ca03e0ac8e856eef0bfee"
 repository = "https://github.com/heAdz0r/rtk.git"

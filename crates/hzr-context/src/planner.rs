@@ -2102,7 +2102,7 @@ mod tests {
         let script = r#"#!/bin/sh
 case "$1" in
   --version)
-    printf '%s\n' 'rtk 0.50.0-fork.1'
+    printf '%s\n' 'rtk 1.1.0-fork.1'
     ;;
   contract)
     [ "$2" = "--json" ] && printf '%s\n' '__CONTRACT_JSON__' || exit 64
@@ -2700,7 +2700,7 @@ esac
         assert!(!log_shell.contains('\''));
         let script = r#"#!/bin/sh
 case "$1" in
-  --version) printf '%s\n' 'rtk 0.50.0-fork.1' ;;
+  --version) printf '%s\n' 'rtk 1.1.0-fork.1' ;;
   contract) printf '%s\n' '__CONTRACT_JSON__' ;;
   rewrite) printf '%s\n' 'rtk rewrite - Raw command to rewrite' ;;
   proxy) printf '%s\n' 'rtk proxy - execute without filtering' ;;
