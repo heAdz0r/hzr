@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "identity": "hzr-public-api-pricing-2026-09-26-v1",
-  "retrieved_at": "2026-09-26",
+  "identity": "hzr-public-api-pricing-2026-11-05-v1",
+  "retrieved_at": "2026-11-05",
   "max_age_days": 30,
   "entries": [
     {
@@ -15,8 +15,8 @@
       "method": "standard_short_context_lte_272k",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
-      "valid_until": "2026-11-21",
+      "retrieved_at": "2026-11-05",
+      "valid_until": "2026-11-30",
       "max_context_tokens_exclusive": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
       "unit": "per_1m_tokens",
@@ -28,7 +28,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "OpenAI API Standard short-context promotional rate through 2026-11-21. Generic cache write is the documented 30m prompt-cache TTL at 1.25x input. ChatGPT and Codex subscriptions are excluded; this entry fails closed after expiry."
+      "note": "OpenAI API Standard short-context promotional rate through 2026-11-30 (extended). Generic cache write is the documented 30m prompt-cache TTL at 1.25x input. ChatGPT and Codex subscriptions are excluded; this entry fails closed after expiry."
     },
     {
       "version": "openai-gpt-5.6-terra-standard-short-lte-272k-2026-08-26",
@@ -39,7 +39,7 @@
       "method": "standard_short_context_lte_272k",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
       "unit": "per_1m_tokens",
@@ -62,7 +62,7 @@
       "method": "standard_short_context_lte_272k",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
       "unit": "per_1m_tokens",
@@ -87,8 +87,8 @@
       "method": "standard_long_context_gt_272k",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
-      "valid_until": "2026-11-21",
+      "retrieved_at": "2026-11-05",
+      "valid_until": "2026-11-30",
       "min_context_tokens": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
       "unit": "per_1m_tokens",
@@ -100,7 +100,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "OpenAI API Standard long-context promotional rate for priced requests above 272K actual input tokens through 2026-11-21. Generic cache write is the documented 30m prompt-cache TTL at 1.25x input; this entry fails closed without explicit request-input evidence."
+      "note": "OpenAI API Standard long-context promotional rate for priced requests above 272K actual input tokens through 2026-11-30 (extended). Generic cache write is the documented 30m prompt-cache TTL at 1.25x input; this entry fails closed without explicit request-input evidence."
     },
     {
       "version": "openai-gpt-5.6-terra-standard-long-gt-272k-2026-08-26",
@@ -111,7 +111,7 @@
       "method": "standard_long_context_gt_272k",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
       "unit": "per_1m_tokens",
@@ -134,7 +134,7 @@
       "method": "standard_long_context_gt_272k",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
       "unit": "per_1m_tokens",
@@ -157,7 +157,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://developers.openai.com/api/docs/models/gpt-5.3-codex",
       "unit": "per_1m_tokens",
       "rates": {
@@ -180,7 +180,7 @@
       "method": "standard_short_context_lte_272k",
       "currency": "USD",
       "effective_at": "2026-09-05",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
       "unit": "per_1m_tokens",
@@ -205,7 +205,7 @@
       "method": "standard_long_context_gt_272k",
       "currency": "USD",
       "effective_at": "2026-09-05",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-6-astra",
       "unit": "per_1m_tokens",
@@ -228,7 +228,7 @@
       "method": "standard_short_context_lte_272k",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-6-sol",
       "unit": "per_1m_tokens",
@@ -240,7 +240,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "OpenAI API Standard short-context list rate observed 2026-09-26 (input $2, cached input $0.20, cache write $2.50, output $10). Batch/Flex (50%) and Fast mode (2x) are separate methods and not inferred."
+      "note": "OpenAI API Standard short-context list rate observed 2026-09-26, re-verified 2026-11-05 (input $2, cached input $0.20, cache write $2.50, output $10). Batch/Flex (50%) and Fast mode (2x) are separate methods and not inferred."
     },
     {
       "version": "openai-gpt-6-sol-standard-long-gt-272k-2026-09-26",
@@ -251,7 +251,7 @@
       "method": "standard_long_context_gt_272k",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-6-sol",
       "unit": "per_1m_tokens",
@@ -263,7 +263,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "OpenAI API Standard long-context rate above 272K actual input tokens observed 2026-09-26 (input $4, cached input $0.40, cache write $5, output $15; 2x input and cache, 1.5x output for the full request); explicit request-input evidence is required."
+      "note": "OpenAI API Standard long-context rate above 272K actual input tokens observed 2026-09-26, re-verified 2026-11-05 (input $4, cached input $0.40, cache write $5, output $15; 2x input and cache, 1.5x output for the full request); explicit request-input evidence is required."
     },
     {
       "version": "openai-gpt-6-luna-standard-short-lte-272k-2026-09-26",
@@ -274,7 +274,7 @@
       "method": "standard_short_context_lte_272k",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-6-luna",
       "unit": "per_1m_tokens",
@@ -286,7 +286,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "OpenAI API Standard short-context list rate observed 2026-09-26 (input $0.10, cached input $0.01, cache write $0.125, output $0.50). Batch/Flex (50%) and Fast mode (2x) are separate methods and not inferred."
+      "note": "OpenAI API Standard short-context list rate observed 2026-09-26, re-verified 2026-11-05 (input $0.10, cached input $0.01, cache write $0.125, output $0.50). Batch/Flex (50%) and Fast mode (2x) are separate methods and not inferred."
     },
     {
       "version": "openai-gpt-6-luna-standard-long-gt-272k-2026-09-26",
@@ -297,7 +297,7 @@
       "method": "standard_long_context_gt_272k",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 272001,
       "source_url": "https://developers.openai.com/api/docs/models/gpt-6-luna",
       "unit": "per_1m_tokens",
@@ -309,7 +309,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "OpenAI API Standard long-context rate above 272K actual input tokens observed 2026-09-26 (input $0.20, cached input $0.02, cache write $0.25, output $0.75); explicit request-input evidence is required."
+      "note": "OpenAI API Standard long-context rate above 272K actual input tokens observed 2026-09-26, re-verified 2026-11-05 (input $0.20, cached input $0.02, cache write $0.25, output $0.75); explicit request-input evidence is required."
     },
     {
       "version": "openai-gpt-5.5-standard-short-lte-272k-2026-09-05",
@@ -332,7 +332,7 @@
         "cache_write_1h_microunits_per_million": null
       },
       "note": "OpenAI API Standard short-context list rate re-checked 2026-09-26 (input $5, cached $0.50, output $30). The official page lists no cache-write price, so none is priced.",
-      "retrieved_at": "2026-09-26"
+      "retrieved_at": "2026-11-05"
     },
     {
       "version": "openai-gpt-5.5-standard-long-gt-272k-2026-09-05",
@@ -355,7 +355,7 @@
         "cache_write_1h_microunits_per_million": null
       },
       "note": "OpenAI API Standard long-context rate above 272K actual input tokens (input $10, cached $1, output $45); explicit request-input evidence is required. The official page lists no cache-write price, so none is priced.",
-      "retrieved_at": "2026-09-26"
+      "retrieved_at": "2026-11-05"
     },
     {
       "version": "openai-gpt-5.4-standard-short-lte-272k-2026-09-05",
@@ -378,7 +378,7 @@
         "cache_write_1h_microunits_per_million": null
       },
       "note": "OpenAI API Standard short-context list rate re-checked 2026-09-26 (input $2.50, cached $0.25, output $15). The official page lists no cache-write price, so none is priced.",
-      "retrieved_at": "2026-09-26"
+      "retrieved_at": "2026-11-05"
     },
     {
       "version": "openai-gpt-5.4-standard-long-gt-272k-2026-09-05",
@@ -401,7 +401,7 @@
         "cache_write_1h_microunits_per_million": null
       },
       "note": "OpenAI API Standard long-context rate above 272K actual input tokens (input $5, cached $0.50, output $22.50); explicit request-input evidence is required. The official page lists no cache-write price, so none is priced.",
-      "retrieved_at": "2026-09-26"
+      "retrieved_at": "2026-11-05"
     },
     {
       "version": "openai-gpt-5.4-mini-standard-2026-09-05",
@@ -423,7 +423,7 @@
         "cache_write_1h_microunits_per_million": null
       },
       "note": "OpenAI API Standard list rate re-checked 2026-09-26 (input $0.75, cached $0.075, output $4.50); the model has no long-context tier. The official page lists no cache-write price, so none is priced.",
-      "retrieved_at": "2026-09-26"
+      "retrieved_at": "2026-11-05"
     },
     {
       "version": "anthropic-claude-sonnet-5-standard-2026-08-26",
@@ -434,7 +434,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -444,7 +444,7 @@
         "cache_write_5m_microunits_per_million": 2500000,
         "cache_write_1h_microunits_per_million": 4000000
       },
-      "note": "First-party Claude API standard pricing; Claude subscriptions and partner clouds are excluded. Re-read 2026-09-26: the $2/$10 launch price is now the standard price and the scheduled 2026-09-01 increase to $3/$15 did not occur."
+      "note": "First-party Claude API standard pricing; Claude subscriptions and partner clouds are excluded. Re-read 2026-09-26 and re-verified 2026-11-05: the $2/$10 launch price is now the standard price and the scheduled 2026-09-01 increase to $3/$15 did not occur."
     },
     {
       "version": "anthropic-claude-sonnet-4.6-standard-2026-08-26",
@@ -457,7 +457,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -478,7 +478,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -502,7 +502,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -523,7 +523,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-09-10",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -546,7 +546,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-09-01",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -569,7 +569,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-09-22",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -579,7 +579,7 @@
         "cache_write_5m_microunits_per_million": 5000000,
         "cache_write_1h_microunits_per_million": 8000000
       },
-      "note": "First-party Claude API standard pricing observed 2026-09-26 (Opus 5.5 released 2026-09-22): input $4, output $20, cache read $0.20 (0.05x input), 5m cache write $5, 1h cache write $8. It is not an alias of Opus 5 ($5/$25). Fast mode ($8/$40) is a separate method and not inferred. Batch, fast mode, data residency and subscription billing are not inferred."
+      "note": "First-party Claude API standard pricing observed 2026-09-26, re-verified 2026-11-05 (Opus 5.5 released 2026-09-22): input $4, output $20, cache read $0.20 (0.05x input), 5m cache write $5, 1h cache write $8. It is not an alias of Opus 5 ($5/$25). Fast mode ($8/$40) is a separate method and not inferred. Batch, fast mode, data residency and subscription billing are not inferred."
     },
     {
       "version": "anthropic-claude-mythos-5.1-standard-2026-09-26",
@@ -592,7 +592,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-09-01",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -602,7 +602,7 @@
         "cache_write_5m_microunits_per_million": 12500000,
         "cache_write_1h_microunits_per_million": 20000000
       },
-      "note": "First-party Claude API standard pricing observed 2026-09-26 for the limited-availability (Project Glasswing) model: input $10, output $50, cache read $0.25 (0.025x input), 5m cache write $12.50, 1h cache write $20. Batch, fast mode, data residency and subscription billing are not inferred."
+      "note": "First-party Claude API standard pricing observed 2026-09-26, re-verified 2026-11-05 for the limited-availability (Project Glasswing) model: input $10, output $50, cache read $0.25 (0.025x input), 5m cache write $12.50, 1h cache write $20. Batch, fast mode, data residency and subscription billing are not inferred."
     },
     {
       "version": "anthropic-claude-mythos-5-standard-2026-09-26",
@@ -613,7 +613,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -623,7 +623,7 @@
         "cache_write_5m_microunits_per_million": 12500000,
         "cache_write_1h_microunits_per_million": 20000000
       },
-      "note": "First-party Claude API standard pricing observed 2026-09-26 for the limited-availability (Project Glasswing) model: input $10, output $50, cache read $1, 5m cache write $12.50, 1h cache write $20. It is not an alias of Mythos 5.1. Batch, fast mode, data residency and subscription billing are not inferred."
+      "note": "First-party Claude API standard pricing observed 2026-09-26, re-verified 2026-11-05 for the limited-availability (Project Glasswing) model: input $10, output $50, cache read $1, 5m cache write $12.50, 1h cache write $20. It is not an alias of Mythos 5.1. Batch, fast mode, data residency and subscription billing are not inferred."
     },
     {
       "version": "anthropic-claude-opus-4.8-standard-2026-09-26",
@@ -636,7 +636,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -646,7 +646,7 @@
         "cache_write_5m_microunits_per_million": 6250000,
         "cache_write_1h_microunits_per_million": 10000000
       },
-      "note": "First-party Claude API standard pricing observed 2026-09-26 (legacy, still available). Fast mode ($10/$50) is a separate method and not inferred. Batch, fast mode, data residency and subscription billing are not inferred."
+      "note": "First-party Claude API standard pricing observed 2026-09-26, re-verified 2026-11-05 (legacy, still available). Fast mode ($10/$50) is a separate method and not inferred. Batch, fast mode, data residency and subscription billing are not inferred."
     },
     {
       "version": "anthropic-claude-opus-4.7-standard-2026-09-26",
@@ -659,7 +659,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -669,7 +669,7 @@
         "cache_write_5m_microunits_per_million": 6250000,
         "cache_write_1h_microunits_per_million": 10000000
       },
-      "note": "First-party Claude API standard pricing observed 2026-09-26 (legacy, still available). Batch, fast mode, data residency and subscription billing are not inferred."
+      "note": "First-party Claude API standard pricing observed 2026-09-26, re-verified 2026-11-05 (legacy, still available). Batch, fast mode, data residency and subscription billing are not inferred."
     },
     {
       "version": "anthropic-claude-opus-4.6-standard-2026-09-26",
@@ -682,7 +682,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -692,7 +692,7 @@
         "cache_write_5m_microunits_per_million": 6250000,
         "cache_write_1h_microunits_per_million": 10000000
       },
-      "note": "First-party Claude API standard pricing observed 2026-09-26 (legacy, still available). Batch, fast mode, data residency and subscription billing are not inferred."
+      "note": "First-party Claude API standard pricing observed 2026-09-26, re-verified 2026-11-05 (legacy, still available). Batch, fast mode, data residency and subscription billing are not inferred."
     },
     {
       "version": "anthropic-claude-opus-4.5-standard-2026-09-26",
@@ -706,7 +706,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -716,7 +716,7 @@
         "cache_write_5m_microunits_per_million": 6250000,
         "cache_write_1h_microunits_per_million": 10000000
       },
-      "note": "First-party Claude API standard pricing observed 2026-09-26 (legacy, still available; API ID claude-opus-4-5-20251101). Batch, fast mode, data residency and subscription billing are not inferred."
+      "note": "First-party Claude API standard pricing observed 2026-09-26, re-verified 2026-11-05 (legacy, still available; API ID claude-opus-4-5-20251101). Batch, fast mode, data residency and subscription billing are not inferred."
     },
     {
       "version": "anthropic-claude-sonnet-4.5-standard-2026-09-26",
@@ -730,7 +730,7 @@
       "method": "standard",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -740,7 +740,7 @@
         "cache_write_5m_microunits_per_million": 3750000,
         "cache_write_1h_microunits_per_million": 6000000
       },
-      "note": "First-party Claude API standard pricing observed 2026-09-26 (legacy, still available; API ID claude-sonnet-4-5-20250929). Batch, fast mode, data residency and subscription billing are not inferred."
+      "note": "First-party Claude API standard pricing observed 2026-09-26, re-verified 2026-11-05 (legacy, still available; API ID claude-sonnet-4-5-20250929). Batch, fast mode, data residency and subscription billing are not inferred."
     },
     {
       "version": "google-gemini-3.7-flash-standard-paid-2026-08-26",
@@ -751,9 +751,9 @@
       "method": "standard_paid_through_2026-12-31",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "valid_until": "2026-12-31",
-      "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "source_url": "https://ai.google.dev/gemini-api/docs/deprecations",
       "unit": "per_1m_tokens",
       "rates": {
         "input_microunits_per_million": 750000,
@@ -762,7 +762,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "Gemini Developer API paid standard promotional rate through 2026-12-31; cache storage duration fees are excluded."
+      "note": "Gemini Developer API paid standard promotional rate through 2026-12-31; cache storage duration fees are excluded. Deprecated 2026-10-08: requests are routed to gemini-3.8-flash and billed at its identical rate; no shutdown date."
     },
     {
       "version": "google-gemini-3.7-flash-batch-paid-2026-08-26",
@@ -773,9 +773,9 @@
       "method": "batch_paid_through_2026-12-31",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "valid_until": "2026-12-31",
-      "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "source_url": "https://ai.google.dev/gemini-api/docs/deprecations",
       "unit": "per_1m_tokens",
       "rates": {
         "input_microunits_per_million": 375000,
@@ -784,7 +784,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "Gemini Developer API paid Batch promotional rate through 2026-12-31."
+      "note": "Gemini Developer API paid Batch promotional rate through 2026-12-31. Deprecated 2026-10-08: requests are routed to gemini-3.8-flash and billed at its identical rate; no shutdown date."
     },
     {
       "version": "google-gemini-3.8-flash-standard-paid-2026-09-05",
@@ -795,9 +795,9 @@
       "method": "standard_paid_through_2026-12-31",
       "currency": "USD",
       "effective_at": "2026-09-05",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "valid_until": "2026-12-31",
-      "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "source_url": "https://aistudio.google.com/docs/pricing",
       "unit": "per_1m_tokens",
       "rates": {
         "input_microunits_per_million": 750000,
@@ -817,9 +817,9 @@
       "method": "batch_paid_through_2026-12-31",
       "currency": "USD",
       "effective_at": "2026-09-05",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "valid_until": "2026-12-31",
-      "source_url": "https://ai.google.dev/gemini-api/docs/pricing",
+      "source_url": "https://aistudio.google.com/docs/pricing",
       "unit": "per_1m_tokens",
       "rates": {
         "input_microunits_per_million": 375000,
@@ -843,7 +843,7 @@
       "method": "peak",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
       "unit": "per_1m_tokens",
       "rates": {
@@ -853,7 +853,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "Official table observed 2026-09-26: peak cache hit $0.006, cache miss $0.30, output $1.20 per 1M tokens. deepseek-flash is served by DeepSeek-V4.1-Flash; the legacy names deepseek-v4-flash and deepseek-v4-flash-vision-exp are accepted and billed at the Flash price, so they resolve here instead of to the retired V4-Flash rate."
+      "note": "Official table observed 2026-09-26, re-verified 2026-11-05: peak cache hit $0.006, cache miss $0.30, output $1.20 per 1M tokens. deepseek-flash is served by DeepSeek-V4.1-Flash; the legacy names deepseek-v4-flash and deepseek-v4-flash-vision-exp are accepted and billed at the Flash price, so they resolve here instead of to the retired V4-Flash rate."
     },
     {
       "version": "deepseek-flash-off-peak-2026-09-26",
@@ -868,7 +868,7 @@
       "method": "off_peak",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
       "unit": "per_1m_tokens",
       "rates": {
@@ -878,7 +878,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "Official table observed 2026-09-26: off-peak cache hit $0.003, cache miss $0.15, output $0.60; eligibility must be proven by the adapter. deepseek-flash is served by DeepSeek-V4.1-Flash; the legacy names deepseek-v4-flash and deepseek-v4-flash-vision-exp are accepted and billed at the Flash price, so they resolve here instead of to the retired V4-Flash rate."
+      "note": "Official table observed 2026-09-26, re-verified 2026-11-05: off-peak cache hit $0.003, cache miss $0.15, output $0.60; eligibility must be proven by the adapter. deepseek-flash is served by DeepSeek-V4.1-Flash; the legacy names deepseek-v4-flash and deepseek-v4-flash-vision-exp are accepted and billed at the Flash price, so they resolve here instead of to the retired V4-Flash rate."
     },
     {
       "version": "deepseek-v4-pro-peak-2026-08-26",
@@ -891,7 +891,7 @@
       "method": "peak",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
       "unit": "per_1m_tokens",
       "rates": {
@@ -914,7 +914,7 @@
       "method": "off_peak",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
       "unit": "per_1m_tokens",
       "rates": {
@@ -927,52 +927,6 @@
       "note": "Official table observed 2026-08-26: off-peak cache hit $0.022, cache miss $0.66, output $1.98; eligibility must be proven by the adapter."
     },
     {
-      "version": "mistral-large-3-standard-2026-08-26",
-      "harness": "openai_compatible",
-      "provider": "mistral",
-      "model": "mistral-large-3",
-      "aliases": [
-        "mistral-large-2512"
-      ],
-      "method": "standard_usd_non_regional",
-      "currency": "USD",
-      "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
-      "source_url": "https://docs.mistral.ai/inference/pricing",
-      "unit": "per_1m_tokens",
-      "rates": {
-        "input_microunits_per_million": 500000,
-        "output_microunits_per_million": 1500000,
-        "cache_read_microunits_per_million": 50000,
-        "cache_write_5m_microunits_per_million": null,
-        "cache_write_1h_microunits_per_million": null
-      },
-      "note": "Mistral API standard USD rate; batch, priority, EUR and regional variants are not inferred."
-    },
-    {
-      "version": "mistral-medium-3.5-standard-2026-08-26",
-      "harness": "openai_compatible",
-      "provider": "mistral",
-      "model": "mistral-medium-3.5",
-      "aliases": [
-        "mistral-medium-2604"
-      ],
-      "method": "standard_usd_non_regional",
-      "currency": "USD",
-      "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
-      "source_url": "https://docs.mistral.ai/inference/pricing",
-      "unit": "per_1m_tokens",
-      "rates": {
-        "input_microunits_per_million": 1500000,
-        "output_microunits_per_million": 7500000,
-        "cache_read_microunits_per_million": 150000,
-        "cache_write_5m_microunits_per_million": null,
-        "cache_write_1h_microunits_per_million": null
-      },
-      "note": "Mistral API standard USD rate."
-    },
-    {
       "version": "mistral-small-4-standard-2026-08-26",
       "harness": "openai_compatible",
       "provider": "mistral",
@@ -983,7 +937,7 @@
       "method": "standard_usd_non_regional",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://docs.mistral.ai/inference/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -1006,7 +960,7 @@
       "method": "standard_usd_non_regional",
       "currency": "USD",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "source_url": "https://docs.mistral.ai/inference/pricing",
       "unit": "per_1m_tokens",
       "rates": {
@@ -1029,7 +983,7 @@
       "method": "standard_short_context_lt_200k",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 200000,
       "source_url": "https://docs.x.ai/developers/pricing",
       "unit": "per_1m_tokens",
@@ -1040,7 +994,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "xAI standard rate below 200K actual priced-request input tokens observed 2026-09-26 (input $2, cached $0.50, output $6). Request input must be supplied explicitly; model capacity, search, tools, batch and priority charges are excluded."
+      "note": "xAI standard rate below 200K actual priced-request input tokens observed 2026-09-26, re-verified 2026-11-05 (input $2, cached $0.50, output $6). Request input must be supplied explicitly; model capacity, search, tools, batch and priority charges are excluded."
     },
     {
       "version": "xai-grok-4.7-standard-long-gte-200k-2026-09-26",
@@ -1053,7 +1007,7 @@
       "method": "standard_long_context_gte_200k",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 200000,
       "source_url": "https://docs.x.ai/developers/pricing",
       "unit": "per_1m_tokens",
@@ -1064,7 +1018,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "xAI standard rate at or above 200K actual priced-request input tokens observed 2026-09-26 (input $4, cached $1, output $12). Request input must be supplied explicitly; model capacity, search, tools, batch and priority charges are excluded."
+      "note": "xAI standard rate at or above 200K actual priced-request input tokens observed 2026-09-26, re-verified 2026-11-05 (input $4, cached $1, output $12). Request input must be supplied explicitly; model capacity, search, tools, batch and priority charges are excluded."
     },
     {
       "version": "xai-grok-build-0.1-standard-short-lt-200k-2026-09-26",
@@ -1079,7 +1033,7 @@
       "method": "standard_short_context_lt_200k",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 200000,
       "source_url": "https://docs.x.ai/developers/pricing",
       "unit": "per_1m_tokens",
@@ -1090,7 +1044,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "xAI standard rate below 200K actual priced-request input tokens observed 2026-09-26 (input $1, cached $0.20, output $2); aliases are the ones documented on the model page. Request input must be supplied explicitly; model capacity, search, tools, batch and priority charges are excluded."
+      "note": "xAI standard rate below 200K actual priced-request input tokens observed 2026-09-26, re-verified 2026-11-05 (input $1, cached $0.20, output $2); aliases are the ones documented on the model page. Request input must be supplied explicitly; model capacity, search, tools, batch and priority charges are excluded."
     },
     {
       "version": "xai-grok-build-0.1-standard-long-gte-200k-2026-09-26",
@@ -1105,7 +1059,7 @@
       "method": "standard_long_context_gte_200k",
       "currency": "USD",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 200000,
       "source_url": "https://docs.x.ai/developers/pricing",
       "unit": "per_1m_tokens",
@@ -1116,7 +1070,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "xAI standard rate at or above 200K actual priced-request input tokens observed 2026-09-26 (input $2, cached $0.40, output $4). Request input must be supplied explicitly; model capacity, search, tools, batch and priority charges are excluded."
+      "note": "xAI standard rate at or above 200K actual priced-request input tokens observed 2026-09-26, re-verified 2026-11-05 (input $2, cached $0.40, output $4). Request input must be supplied explicitly; model capacity, search, tools, batch and priority charges are excluded."
     },
     {
       "version": "xai-grok-4.6-standard-short-lt-200k-2026-08-26",
@@ -1129,7 +1083,7 @@
       "method": "standard_short_context_lt_200k",
       "currency": "USD",
       "effective_at": "2026-08-21",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 200000,
       "source_url": "https://docs.x.ai/developers/pricing",
       "unit": "per_1m_tokens",
@@ -1153,7 +1107,7 @@
       "method": "standard_long_context_gte_200k",
       "currency": "USD",
       "effective_at": "2026-08-21",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 200000,
       "source_url": "https://docs.x.ai/developers/pricing",
       "unit": "per_1m_tokens",
@@ -1177,7 +1131,7 @@
       "method": "standard_short_context_lt_200k",
       "currency": "USD",
       "effective_at": "2026-09-05",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 200000,
       "source_url": "https://docs.x.ai/developers/pricing",
       "unit": "per_1m_tokens",
@@ -1201,7 +1155,7 @@
       "method": "standard_long_context_gte_200k",
       "currency": "USD",
       "effective_at": "2026-09-05",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 200000,
       "source_url": "https://docs.x.ai/developers/pricing",
       "unit": "per_1m_tokens",
@@ -1225,7 +1179,7 @@
       "method": "global_standard_0_128k",
       "currency": "CNY",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 128001,
       "source_url": "https://help.aliyun.com/en/model-studio/qwen3-5-plus",
       "unit": "per_1m_tokens",
@@ -1250,7 +1204,7 @@
       "method": "global_standard_gt_128k_lte_256k",
       "currency": "CNY",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 128001,
       "max_context_tokens_exclusive": 256001,
       "source_url": "https://help.aliyun.com/en/model-studio/qwen3-5-plus",
@@ -1276,7 +1230,7 @@
       "method": "global_standard_gt_256k_lte_1m",
       "currency": "CNY",
       "effective_at": "2026-08-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 256001,
       "max_context_tokens_exclusive": 1000001,
       "source_url": "https://help.aliyun.com/en/model-studio/qwen3-5-plus",
@@ -1302,7 +1256,7 @@
       "method": "global_standard_0_256k",
       "currency": "CNY",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 256001,
       "source_url": "https://help.aliyun.com/en/model-studio/qwen3-7-plus",
       "unit": "per_1m_tokens",
@@ -1314,7 +1268,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "Alibaba Model Studio Global deployment scope (Germany/Frankfurt and US/Virginia), CNY list price excluding limited-time promotions, 0-256K input band observed 2026-09-26: input 2, output 8, explicit cache read 0.2, explicit cache creation 2.5. Implicit cache hits (0.4) are not modeled."
+      "note": "Alibaba Model Studio Global deployment scope (Germany/Frankfurt and US/Virginia), CNY list price excluding limited-time promotions, 0-256K input band observed 2026-09-26, re-verified 2026-11-05: input 2, output 8, explicit cache read 0.2, explicit cache creation 2.5. Implicit cache hits (0.4) are not modeled."
     },
     {
       "version": "alibaba-qwen3.7-plus-global-gt-256k-lte-1m-2026-09-26",
@@ -1327,7 +1281,7 @@
       "method": "global_standard_gt_256k_lte_1m",
       "currency": "CNY",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 256001,
       "max_context_tokens_exclusive": 1000001,
       "source_url": "https://help.aliyun.com/en/model-studio/qwen3-7-plus",
@@ -1340,7 +1294,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "Alibaba Model Studio Global deployment scope (Germany/Frankfurt and US/Virginia), CNY list price excluding limited-time promotions, above 256K through 1M actual priced-request input band observed 2026-09-26: input 6, output 24, explicit cache read 0.6, explicit cache creation 7.5. Implicit cache hits (1.2) are not modeled; explicit request-input evidence is required."
+      "note": "Alibaba Model Studio Global deployment scope (Germany/Frankfurt and US/Virginia), CNY list price excluding limited-time promotions, above 256K through 1M actual priced-request input band observed 2026-09-26, re-verified 2026-11-05: input 6, output 24, explicit cache read 0.6, explicit cache creation 7.5. Implicit cache hits (1.2) are not modeled; explicit request-input evidence is required."
     },
     {
       "version": "alibaba-qwen3.6-plus-global-0-256k-2026-09-26",
@@ -1353,7 +1307,7 @@
       "method": "global_standard_0_256k",
       "currency": "CNY",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "max_context_tokens_exclusive": 256001,
       "source_url": "https://help.aliyun.com/en/model-studio/qwen3-6-plus",
       "unit": "per_1m_tokens",
@@ -1365,7 +1319,7 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "Alibaba Model Studio Global deployment scope (Germany/Frankfurt and US/Virginia), CNY list price excluding limited-time promotions, 0-256K input band observed 2026-09-26: input 2, output 12, explicit cache read 0.2, explicit cache creation 2.5."
+      "note": "Alibaba Model Studio Global deployment scope (Germany/Frankfurt and US/Virginia), CNY list price excluding limited-time promotions, 0-256K input band observed 2026-09-26, re-verified 2026-11-05: input 2, output 12, explicit cache read 0.2, explicit cache creation 2.5."
     },
     {
       "version": "alibaba-qwen3.6-plus-global-gt-256k-lte-1m-2026-09-26",
@@ -1378,7 +1332,7 @@
       "method": "global_standard_gt_256k_lte_1m",
       "currency": "CNY",
       "effective_at": "2026-09-26",
-      "retrieved_at": "2026-09-26",
+      "retrieved_at": "2026-11-05",
       "min_context_tokens": 256001,
       "max_context_tokens_exclusive": 1000001,
       "source_url": "https://help.aliyun.com/en/model-studio/qwen3-6-plus",
@@ -1391,7 +1345,277 @@
         "cache_write_5m_microunits_per_million": null,
         "cache_write_1h_microunits_per_million": null
       },
-      "note": "Alibaba Model Studio Global deployment scope (Germany/Frankfurt and US/Virginia), CNY list price excluding limited-time promotions, above 256K through 1M actual priced-request input band observed 2026-09-26: input 8, output 48, explicit cache read 0.8, explicit cache creation 10; explicit request-input evidence is required."
+      "note": "Alibaba Model Studio Global deployment scope (Germany/Frankfurt and US/Virginia), CNY list price excluding limited-time promotions, above 256K through 1M actual priced-request input band observed 2026-09-26, re-verified 2026-11-05: input 8, output 48, explicit cache read 0.8, explicit cache creation 10; explicit request-input evidence is required."
+    },
+    {
+      "version": "anthropic-claude-sonnet-5.5-standard-2026-11-05",
+      "harness": "claude_code",
+      "provider": "anthropic",
+      "model": "claude-sonnet-5-5",
+      "aliases": [
+        "claude-sonnet-5.5"
+      ],
+      "method": "standard",
+      "currency": "USD",
+      "effective_at": "2026-11-05",
+      "retrieved_at": "2026-11-05",
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 2000000,
+        "output_microunits_per_million": 10000000,
+        "cache_read_microunits_per_million": 100000,
+        "cache_write_5m_microunits_per_million": 2500000,
+        "cache_write_1h_microunits_per_million": 4000000
+      },
+      "note": "First-party Claude API standard pricing; cache hits are 0.05x input ($0.10). Claude subscriptions and partner clouds are excluded."
+    },
+    {
+      "version": "anthropic-claude-haiku-5.5-standard-prompt-lte-100k-2026-11-05",
+      "harness": "claude_code",
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5",
+      "aliases": [
+        "claude-haiku-5.5"
+      ],
+      "method": "standard_prompt_lte_100k",
+      "currency": "USD",
+      "effective_at": "2026-11-05",
+      "retrieved_at": "2026-11-05",
+      "max_context_tokens_exclusive": 100001,
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 100000,
+        "output_microunits_per_million": 500000,
+        "cache_read_microunits_per_million": 10000,
+        "cache_write_5m_microunits_per_million": 125000,
+        "cache_write_1h_microunits_per_million": 200000
+      },
+      "note": "First-party Claude API standard pricing for prompts up to 100,000 tokens. Request input must be supplied explicitly; subscriptions and partner clouds are excluded."
+    },
+    {
+      "version": "anthropic-claude-haiku-5.5-standard-prompt-gt-100k-2026-11-05",
+      "harness": "claude_code",
+      "provider": "anthropic",
+      "model": "claude-haiku-5-5",
+      "aliases": [
+        "claude-haiku-5.5"
+      ],
+      "method": "standard_prompt_gt_100k",
+      "currency": "USD",
+      "effective_at": "2026-11-05",
+      "retrieved_at": "2026-11-05",
+      "min_context_tokens": 100001,
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 500000,
+        "output_microunits_per_million": 2500000,
+        "cache_read_microunits_per_million": 50000,
+        "cache_write_5m_microunits_per_million": 625000,
+        "cache_write_1h_microunits_per_million": 1000000
+      },
+      "note": "First-party Claude API standard pricing for prompts over 100,000 tokens. Request input must be supplied explicitly; subscriptions and partner clouds are excluded."
+    },
+    {
+      "version": "openai-gpt-6.1-sol-standard-short-lte-272k-2026-11-05",
+      "harness": "codex",
+      "provider": "openai",
+      "model": "gpt-6.1-sol",
+      "aliases": [],
+      "method": "standard_short_context_lte_272k",
+      "currency": "USD",
+      "effective_at": "2026-11-05",
+      "retrieved_at": "2026-11-05",
+      "max_context_tokens_exclusive": 272001,
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 2000000,
+        "output_microunits_per_million": 10000000,
+        "cache_read_microunits_per_million": 100000,
+        "cache_write_microunits_per_million": 2500000,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "OpenAI API Standard short-context rate (<=272K input). Generic cache write is the documented 30m prompt-cache rate at 1.25x input. ChatGPT and Codex subscriptions are excluded."
+    },
+    {
+      "version": "openai-gpt-6.1-sol-standard-long-gt-272k-2026-11-05",
+      "harness": "codex",
+      "provider": "openai",
+      "model": "gpt-6.1-sol",
+      "aliases": [],
+      "method": "standard_long_context_gt_272k",
+      "currency": "USD",
+      "effective_at": "2026-11-05",
+      "retrieved_at": "2026-11-05",
+      "min_context_tokens": 272001,
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 4000000,
+        "output_microunits_per_million": 15000000,
+        "cache_read_microunits_per_million": 200000,
+        "cache_write_microunits_per_million": 5000000,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "OpenAI API Standard long-context rate for priced requests above 272K input tokens, from the documented multipliers (2x input and cache, 1.5x output for the full request); fails closed without explicit request-input evidence."
+    },
+    {
+      "version": "openai-gpt-6.1-terra-standard-short-lte-272k-2026-11-05",
+      "harness": "codex",
+      "provider": "openai",
+      "model": "gpt-6.1-terra",
+      "aliases": [],
+      "method": "standard_short_context_lte_272k",
+      "currency": "USD",
+      "effective_at": "2026-11-05",
+      "retrieved_at": "2026-11-05",
+      "max_context_tokens_exclusive": 272001,
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 1000000,
+        "output_microunits_per_million": 5000000,
+        "cache_read_microunits_per_million": 50000,
+        "cache_write_microunits_per_million": 1250000,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "OpenAI API Standard short-context rate (<=272K input). Generic cache write is the documented 30m prompt-cache rate at 1.25x input. ChatGPT and Codex subscriptions are excluded."
+    },
+    {
+      "version": "openai-gpt-6.1-terra-standard-long-gt-272k-2026-11-05",
+      "harness": "codex",
+      "provider": "openai",
+      "model": "gpt-6.1-terra",
+      "aliases": [],
+      "method": "standard_long_context_gt_272k",
+      "currency": "USD",
+      "effective_at": "2026-11-05",
+      "retrieved_at": "2026-11-05",
+      "min_context_tokens": 272001,
+      "source_url": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 2000000,
+        "output_microunits_per_million": 7500000,
+        "cache_read_microunits_per_million": 100000,
+        "cache_write_microunits_per_million": 2500000,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "OpenAI API Standard long-context rate for priced requests above 272K input tokens, from the documented multipliers (2x input and cache, 1.5x output for the full request); fails closed without explicit request-input evidence."
+    },
+    {
+      "version": "mistral-large-4-standard-2026-11-05",
+      "harness": "openai_compatible",
+      "provider": "mistral",
+      "model": "mistral-large-4",
+      "aliases": [],
+      "method": "standard_usd_non_regional",
+      "currency": "USD",
+      "effective_at": "2026-11-05",
+      "retrieved_at": "2026-11-05",
+      "source_url": "https://docs.mistral.ai/inference/pricing",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 700000,
+        "output_microunits_per_million": 2100000,
+        "cache_read_microunits_per_million": 70000,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "Mistral API standard USD rate (replaces Mistral Large 3 and Medium 3.5, deprecated 2026-10-31); batch, priority, EUR and regional variants are not inferred."
+    },
+    {
+      "version": "google-gemini-4-argon-standard-paid-promo-2026-11-05",
+      "harness": "gemini_cli",
+      "provider": "google",
+      "model": "gemini-4-argon",
+      "aliases": [],
+      "method": "standard_paid_through_2026-11-30",
+      "currency": "USD",
+      "effective_at": "2026-11-05",
+      "retrieved_at": "2026-11-05",
+      "valid_until": "2026-11-30",
+      "source_url": "https://aistudio.google.com/docs/pricing",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 2000000,
+        "output_microunits_per_million": 10000000,
+        "cache_read_microunits_per_million": 100000,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "Gemini Developer API paid standard promotional rate through 2026-11-30 (doubles from 2026-12-01); cache storage duration fees are excluded."
+    },
+    {
+      "version": "google-gemini-4-argon-batch-paid-promo-2026-11-05",
+      "harness": "gemini_cli",
+      "provider": "google",
+      "model": "gemini-4-argon",
+      "aliases": [],
+      "method": "batch_paid_through_2026-11-30",
+      "currency": "USD",
+      "effective_at": "2026-11-05",
+      "retrieved_at": "2026-11-05",
+      "valid_until": "2026-11-30",
+      "source_url": "https://aistudio.google.com/docs/pricing",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 1000000,
+        "output_microunits_per_million": 5000000,
+        "cache_read_microunits_per_million": 50000,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "Gemini Developer API paid batch promotional rate through 2026-11-30 (doubles from 2026-12-01); cache storage duration fees are excluded."
+    },
+    {
+      "version": "google-gemini-4-argon-standard-paid-2026-12-01",
+      "harness": "gemini_cli",
+      "provider": "google",
+      "model": "gemini-4-argon",
+      "aliases": [],
+      "method": "standard_paid_from_2026-12-01",
+      "currency": "USD",
+      "effective_at": "2026-12-01",
+      "retrieved_at": "2026-11-05",
+      "source_url": "https://aistudio.google.com/docs/pricing",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 4000000,
+        "output_microunits_per_million": 20000000,
+        "cache_read_microunits_per_million": 200000,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "Gemini Developer API paid standard rate published for 2026-12-01 onward; cache storage duration fees are excluded."
+    },
+    {
+      "version": "google-gemini-4-argon-batch-paid-2026-12-01",
+      "harness": "gemini_cli",
+      "provider": "google",
+      "model": "gemini-4-argon",
+      "aliases": [],
+      "method": "batch_paid_from_2026-12-01",
+      "currency": "USD",
+      "effective_at": "2026-12-01",
+      "retrieved_at": "2026-11-05",
+      "source_url": "https://aistudio.google.com/docs/pricing",
+      "unit": "per_1m_tokens",
+      "rates": {
+        "input_microunits_per_million": 2000000,
+        "output_microunits_per_million": 10000000,
+        "cache_read_microunits_per_million": 100000,
+        "cache_write_5m_microunits_per_million": null,
+        "cache_write_1h_microunits_per_million": null
+      },
+      "note": "Gemini Developer API paid batch rate published for 2026-12-01 onward; cache storage duration fees are excluded."
     }
   ]
 }

@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::bounded_file::{BoundedFileError, read_bounded_regular_file};
 
-pub const BUILTIN_PRICING_CATALOG_IDENTITY: &str = "hzr-public-api-pricing-2026-09-26-v1"; // 0.11.2: catalog re-read 2026-09-26 (Opus 5.5 and current models)
+pub const BUILTIN_PRICING_CATALOG_IDENTITY: &str = "hzr-public-api-pricing-2026-11-05-v1"; // 0.12.2: catalog re-verified 2026-11-05 (Sonnet 5.5, Haiku 5.5, GPT-6.1, Gemini 4 Argon, Mistral Large 4)
 pub const PRICING_CATALOG_SCHEMA_VERSION: u16 = 1;
 pub const PRICING_OVERRIDE_MAX_BYTES: u64 = 1_048_576;
 pub const PROVIDER_RECEIPT_MAX_AGE_MS: u64 = 366 * 24 * 60 * 60 * 1_000;
@@ -238,7 +238,7 @@ pub enum BillingError {
 
 pub fn builtin_pricing_catalog() -> Result<PricingCatalog, BillingError> {
     let mut catalog: PricingCatalog = serde_json::from_str(include_str!(
-        "../../../data/pricing/public-api-pricing-2026-09-26-v1.json" // 0.11.2: dated catalog file moves with its identity
+        "../../../data/pricing/public-api-pricing-2026-11-05-v1.json" // 0.12.2: dated catalog file moves with its identity
     ))
     .map_err(|source| BillingError::CatalogParse {
         path: Path::new("<embedded-public-pricing>").to_path_buf(),
@@ -763,7 +763,7 @@ fn pricing_date_expired(valid_until: &str) -> bool {
 
 /// 1.1.0: the day the built-in catalog was read; test builds price on this day.
 #[cfg(any(test, feature = "pricing-test-clock"))]
-const BUILTIN_CATALOG_RETRIEVED_AT: &str = "2026-09-26";
+const BUILTIN_CATALOG_RETRIEVED_AT: &str = "2026-11-05"; // 0.12.2: follows the catalog
 
 fn current_unix_days() -> i64 {
     // 1.1.0: a test must not start failing because the calendar moved past the catalog's
@@ -969,7 +969,7 @@ mod tests {
             opus_5_5.entry_version,
             "anthropic-claude-opus-5.5-standard-2026-09-26"
         ); // 0.11.2
-        assert_eq!(opus_5_5.retrieved_at, "2026-09-26"); // 0.11.2
+        assert_eq!(opus_5_5.retrieved_at, "2026-11-05"); // 0.12.2: re-verified
         assert_eq!(
             opus_5_5.source_url,
             "https://platform.claude.com/docs/en/about-claude/pricing"
@@ -1352,5 +1352,111 @@ mod tests {
     fn test_clock_is_the_builtin_catalog_retrieval_day() {
         let catalog = builtin_pricing_catalog().expect("catalog");
         assert_eq!(catalog.retrieved_at, BUILTIN_CATALOG_RETRIEVED_AT);
+    }
+
+    // 0.12.2: rows added when the catalog was re-verified on 2026-11-05.
+    #[test]
+    fn catalog_2026_11_05_prices_new_models_and_drops_unverifiable_rows() {
+        let catalog = builtin_pricing_catalog().expect("catalog");
+        let estimate = |harness: &str,
+                        provider: &str,
+                        model: &str,
+                        method: &str,
+                        input: Option<u64>,
+                        basis: &str| {
+            price_avoided_input_tokens(
+                &catalog,
+                RawPublicEstimateRequest {
+                    harness,
+                    provider,
+                    model,
+                    method,
+                    request_input_tokens: input,
+                    basis,
+                    avoided_tokens: 1_000_000,
+                },
+            )
+        };
+        let sonnet = |basis| {
+            estimate(
+                "claude_code",
+                "anthropic",
+                "claude-sonnet-5.5",
+                "standard",
+                None,
+                basis,
+            )
+            .expect("Sonnet 5.5")
+            .savings_microunits
+        };
+        assert_eq!(sonnet("input"), 2_000_000);
+        assert_eq!(
+            sonnet("cache_read"),
+            100_000,
+            "Sonnet 5.5 cache hits are 0.05x input"
+        );
+
+        let haiku = |method, input| {
+            estimate(
+                "claude_code",
+                "anthropic",
+                "claude-haiku-5-5",
+                method,
+                Some(input),
+                "input",
+            )
+        };
+        assert_eq!(
+            haiku("standard_prompt_lte_100k", 100_000)
+                .expect("Haiku 5.5 up to 100K")
+                .savings_microunits,
+            100_000
+        );
+        assert_eq!(
+            haiku("standard_prompt_gt_100k", 100_001)
+                .expect("Haiku 5.5 over 100K")
+                .savings_microunits,
+            500_000
+        );
+        assert!(haiku("standard_prompt_lte_100k", 100_001).is_err());
+
+        let gpt = estimate(
+            "codex",
+            "openai",
+            "gpt-6.1-sol",
+            "standard_long_context_gt_272k",
+            Some(300_000),
+            "input",
+        )
+        .expect("GPT-6.1 Sol long context");
+        assert_eq!(gpt.savings_microunits, 4_000_000);
+
+        // Published for 2026-12-01 onward: not yet effective on the catalog's day.
+        assert!(
+            estimate(
+                "gemini_cli",
+                "google",
+                "gemini-4-argon",
+                "standard_paid_from_2026-12-01",
+                None,
+                "input"
+            )
+            .is_err()
+        );
+        // Deprecated with no verifiable list price: never estimated.
+        for model in ["mistral-large-3", "mistral-medium-3.5"] {
+            assert!(
+                estimate(
+                    "openai_compatible",
+                    "mistral",
+                    model,
+                    "standard_usd_non_regional",
+                    None,
+                    "input"
+                )
+                .is_err(),
+                "{model}"
+            );
+        }
     }
 }
