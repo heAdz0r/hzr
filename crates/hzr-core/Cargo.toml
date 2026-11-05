@@ -21,5 +21,11 @@ tempfile.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 
+[features]
+# 1.1.0: test builds price at the built-in catalog's retrieval day instead of the wall clock,
+# so date-bound tests stop failing once the calendar passes the catalog's max_age. Enabled only
+# through dev-dependencies; release builds never carry it.
+pricing-test-clock = []
+
 [lints]
 workspace = true

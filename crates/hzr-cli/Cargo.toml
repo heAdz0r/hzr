@@ -38,6 +38,10 @@ toml_edit.workspace = true
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.30.1", default-features = false, features = ["process", "signal"] }
 
+
+[dev-dependencies]
+hzr-core = { path = "../hzr-core", features = ["pricing-test-clock"] } # 1.1.0
+
 [lints]
 workspace = true
 

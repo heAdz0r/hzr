@@ -761,12 +761,25 @@ fn pricing_date_expired(valid_until: &str) -> bool {
     current_unix_days() > expiry_days
 }
 
+/// 1.1.0: the day the built-in catalog was read; test builds price on this day.
+#[cfg(any(test, feature = "pricing-test-clock"))]
+const BUILTIN_CATALOG_RETRIEVED_AT: &str = "2026-09-26";
+
 fn current_unix_days() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_secs() / 86_400).unwrap_or(i64::MAX)
-        })
+    // 1.1.0: a test must not start failing because the calendar moved past the catalog's
+    // max_age. Production keeps the wall clock, so a stale catalog still prices nothing.
+    #[cfg(any(test, feature = "pricing-test-clock"))]
+    {
+        date_to_unix_days(BUILTIN_CATALOG_RETRIEVED_AT).unwrap_or(0)
+    }
+    #[cfg(not(any(test, feature = "pricing-test-clock")))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| {
+                i64::try_from(duration.as_secs() / 86_400).unwrap_or(i64::MAX)
+            })
+    }
 }
 
 fn date_to_unix_days(value: &str) -> Option<i64> {
@@ -1332,5 +1345,12 @@ mod tests {
             load_pricing_catalog(Some(&path)),
             Err(BillingError::InvalidCatalog(_))
         ));
+    }
+
+    // 1.1.0: the test clock follows the catalog it was pinned to.
+    #[test]
+    fn test_clock_is_the_builtin_catalog_retrieval_day() {
+        let catalog = builtin_pricing_catalog().expect("catalog");
+        assert_eq!(catalog.retrieved_at, BUILTIN_CATALOG_RETRIEVED_AT);
     }
 }
