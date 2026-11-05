@@ -129,11 +129,10 @@ jobs:
           # grepai is cloned after setup; caching cannot inspect its go.sum yet.
           cache: false
       - run: git clone --filter=blob:none https://github.com/yoanbernabeu/grepai /tmp/hzr-grepai
-      - run: git -C /tmp/hzr-grepai checkout --detach ad90c4216282a434eeb2e28df4a1ea175a5470aa
-      - run: git -C /tmp/hzr-grepai apply --check "$GITHUB_WORKSPACE/patches/grepai/0.37.0-disable-worktree-discovery.patch"
-      - run: git -C /tmp/hzr-grepai apply "$GITHUB_WORKSPACE/patches/grepai/0.37.0-disable-worktree-discovery.patch"
-      - run: git -C /tmp/hzr-grepai apply --check "$GITHUB_WORKSPACE/patches/grepai/0.37.0-event-queue-backpressure.patch"
-      - run: git -C /tmp/hzr-grepai apply "$GITHUB_WORKSPACE/patches/grepai/0.37.0-event-queue-backpressure.patch"
+      # 1.1.0: grepai 1.2.0 ships the backpressure fix; only the worktree flag patch remains.
+      - run: git -C /tmp/hzr-grepai checkout --detach d86397d5f0c94ea31b96d1bb8b4da6966e26f5ef
+      - run: git -C /tmp/hzr-grepai apply --check "$GITHUB_WORKSPACE/patches/grepai/1.2.0-disable-worktree-discovery.patch"
+      - run: git -C /tmp/hzr-grepai apply "$GITHUB_WORKSPACE/patches/grepai/1.2.0-disable-worktree-discovery.patch"
       - run: go test ./cli ./watcher
         working-directory: /tmp/hzr-grepai
 
