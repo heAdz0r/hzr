@@ -1,7 +1,7 @@
-# HZR 0.12.1 — fork-core parity ledger
+# HZR 0.12.2 — fork-core parity ledger
 
 **Audit date:** 2026-09-03
-**Status:** HZR 0.12.1 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
+**Status:** HZR 0.12.2 preserves the imported command surface while improving diagnostic fidelity, effective routing and accounting. Current changes remain subject to the complete deterministic gate.
 **Import baseline:** exact `heAdz0r/rtk` worktree snapshot `0.44.1-fork.1` at HZR tag `v0.1.0`
 **Current runtime core:** HZR-owned evolvable `fork-core/rtk` `1.1.0-fork.1`, derived from that complete baseline and synced selectively with upstream `rtk-ai/rtk` v1.1.0 (Apache-2.0 `src/` only)
 
@@ -454,7 +454,7 @@ Response density is set before generation by a short cache-stable contract. HZR 
 
 These items do not replace or bypass fork functionality. They are a measurement/operability of the next stage and do not create a second runtime path.
 
-## 0.12.1 test isolation
+## 0.12.2 test isolation
 
 The loopback health-check regression keeps its original ephemeral-port listener
 instead of dropping and rebinding it. Parallel socket users can no longer take

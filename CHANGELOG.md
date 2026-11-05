@@ -4,6 +4,27 @@ All notable HZR changes are documented here. HZR follows semantic versioning whi
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-11-05
+
+### Fixed
+
+- `hzr doctor` no longer fails `billing_pricing`, and savings can be priced
+  again. The built-in public price catalog was read on 2026-09-26 with a 30-day
+  limit, so since 2026-10-26 every price was reported stale. Every entry was
+  re-read from its official source on 2026-11-05; all kept prices are unchanged.
+
+### Changed
+
+- The catalog is `hzr-public-api-pricing-2026-11-05-v1`. Added Claude Sonnet 5.5,
+  Claude Haiku 5.5 (methods `standard_prompt_lte_100k` and
+  `standard_prompt_gt_100k`), GPT-6.1 Sol and Terra, Mistral Large 4 and
+  Gemini 4 Argon (promotional rate through 2026-11-30, published rate from
+  2026-12-01). GPT-5.6 Sol's promotional rate now runs through 2026-11-30, and
+  Gemini 3.7 Flash is marked as routed to Gemini 3.8 Flash at the same rate.
+- Removed Mistral Large 3 and Mistral Medium 3.5: both were deprecated on
+  2026-10-31 and are no longer on Mistral's price list, so a configuration that
+  names them reports pricing as unavailable instead of using an unverified price.
+
 ## [0.12.1] - 2026-11-05
 
 ### Fixed
@@ -2249,6 +2270,7 @@ First public HZR release.
 [0.9.8]: https://github.com/heAdz0r/hzr/compare/v0.9.7...v0.9.8
 [0.11.2]: https://github.com/heAdz0r/hzr/compare/v0.11.1...v0.11.2
 [0.11.1]: https://github.com/heAdz0r/hzr/compare/v0.11.0...v0.11.1
+[0.12.2]: https://github.com/heAdz0r/hzr/compare/v0.12.1...v0.12.2
 [0.12.1]: https://github.com/heAdz0r/hzr/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/heAdz0r/hzr/compare/v0.11.5...v0.12.0
 [0.11.5]: https://github.com/heAdz0r/hzr/compare/v0.11.4...v0.11.5
